@@ -5,7 +5,7 @@
 config { channels: stereo }
 tempo 110bpm
 
-// A bus can process what is sent to it. `it` is what it has collected.
+// A bus can process what is sent to it. In its `fx`, `in` is what it has collected.
 bus space: stereo
 fx space_return {
   out = space.reverb(room: 0.8, damp: 0.4).gain(0.8)

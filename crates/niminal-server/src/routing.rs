@@ -57,7 +57,7 @@ pub enum RoutingEdit {
         #[serde(default)]
         offset: f32,
     },
-    /// A reusable fx signature and body, e.g. `(wet: num = 0.5) { out = it * wet }`.
+    /// A reusable fx signature and body, e.g. `(wet: num = 0.5) { out = in * wet }`.
     Fx {
         name: String,
         source: String,

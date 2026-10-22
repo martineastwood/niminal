@@ -299,7 +299,7 @@ ctl filth  = midi.cc(21)
 ctl volume = midi.cc(7).range(-60db..0db)
 ctl drive  = 0.3
 
-fx bass { out = it.lpf(cutoff: filth.range(200hz..4khz)).drive(amount: filth) }
+fx bass { out = in.lpf(cutoff: filth.range(200hz..4khz)).drive(amount: filth) }
 ```
 
 **Learning a controller:** write `midi.learn` and move the knob you want. The next control change binds to it, and the server tells the editor to rewrite the line to what it heard.

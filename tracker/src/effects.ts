@@ -5,6 +5,7 @@ import lowpass from './presets/lowpass.nml?raw';
 import highpass from './presets/highpass.nml?raw';
 import bandpass from './presets/bandpass.nml?raw';
 import notch from './presets/notch.nml?raw';
+import tremolo from './presets/tremolo.nml?raw';
 
 export const builtInEffects = [
   { id: 'delay', name: 'Stereo delay', source: delay },
@@ -13,14 +14,21 @@ export const builtInEffects = [
   { id: 'highpass', name: 'High pass', source: highpass },
   { id: 'bandpass', name: 'Band pass', source: bandpass },
   { id: 'notch', name: 'Notch', source: notch },
+  { id: 'tremolo', name: 'Tremolo', source: tremolo },
 ];
 
-// A project-owned copy keeps edits local and avoids top-level symbol collisions.
-export function copyBuiltInEffect(project: Project, presetId: string): Definition {
-  const preset = builtInEffects.find(preset => preset.id === presetId);
-  if (!preset) throw new Error('Unknown built-in effect');
-  const id = `fx_${crypto.randomUUID().replaceAll('-', '_')}`;
-  const definition: Definition = { id, name: preset.name, kind: 'fx', source: preset.source.replace(/^fx \w+/m, `fx ${id}`) };
-  project.definitions.push(definition);
-  return definition;
+/** Each track owns its processor; presets replace source without changing its automation address. */
+export function setTrackFxPreset(project: Project, track: number, presetId = 'dry'): Definition {
+  const source = presetId === 'dry' ? 'fx passthrough() { out = in }\n' : builtInEffects.find(p => p.id === presetId)?.source;
+  if (!source) throw new Error('Unknown track FX preset');
+  const slot = project.tracks[track].fx;
+  const definition = slot && project.definitions.find(d => d.id === slot.definition);
+  const id = definition?.id ?? `fx_${crypto.randomUUID().replaceAll('-', '_')}`;
+  const fx: Definition = definition ?? { id, name: `${project.tracks[track].name} FX`, kind: 'fx', source: '' };
+  fx.source = source.replace(/^fx \w+/m, `fx ${id}`);
+  if (!definition) {
+    project.definitions.push(fx);
+    project.tracks[track].fx = { definition: id, values: {}, modulations: {} };
+  }
+  return fx;
 }

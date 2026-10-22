@@ -1,5 +1,5 @@
 use super::*;
-use crate::pattern::{EffectSlot, FxLane, Pattern, Track};
+use crate::pattern::{FxLane, Pattern, Track, TrackFx};
 use niminal_lang::Layout;
 use niminal_server::{EngineServer, Session};
 use niminal_ws::{Server, ServerConfig};
@@ -140,7 +140,7 @@ fn track_effects_gain_and_mute_change_rendered_audio_and_reject_bad_fx_edits() {
     worker
         .command(Command::Apply {
             id: "half".into(),
-            source: "fn half_level(x) { x * 0.5 }\nfx half { out = half_level(it) }".into(),
+            source: "fn half_level(x) { x * 0.5 }\nfx half { out = half_level(in) }".into(),
             kind: Kind::Fx,
         })
         .unwrap();
@@ -165,10 +165,10 @@ fn track_effects_gain_and_mute_change_rendered_audio_and_reject_bad_fx_edits() {
     };
     let dry = render_note(&mut worker);
     assert!(dry > 0.09);
-    song.tracks[0].effects = vec![EffectSlot {
+    song.tracks[0].fx = Some(TrackFx {
         definition: "half".into(),
-        ..EffectSlot::default()
-    }];
+        ..TrackFx::default()
+    });
     worker
         .command(Command::Update { song: song.clone() })
         .unwrap();
@@ -178,7 +178,7 @@ fn track_effects_gain_and_mute_change_rendered_audio_and_reject_bad_fx_edits() {
         worker
             .command(Command::Apply {
                 id: "half".into(),
-                source: "fx half { out = it.no_such_op }".into(),
+                source: "fx half { out = in.no_such_op }".into(),
                 kind: Kind::Fx
             })
             .is_err()
@@ -188,7 +188,7 @@ fn track_effects_gain_and_mute_change_rendered_audio_and_reject_bad_fx_edits() {
     worker
         .command(Command::Apply {
             id: "half".into(),
-            source: "fx half { out = it * 0.25 }".into(),
+            source: "fx half { out = in * 0.25 }".into(),
             kind: Kind::Fx,
         })
         .unwrap();
@@ -204,7 +204,7 @@ fn track_effects_gain_and_mute_change_rendered_audio_and_reject_bad_fx_edits() {
         .unwrap();
     assert_eq!(render_note(&mut worker), 0.0);
     song.tracks[0].muted = false;
-    song.tracks[0].effects.clear();
+    song.tracks[0].fx = None;
     song.tracks[0].volume_db = 0.0;
     worker.command(Command::Update { song }).unwrap();
     let bypassed = render_note(&mut worker);
@@ -303,7 +303,7 @@ fn song_playback_completes_and_leaves_the_final_release_audible() {
 }
 
 #[test]
-fn native_effect_chain_parameter_commands_and_bus_lfo_change_rendered_audio() {
+fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
     use crate::pattern::Lfo;
     let engine = Arc::new(Mutex::new(EngineServer::new(
         Session::new(48000.0, Layout::Stereo).without_limiter(),
@@ -333,20 +333,17 @@ fn native_effect_chain_parameter_commands_and_bus_lfo_change_rendered_audio() {
     worker
         .command(Command::Apply {
             id: "level".into(),
-            source: "fx level(amount: 0..1 = 1) { out = it * amount }".into(),
+            source: "fx level(amount: 0..1 = 1) { out = in * amount }".into(),
             kind: Kind::Fx,
         })
         .unwrap();
     assert_eq!(worker.status.effect_parameters["level"][0].name, "amount");
     let mut song = test_song(Some("C-4"));
-    song.tracks[0].effects = vec![
-        EffectSlot {
-            definition: "level".into(),
-            values: BTreeMap::from([("amount".into(), 0.5)]),
-            ..EffectSlot::default()
-        };
-        2
-    ];
+    song.tracks[0].fx = Some(TrackFx {
+        definition: "level".into(),
+        values: BTreeMap::from([("amount".into(), 0.5)]),
+        ..TrackFx::default()
+    });
     worker
         .command(Command::Update { song: song.clone() })
         .unwrap();
@@ -362,13 +359,12 @@ fn native_effect_chain_parameter_commands_and_bus_lfo_change_rendered_audio() {
         .iter()
         .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
     assert!(
-        (peak - 0.0625).abs() < 0.001,
-        "two native gain effects: {peak}"
+        (peak - 0.125).abs() < 0.001,
+        "one native gain processor: {peak}"
     );
-    song.tracks[0].effects.truncate(1);
-    song.tracks[0].effects[0].values.clear();
+
+    song.tracks[0].fx.as_mut().unwrap().values.clear();
     song.patterns[0].fx[0][0].target = Some(crate::commands::FxTarget::Effect {
-        device: 0,
         parameter: "amount".into(),
     });
     song.patterns[0].fx[0][0].values[0] = Some("0".into());
@@ -401,7 +397,7 @@ fn native_effect_chain_parameter_commands_and_bus_lfo_change_rendered_audio() {
     );
     worker.command(Command::Stop).unwrap();
     song.patterns[0].fx[0][0].values.fill(None);
-    song.tracks[0].effects[0].modulations.insert(
+    song.tracks[0].fx.as_mut().unwrap().modulations.insert(
         "amount".into(),
         Lfo {
             enabled: true,
@@ -437,6 +433,42 @@ fn native_effect_chain_parameter_commands_and_bus_lfo_change_rendered_audio() {
         a.min(b) < 0.0001 && a.max(b) > 0.2,
         "native bus LFO: {a}, {b}"
     );
+    // Removing an exposed parameter while playing retains its lane and LFO data,
+    // frees the obsolete modulation resources, and keeps scheduling audio.
+    worker
+        .command(Command::Apply {
+            id: "level".into(),
+            source: "fx level() { shaped = in * 0.5\n out = shaped * 0.5 }".into(),
+            kind: Kind::Fx,
+        })
+        .unwrap();
+    let retained = worker.playback.as_ref().unwrap().song.clone();
+    assert!(matches!(
+        retained.patterns[0].fx[0][0].target,
+        Some(crate::commands::FxTarget::Effect { .. })
+    ));
+    worker
+        .command(Command::Update {
+            song: retained.clone(),
+        })
+        .unwrap();
+    for _ in 0..24 {
+        engine.lock().unwrap().session_mut().process(1000);
+        worker.tick().unwrap();
+    }
+    worker.command(Command::Stop).unwrap();
+    worker
+        .command(Command::Play {
+            song: retained,
+            mode: Mode::Pattern,
+            pattern_id: "p0".into(),
+            start_position: 0,
+        })
+        .unwrap();
+    for _ in 0..24 {
+        engine.lock().unwrap().session_mut().process(1000);
+        worker.tick().unwrap();
+    }
     worker.command(Command::Disconnect).unwrap();
     drop(worker);
     server.stop();
@@ -490,9 +522,9 @@ fn library_effects_expose_controls_and_render_on_mono_and_stereo_engines() {
             assert!(worker.sounds[&id].parameters.len() >= 3);
             engine.lock().unwrap().session_mut().process(2048);
             let mut song = test_song(None);
-            song.tracks[0].effects.push(EffectSlot {
+            song.tracks[0].fx = Some(TrackFx {
                 definition: id,
-                ..EffectSlot::default()
+                ..TrackFx::default()
             });
             worker.command(Command::Update { song }).unwrap();
             worker
@@ -547,7 +579,7 @@ fn graphical_envelopes_render_native_linear_ramps_at_fractional_rows() {
     worker
         .command(Command::Apply {
             id: "gain".into(),
-            source: "fx gain(amount: 0..1 = 1) { out = it * amount }".into(),
+            source: "fx gain(amount: 0..1 = 1) { out = in * amount }".into(),
             kind: Kind::Fx,
         })
         .unwrap();
@@ -555,13 +587,12 @@ fn graphical_envelopes_render_native_linear_ramps_at_fractional_rows() {
     song.bpm = 20.0;
     song.rows_per_beat = 1;
     song.patterns[0].notes[0][0] = Some("C-4".into());
-    song.tracks[0].effects.push(EffectSlot {
+    song.tracks[0].fx = Some(TrackFx {
         definition: "gain".into(),
         ..Default::default()
     });
     let lane = &mut song.patterns[0].fx[0][0];
     lane.target = Some(FxTarget::Effect {
-        device: 0,
         parameter: "amount".into(),
     });
     lane.values[0] = Some("1".into()); // Envelope takes priority over row values.

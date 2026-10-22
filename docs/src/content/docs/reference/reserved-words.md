@@ -14,7 +14,7 @@ None of these can be used as a name.
 | Rates | `const`, `init`, `control` |
 | Literal prefixes | `env[...]`, `grid[...]`, `grid { ... }` |
 | Units | `num`, `int`, `sec`, `ms`, `samples`, `hz`, `khz`, `db`, `st`, `ct`, `deg`, `bpm`, `beat`, `beats`, `bar`, `bars`, `%` |
-| Implicit names | `out`, `it`, `note`, `clock` |
+| Implicit names | `out`, `in`, `it`, `note`, `clock` |
 | Constants | `pi`, `sample_rate` |
 | Universal controls | `pan`, `gain`, `to`, `dur`, `nudge` |
 

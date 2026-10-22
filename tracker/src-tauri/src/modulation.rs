@@ -15,14 +15,13 @@ pub fn declarations() -> Vec<Value> {
 
 struct Target<'a> {
     track: usize,
-    device: usize,
     parameter: &'a Parameter,
     lfo: &'a Lfo,
     definition: &'a str,
 }
 impl Target<'_> {
     fn source(&self) -> String {
-        format!("mod_{}_{}_{}", self.track, self.device, self.parameter.name)
+        format!("mod_{}_{}", self.track, self.parameter.name)
     }
     fn node(&self, bpm: f64, rows_per_beat: u32) -> Value {
         let hz = bpm * f64::from(rows_per_beat) / (60.0 * self.lfo.period);
@@ -35,7 +34,7 @@ impl Target<'_> {
         let max = self.parameter.engine_value(
             self.parameter.min + self.lfo.max * (self.parameter.max - self.parameter.min),
         );
-        json!({"op":"map", "id":format!("fx_{}_{}", self.track, self.device), "param":self.parameter.name,
+        json!({"op":"map", "id":format!("fx_{}", self.track), "param":self.parameter.name,
             "source":if enabled {json!({"kind":"bus", "id":self.source()})} else {Value::Null}, "scale":max-min, "offset":min})
     }
 }
@@ -46,7 +45,7 @@ fn targets<'a>(
 ) -> BTreeMap<String, Target<'a>> {
     let mut targets = BTreeMap::new();
     for (track, t) in tracks.iter().enumerate() {
-        for (device, slot) in t.effects.iter().enumerate() {
+        if let Some(slot) = &t.fx {
             for (name, lfo) in &slot.modulations {
                 if !lfo.enabled {
                     continue;
@@ -57,7 +56,6 @@ fn targets<'a>(
                 {
                     let target = Target {
                         track,
-                        device,
                         parameter,
                         lfo,
                         definition: &slot.definition,

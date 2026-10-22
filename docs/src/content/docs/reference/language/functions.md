@@ -308,4 +308,4 @@ instr cloud(freq: hz) {
 }
 ```
 
-A node can use `oversample(4) { it.tanh }` directly. Each nested scope uses the sample rate of its immediate parent; two nested 2x scopes run the inner DSP at 4x the project rate. `spawn` captures the values it reads when a layer starts; placing an effect inside that layer gives it independent state.
+A node can use `oversample(4) { in.tanh }` directly. Each nested scope uses the sample rate of its immediate parent; two nested 2x scopes run the inner DSP at 4x the project rate. `spawn` captures the values it reads when a layer starts; placing an effect inside that layer gives in independent state.

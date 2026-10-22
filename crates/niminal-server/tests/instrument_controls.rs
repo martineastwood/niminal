@@ -160,8 +160,8 @@ fn bus_mapping_is_one_block_delayed_and_independent_of_render_chunk_size() {
 #[test]
 fn parallel_nodes_and_bus_sends_are_latency_compensated() {
     for source in [
-        "instr tone() { osc(sine, 1khz) }\nnode dry { instrument = tone }\nfx wet_fx {out = -oversample(4) { it }}\nnode wet { instrument = tone\noutput = wet_fx}",
-        "bus sum\ninstr tone() { osc(sine, 1khz) }\nbus dry_audio\nfx dry_fx {sum += dry_audio\nout = 0}\nnode dry { instrument = tone\noutput = dry_audio}\nfx wet_fx {sum += -oversample(4) { it }\nout = 0}\nnode wet { instrument = tone\noutput = wet_fx}\nfx result { out = sum }",
+        "instr tone() { osc(sine, 1khz) }\nnode dry { instrument = tone }\nfx wet_fx {out = -oversample(4) { in }}\nnode wet { instrument = tone\noutput = wet_fx}",
+        "bus sum\ninstr tone() { osc(sine, 1khz) }\nbus dry_audio\nfx dry_fx {sum += dry_audio\nout = 0}\nnode dry { instrument = tone\noutput = dry_audio}\nfx wet_fx {sum += -oversample(4) { in }\nout = 0}\nnode wet { instrument = tone\noutput = wet_fx}\nfx result { out = sum }",
     ] {
         let mut s = session(source);
         let notes = ["dry", "wet"]

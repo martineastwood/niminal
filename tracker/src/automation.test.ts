@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { formatValue, parseValue, remapEffectLanes } from './automation';
+import { formatValue, parseValue, laneParameter } from './automation';
 import { newProject } from './project';
 it('reads real units, preserves precision, and rejects wrong units and out-of-range values', () => {
   const frequency = { name: 'cutoff', min: 20, max: 20000, default: 2400, unit: 'hz' };
@@ -11,9 +11,13 @@ it('reads real units, preserves precision, and rejects wrong units and out-of-ra
   const blend = { ...frequency, min: 0, max: 1, unit: null };
   expect(parseValue('35', blend)).toBe('0.35'); expect(formatValue('0.35', blend)).toBe('35%');
 });
-it('keeps lanes attached to reordered inserts and clears lanes for removed inserts', () => {
+it('addresses track FX by name and retains missing targets for repair', () => {
   const project = newProject();
-  const lane = project.patterns[0].fx[0][0]; lane.target = { kind: 'effect', device: 0, parameter: 'cutoff' }; lane.values[4] = '2400';
-  remapEffectLanes(project, 0, d => d === 0 ? 1 : 0); expect(lane.target.device).toBe(1); expect(lane.values[4]).toBe('2400');
-  remapEffectLanes(project, 0, () => null); expect(lane.target).toBeNull(); expect(lane.values.every(v => v === null)).toBe(true);
+  project.definitions.push({ id: 'filter', kind: 'fx', name: 'Filter', source: '' });
+  project.tracks[0].fx = { definition: 'filter', values: {}, modulations: {} };
+  const target = { kind: 'effect' as const, parameter: 'cutoff' };
+  const parameters = { filter: [{ name: 'cutoff', min: 20, max: 20000, default: 2400, unit: 'hz' }] };
+  expect(laneParameter(target, 0, project, parameters)?.name).toBe('cutoff');
+  expect(laneParameter(target, 0, project, { filter: [] })).toBeNull();
+  expect(target.parameter).toBe('cutoff');
 });

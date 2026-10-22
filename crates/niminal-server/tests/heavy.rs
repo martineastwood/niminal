@@ -144,7 +144,7 @@ fn heavy_pieces() {
     time("10 nodes, 10 voices each", &ten, &notes);
 
     // few voices, heavy effect chains: nothing here has 16 voices on a node, so nothing forks
-    let chain = "it.reverb(room: 0.9, damp: 0.3).reverb(room: 0.8, damp: 0.5).delay(time: 130ms, feedback: 0.5).reverb(room: 0.7, damp: 0.2)";
+    let chain = "in.reverb(room: 0.9, damp: 0.3).reverb(room: 0.8, damp: 0.5).delay(time: 130ms, feedback: 0.5).reverb(room: 0.7, damp: 0.2)";
     for nodes in [1, 6] {
         let mut src = instrument("voice", "");
         let mut notes = Vec::new();

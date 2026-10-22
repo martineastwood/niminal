@@ -21,6 +21,7 @@ it('maps the laptop keyboard chromatically without consuming navigation keys', (
 
 it('rejects invalid assignments and tempo before a project reaches playback', () => {
   const project = newProject();
+  project.definitions.push({ id: 'soften', name: 'Filter', kind: 'fx', source: 'fx soften() { out = in }' });
   project.tracks[0].instrument = 'soften';
   expect(() => readProject(JSON.stringify(project))).toThrow();
   project.tracks[0].instrument = 'tone';
@@ -43,7 +44,8 @@ it('accepts more tracks only when every pattern has matching note columns', () =
 
 it('deletes a track across all patterns and restores its notes and mixer settings', () => {
   const project = newProject();
-  project.tracks[1].effects = [{ definition: 'soften', values: {}, modulations: {} }]; project.tracks[1].volume_db = -7;
+  project.definitions.push({ id: 'soften', name: 'Filter', kind: 'fx', source: 'fx soften() { out = in }' });
+  project.tracks[1].fx = { definition: 'soften', values: {}, modulations: {} }; project.tracks[1].volume_db = -7;
   project.patterns[0].notes[1][5] = 'F#3';
   const deleted = removeTrack(project, 1)!;
   expect(project.tracks).toHaveLength(3);
@@ -58,10 +60,11 @@ it('deletes a track across all patterns and restores its notes and mixer setting
   expect(removeTrack(project, 0)).toBeNull();
 });
 
-it('round trips named lanes, chains and LFO settings and rejects malformed values/modulation', () => {
+it('round trips named lanes, processors and LFO settings and rejects malformed values/modulation', () => {
   const project = newProject();
-  project.tracks[0].effects.push({ definition: 'soften', values: { cutoff: 700 }, modulations: { cutoff: { enabled: true, shape: 'sine', period: 16, min: 0.1, max: 0.8 } } });
-  project.patterns[0].fx[0][0].target = { kind: 'effect', device: 0, parameter: 'cutoff' };
+  project.definitions.push({ id: 'soften', name: 'Filter', kind: 'fx', source: 'fx soften() { out = in }' });
+  project.tracks[0].fx = { definition: 'soften', values: { cutoff: 700 }, modulations: { cutoff: { enabled: true, shape: 'sine', period: 16, min: 0.1, max: 0.8 } } };
+  project.patterns[0].fx[0][0].target = { kind: 'effect', parameter: 'cutoff' };
   project.patterns[0].fx[0][0].values[4] = '2400';
   expect(readProject(JSON.stringify(project))).toEqual(project);
   const copy = makePattern(project, project.patterns[0]); copy.fx[0][0].values[4] = '800';
@@ -69,7 +72,7 @@ it('round trips named lanes, chains and LFO settings and rejects malformed value
   resizePattern(copy, 2); resizePattern(copy, 64); expect(copy.fx[0][0].values[4]).toBe('800');
   project.patterns[0].fx[0][0].values[4] = '0Q10'; expect(() => readProject(JSON.stringify(project))).toThrow();
   project.patterns[0].fx[0][0].values[4] = null;
-  project.tracks[0].effects[0].modulations.cutoff.period = 0; expect(() => readProject(JSON.stringify(project))).toThrow();
+  project.tracks[0].fx!.modulations.cutoff.period = 0; expect(() => readProject(JSON.stringify(project))).toThrow();
 });
 
 it('saves envelopes, deep-copies them into variations, retains hidden points and rejects invalid ordering', () => {

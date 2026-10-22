@@ -1631,7 +1631,7 @@ mod tests {
 
     #[test]
     fn fx_is_reserved_and_parses_as_a_persistent_declaration() {
-        let items = parse_ok("fx room { out = it }");
+        let items = parse_ok("fx room { out = in }");
         assert!(matches!(&items[0], Item::Fx(_)));
         assert!(parse("fx = 1").is_err());
         assert!(crate::ide::RESERVED_WORDS.contains(&"fx"));

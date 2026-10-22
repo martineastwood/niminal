@@ -14,6 +14,7 @@ function setup() {
   const parent = document.createElement('div'); parent.tabIndex = 0; document.body.append(parent);
   const project = newProject(), edited = vi.fn(), audition = vi.fn(), play = vi.fn();
   const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, edited, vi.fn(), audition, play);
+  grid.recording = true;
   grid.render();
   const key = (key: string, options: KeyboardEventInit = {}) => parent.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...options }));
   const click = (row: number, track: number) => parent.querySelector<HTMLElement>(`#cell-${row}-${track}`)!.click();
@@ -79,6 +80,7 @@ it('keeps note undo history independent for each pattern and supports longer pat
   project.patterns.push(second);
   let pattern = project.patterns[0];
   const grid = new PatternGrid(parent, () => project, () => pattern, () => 4, vi.fn(), vi.fn(), vi.fn(), vi.fn());
+  grid.recording = true;
   const key = (key: string) => parent.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
   grid.render(); key('s'); // change first pattern's C to C#
   pattern = second; grid.render();
@@ -94,10 +96,11 @@ it('opens track devices without entering notes and navigates beyond the starter 
   const parent = document.createElement('div'); document.body.append(parent);
   const project = newProject(), selected = vi.fn(), open = vi.fn();
   for (let i = 4; i < 8; i++) {
-    project.tracks.push({ name: `Track ${i + 1}`, instrument: 'tone', effects: [], pan: 0, volume_db: 0, muted: false });
+    project.tracks.push({ name: `Track ${i + 1}`, instrument: 'tone', fx: null, pan: 0, volume_db: 0, muted: false });
     project.patterns[0].notes.push(Array(32).fill(null)); project.patterns[0].fx.push([emptyFxLane(32)]);
   }
   const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, vi.fn(), vi.fn(), vi.fn(), vi.fn(), selected, open);
+  grid.recording = true;
   grid.render();
   parent.querySelector<HTMLButtonElement>('[aria-label="Show Track 8 effects"]')!.click();
   expect(parent.querySelector('#cell-0-7')?.getAttribute('aria-selected')).toBe('true');
@@ -116,6 +119,7 @@ it('advances notes by the entry step, wraps, and supports step zero', () => {
   const parent = document.createElement('div'); document.body.append(parent);
   const project = newProject(); let step = 4;
   const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn(), () => step);
+  grid.recording = true;
   grid.render();
   const key = () => parent.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', bubbles: true, cancelable: true }));
   key(); expect(parent.getAttribute('aria-activedescendant')).toBe('cell-4-0');
@@ -218,4 +222,34 @@ it('adjusts values with one undoable vertical drag and cancels invalid text', ()
   input.value = '100 dB'; input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
   expect(project.patterns[0].fx[0][0].values[0]).toBe('-6');
   input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); expect(parent.querySelector('.lane-value')).toBeNull();
+});
+
+it('only previews notes until record mode is on, and marks the selected track', () => {
+  const { parent, project, grid, key, edited, audition } = setup();
+  grid.recording = false; grid.selectTrack(0);
+  project.tracks[0].instrument = 'lead';
+  const original = project.patterns[0].notes[0][0];
+  key('s');
+  expect(audition).toHaveBeenCalledTimes(1);
+  expect(project.patterns[0].notes[0][0]).toBe(original); expect(edited).not.toHaveBeenCalled();
+  key('Delete'); parent.querySelector<HTMLElement>('#cell-0-0')!.click();
+  expect(edited).not.toHaveBeenCalled();
+  const changed = vi.fn(); grid.modeChanged = changed;
+  key('Escape'); expect(grid.recording).toBe(true); expect(changed).toHaveBeenCalledWith(true);
+  key('s'); expect(project.patterns[0].notes[0][0]).toBe('C#4');
+  key('Escape'); expect(grid.recording).toBe(false);
+  expect(document.querySelector('.track-frame')).not.toBeNull();
+});
+
+it('lets a track pick its colour from the strip above its header', () => {
+  const { parent, project, edited } = setup();
+  expect(project.tracks[1].colour).toBeUndefined();
+  parent.querySelector<HTMLElement>('.track-header[data-track="1"] .track-colour')!.click();
+  document.querySelector<HTMLElement>('[aria-label="Colour #8f8fd8"]')!.click();
+  expect(project.tracks[1].colour).toBe('#8f8fd8'); expect(edited).toHaveBeenCalled();
+  expect(parent.querySelector<HTMLElement>('.track-header[data-track="1"]')!.style.getPropertyValue('--track-colour')).toBe('#8f8fd8');
+  expect(document.querySelector('.colour-popover')).toBeNull();
+  parent.querySelector<HTMLElement>('.track-header[data-track="1"] .track-colour')!.click();
+  [...document.querySelectorAll<HTMLElement>('.swatch-reset')].at(-1)!.click();
+  expect(project.tracks[1].colour).toBeUndefined();
 });

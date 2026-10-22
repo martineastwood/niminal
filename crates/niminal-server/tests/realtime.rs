@@ -568,7 +568,7 @@ fn routing_session() -> Session {
         1,
         serde_json::from_value(json!([
             {"op":"transaction","at":0,"source":"instr flat() { 0.2 }","edits":[
-                {"op":"fx","name":"volume","source":"(level: num = 1) { out = it * level }"},
+                {"op":"fx","name":"volume","source":"(level: num = 1) { out = in * level }"},
                 {"op":"node","id":"a","fx":"volume"},
                 {"op":"connect","id":"out","from":{"kind":"node","id":"a"},"to":{"kind":"master"}}
             ]},
@@ -622,7 +622,7 @@ fn crossfades_and_actual_transaction_acknowledgements_do_no_heap_work_on_audio()
     let mut r = s.start_realtime(RealtimeConfig::default());
     let ops: Vec<niminal_server::Op> = serde_json::from_value(json!([
         {"op":"transaction","at":17,"edits":[
-            {"op":"fx","name":"twice","source":"(level: num = 1) { out = it * level * 2 }"},
+            {"op":"fx","name":"twice","source":"(level: num = 1) { out = in * level * 2 }"},
             {"op":"replace","id":"a","fx":"twice","fade":8.0/48000.0}
         ]},
         {"op":"routing","at":21,"edits":[{"op":"bus","id":"unused","channels":1}]}
@@ -670,7 +670,7 @@ fn a_graph_missed_during_starvation_is_applied_and_acknowledged_when_planning_re
         .send_events(
             1,
             serde_json::from_value(json!([{"op":"routing","at":32,"edits":[
-                {"op":"fx","name":"double","source":"() { out = it * 2 }"},
+                {"op":"fx","name":"double","source":"() { out = in * 2 }"},
                 {"op":"replace","id":"a","fx":"double"}
             ]}]))
             .unwrap(),
@@ -713,11 +713,11 @@ fn panic_during_a_fx_crossfade_matches_offline_without_heap_work_on_audio() {
         let mut s = routing_session();
         s.send_events(1, serde_json::from_value(json!([
             {"op":"routing","at":0,"edits":[
-                {"op":"fx","name":"echo","source":"() { out = it.delay(time: 1ms, feedback: 0.9) }"},
+                {"op":"fx","name":"echo","source":"() { out = in.delay(time: 1ms, feedback: 0.9) }"},
                 {"op":"replace","id":"a","fx":"echo"}
             ]},
             {"op":"routing","at":128,"edits":[
-                {"op":"fx","name":"double","source":"() { out = it * 2 }"},
+                {"op":"fx","name":"double","source":"() { out = in * 2 }"},
                 {"op":"replace","id":"a","fx":"double","fade":0.02}
             ]}
         ])).unwrap()).unwrap();

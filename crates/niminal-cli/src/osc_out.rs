@@ -1,4 +1,4 @@
-//! Signals sent out over OSC: `out = it.osc_out("/vj/level", port: 9000)`. The audio thread keeps the
+//! Signals sent out over OSC: `out = in.osc_out("/vj/level", port: 9000)`. The audio thread keeps the
 //! latest value of each; this thread reads them and sends the ones that moved, as often as each
 //! asked for. Nothing here is on the audio thread or logged: a replay does not send.
 

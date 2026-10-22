@@ -227,7 +227,7 @@ mod tests {
         let first = |src: &str| analyze(src).unwrap().remove(0);
         let unit = |src: &str| d.for_statement(&first(src), None, None).unit;
         assert_eq!(unit("instr a(f: hz) { osc(sine, f) }"), QuantizeUnit::Beat);
-        assert_eq!(unit("fx t { out = it }"), QuantizeUnit::Bar);
+        assert_eq!(unit("fx t { out = in }"), QuantizeUnit::Bar);
         assert_eq!(unit("t.__update([c4])"), QuantizeUnit::Cycle);
         assert_eq!(unit("t.mute"), QuantizeUnit::Bar);
         assert_eq!(unit("t.start"), QuantizeUnit::Cycle);

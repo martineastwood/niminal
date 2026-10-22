@@ -65,7 +65,7 @@ Protocol **5** includes a timed `routing` operation inside `events.send`. Each c
 ```json
 { "method": "events.send", "params": { "events": [
   { "op": "routing", "at": 96000, "edits": [
-    { "op": "fx", "name": "echo", "source": "(feedback: num = 0.3) { out = it.delay(time: 120ms, feedback: feedback) }" },
+    { "op": "fx", "name": "echo", "source": "(feedback: num = 0.3) { out = in.delay(time: 120ms, feedback: feedback) }" },
     { "op": "node", "id": "channel" },
     { "op": "node", "id": "return", "fx": "echo", "args": { "feedback": 0.5 } },
     { "op": "connect", "id": "send", "from": { "kind": "node", "id": "channel" }, "to": { "kind": "node", "id": "return" }, "gain": 0.25 },
@@ -75,7 +75,7 @@ Protocol **5** includes a timed `routing` operation inside `events.send`. Each c
 ] } }
 ```
 
-`fx` defines reusable DSP with a parameter signature and body. `it` is incoming audio. A node without an fx instance is a voice collection and audio pass-through. Notes choose their instrument independently with `target`, and their destination with `to`. Node output is silent until connected. Add a second channel-to-master connection for a dry path.
+`fx` defines reusable DSP with a parameter signature and body. `in` is incoming audio. A node without an fx instance is a voice collection and audio pass-through. Notes choose their instrument independently with `target`, and their destination with `to`. Node output is silent until connected. Add a second channel-to-master connection for a dry path.
 
 | Routing edit | Fields | Meaning |
 | --- | --- | --- |
@@ -329,7 +329,7 @@ Use one `transaction` operation for coordinated definition and topology changes 
 { "op": "transaction", "at": 96000, "tag": "edit-42",
   "source": "instr tone(freq: hz) { osc(sine, freq) * env[0.1 | 100ms 0] }",
   "edits": [
-    { "op": "fx", "name": "echo", "source": "() { out = it.delay(time: 120ms, feedback: 0.3) }" },
+    { "op": "fx", "name": "echo", "source": "() { out = in.delay(time: 120ms, feedback: 0.3) }" },
     { "op": "node", "id": "return", "fx": "echo" },
     { "op": "connect", "id": "wet", "from": { "kind": "node", "id": "return" }, "to": { "kind": "master" } }
   ]
@@ -346,14 +346,14 @@ The JavaScript and Python clients expose `transaction(...)`. The live sequencer 
 
 ```json
 { "op": "routing", "at": 96000, "edits": [
-  { "op": "fx", "name": "new_echo", "source": "(feedback: num = 0.3) { out = it.delay(time: 180ms, feedback: feedback) }" },
+  { "op": "fx", "name": "new_echo", "source": "(feedback: num = 0.3) { out = in.delay(time: 180ms, feedback: feedback) }" },
   { "op": "replace", "id": "return", "fx": "new_echo", "fade": 0.02, "args": { "feedback": 0.45 } }
 ] }
 ```
 
 Matching parameter names and units retain their current values and smoothing trajectories unless overridden in `args`. New parameters use their defaults; removed parameters disappear. A zero `fade` (the default) preserves compatible DSP memory. A positive fade starts the new DSP fresh and linearly blends the old and new outputs for that duration, in seconds (maximum 60). The old fx receives the same incoming audio during the fade; its remaining tail is discarded at the end. Retired DSP storage is destroyed off the audio thread. To keep a longer independent tail, use separate instances and `drain` instead.
 
-Crossfades require the same output width and fx definitions whose audio inputs come only from `it`, with sends represented by explicit connections. Schedule successive crossfaded replacements after the preceding fade finishes. An unrelated graph edit preserves an ongoing fade. Panic cancels the fade and clears both fx instances' memory; subsequent notes use the replacement immediately.
+Crossfades require the same output width and fx definitions whose audio inputs come only from `in`, with sends represented by explicit connections. Schedule successive crossfaded replacements after the preceding fade finishes. An unrelated graph edit preserves an ongoing fade. Panic cancels the fade and clears both fx instances' memory; subsequent notes use the replacement immediately.
 
 ### Graph inspection and meters
 

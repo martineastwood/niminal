@@ -296,6 +296,7 @@ impl Names {
         if matches!(
             name.name.as_str(),
             "out"
+                | "in"
                 | "it"
                 | "instrument"
                 | "state"
@@ -472,7 +473,7 @@ pub(crate) fn compile_control(
 ) -> Res<ControlDef> {
     if matches!(
         name.name.as_str(),
-        "out" | "it" | "instrument" | "state" | "ctl"
+        "out" | "in" | "it" | "instrument" | "state" | "ctl"
     ) {
         return Err(Diagnostic::new(
             format!("`{}` is a reserved word", name.name),
@@ -1192,7 +1193,7 @@ pub(crate) fn compile_chain(
 
     let out = match lower.out.take() {
         Some(out) => out,
-        None if has_instrument => lower.it(),
+        None if has_instrument => lower.node_input(),
         None if lower.sends > 0 => Sig::constant(Unit::Num, 0.0),
         None => {
             return Err(Diagnostic::new(
@@ -1762,8 +1763,8 @@ impl<'a> Lower<'a> {
                 let sig = self.out_value(value)?;
                 self.set_out(sig, value.span)
             }
-            "it" => Err(Diagnostic::new(
-                "`it` is an input and can't be assigned",
+            "in" => Err(Diagnostic::new(
+                "`in` is an input and can't be assigned",
                 name.span,
             )),
             "instrument" => Err(Diagnostic::new(
@@ -2012,7 +2013,7 @@ impl<'a> Lower<'a> {
         }
         let [source, target] = args.as_slice() else {
             return Err(Diagnostic::new("`to` takes a bus", name.span)
-                .with_help("for example `out = it.to(space)`"));
+                .with_help("for example `out = in.to(space)`"));
         };
         let bus = match (&target.name, &target.value.kind) {
             (None, ExprKind::Name(b)) => self.names.bus(b).ok_or_else(|| {
@@ -2055,9 +2056,9 @@ impl<'a> Lower<'a> {
         sig
     }
 
-    /// `it`: what the node's voices produced, in the master's layout.
-    fn it(&mut self) -> Sig {
-        self.input_bundle("it", self.names.master, |channel| ChainInput::It {
+    /// `in`: what the node's voices produced, in the master's layout.
+    fn node_input(&mut self) -> Sig {
+        self.input_bundle("in", self.names.master, |channel| ChainInput::It {
             channel,
         })
     }
@@ -3485,14 +3486,20 @@ impl<'a> Lower<'a> {
                         .with_help("set it first, with `out = ...`")
                 });
             }
-            "it" => {
+            "in" => {
                 return match self.mode {
-                    Mode::Node => Ok(self.it()),
+                    Mode::Node => Ok(self.node_input()),
                     _ => Err(Diagnostic::new(
-                        "`it` is only available inside a node, or a function given to `map`",
+                        "`in` is only available inside an fx, where it is the audio coming in",
                         span,
                     )),
                 };
+            }
+            "it" => {
+                return Err(Diagnostic::new(
+                    "`it` is only available inside a function given to `map`",
+                    span,
+                ));
             }
             "pi" => return Ok(Sig::constant(Unit::Num, std::f64::consts::PI)),
             "true" => return Ok(Sig::constant(Unit::Num, 1.0)),
@@ -4379,11 +4386,11 @@ impl<'a> Lower<'a> {
     /// Make free variables explicit ports; each fx decides when to read them.
     fn scope_kernel(&mut self, body: &[Stmt], span: Span) -> (FnDef, Vec<PParam>, BoundFnArgs) {
         let mut def = funcs::lambda(&[], body, span);
-        let capture_it =
-            self.mode == Mode::Node && !self.scope.contains_key("it") && funcs::reads(&def, "it");
-        if capture_it {
-            let it = self.it();
-            self.scope.insert("it".into(), Datum::Sig(it));
+        let capture_in =
+            self.mode == Mode::Node && !self.scope.contains_key("in") && funcs::reads(&def, "in");
+        if capture_in {
+            let input = self.node_input();
+            self.scope.insert("in".into(), Datum::Sig(input));
         }
         let mut captures: Vec<_> = self
             .scope
@@ -4418,8 +4425,8 @@ impl<'a> Lower<'a> {
                 },
             )));
         }
-        if capture_it {
-            self.scope.remove("it");
+        if capture_in {
+            self.scope.remove("in");
         }
         (def, params, given)
     }
@@ -4757,7 +4764,7 @@ impl<'a> Lower<'a> {
                 "`to` can only end the line that sets a node's `out`",
                 name.span,
             )
-            .with_help("for example `out = it.lpf(cutoff: 1khz).to(space)`"));
+            .with_help("for example `out = in.lpf(cutoff: 1khz).to(space)`"));
         }
         let registry = self.registry;
         let Some(spec) = registry.find(&name.name) else {

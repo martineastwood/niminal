@@ -2,7 +2,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { EffectParameters, Song } from './project';
 
 export interface AudioStatus {
-  connected: boolean; playing: boolean; row: number | null; pattern_id: string | null; sequence_position: number | null; sample_rate: number;
+  connected: boolean; playing: boolean; row: number | null; row_phase: number | null; row_at_ms: number; pattern_id: string | null; sequence_position: number | null; sample_rate: number;
   skipped_rows: number; late_events: number; error: string | null;
   instruments: Record<string, string>; effects: Record<string, string>; effect_parameters: EffectParameters;
 }
@@ -15,7 +15,7 @@ type Command =
   | { op: 'audition'; instrument: string; note: string; track: number };
 
 export let audioStatus: AudioStatus = {
-  connected: false, playing: false, row: null, pattern_id: null, sequence_position: null, sample_rate: 0,
+  connected: false, playing: false, row: null, row_phase: null, row_at_ms: 0, pattern_id: null, sequence_position: null, sample_rate: 0,
   skipped_rows: 0, late_events: 0, error: null, instruments: {}, effects: {}, effect_parameters: {},
 };
 let receive: (status: AudioStatus) => void = () => {};

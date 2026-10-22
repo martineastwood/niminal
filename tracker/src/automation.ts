@@ -6,11 +6,11 @@ export function laneParameter(target: FxTarget | null, track: number, project: P
   if (!target) return null;
   if (target.kind === 'volume') return { label: 'Track volume', name: 'volume', min: -60, max: 6, default: 0, unit: 'db' };
   if (target.kind === 'pan') return { label: 'Track pan', name: 'pan', min: -1, max: 1, default: 0, unit: '%' };
-  const slot = project.tracks[track].effects[target.device];
-  const parameter = parameters[slot?.definition]?.find(p => p.name === target.parameter);
-  if (!parameter) return null;
+  const slot = project.tracks[track].fx;
+  const parameter = parameters[slot?.definition ?? '']?.find(p => p.name === target.parameter);
+  if (!slot || !parameter) return null;
   const name = project.definitions.find(d => d.id === slot.definition)?.name ?? 'Effect';
-  return { ...parameter, label: `${target.device + 1} ${name} → ${parameter.name}` };
+  return { ...parameter, label: `${name} → ${parameter.name}` };
 }
 function percent(p: Parameter) { return p.unit === '%' || !p.unit && p.min === 0 && p.max === 1; }
 export function formatValue(value: string | number, p: Parameter | null): string {
@@ -32,16 +32,6 @@ export function parseValue(text: string, p: Parameter): string | null {
   else if (percent(p)) n /= 100;
   else if (p.unit === 'sec') n /= 1000;
   return Number.isFinite(n) && n >= p.min - 1e-9 && n <= p.max + 1e-9 ? String(Math.min(p.max, Math.max(p.min, n))) : null;
-}
-
-// Keep named lanes attached to their insert when the device strip changes order.
-export function remapEffectLanes(project: Project, track: number, map: (device: number) => number | null) {
-  for (const pattern of project.patterns) for (const lane of pattern.fx[track]) {
-    if (lane.target?.kind !== 'effect') continue;
-    const device = map(lane.target.device);
-    if (device === null) { lane.target = null; lane.values.fill(null); delete lane.envelope; }
-    else lane.target.device = device;
-  }
 }
 
 // Native glides interpolate engine units; dB controls are linear in gain.

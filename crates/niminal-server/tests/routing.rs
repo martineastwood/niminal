@@ -75,7 +75,7 @@ fn setup(session: &mut Session) {
                     Edit::Fx {
                         output_channels: None,
                         name: "volume".into(),
-                        source: "(level: num = 1) { out = it * level }".into(),
+                        source: "(level: num = 1) { out = in * level }".into(),
                     },
                     instance("a", Some("volume"), Some(0.25)),
                     instance("b", Some("volume"), Some(0.75)),
@@ -258,7 +258,7 @@ fn a_draining_effect_rings_out_and_an_immediate_free_cuts_it_off() {
                         Edit::Fx {
                             output_channels: None,
                             name: "echo".into(),
-                            source: "() { out = it.delay(time: 1ms, feedback: 0.5) }".into(),
+                            source: "() { out = in.delay(time: 1ms, feedback: 0.5) }".into(),
                         },
                         instance("echo", Some("echo"), None),
                         connect("out", node("echo"), Endpoint::Master, 1.0),
@@ -359,7 +359,7 @@ fn redefining_or_freeing_a_template_does_not_change_existing_instances() {
                     Edit::Fx {
                         output_channels: None,
                         name: "volume".into(),
-                        source: "(level: num = 1) { out = it * level * 0 }".into(),
+                        source: "(level: num = 1) { out = in * level * 0 }".into(),
                     },
                     instance("new", Some("volume"), None),
                     connect("new_out", node("new"), Endpoint::Master, 1.0),
@@ -499,7 +499,7 @@ fn node_ids_cannot_alias_fx_instances_or_the_implicit_node() {
                 vec![Edit::Fx {
                     output_channels: None,
                     name: "bad".into(),
-                    source: "() { out = it }\nfx injected { out = 1 }".into()
+                    source: "() { out = in }\nfx injected { out = 1 }".into()
                 }]
             )]
         )
@@ -518,7 +518,7 @@ fn an_unrelated_graph_edit_preserves_effect_memory_when_bus_indices_change() {
                     Edit::Fx {
                         output_channels: None,
                         name: "echo".into(),
-                        source: "() { out = it.delay(time: 1ms, feedback: 0.5) }".into(),
+                        source: "() { out = in.delay(time: 1ms, feedback: 0.5) }".into(),
                     },
                     instance("echo", Some("echo"), None),
                     connect("out", node("echo"), Endpoint::Master, 1.0),
@@ -632,8 +632,8 @@ fn replacement_crossfades_survive_unrelated_graph_changes_and_replay() {
         1,
         vec![
             json_op(json!({"op":"routing","at":0,"edits":[
-                {"op":"fx","name":"one","source":"() { out = it }"},
-                {"op":"fx","name":"two","source":"() { out = it * 2 }"},
+                {"op":"fx","name":"one","source":"() { out = in }"},
+                {"op":"fx","name":"two","source":"() { out = in * 2 }"},
                 {"op":"node","id":"a","fx":"one"},
                 {"op":"connect","id":"out","from":{"kind":"node","id":"a"},"to":{"kind":"master"}}
             ]})),
@@ -674,7 +674,7 @@ fn replacement_preserves_matching_live_parameters_and_allows_explicit_overrides(
     let mut s = ready();
     setup(&mut s);
     s.send_events(1,vec![note("a",0,1.0),json_op(json!({"op":"routing","at":4,"edits":[{"op":"set","id":"a","args":{"level":0.6}}]})),json_op(json!({"op":"routing","at":12,"edits":[
-        {"op":"fx","name":"new","source":"(level: num = 0.1) { out = it * level * 2 }"},
+        {"op":"fx","name":"new","source":"(level: num = 0.1) { out = in * level * 2 }"},
         {"op":"replace","id":"a","fx":"new"}
     ]})),json_op(json!({"op":"routing","at":24,"edits":[{"op":"replace","id":"a","fx":"volume","args":{"level":0.8}}]}))]).unwrap();
     let out = s.process(40).remove(0);
@@ -733,7 +733,7 @@ fn replacement_resets_parameters_whose_units_changed() {
     let mut s = ready();
     setup(&mut s);
     s.send_events(1,vec![note("a",0,1.0),json_op(json!({"op":"routing","at":4,"edits":[{"op":"set","id":"a","args":{"level":0.6}}]})),json_op(json!({"op":"routing","at":12,"edits":[
-        {"op":"fx","name":"frequency","source":"(level: hz = 100hz) { out = it * (level / 100hz) }"},
+        {"op":"fx","name":"frequency","source":"(level: hz = 100hz) { out = in * (level / 100hz) }"},
         {"op":"replace","id":"a","fx":"frequency"}
     ]}))]).unwrap();
     let out = s.process(20).remove(0);
@@ -776,7 +776,7 @@ fn mono_native_modulation_bus_drives_a_stereo_fx_parameter() {
         json_op(json!({"op":"define","at":0,"source":"instr held() { tail = 0ms\n [1, 1].to_layout(stereo) }"})),
         json_op(json!({"op":"routing","at":0,"edits":[
             {"op":"fx","name":"modulator","output_channels":1,"source":"() { out = 0.5 }"},
-            {"op":"fx","name":"gain","source":"(amount: num = 0) { out = it * amount }"},
+            {"op":"fx","name":"gain","source":"(amount: num = 0) { out = in * amount }"},
             {"op":"bus","id":"mod","channels":1},
             {"op":"node","id":"lfo","fx":"modulator"},
             {"op":"node","id":"audio","fx":"gain"},
@@ -804,7 +804,7 @@ fn a_native_fx_reset_restarts_dsp_without_releasing_voices_or_changing_parameter
     session.send_events(1, vec![
         json_op(json!({"op":"define","at":0,"source":"instr held() { tail = 0ms\n [0.2, 0.2].to_layout(stereo) }"})),
         json_op(json!({"op":"routing","at":0,"edits":[
-            {"op":"fx","name":"moving","source":"(amount: num = 0.1) { out = it + osc(sine, 100hz) * amount }"},
+            {"op":"fx","name":"moving","source":"(amount: num = 0.1) { out = in + osc(sine, 100hz) * amount }"},
             {"op":"node","id":"audio","fx":"moving","args":{"amount":0.2}},
             {"op":"connect","id":"out","from":{"kind":"node","id":"audio"},"to":{"kind":"master"}}
         ]})),

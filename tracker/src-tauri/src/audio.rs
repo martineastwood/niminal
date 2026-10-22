@@ -18,6 +18,9 @@ pub struct Status {
     pub connected: bool,
     pub playing: bool,
     pub row: Option<usize>,
+    /// Progress through `row` (0 to 1), measured at `row_at_ms` (Unix time), so the UI can predict row changes exactly.
+    pub row_phase: Option<f64>,
+    pub row_at_ms: f64,
     pub pattern_id: Option<String>,
     pub sequence_position: Option<usize>,
     pub sample_rate: f64,
@@ -177,6 +180,7 @@ impl Worker {
         self.playback = None;
         self.status.playing = false;
         self.status.row = None;
+        self.status.row_phase = None;
         self.status.pattern_id = None;
         self.status.sequence_position = None;
         if self.client.is_some() {
@@ -262,23 +266,19 @@ impl Worker {
                     .filter(|(_, sound)| sound.fx_source.is_some())
                     .map(|(id, sound)| (id.clone(), sound.parameters.clone()))
                     .collect();
-                for track in &self.mixer {
-                    for slot in &track.effects {
-                        for name in slot.modulations.keys() {
-                            if !parameters.get(&slot.definition).is_some_and(|params| {
-                                params.iter().any(|parameter| parameter.name == *name)
-                            }) {
-                                return Err(format!(
-                                    "Remove the LFO targeting {name} before removing that effect parameter"
-                                ));
-                            }
-                        }
-                    }
-                }
+                let (remove_modulators, _) = crate::modulation::edits(
+                    &[],
+                    &self.mixer,
+                    &self.status.effect_parameters,
+                    self.mixer_timing.0,
+                    self.mixer_timing.1,
+                    false,
+                );
+                edits.extend(remove_modulators);
                 edits.extend(mixer::replacements(&self.mixer, &effects, &parameters)?);
                 let (_, modulators) = crate::modulation::edits(
                     &self.mixer,
-                    &self.mixer,
+                    &[],
                     &parameters,
                     self.mixer_timing.0,
                     self.mixer_timing.1,
@@ -372,20 +372,18 @@ impl Worker {
                     track.name
                 ));
             }
-            for slot in &track.effects {
-                let parameters = self
-                    .status
-                    .effect_parameters
-                    .get(&slot.definition)
-                    .ok_or_else(|| format!("Apply the effect assigned to {} first", track.name))?;
-                for name in slot.modulations.keys() {
-                    if !parameters.iter().any(|parameter| parameter.name == *name) {
-                        return Err(format!("{}: unknown modulation target {name}", track.name));
-                    }
-                }
+            if let Some(slot) = &track.fx
+                && !self.status.effect_parameters.contains_key(&slot.definition)
+            {
+                return Err(format!("Apply the effect assigned to {} first", track.name));
             }
             for pattern in &song.patterns {
                 for lane in &pattern.fx[index] {
+                    if lane.target.as_ref().is_some_and(|target| {
+                        !target.available(track, &self.status.effect_parameters)
+                    }) {
+                        continue;
+                    }
                     if let Some(envelope) = &lane.envelope {
                         for point in &envelope.points {
                             let target =
@@ -437,6 +435,10 @@ impl Worker {
         if let Some(playback) = &mut self.playback {
             let position = playback.position(sample, sr);
             self.status.row = position.as_ref().map(|p| p.row);
+            self.status.row_phase = playback.phase(sample, sr);
+            self.status.row_at_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
             self.status.pattern_id = position.as_ref().map(|p| p.pattern.id.clone());
             self.status.sequence_position = position.as_ref().and_then(|p| p.sequence_position);
             let (events, skipped) = playback.events_until(

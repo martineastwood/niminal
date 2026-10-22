@@ -53,10 +53,11 @@ From the tightest to the loosest:
 
 ## Implicit names
 
-**`out`**, **`it`** and **`note`**:
+**`out`**, **`in`**, **`it`** and **`note`**:
 
 - **`out`:** the result of an instrument or function (see [Instruments](/reference/language/instruments/)).
-- **`it`:** the current value in a one-argument context: a function given to `map`, pattern transforms, a bus body, a node's `out` / `notes` line.
+- **`in`:** the audio coming into an `fx`. It pairs with `out`: `out = in.lpf(cutoff: 1khz)`.
+- **`it`:** the current value in a one-argument context: a function given to `map` or a pattern transform such as `every(2, it.reverse)`.
 - **`note`:** the running voice in an instrument: `note.time`, `note.released`.
 
 ## Control flow

@@ -6,25 +6,37 @@ import { Arrangement } from './arrangement';
 import { PatternGrid } from './grid';
 import { EnvelopeEditor } from './envelope-editor';
 import { renderMixer } from './mixer';
+import { setTrackFxPreset } from './effects';
 import { audioCommand, audioStatus, observeAudio } from './audio';
 import './style.css';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
-  <header><div class="brand">niminal <span>tracker</span></div><span class="badge">ALPHA</span><div class="project-actions"><button id="toggle-mixer" aria-expanded="false">Track effects</button><button id="toggle-automation" aria-expanded="false">Automation</button><button id="toggle-code" aria-expanded="false">Code editor</button><button id="focus-pattern">Focus pattern</button><button id="import">Open project</button><button id="export">Save project</button></div></header>
+  <div id="toolbar">
+    <span class="brand">niminal</span>
+    <div class="group"><button id="play" title="Loop pattern (Space)">▶ Pattern</button><button id="play-song" title="Play from the selected sequence step to the end">▶ Song</button><button id="stop" title="Stop">■</button><button id="record" aria-pressed="false" title="Record mode: typed notes and values are entered (Esc)">● Rec</button><label class="check"><input id="follow" type="checkbox" checked> Follow</label><span id="play-position" class="muted"></span></div>
+    <div class="group"><label>BPM <input id="bpm" type="number" min="20" max="300" step="1"></label><label>LPB <input id="rows-per-beat" type="number" min="1" max="16" title="Rows per beat"></label><label>Oct <input id="octave" type="number" min="0" max="8" value="4"></label><label>Step <input id="entry-step" aria-label="Note entry step" title="Rows to advance after entering a note; 0 stays on this row" type="number" min="0" max="256" value="1"></label></div>
+    <div class="group"><strong id="pattern-number">00</strong><select id="pattern-picker" aria-label="Pattern to edit"></select><input id="pattern-name" aria-label="Pattern name"><label>Rows <input id="pattern-rows" type="number" min="1" max="256" data-structure></label><span id="pattern-uses" class="muted"></span></div>
+    <div class="group"><button id="undo">Undo</button><button id="redo">Redo</button><button id="add-track" data-structure title="Add track" aria-label="Add track">+ Track</button><button id="delete-track" data-structure title="Delete selected track" aria-label="Delete selected track">− Track</button><button id="restore-track" data-structure title="Restore last deleted track" aria-label="Restore last deleted track">↺</button></div>
+    <div class="group push"><button id="import">Open</button><button id="export">Save</button></div>
+  </div>
   <main>
-    <aside id="sequencer"><div class="sequence-heading"><span class="section-title">SEQ</span><button id="sequence-names" aria-label="Toggle pattern names" title="Show / hide pattern names" aria-expanded="true">◂</button></div><div id="sequence"></div><div class="sequence-actions"><button id="new-pattern" data-structure title="New blank pattern" aria-label="New blank pattern">+</button><button id="variation" data-structure title="Duplicate as variation" aria-label="Duplicate as variation">⧉</button><button id="reuse" data-structure title="Reuse pattern" aria-label="Reuse pattern">↳</button><button id="move-up" data-structure title="Move sequence step up" aria-label="Move sequence step up">↑</button><button id="move-down" data-structure title="Move sequence step down" aria-label="Move sequence step down">↓</button><button id="remove-step" data-structure title="Remove sequence step" aria-label="Remove sequence step">−</button></div><details id="sound-library"><summary>SOUND LIBRARY</summary><div id="definitions"></div><div class="add-buttons"><button id="new-instrument">+ Instrument</button><button id="new-effect">+ Effect</button></div><p class="aside-help">Select a sound to edit its code.<br>Project copies are saved locally.</p></details></aside>
+    <aside id="sequencer">
+      <div class="side-heading"><span class="section-title">SEQUENCE</span><span class="side-tools"><button id="new-pattern" data-structure title="New blank pattern" aria-label="New blank pattern">+</button><button id="variation" data-structure title="Duplicate as variation" aria-label="Duplicate as variation">⧉</button><button id="reuse" data-structure title="Reuse pattern" aria-label="Reuse pattern">↳</button><button id="move-up" data-structure title="Move sequence step up" aria-label="Move sequence step up">↑</button><button id="move-down" data-structure title="Move sequence step down" aria-label="Move sequence step down">↓</button><button id="remove-step" data-structure title="Remove sequence step" aria-label="Remove sequence step">−</button><button id="sequence-names" aria-label="Toggle pattern names" title="Show / hide pattern names" aria-expanded="true">◂</button></span></div>
+      <div id="sequence"></div>
+      <div id="sound-library"><div class="side-heading"><span class="section-title">INSTRUMENTS</span><span class="side-tools"><button id="new-instrument" title="New instrument" aria-label="New instrument">+</button></span></div><div id="definitions"></div></div>
+    </aside>
     <section class="workspace">
-      <div class="engine-toolbar"><label>Engine port <input id="engine-port" type="number" min="1" max="65535" value="7401"></label><input id="engine-token" type="password" placeholder="Token (optional)" aria-label="Engine token"><button id="connect">Connect</button><span id="audio-status">Start niminal server, then connect</span></div>
-      <div class="transport-toolbar"><button id="play">Loop pattern</button><button id="play-song" title="Play from the selected sequence step to the end">Play song</button><button id="stop">Stop</button><label><input id="follow" type="checkbox" checked> Follow playback</label><span id="play-position" class="muted"></span><label>BPM <input id="bpm" type="number" min="20" max="300" step="1"></label><label>Rows/beat <input id="rows-per-beat" type="number" min="1" max="16"></label></div>
-      <div class="pattern-toolbar"><div><strong id="pattern-number">Pattern 00</strong><select id="pattern-picker" aria-label="Pattern to edit"></select><input id="pattern-name" aria-label="Pattern name"><span id="pattern-uses" class="muted"></span></div><label>Rows <input id="pattern-rows" type="number" min="1" max="256" data-structure></label><label>Octave <input id="octave" type="number" min="0" max="8" value="4"></label><label>Step <input id="entry-step" aria-label="Note entry step" title="Rows to advance after entering a note; 0 stays on this row" type="number" min="0" max="256" value="1"></label><button id="undo">Undo notes</button><button id="redo">Redo</button><button id="add-track" data-structure title="Add track" aria-label="Add track">+ Track</button><button id="delete-track" data-structure title="Delete selected track" aria-label="Delete selected track">− Track</button><button id="restore-track" data-structure title="Restore last deleted track" aria-label="Restore last deleted track">↶</button></div>
-      <div id="grid" tabindex="0" role="grid" aria-label="Pattern editor"></div>
-      <div class="grid-help">Z S X D C V G B H N J M: notes · Arrows: move · Delete: clear · Shift+arrows: select · Cmd/Ctrl+C/V: copy/paste · Cmd/Ctrl+Z: undo · Space: play/stop · F6: switch editor</div>
-      <section id="automation-panel" hidden><div class="panel-heading">PATTERN AUTOMATION<button id="close-automation">Minimise</button></div><div id="automation"></div></section>
-      <section id="mixer-panel" hidden><div class="panel-heading">TRACK DEVICES<button id="close-mixer">Minimise</button></div><div id="mixer" aria-label="Track mixer"></div></section>
-      <section class="instrument-editor" id="code-panel" hidden><div class="editor-toolbar"><div><span id="definition-kind" class="badge"></span><input id="definition-name" aria-label="Definition name"></div><div><span id="apply-status" class="muted"></span><button id="apply">Apply</button><button id="audition">Audition</button><button id="expand">Expand editor</button><button id="close-code">Minimise</button></div></div><div id="code"></div><div class="editor-help">Hover for documentation or errors · Ctrl+Space: completion · Shift+Alt+F: format</div></section>
+      <div id="grid-wrap"><div id="grid" tabindex="0" role="grid" aria-label="Pattern editor"></div></div>
+      <div id="bottom-dock" hidden>
+        <div class="dock-resize" id="dock-resize"></div>
+        <div class="dock-bar"><button class="tab" data-tab="code">Code</button><button class="tab" data-tab="automation">Automation</button><span id="code-tools"><span id="definition-kind" class="badge"></span><input id="definition-name" aria-label="Definition name"><button id="apply">Apply</button><span id="apply-status" class="muted"></span></span><span class="spacer"></span><button id="expand" title="Expand editor" aria-label="Expand editor">⤢</button><button id="close-dock" title="Close" aria-label="Close panel">×</button></div>
+        <section id="automation-panel" hidden><div id="automation"></div></section>
+        <section class="instrument-editor" id="code-panel" hidden><div class="code-workspace"><div id="mixer" aria-label="Track FX controls" hidden></div><div id="code"></div></div></section>
+      </div>
     </section>
-  </main><footer><span id="status">Starting editor…</span><span id="save-status">Local autosave</span></footer>`;
+  </main>
+  <footer><span id="status">Starting editor…</span><span class="spacer"></span><span id="audio-status"></span><label>Port <input id="engine-port" type="number" min="1" max="65535" value="7401"></label><input id="engine-token" type="password" placeholder="Token" aria-label="Engine token"><button id="connect">Connect</button><span id="save-status">Local autosave</span></footer>`;
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 function setText(id: string, value: string) {
@@ -55,25 +67,24 @@ function save() {
 }
 
 function selectDefinition(definition: Definition, reveal = true) {
-  if (reveal) showPanel('code', true);
   if (editor) states.set(selected.id, editor.state);
   selected = definition;
+  if (reveal) showPanel('code', true);
   const state = states.get(definition.id) ?? editorState(`file:///niminal-tracker/${definition.id}.nml`, definition.source, source => { definition.source = source; save(); renderApplyStatus(); });
   if (editor) editor.setState(state);
   else editor = new EditorView({ state, parent: element('code') });
   element<HTMLInputElement>('definition-name').value = definition.name;
-  element('definition-kind').textContent = definition.kind === 'instr' ? 'INSTRUMENT' : 'EFFECT';
+  element('definition-kind').textContent = definition.kind === 'instr' ? 'INSTRUMENT' : 'TRACK FX';
+  element('mixer').hidden = definition.kind !== 'fx';
   renderDefinitions(); renderApplyStatus();
 }
 function renderDefinitions() {
   const list = element('definitions');
   list.replaceChildren();
-  for (const [index, definition] of project.definitions.entries()) {
+  for (const [index, definition] of project.definitions.filter(d => d.kind === 'instr').entries()) {
     const button = document.createElement('button');
     button.className = `definition ${definition.id === selected.id ? 'selected' : ''}`;
     button.textContent = `${String(index).padStart(2, '0')}  ${definition.name}`;
-    const kind = document.createElement('small'); kind.textContent = definition.kind;
-    button.append(kind);
     button.onclick = () => { selectDefinition(definition); editor.focus(); };
     list.append(button);
   }
@@ -101,19 +112,31 @@ async function ensureSound(id: string) {
 async function ensureAssignments() {
   for (const track of project.tracks) {
     if (track.instrument) await ensureSound(track.instrument);
-    for (const slot of track.effects) await ensureSound(slot.definition);
+    if (track.fx) await ensureSound(track.fx.definition);
   }
 }
 function mixerView() {
+  if (selected.kind === 'fx' && !element('code-panel').hidden && project.tracks[deviceTrack].fx?.definition !== selected.id) {
+    openTrackFx(); return;
+  }
   envelopeEditor?.select(deviceTrack);
-  renderMixer(element('mixer'), project, deviceTrack, track => grid.selectTrack(track), () => { editedPattern(); grid.render(); }, id => {
-    const definition = project.definitions.find(d => d.id === id);
-    if (definition) selectDefinition(definition);
-  }, audioStatus.effect_parameters, (target, value) => grid.writeParameter(deviceTrack, target, value), audioStatus.playing, () => {
-    const definition = addDefinition('fx');
-    project.tracks[deviceTrack].effects.push({ definition: definition.id, values: {}, modulations: {} });
-    editedPattern(); mixerView();
+  renderMixer(element('mixer'), project, deviceTrack, () => { editedPattern(); grid.render(); }, audioStatus.effect_parameters, (target, value) => grid.writeParameter(deviceTrack, target, value), preset => {
+    const definition = setTrackFxPreset(project, deviceTrack, preset);
+    states.delete(definition.id);
+    // Discard the old editor state before loading the replacement source.
+    if (selected.id === definition.id) {
+      const state = editorState(`file:///niminal-tracker/${definition.id}.nml`, definition.source, source => { definition.source = source; save(); renderApplyStatus(); });
+      editor.setState(state);
+    }
+    selectDefinition(definition); editedPattern(); mixerView();
+    if (audioStatus.connected) void action(() => applyDefinition(definition));
   });
+}
+function openTrackFx() {
+  const track = project.tracks[deviceTrack];
+  const definition = track.fx ? project.definitions.find(d => d.id === track.fx!.definition)! : setTrackFxPreset(project, deviceTrack);
+  selectDefinition(definition); editor.focus();
+  editedPattern(); mixerView();
 }
 async function stopPlayback() {
   transportRevision++; starting = false;
@@ -126,7 +149,7 @@ async function togglePlay(mode: 'pattern' | 'song' = 'pattern') {
   try {
     for (const track of project.tracks) {
       if (track.instrument) await ensureSound(track.instrument);
-      for (const slot of track.effects) await ensureSound(slot.definition);
+      if (track.fx) await ensureSound(track.fx.definition);
       if (revision !== transportRevision) return;
     }
     await audioCommand({ op: 'play', song: song(), mode, pattern_id: arrangement.pattern.id, start_position: arrangement.position });
@@ -155,9 +178,12 @@ const grid = new PatternGrid(element('grid'), () => project, () => arrangement.p
   id => { if (id) { const definition = project.definitions.find(d => d.id === id); if (definition) selectDefinition(definition); } },
   (id, note, track) => { if (audioStatus.connected && !audioStatus.playing) void action(() => audition(id, note, track)); },
   () => { void action(() => togglePlay()); },
-  track => { if (deviceTrack !== track) { deviceTrack = track; mixerView(); } },
+  track => { if (deviceTrack !== track) { const editingFx = selected.kind === 'fx' && !element('code-panel').hidden; deviceTrack = track; if (editingFx) openTrackFx(); else mixerView(); } },
   (track, device, sameTrack) => {
-    if (device === 'effects') { showPanel('mixer', !sameTrack || element('mixer-panel').hidden); mixerView(); }
+    if (device === 'effects') {
+      if (sameTrack && selected.id === project.tracks[track].fx?.definition && !element('code-panel').hidden) { showPanel('code', false); element('grid').focus(); }
+      else openTrackFx();
+    }
     else {
       const definition = project.definitions.find(d => d.id === project.tracks[track].instrument);
       if (definition) {
@@ -171,13 +197,15 @@ const grid = new PatternGrid(element('grid'), () => project, () => arrangement.p
   });
 envelopeEditor = new EnvelopeEditor(element('automation'), () => project, () => arrangement.pattern, () => audioStatus.effect_parameters,
   () => { editedPattern(); grid.render(); }, track => grid.selectTrack(track));
+grid.modeChanged = on => { element('grid-wrap').classList.toggle('recording', on); element('record').setAttribute('aria-pressed', String(on)); };
+element('record').onclick = () => { grid.setRecording(!grid.recording); element('grid').focus(); };
 element('undo').onclick = () => { grid.undo(); element('grid').focus(); };
 element('redo').onclick = () => { grid.redo(); element('grid').focus(); };
 function renderApplyStatus() {
   const effect = selected.kind === 'fx';
   const ready = (effect ? audioStatus.effects[selected.id] : audioStatus.instruments[selected.id]) !== undefined;
   element<HTMLButtonElement>('apply').disabled = !audioStatus.connected;
-  element<HTMLButtonElement>('audition').disabled = !audioStatus.connected || (effect && !project.tracks.some(t => t.effects.some(slot => slot.definition === selected.id) && t.instrument));
+  element('apply').classList.toggle('dirty', audioStatus.connected && (!ready || appliedSources.get(selected.id) !== selected.source));
   setText('apply-status', !ready ? 'Not applied' : appliedSources.get(selected.id) === selected.source ? 'Applied' : 'Unapplied edits · playing last applied version');
 }
 function renderConnectButton() {
@@ -203,17 +231,6 @@ element('play').onclick = () => { void action(() => togglePlay('pattern')); };
 element('play-song').onclick = () => { void action(() => togglePlay('song')); };
 element('stop').onclick = () => { void action(stopPlayback); };
 element('apply').onclick = () => { const definition = selected; void action(() => applyDefinition(definition)); };
-element('audition').onclick = () => { const definition = selected; void action(async () => {
-  let track = grid.activeTrack;
-  let id = definition.id;
-  if (definition.kind === 'fx') {
-    await ensureSound(id);
-    if (!project.tracks[track].effects.some(slot => slot.definition === id) || !project.tracks[track].instrument) track = project.tracks.findIndex(t => t.effects.some(slot => slot.definition === id) && t.instrument);
-    if (track < 0) throw new Error('Assign this effect and an instrument to a track first');
-    id = project.tracks[track].instrument!;
-  }
-  await audition(id, `C-${element<HTMLInputElement>('octave').value}`, track);
-}); };
 function timingInputs() {
   element<HTMLInputElement>('bpm').value = String(project.bpm);
   element<HTMLInputElement>('rows-per-beat').value = String(project.rows_per_beat);
@@ -242,16 +259,15 @@ element<HTMLInputElement>('definition-name').oninput = event => { selected.name 
 function addDefinition(kind: 'instr' | 'fx') {
   const id = `${kind}_${crypto.randomUUID().replaceAll('-', '_')}`;
   const name = `${kind === 'instr' ? 'voice' : 'effect'}${project.definitions.length + 1}`;
-  const definition: Definition = { id, kind, name, source: kind === 'instr' ? `/// Describe your instrument here.\ninstr ${name}(freq: hz) {\n  osc(sine, freq) * env[0.15 | 200ms 0]\n}\n` : `/// Describe your effect here.\nfx ${name}(cutoff: hz = 2400hz) {\n  out = it.lpf(cutoff: cutoff)\n}\n` };
+  const definition: Definition = { id, kind, name, source: kind === 'instr' ? `/// Describe your instrument here.\ninstr ${name}(freq: hz) {\n  osc(sine, freq) * env[0.15 | 200ms 0]\n}\n` : `/// Describe your effect here.\nfx ${name}(cutoff: hz = 2400hz) {\n  out = in.lpf(cutoff: cutoff)\n}\n` };
   project.definitions.push(definition); selectDefinition(definition); editor.focus(); grid.render(); mixerView(); save();
   return definition;
 }
 element('new-instrument').onclick = () => addDefinition('instr');
-element('new-effect').onclick = () => addDefinition('fx');
 element('expand').onclick = () => {
   showPanel('code', true);
   const expanded = element('app').classList.toggle('editor-expanded');
-  element('expand').textContent = expanded ? 'Show pattern' : 'Expand editor'; editor.requestMeasure();
+  setText('expand', expanded ? '⤡' : '⤢'); editor.requestMeasure();
 };
 document.addEventListener('keydown', event => {
   if (event.key === 'F6') { event.preventDefault(); if (editor.hasFocus) element('grid').focus(); else { showPanel('code', true); editor.focus(); } }
@@ -294,28 +310,38 @@ element('import').onclick = async () => {
   };
   input.click();
 };
-function showPanel(panel: 'code' | 'mixer' | 'automation', visible: boolean) {
-  element(`${panel}-panel`).hidden = !visible;
-  element(`toggle-${panel}`).setAttribute('aria-expanded', String(visible));
-  if (panel === 'code') {
-    if (!visible) { element('app').classList.remove('editor-expanded'); setText('expand', 'Expand editor'); }
-    if (editor) editor.requestMeasure();
+function showPanel(panel: 'code' | 'automation', visible: boolean) {
+  for (const candidate of ['code', 'automation'] as const) {
+    const section = element(`${candidate}-panel`);
+    if (visible || candidate === panel) section.hidden = !visible || candidate !== panel;
+    document.querySelector(`[data-tab=${candidate}]`)!.setAttribute('aria-selected', String(!section.hidden));
   }
+  element('code-tools').hidden = element('code-panel').hidden;
+  element('bottom-dock').hidden = ['code', 'automation'].every(candidate => element(`${candidate}-panel`).hidden);
+  if (element('code-panel').hidden) {
+    element('app').classList.remove('editor-expanded'); setText('expand', '⤢');
+  }
+  if (editor) editor.requestMeasure();
 }
-for (const panel of ['code', 'mixer', 'automation'] as const) {
-  element(`toggle-${panel}`).onclick = () => { showPanel(panel, element(`${panel}-panel`).hidden); if (panel === 'automation') envelopeEditor?.select(deviceTrack); };
-  element(`close-${panel}`).onclick = () => { showPanel(panel, false); element('grid').focus(); };
+for (const panel of ['code', 'automation'] as const) {
+  document.querySelector<HTMLElement>(`[data-tab=${panel}]`)!.onclick = () => { showPanel(panel, true); if (panel === 'automation') envelopeEditor?.select(deviceTrack); };
 }
-element('focus-pattern').onclick = () => { showPanel('code', false); showPanel('mixer', false); showPanel('automation', false); element<HTMLDetailsElement>('sound-library').open = false; element('grid').focus(); };
+element('close-dock').onclick = () => { showPanel('code', false); element('grid').focus(); };
+element('dock-resize').onpointerdown = event => {
+  const dock = element('bottom-dock'), startY = event.clientY, startHeight = dock.offsetHeight;
+  const target = event.currentTarget as HTMLElement; target.setPointerCapture(event.pointerId);
+  target.onpointermove = move => { dock.style.height = `${Math.max(120, startHeight + startY - move.clientY)}px`; editor.requestMeasure(); };
+  target.onpointerup = () => { target.onpointermove = null; target.onpointerup = null; };
+};
 function patternControls() {
   const current = arrangement.pattern;
-  setText('pattern-number', `Pattern ${arrangement.number}`);
+  setText('pattern-number', arrangement.number);
   element<HTMLInputElement>('pattern-name').value = current.name;
   element<HTMLInputElement>('pattern-rows').value = String(current.rows);
   const uses = project.sequence.filter(id => id === current.id).length;
-  setText('pattern-uses', uses > 1 ? `Shared by ${uses} sequence steps` : uses === 1 ? 'One sequence step' : 'Not sequenced');
+  setText('pattern-uses', uses > 1 ? `×${uses}` : uses === 0 ? 'unused' : '');
   const picker = element<HTMLSelectElement>('pattern-picker'); picker.replaceChildren();
-  for (const [index, pattern] of project.patterns.entries()) picker.add(new Option(`${String(index).padStart(2, '0')} · ${pattern.name}`, pattern.id));
+  for (const [index, pattern] of project.patterns.entries()) picker.add(new Option(String(index).padStart(2, '0'), pattern.id));
   picker.value = current.id;
 }
 element<HTMLSelectElement>('pattern-picker').onchange = event => arrangement.choose((event.target as HTMLSelectElement).value);
@@ -336,7 +362,7 @@ element('move-up').onclick = () => { if (!audioStatus.playing) arrangement.move(
 element('move-down').onclick = () => { if (!audioStatus.playing) arrangement.move(1); };
 element('add-track').onclick = () => {
   if (audioStatus.playing || project.tracks.length >= 16) return;
-  project.tracks.push({ name: `Track ${project.tracks.length + 1}`, instrument: null, effects: [], pan: 0, muted: false, volume_db: 0 });
+  project.tracks.push({ name: `Track ${project.tracks.length + 1}`, instrument: null, fx: null, pan: 0, muted: false, volume_db: 0 });
   for (const pattern of project.patterns) { pattern.notes.push(Array(pattern.notes[0].length).fill(null)); pattern.fx.push([emptyFxLane(pattern.notes[0].length)]); }
   grid.selectTrack(project.tracks.length - 1); editedPattern();
 };
@@ -379,7 +405,7 @@ const audioTimer = observeAudio(state => {
   element<HTMLInputElement>('rows-per-beat').disabled = state.playing;
   setText('audio-status', audioError ?? state.error ?? (state.connected ? `${state.playing ? 'Playing' : 'Connected'} · ${state.sample_rate / 1000} kHz${state.skipped_rows ? ` · ${state.skipped_rows} skipped rows` : ''}${state.late_events ? ` · ${state.late_events} late events` : ''}` : 'Start niminal server, then connect'));
   envelopeEditor?.paint(state.pattern_id === arrangement.pattern.id ? state.row : null);
-  grid.paint(state.pattern_id === arrangement.pattern.id ? state.row : null); renderApplyStatus();
+  grid.paint(state.pattern_id === arrangement.pattern.id ? state.row : null, state.row_phase, state.row_at_ms); renderApplyStatus();
 });
 void connectLanguageServer(status);
 window.addEventListener('beforeunload', () => { clearInterval(audioTimer); editor.destroy(); });

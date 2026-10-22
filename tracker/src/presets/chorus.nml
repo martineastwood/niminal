@@ -1,4 +1,4 @@
 /// Gently widen the signal with niminal's modulated delay chorus.
 fx library_chorus(rate: 0.05hz..8hz = 0.8hz, depth: 0..1 = 0.3, time: 1ms..40ms = 15ms, mix: 0..1 = 0.4) {
-  out = it.chorus(rate: rate, depth: depth, time: time, mix: mix)
+  out = in.chorus(rate: rate, depth: depth, time: time, mix: mix)
 }

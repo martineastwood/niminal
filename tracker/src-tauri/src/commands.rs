@@ -34,7 +34,20 @@ impl Parameter {
 pub enum FxTarget {
     Volume,
     Pan,
-    Effect { device: usize, parameter: String },
+    Effect { parameter: String },
+}
+
+impl FxTarget {
+    pub fn available(&self, track: &Track, parameters: &EffectParameters) -> bool {
+        match self {
+            Self::Effect { parameter } => track
+                .fx
+                .as_ref()
+                .and_then(|fx| parameters.get(&fx.definition))
+                .is_some_and(|params| params.iter().any(|p| p.name == *parameter)),
+            _ => true,
+        }
+    }
 }
 
 pub fn edit(
@@ -73,10 +86,10 @@ pub fn edit(
                 json!({"op":"set", "id":format!("track_{index}"), "args":{"balance":value}, "glide":0.0}),
             )
         }
-        FxTarget::Effect { device, parameter } => {
+        FxTarget::Effect { parameter } => {
             let slot = track
-                .effects
-                .get(*device)
+                .fx
+                .as_ref()
                 .ok_or_else(|| format!("{}: lane addresses a missing effect", track.name))?;
             let info = parameters
                 .get(&slot.definition)
@@ -89,7 +102,7 @@ pub fn edit(
                 })?;
             bounded(info.min, info.max)?;
             Ok(
-                json!({"op":"set", "id":format!("fx_{index}_{device}"), "args":{parameter:info.argument(value)}, "glide":0.0}),
+                json!({"op":"set", "id":format!("fx_{index}"), "args":{parameter:info.argument(value)}, "glide":0.0}),
             )
         }
     }
@@ -111,7 +124,7 @@ mod tests {
         );
         assert!(edit(&FxTarget::Pan, "2", 0, &track, &BTreeMap::new()).is_err());
         assert!(edit(&FxTarget::Volume, "NaN", 0, &track, &BTreeMap::new()).is_err());
-        track.effects.push(crate::pattern::EffectSlot {
+        track.fx = Some(crate::pattern::TrackFx {
             definition: "filter".into(),
             ..Default::default()
         });
@@ -127,7 +140,6 @@ mod tests {
         )]
         .into();
         let target = FxTarget::Effect {
-            device: 0,
             parameter: "cutoff".into(),
         };
         assert_eq!(

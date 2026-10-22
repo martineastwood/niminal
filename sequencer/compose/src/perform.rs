@@ -513,7 +513,7 @@ impl Perform<'_> {
                 name.span,
             ));
         }
-        if matches!(name.name.as_str(), "it" | "out") {
+        if matches!(name.name.as_str(), "in" | "it" | "out") {
             return Err(Diagnostic::new(
                 format!("`{}` is a reserved word", name.name),
                 name.span,

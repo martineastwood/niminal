@@ -121,11 +121,11 @@ mod tests {
     fn separates_reusable_fx_from_its_helper_definitions() {
         let sound = Sound::parse(
             Kind::Fx,
-            "fn soften(x) { x * 0.5 }\nfx low { out = soften(it) }\n".into(),
+            "fn soften(x) { x * 0.5 }\nfx low { out = soften(in) }\n".into(),
         )
         .unwrap();
         assert_eq!(sound.target, "low");
-        assert_eq!(sound.fx_source.as_deref(), Some("(){ out = soften(it) }"));
+        assert_eq!(sound.fx_source.as_deref(), Some("(){ out = soften(in) }"));
         assert!(sound.engine_source.contains("fn soften"));
         assert!(!sound.engine_source.contains("fx low"));
     }
@@ -136,7 +136,7 @@ mod parameter_tests {
     use super::*;
     #[test]
     fn exposes_typed_fx_parameters_in_signature_order() {
-        let sound = Sound::parse(Kind::Fx, "fx filter(cutoff: hz = 2400hz, resonance: 0..1 = 0.2) { out = it.lpf(cutoff: cutoff, res: resonance) }".into()).unwrap();
+        let sound = Sound::parse(Kind::Fx, "fx filter(cutoff: hz = 2400hz, resonance: 0..1 = 0.2) { out = in.lpf(cutoff: cutoff, res: resonance) }".into()).unwrap();
         assert_eq!(
             sound
                 .parameters

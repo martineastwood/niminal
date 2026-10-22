@@ -660,7 +660,7 @@ mod tests {
     #[test]
     fn a_fx_offers_its_automation_parameters() {
         let labels = labels_in(
-            "fx filter(cut: hz = 2khz) { out = it.lpf(cutoff: cut) }",
+            "fx filter(cut: hz = 2khz) { out = in.lpf(cutoff: cut) }",
             "clip c { filter.",
         );
         assert_eq!(labels, ["cut"]);

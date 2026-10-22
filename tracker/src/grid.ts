@@ -1,6 +1,8 @@
 import { laneParameter, targetKey, formatValue, parseValue, envelopeValue } from './automation';
-import { keyboardNote, emptyFxLane, type FxTarget, type EffectParameters, type Project, type Pattern } from './project';
+import { keyboardNote, emptyFxLane, type FxTarget, type EffectParameters, type Project, type Pattern, type Track } from './project';
 import { NoteHistory, parseNotes, type NoteEdit } from './history';
+
+const ROW_WIDTH = 30, NOTE_WIDTH = 44, LANE_WIDTH = 100;
 
 interface Lane { track: number; fx: number | null; values: (string | null)[] }
 
@@ -11,6 +13,15 @@ export class PatternGrid {
   private histories = new Map<string, NoteHistory>();
   private targetSignatures = new Map<string, string>();
   private playing: number | null = null;
+  private pad = 0;
+  private origin = 0;
+  private shown = -1;
+  private animation = 0;
+  private playhead = document.createElement('div');
+  private frame = document.createElement('div');
+  /** Record mode: typed keys enter notes and values. Otherwise they only preview the instrument. */
+  recording = false;
+  modeChanged: (recording: boolean) => void = () => {};
   private dragging = false;
   private dragged = false;
 
@@ -30,6 +41,10 @@ export class PatternGrid {
     private feedback: (text: string) => void = () => {},
     private openEnvelope: (track: number, fx: number) => void = () => {},
   ) {
+    this.playhead.className = 'playhead'; this.playhead.hidden = true; this.frame.className = 'track-frame'; this.frame.hidden = true;
+    parent.parentElement?.append(this.playhead, this.frame);
+    parent.addEventListener('scroll', () => this.placeFrame());
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => this.placeFrame()).observe(parent);
     parent.addEventListener('pointerdown', event => {
       const cell = (event.target as HTMLElement).closest<HTMLElement>('[data-column]');
       if (!cell || event.button !== 0 || (event.target as HTMLElement).closest('input, .value-drag')) return;
@@ -50,9 +65,9 @@ export class PatternGrid {
     for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) parent.addEventListener(name, () => { this.dragging = false; });
     parent.addEventListener('keydown', event => this.keydown(event));
     parent.addEventListener('copy', event => this.copy(event));
-    parent.addEventListener('cut', event => { if ((event.target as HTMLElement).closest('input')) return; this.copy(event); this.clearSelection(); });
+    parent.addEventListener('cut', event => { if ((event.target as HTMLElement).closest('input')) return; this.copy(event); if (this.recording) this.clearSelection(); });
     parent.addEventListener('paste', event => {
-      if ((event.target as HTMLElement).closest('input')) return;
+      if ((event.target as HTMLElement).closest('input') || !this.recording) return;
       const rows = parseNotes(event.clipboardData?.getData('text/plain') ?? ''); event.preventDefault();
       if (!rows) { this.feedback('Clipboard needs notes or parameter values, separated by tabs.'); return; }
       const lanes = this.lanes, edits: NoteEdit[] = [];
@@ -113,7 +128,7 @@ export class PatternGrid {
       cell.classList.toggle('cursor', row === this.row && column === this.column);
     }
     for (const header of this.parent.querySelectorAll<HTMLElement>('[data-track]')) header.classList.toggle('selected-track', Number(header.dataset.track) === this.activeTrack);
-    this.parent.setAttribute('aria-activedescendant', this.id(this.row, this.lanes[this.column]));
+    this.parent.setAttribute('aria-activedescendant', this.id(this.row, this.lanes[this.column])); this.placeFrame();
   }
 
   render() {
@@ -121,12 +136,14 @@ export class PatternGrid {
     this.column = Math.min(this.column, lanes.length - 1); this.anchor.column = Math.min(this.anchor.column, lanes.length - 1);
     this.row = Math.min(this.row, pattern.rows - 1); this.anchor.row = Math.min(this.anchor.row, pattern.rows - 1);
     this.parent.replaceChildren();
-    this.parent.style.setProperty('--track-columns', `42px ${pattern.fx.map(columns => `${Math.max(196, 72 + columns.length * 116)}px`).join(' ')}`);
+    this.parent.style.setProperty('--track-columns', `${ROW_WIDTH}px ${pattern.fx.map(columns => `${Math.max(150, NOTE_WIDTH + 2 + columns.length * LANE_WIDTH)}px`).join(' ')}`);
     const header = document.createElement('div'); header.className = 'grid-row grid-header'; header.setAttribute('role', 'row');
-    const label = document.createElement('span'); label.textContent = 'ROW'; label.setAttribute('role', 'columnheader'); header.append(label);
+    const label = document.createElement('span'); label.setAttribute('role', 'columnheader'); header.append(label);
     for (const [index, track] of project.tracks.entries()) {
       const cell = document.createElement('div'); cell.setAttribute('role', 'columnheader'); cell.className = 'track-header'; cell.dataset.track = String(index);
-      cell.style.setProperty('--track-colour', trackColour(index)); cell.classList.toggle('selected-track', index === this.activeTrack);
+      cell.style.setProperty('--track-colour', trackColour(track, index)); cell.classList.toggle('selected-track', index === this.activeTrack);
+      const strip = document.createElement('button'); strip.className = 'track-colour'; strip.title = 'Track colour'; strip.setAttribute('aria-label', `${track.name} colour`);
+      strip.onclick = () => this.pickColour(track, strip);
       const heading = document.createElement('div'); heading.className = 'track-heading';
       const name = document.createElement('button'); name.className = 'track-name'; name.textContent = `${String(index + 1).padStart(2, '0')} ${track.name}`; name.title = 'Double-click to rename'; name.onclick = () => this.selectTrack(index, false);
       name.ondblclick = () => {
@@ -152,14 +169,14 @@ export class PatternGrid {
       for (const definition of project.definitions.filter(d => d.kind === 'instr')) select.add(new Option(definition.name, definition.id));
       select.value = track.instrument ?? ''; select.onchange = () => { track.instrument = select.value || null; this.assigned(track.instrument); this.edited(); };
       const columns = document.createElement('div'); columns.className = 'track-columns';
-      const note = document.createElement('span'); note.textContent = 'NOTE'; columns.append(note);
+      const note = document.createElement('span'); note.textContent = 'Note'; columns.append(note);
       for (const [column, lane] of pattern.fx[index].entries()) {
         const picker = document.createElement('select'); picker.className = 'lane-target'; picker.setAttribute('aria-label', `${track.name} parameter lane ${column + 1}`);
-        picker.add(new Option('Choose parameter…', ''));
+        picker.add(new Option('—', ''));
         const choices: FxTarget[] = [{ kind: 'volume' }, { kind: 'pan' }];
-        track.effects.forEach((slot, device) => { for (const p of this.parameters()[slot.definition] ?? []) choices.push({ kind: 'effect', device, parameter: p.name }); });
+        if (track.fx) for (const p of this.parameters()[track.fx.definition] ?? []) choices.push({ kind: 'effect', parameter: p.name });
         for (const target of choices) picker.add(new Option(laneParameter(target, index, project, this.parameters())!.label, targetKey(target)));
-        if (lane.target && !choices.some(t => targetKey(t) === targetKey(lane.target))) picker.add(new Option(`Apply FX to inspect ${lane.target.kind === 'effect' ? lane.target.parameter : 'parameter'}`, targetKey(lane.target)));
+        if (lane.target && !choices.some(t => targetKey(t) === targetKey(lane.target))) picker.add(new Option(`Missing/unapplied FX parameter: ${lane.target.kind === 'effect' ? lane.target.parameter : 'parameter'}`, targetKey(lane.target)));
         picker.value = targetKey(lane.target); picker.title = laneParameter(lane.target, index, project, this.parameters())?.label ?? 'Connect and Apply effects to expose more parameters';
         picker.onchange = () => {
           if (lane.values.some(value => value !== null) || lane.envelope?.points.length) { picker.value = targetKey(lane.target); this.feedback('Clear this lane’s values before choosing a different parameter.'); return; }
@@ -182,11 +199,14 @@ export class PatternGrid {
           this.resetHistory(); this.selectTrack(index); this.edited();
         }; adjust.append(button);
       }
-      cell.append(heading, select, columns, adjust); cell.onkeydown = event => event.stopPropagation(); header.append(cell);
+      const source = document.createElement('div'); source.className = 'track-source'; source.append(select, adjust);
+      cell.append(strip, heading, source, columns); cell.onkeydown = event => event.stopPropagation();
+      cell.onclick = event => { if (!(event.target as HTMLElement).closest('button, select, input')) this.selectTrack(index, false); };
+      header.append(cell);
     }
-    this.parent.append(header);
+    this.parent.append(header, this.pads());
     for (let row = 0; row < pattern.rows; row++) {
-      const line = document.createElement('div'); line.className = `grid-row ${row % project.rows_per_beat === 0 ? 'beat' : ''}`; line.setAttribute('role', 'row'); line.dataset.row = String(row);
+      const line = document.createElement('div'); line.className = `grid-row ${row % project.rows_per_beat === 0 ? 'beat' : ''} ${row % (project.rows_per_beat * 4) === 0 ? 'bar' : ''}`; line.setAttribute('role', 'row'); line.dataset.row = String(row);
       const number = document.createElement('span'); number.className = 'row-number'; number.textContent = String(row).padStart(2, '0'); line.append(number);
       let column = 0;
       for (let track = 0; track < project.tracks.length; track++) {
@@ -201,20 +221,88 @@ export class PatternGrid {
             if (this.dragged) { this.dragged = false; return; }
             if (!event.shiftKey) this.anchor = { row, column: c };
             this.row = row; this.column = c; this.trackSelected(track); this.render(); this.parent.focus();
-            if (lane.fx !== null && !event.shiftKey) this.editValue(row, c);
+            if (lane.fx !== null && !event.shiftKey && this.recording) this.editValue(row, c);
           }; group.append(cell);
         }
         line.append(group);
       }
       this.parent.append(line);
     }
-    this.paintSelection(); this.paint(this.playing);
+    this.parent.append(this.pads());
+    this.paintSelection();
     const cursor = this.parent.querySelector<HTMLElement>(`#${this.id(this.row, lanes[this.column])}`);
     cursor?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    if (cursor) { const cell = cursor.getBoundingClientRect(), viewport = this.parent.getBoundingClientRect(); if (cell.left < viewport.left + 42) this.parent.scrollLeft -= viewport.left + 42 - cell.left; }
+    if (cursor) { const cell = cursor.getBoundingClientRect(), viewport = this.parent.getBoundingClientRect(); if (cell.left < viewport.left + ROW_WIDTH) this.parent.scrollLeft -= viewport.left + ROW_WIDTH - cell.left; }
+    if (this.playing !== null && this.shown >= 0) this.followRow(this.shown);
   }
 
-  paint(row: number | null) { this.playing = row; for (const line of this.parent.querySelectorAll<HTMLElement>('[data-row]')) line.classList.toggle('playing-row', row !== null && Number(line.dataset.row) === row); }
+  /**
+   * `row` is the row the engine is playing; `phase` (0 to 1) is how far through it was at `atMs`.
+   * Together they pin the song's timeline, so row changes are predicted from the clock instead of
+   * waiting for each status poll.
+   */
+  paint(row: number | null, phase: number | null = null, atMs = Date.now()) {
+    this.playing = row;
+    if (row === null) { this.playhead.hidden = true; this.shown = -1; if (this.pad) this.setPad(0); return; }
+    this.origin = atMs - (row + (phase ?? 0)) * this.rowMs();
+    this.animation ||= requestAnimationFrame(this.follow);
+  }
+  private rowMs() { return 60000 / (this.project().bpm * this.project().rows_per_beat); }
+  private follow = () => {
+    this.animation = 0;
+    if (this.playing === null) return;
+    const row = Math.min(Math.max(Math.floor((Date.now() - this.origin) / this.rowMs()), 0), this.pattern().rows - 1);
+    if (row !== this.shown) { this.shown = row; this.followRow(row); }
+    this.animation = requestAnimationFrame(this.follow);
+  };
+  /**
+   * While playing, the pattern steps up one row at a time under a play bar that stays near the middle.
+   * Padding above the first row and below the last lets the bar stay put at both ends.
+   */
+  private followRow(row: number) {
+    const header = this.parent.querySelector<HTMLElement>('.grid-header')?.offsetHeight ?? 0;
+    const pad = Math.round((this.parent.clientHeight - header) / 2); if (pad !== this.pad) this.setPad(pad);
+    const top = this.contentTop(row); if (top === null) return;
+    this.parent.scrollTop = top - header - pad;
+    const y = top - this.parent.scrollTop;
+    this.playhead.hidden = y < header || y > this.parent.clientHeight;
+    this.playhead.style.top = `${y}px`;
+  }
+  private pickColour(track: Track, anchor: HTMLElement) {
+    document.querySelector('.colour-popover')?.remove();
+    const popover = document.createElement('div'); popover.className = 'colour-popover';
+    const choose = (colour: string | undefined) => { close(); if (track.colour === colour) return; if (colour) track.colour = colour; else delete track.colour; this.edited(); this.render(); };
+    for (const colour of trackPalette) {
+      const swatch = document.createElement('button'); swatch.className = 'swatch'; swatch.style.background = colour; swatch.title = colour; swatch.setAttribute('aria-label', `Colour ${colour}`);
+      swatch.onclick = () => choose(colour); popover.append(swatch);
+    }
+    const custom = document.createElement('input'); custom.type = 'color'; custom.title = 'Custom colour'; custom.setAttribute('aria-label', 'Custom colour'); custom.value = track.colour ?? '#808080';
+    custom.onchange = () => choose(custom.value); popover.append(custom);
+    const reset = document.createElement('button'); reset.className = 'swatch-reset'; reset.textContent = 'Default'; reset.onclick = () => choose(undefined); popover.append(reset);
+    const box = anchor.getBoundingClientRect(); popover.style.left = `${box.left}px`; popover.style.top = `${box.bottom + 2}px`;
+    const outside = (event: Event) => { if (!popover.contains(event.target as Node)) close(); };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); close(); } };
+    const close = () => { popover.remove(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', escape, true); };
+    document.body.append(popover); document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', escape, true);
+  }
+  setRecording(on: boolean) { this.recording = on; this.modeChanged(on); }
+  /** Corner brackets mark the selected track, from its header to the bottom of the grid. */
+  private placeFrame() {
+    const header = this.parent.querySelector<HTMLElement>(`.track-header[data-track="${this.activeTrack}"]`);
+    if (!header) { this.frame.hidden = true; return; }
+    const box = this.parent.getBoundingClientRect(), cell = header.getBoundingClientRect();
+    const left = Math.max(cell.left - box.left, ROW_WIDTH), right = Math.min(cell.right - box.left, this.parent.clientWidth);
+    this.frame.hidden = right - left < 12;
+    const end = this.parent.querySelector<HTMLElement>(`[data-row="${this.pattern().rows - 1}"]`)?.getBoundingClientRect().bottom;
+    const bottom = Math.min(this.parent.clientHeight, end === undefined ? this.parent.clientHeight : end - box.top);
+    this.frame.style.cssText = `left:${left}px;width:${right - left}px;top:0;height:${Math.max(0, bottom)}px;--c:${trackColour(this.project().tracks[this.activeTrack], this.activeTrack)};--side:${header.offsetHeight}px`;
+  }
+  private setPad(pad: number) { this.pad = pad; for (const spacer of this.parent.querySelectorAll<HTMLElement>('.grid-pad')) spacer.style.height = `${pad}px`; }
+  private pads() { const spacer = document.createElement('div'); spacer.className = 'grid-pad'; spacer.style.height = `${this.pad}px`; return spacer; }
+  private contentTop(row: number) {
+    const line = this.parent.querySelector<HTMLElement>(`[data-row="${row}"]`); if (!line) return null;
+    return line.getBoundingClientRect().top - this.parent.getBoundingClientRect().top + this.parent.scrollTop;
+  }
   private copy(event: ClipboardEvent) {
     if ((event.target as HTMLElement).closest('input')) return;
     const rows: string[] = [], lanes = this.lanes;
@@ -288,21 +376,24 @@ export class PatternGrid {
     const lanes = this.lanes, lane = lanes[this.column];
     switch (event.key) {
       case ' ': event.preventDefault(); this.togglePlay(); return;
-      case 'Escape': this.render(); return;
+      case 'Escape': event.preventDefault(); this.setRecording(!this.recording); return;
       case 'ArrowUp': this.row = event.shiftKey ? Math.max(0, this.row - 1) : (this.row + this.pattern().rows - 1) % this.pattern().rows; break;
       case 'ArrowDown': this.row = event.shiftKey ? Math.min(this.pattern().rows - 1, this.row + 1) : (this.row + 1) % this.pattern().rows; break;
       case 'ArrowLeft': this.column = event.shiftKey ? Math.max(0, this.column - 1) : (this.column + lanes.length - 1) % lanes.length; break;
       case 'ArrowRight': this.column = event.shiftKey ? Math.min(lanes.length - 1, this.column + 1) : (this.column + 1) % lanes.length; break;
       case 'Tab': this.selectTrack((this.activeTrack + (event.shiftKey ? this.project().tracks.length - 1 : 1)) % this.project().tracks.length); event.preventDefault(); return;
-      case 'Delete': case 'Backspace': event.preventDefault(); this.clearSelection(); return;
+      case 'Delete': case 'Backspace': if (!this.recording) return; event.preventDefault(); this.clearSelection(); return;
       default: {
         if (lane.fx !== null) {
+          if (!this.recording) return;
           if (event.key === 'Enter' || event.key.length === 1 && /[0-9+.-]/.test(event.key)) { event.preventDefault(); this.editValue(this.row, this.column, event.key === 'Enter' ? undefined : event.key); } return;
         }
         const note = keyboardNote(event.key, this.octave()); if (!note) return;
-        this.apply([{ row: this.row, track: this.column, before: lane.values[this.row], after: note }]);
         const instrument = this.project().tracks[lane.track].instrument; if (instrument) this.audition(instrument, note, lane.track);
-        this.advance(); event.preventDefault(); this.render(); return;
+        event.preventDefault();
+        if (!this.recording) return;
+        this.apply([{ row: this.row, track: this.column, before: lane.values[this.row], after: note }]);
+        this.advance(); this.render(); return;
       }
     }
     if (!event.shiftKey) this.anchor = { row: this.row, column: this.column };
@@ -310,4 +401,6 @@ export class PatternGrid {
   }
 }
 
-export function trackColour(index: number) { return ['#c97979', '#c6a465', '#a9b966', '#73b48a', '#6db4be', '#829bd1', '#b28bce', '#cc8fb2'][index % 8]; }
+export const trackPalette = ['#c97979', '#d08a5a', '#c6a465', '#a9b966', '#73b48a', '#5fb3a6', '#6db4be', '#829bd1', '#8f8fd8', '#b28bce', '#cc8fb2', '#9aa0a8'];
+/** A track's own colour if it has one, otherwise a default from its position. */
+export function trackColour(track: Track, index: number) { return track.colour ?? trackPalette[index % 8]; }

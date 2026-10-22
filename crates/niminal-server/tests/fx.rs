@@ -32,7 +32,7 @@ fn peak(samples: &[f32]) -> f32 {
 fn collections_share_one_persistent_fx_and_its_tail_outlives_the_notes() {
     let audio = render(
         "instr flat() { 0.25 }
-         fx echo { out = it.delay(time: 20ms, feedback: 0) }
+         fx echo { out = in.delay(time: 20ms, feedback: 0) }
          node a { instrument = flat
                   output = echo }
          node b { instrument = flat
@@ -48,8 +48,8 @@ fn collections_share_one_persistent_fx_and_its_tail_outlives_the_notes() {
 fn separate_fx_instances_have_independent_state() {
     let audio = render(
         "instr flat() { 0.25 }
-         fx first { out = it.delay(time: 20ms, feedback: 0) }
-         fx second { out = it.delay(time: 40ms, feedback: 0) }
+         fx first { out = in.delay(time: 20ms, feedback: 0) }
+         fx second { out = in.delay(time: 40ms, feedback: 0) }
          node a { instrument = flat
                   output = first }
          node b { instrument = flat

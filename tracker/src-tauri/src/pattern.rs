@@ -6,14 +6,14 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct Track {
     pub name: String,
     pub instrument: Option<String>,
-    pub effects: Vec<EffectSlot>,
+    pub fx: Option<TrackFx>,
     pub pan: f64,
     pub muted: bool,
     pub volume_db: f64,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct EffectSlot {
+pub struct TrackFx {
     pub definition: String,
     pub values: BTreeMap<String, f64>,
     pub modulations: BTreeMap<String, Lfo>,
@@ -128,8 +128,7 @@ impl Song {
                     || !(-60.0..=6.0).contains(&t.volume_db)
                     || !t.pan.is_finite()
                     || !(-1.0..=1.0).contains(&t.pan)
-                    || t.effects.len() > 8
-                    || t.effects.iter().any(|slot| {
+                    || t.fx.iter().any(|slot| {
                         slot.values.values().any(|value| !value.is_finite())
                             || slot.modulations.values().any(|lfo| !lfo.valid())
                     })
@@ -203,10 +202,9 @@ impl Song {
     pub fn same_timeline(&self, other: &Self) -> bool {
         self.tracks.len() == other.tracks.len()
             && self.tracks.iter().zip(&other.tracks).all(|(a, b)| {
-                a.effects
-                    .iter()
+                a.fx.iter()
                     .map(|slot| &slot.definition)
-                    .eq(b.effects.iter().map(|slot| &slot.definition))
+                    .eq(b.fx.iter().map(|slot| &slot.definition))
             })
             && self.bpm == other.bpm
             && self.rows_per_beat == other.rows_per_beat
@@ -327,6 +325,14 @@ impl Playback {
         self.location(index)
     }
 
+    /// How far through the current row `sample` is, from 0 up to 1.
+    pub fn phase(&self, sample: u64, sample_rate: f64) -> Option<f64> {
+        if sample < self.origin {
+            return None;
+        }
+        Some(((sample - self.origin) as f64 / self.song.row_samples(sample_rate)).fract())
+    }
+
     pub fn finished(&self, sample: u64, sample_rate: f64) -> bool {
         self.mode == Mode::Song
             && sample >= self.origin
@@ -356,6 +362,13 @@ impl Playback {
             for (index, track) in self.song.tracks.iter().enumerate() {
                 let mut edits = Vec::new();
                 for lane in &position.pattern.fx[index] {
+                    if lane
+                        .target
+                        .as_ref()
+                        .is_some_and(|target| !target.available(track, &self.parameters))
+                    {
+                        continue;
+                    }
                     if let (Some(envelope), Some(target)) = (&lane.envelope, &lane.target)
                         && envelope.enabled
                     {
@@ -372,9 +385,9 @@ impl Playback {
                         breaks.push(end);
                         let db = match target {
                             crate::commands::FxTarget::Volume => true,
-                            crate::commands::FxTarget::Effect { device, parameter } => track
-                                .effects
-                                .get(*device)
+                            crate::commands::FxTarget::Effect { parameter } => track
+                                .fx
+                                .as_ref()
                                 .and_then(|slot| self.parameters.get(&slot.definition))
                                 .and_then(|params| params.iter().find(|p| p.name == *parameter))
                                 .is_some_and(|p| p.unit.as_deref() == Some("db")),
@@ -391,13 +404,16 @@ impl Playback {
                                 + ((pair[1] - start) * self.song.row_samples(sample_rate)).round()
                                     as u64;
                             let mut point_edits = Vec::new();
-                            if let crate::commands::FxTarget::Effect { device, parameter } = target
-                                && track.effects[*device]
+                            if let crate::commands::FxTarget::Effect { parameter } = target
+                                && track
+                                    .fx
+                                    .as_ref()
+                                    .unwrap()
                                     .modulations
                                     .get(parameter)
                                     .is_some_and(|lfo| lfo.enabled)
                             {
-                                point_edits.push(json!({"op":"map", "id":format!("fx_{index}_{device}"), "param":parameter, "source":null}));
+                                point_edits.push(json!({"op":"map", "id":format!("fx_{index}"), "param":parameter, "source":null}));
                             }
                             point_edits.push(crate::commands::edit(
                                 target,
@@ -444,14 +460,14 @@ impl Playback {
                     };
                     let edit =
                         crate::commands::edit(target, value, index, track, &self.parameters)?;
-                    if let crate::commands::FxTarget::Effect { device, parameter } = target {
-                        let slot = &track.effects[*device];
+                    if let crate::commands::FxTarget::Effect { parameter } = target {
+                        let slot = &track.fx.as_ref().unwrap();
                         if slot
                             .modulations
                             .get(parameter)
                             .is_some_and(|lfo| lfo.enabled)
                         {
-                            edits.push(json!({"op":"map", "id":format!("fx_{index}_{device}"), "param":parameter, "source":null}));
+                            edits.push(json!({"op":"map", "id":format!("fx_{index}"), "param":parameter, "source":null}));
                         }
                     }
                     edits.push(edit);

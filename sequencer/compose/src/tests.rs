@@ -685,11 +685,11 @@ fn out_and_it_rules() {
     );
     assert_eq!(
         msg("instr a(f: hz) { osc(saw, it) }"),
-        "`it` is only available inside a node, or a function given to `map`"
+        "`it` is only available inside a function given to `map`"
     );
     assert_eq!(
-        msg("instr a(f: hz) { it = 1 }"),
-        "`it` is an input and can't be assigned"
+        msg("instr a(f: hz) { in = 1 }"),
+        "`in` is an input and can't be assigned"
     );
     assert_eq!(
         msg("instr a(f: hz) { instrument = 1\n0.5 }"),
@@ -765,7 +765,7 @@ fn locals_cannot_shadow_top_level_names() {
 fn collections_and_fxs_have_distinct_roles() {
     let base = "instr tone(freq: hz = 440hz) { osc(sine, freq) }\n";
     ok(&format!("{base}clip lead {{ instrument: tone }}"));
-    ok("fx room(cut: hz = 2khz) { out = it.lpf(cutoff: cut) }");
+    ok("fx room(cut: hz = 2khz) { out = in.lpf(cutoff: cut) }");
     assert!(
         msg(&format!("{base}fx room {{ instrument = tone }}"))
             .contains("cannot select an instrument")
@@ -778,7 +778,7 @@ fn collections_and_fxs_have_distinct_roles() {
     );
 
     assert!(compile("track lead { instrument = tone }").is_err());
-    assert!(compile("bus room { out = it }").is_err());
+    assert!(compile("bus room { out = in }").is_err());
 }
 
 #[test]
@@ -1304,7 +1304,7 @@ fn osc_out_sends_a_nodes_signal() {
             "tempo 120bpm\ninstr pluck(freq: hz) {{ osc(saw, freq) }}\nbus lead_audio\nfx lead_fx {{{body}}}\nclip lead {{ instrument: pluck }}\n"
         )
     };
-    let p = ok(&node("out = it.osc_out(\"/vj/level\", port: 9000)"));
+    let p = ok(&node("out = in.osc_out(\"/vj/level\", port: 9000)"));
     assert_eq!(p.taps.len(), 1);
     assert_eq!(
         (
@@ -1316,7 +1316,7 @@ fn osc_out_sends_a_nodes_signal() {
         ("/vj/level", "127.0.0.1", 9000, 30.0)
     );
     let p = ok(&node(
-        "out = it.osc_out(\"/a\", host: \"10.0.0.2\", port: 9001, rate: 5hz).osc_out(\"/b\", port: 9001)",
+        "out = in.osc_out(\"/a\", host: \"10.0.0.2\", port: 9001, rate: 5hz).osc_out(\"/b\", port: 9001)",
     ));
     assert_eq!(
         p.taps
@@ -1326,31 +1326,31 @@ fn osc_out_sends_a_nodes_signal() {
         [("/a", "10.0.0.2", 5.0), ("/b", "127.0.0.1", 30.0)]
     );
     assert_eq!(
-        msg(&node("out = it.osc_out(\"vj\", port: 9000)")),
+        msg(&node("out = in.osc_out(\"vj\", port: 9000)")),
         "an OSC address starts with `/`"
     );
     assert_eq!(
-        msg(&node("out = it.osc_out(\"/a\")")),
+        msg(&node("out = in.osc_out(\"/a\")")),
         "`osc_out` needs a `port:`"
     );
     assert_eq!(
-        msg(&node("out = it.osc_out(port: 9000)")),
+        msg(&node("out = in.osc_out(port: 9000)")),
         "`osc_out` needs an address"
     );
     assert_eq!(
-        msg(&node("out = it.osc_out(\"/a\", port: 0)")),
+        msg(&node("out = in.osc_out(\"/a\", port: 0)")),
         "a port is a whole number from 1 to 65535"
     );
     assert_eq!(
-        msg(&node("out = it.osc_out(\"/a\", port: 9000, rate: 900hz)")),
+        msg(&node("out = in.osc_out(\"/a\", port: 9000, rate: 900hz)")),
         "`rate` is from 0.5hz to 200hz"
     );
     assert_eq!(
-        msg(&node("out = it.osc_out(\"/a\", prot: 9000)")),
+        msg(&node("out = in.osc_out(\"/a\", prot: 9000)")),
         "`osc_out` has no argument named `prot`"
     );
     assert_eq!(
-        msg(&node("out = it.osc_out(5, port: 9000)")),
+        msg(&node("out = in.osc_out(5, port: 9000)")),
         "an OSC address is text in quotes"
     );
     ok("instr a(f: hz) { osc(saw, f).osc_out(\"/a\", port: 9000) }");
@@ -2045,7 +2045,7 @@ fn clips_are_checked_against_the_node_they_play_on() {
         msg(no_pitch),
         "`drone` has no `freq` parameter for the notes to set"
     );
-    let silent = "instr a(freq: hz) { osc(sine, freq) }\nfx room { out = it }\nroom.__update([c4])";
+    let silent = "instr a(freq: hz) { osc(sine, freq) }\nfx room { out = in }\nroom.__update([c4])";
     assert_eq!(
         msg(silent),
         "node `room` has no instrument to play a clip on"
@@ -2190,11 +2190,11 @@ fn a_node_parameter_is_a_control_the_node_can_read() {
     assert_eq!(names, ["hall_fx::tone", "hall_fx::drive"]);
     assert_eq!(p.controls[0].initial, 2000.0);
     assert_eq!(
-        msg("fx t(tone: hz) { out = it }"),
+        msg("fx t(tone: hz) { out = in }"),
         "fx parameter `tone` needs a starting value"
     );
     assert_eq!(
-        help("fx t(tone: hz) { out = it }").as_deref(),
+        help("fx t(tone: hz) { out = in }").as_deref(),
         Some("for example `fx bass(tone: hz = 2khz)`")
     );
 }

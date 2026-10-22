@@ -1,13 +1,13 @@
 use crate::{
     commands::EffectParameters,
-    pattern::{EffectSlot, Track},
+    pattern::{Track, TrackFx},
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 pub fn setup() -> Vec<Value> {
     let mut edits = vec![
-        json!({"op":"fx", "name":"__tracker_mix", "source":"(level: num = 1, balance: -1..1 = 0) { out = it * [1 - balance.clamp(0..1), 1 + balance.clamp(-1..0)] * level }"}),
+        json!({"op":"fx", "name":"__tracker_mix", "source":"(level: num = 1, balance: -1..1 = 0) { out = in * [1 - balance.clamp(0..1), 1 + balance.clamp(-1..0)] * level }"}),
     ];
     edits.extend(crate::modulation::declarations());
     for track in 0..16 {
@@ -17,7 +17,7 @@ pub fn setup() -> Vec<Value> {
     edits
 }
 
-fn arguments(slot: &EffectSlot, parameters: &EffectParameters) -> BTreeMap<String, Value> {
+fn arguments(slot: &TrackFx, parameters: &EffectParameters) -> BTreeMap<String, Value> {
     parameters
         .get(&slot.definition)
         .into_iter()
@@ -26,10 +26,11 @@ fn arguments(slot: &EffectSlot, parameters: &EffectParameters) -> BTreeMap<Strin
             (
                 parameter.name.clone(),
                 parameter.argument(
-                    *slot
-                        .values
+                    slot.values
                         .get(&parameter.name)
-                        .unwrap_or(&parameter.default),
+                        .copied()
+                        .unwrap_or(parameter.default)
+                        .clamp(parameter.min, parameter.max),
                 ),
             )
         })
@@ -38,8 +39,7 @@ fn arguments(slot: &EffectSlot, parameters: &EffectParameters) -> BTreeMap<Strin
 
 fn replacement(
     index: usize,
-    device: usize,
-    slot: &EffectSlot,
+    slot: &TrackFx,
     effects: &BTreeMap<String, String>,
     parameters: &EffectParameters,
 ) -> Result<Value, String> {
@@ -47,7 +47,7 @@ fn replacement(
         .get(&slot.definition)
         .ok_or("Apply the effect assigned to this track first")?;
     Ok(
-        json!({"op":"replace", "id":format!("fx_{index}_{device}"), "fx":fx, "args":arguments(slot, parameters), "fade":0.02}),
+        json!({"op":"replace", "id":format!("fx_{index}"), "fx":fx, "args":arguments(slot, parameters), "fade":0.02}),
     )
 }
 
@@ -58,8 +58,8 @@ pub fn replacements(
 ) -> Result<Vec<Value>, String> {
     let mut edits = Vec::new();
     for (index, track) in tracks.iter().enumerate() {
-        for (device, slot) in track.effects.iter().enumerate() {
-            edits.push(replacement(index, device, slot, effects, parameters)?);
+        if let Some(slot) = &track.fx {
+            edits.push(replacement(index, slot, effects, parameters)?);
         }
     }
     Ok(edits)
@@ -77,10 +77,12 @@ pub fn reset(tracks: &[Track], parameters: &EffectParameters) -> Vec<Value> {
     let mut edits = Vec::new();
     for (index, track) in tracks.iter().enumerate() {
         edits.extend([base(index, track), output(index, track)]);
-        for (device, slot) in track.effects.iter().enumerate() {
+        if let Some(slot) = &track.fx {
             let args = arguments(slot, parameters);
             if !args.is_empty() {
-                edits.push(json!({"op":"set", "id":format!("fx_{index}_{device}"), "args":args, "glide":0.01}));
+                edits.push(
+                    json!({"op":"set", "id":format!("fx_{index}"), "args":args, "glide":0.01}),
+                );
             }
         }
     }
@@ -111,39 +113,30 @@ pub fn events(
     let mut controls = Vec::new();
     for index in 0..tracks.len().max(previous.len()) {
         let old = previous.get(index);
-        let slots = tracks
-            .get(index)
-            .map_or(&[][..], |track| track.effects.as_slice());
-        let old_slots = old.map_or(&[][..], |track| track.effects.as_slice());
-        for device in slots.len()..old_slots.len() {
-            topology.push(json!({"op":"free_node", "id":format!("fx_{index}_{device}")}));
+        let slot = tracks.get(index).and_then(|track| track.fx.as_ref());
+        let old_slot = old.and_then(|track| track.fx.as_ref());
+        if slot.is_none() && old_slot.is_some() {
+            topology.push(json!({"op":"free_node", "id":format!("fx_{index}")}));
         }
         if let Some(track) = tracks.get(index) {
-            for (device, slot) in slots.iter().enumerate() {
-                let id = format!("fx_{index}_{device}");
-                match old_slots.get(device) {
+            if let Some(slot) = slot {
+                let id = format!("fx_{index}");
+                match old_slot {
                     None => {
                         let fx = effects.get(&slot.definition).ok_or_else(|| format!("Apply the effect assigned to {} first", track.name))?;
                         topology.push(json!({"op":"node", "id":id, "fx":fx, "args":arguments(slot, parameters)}));
+                        topology.push(json!({"op":"connect", "id":format!("fx_in_{index}"), "from":{"kind":"node", "id":format!("track_{index}")}, "to":{"kind":"node", "id":id}}));
                     }
-                    Some(old) if old.definition != slot.definition => topology.push(replacement(index, device, slot, effects, parameters)?),
+                    Some(old) if old.definition != slot.definition => topology.push(replacement(index, slot, effects, parameters)?),
                     Some(old) if old.values != slot.values => controls.push(json!({"op":"set", "id":id, "args":arguments(slot, parameters), "glide":0.01})),
                     _ => {}
                 }
-                if slots.len() != old_slots.len() {
-                    let from = if device == 0 {
-                        format!("track_{index}")
-                    } else {
-                        format!("fx_{index}_{}", device - 1)
-                    };
-                    topology.push(json!({"op":"connect", "id":format!("chain_{index}_{device}"), "from":{"kind":"node", "id":from}, "to":{"kind":"node", "id":id}}));
-                }
             }
-            if slots.len() != old_slots.len() {
-                let from = if slots.is_empty() {
-                    format!("track_{index}")
+            if slot.is_some() != old_slot.is_some() {
+                let from = if slot.is_some() {
+                    format!("fx_{index}")
                 } else {
-                    format!("fx_{index}_{}", slots.len() - 1)
+                    format!("track_{index}")
                 };
                 topology.push(json!({"op":"connect", "id":format!("out_{index}"), "from":{"kind":"node", "id":from}, "to":{"kind":"master"}, "gain":if track.muted {0.0} else {1.0}}));
             }

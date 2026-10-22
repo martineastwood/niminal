@@ -11,7 +11,7 @@ flowchart LR
   LFO[Native niminal oscillator node] -->|native send| Bus[Native modulation bus]
   Bus -->|native parameter map| FX[Native effect parameter]
   Notes[Scheduled note events] --> Input[Native collection / track input]
-  Input --> Insert[Native insert chain]
+  Input --> Insert[Native track FX processor]
   Insert --> Master[Niminal master]
 ```
 

@@ -23,13 +23,13 @@ export async function connectLanguageServer(status: (message: string) => void) {
 }
 
 const theme = EditorView.theme({
-  '&': { height: '100%', backgroundColor: '#151b22', color: '#d4dde7', fontSize: '13px' },
+  '&': { height: '100%', backgroundColor: '#14161a', color: '#d3d7de', fontSize: '12px' },
   '.cm-scroller': { overflow: 'auto', fontFamily: '"SFMono-Regular", Consolas, monospace' },
-  '.cm-content': { padding: '16px 0', caretColor: '#e9b66e' },
-  '.cm-gutters': { backgroundColor: '#151b22', color: '#657486', border: 'none' },
-  '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: '#202a35' },
-  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: '#384b60' },
-  '.cm-tooltip': { backgroundColor: '#25313e', color: '#e1e7ed', border: '1px solid #4b5e73', maxWidth: '550px' },
+  '.cm-content': { padding: '4px 0', caretColor: '#e9b66e' },
+  '.cm-gutters': { backgroundColor: '#14161a', color: '#5f6670', border: 'none' },
+  '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: '#1d2025' },
+  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: '#3a4350' },
+  '.cm-tooltip': { backgroundColor: '#23272d', color: '#e1e7ed', border: '1px solid #3d434b', maxWidth: '550px' },
   '.cm-tooltip pre': { whiteSpace: 'pre-wrap' },
 }, { dark: true });
 const colours = syntaxHighlighting(HighlightStyle.define([
