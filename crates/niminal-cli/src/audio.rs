@@ -7,9 +7,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use niminal_engine::{MAX_CHANNELS, block_size};
 use niminal_server::{AudioInput, EngineServer, RealtimeConfig, RealtimeRenderer};
-use rtrb::{Consumer, Producer, RingBuffer};
+use niminal_engine::MAX_CHANNELS;
+use rtrb::RingBuffer;
 
 /// Control and event preparation share the server. DSP owns its state and
 /// communicates through bounded queues; neither rendering nor playback locks it.
@@ -27,7 +27,6 @@ pub struct Output {
     config: cpal::StreamConfig,
     name: String,
     health: Arc<Health>,
-    queue_frames: usize,
     requested_buffer: Option<u32>,
 }
 
@@ -39,7 +38,7 @@ pub struct Health {
     pub panics: AtomicUsize,
     /// Errors the audio device reported (underruns and the like).
     pub errors: AtomicUsize,
-    /// Device callbacks that exhausted the render queue.
+    /// Device callbacks whose rendering took longer than the buffer lasts.
     pub underruns: AtomicUsize,
     /// Times event preparation panicked and was restarted.
     pub planner_panics: AtomicUsize,
@@ -65,8 +64,7 @@ impl Output {
         let default = device
             .default_output_config()
             .map_err(|e| format!("can't query the audio device: {e}"))?;
-        // Request a callback comfortably smaller than the output queue. When
-        // the backend cannot report limits, retain its default buffer size.
+        // Request a small callback. When the backend cannot report limits, retain its default buffer size.
         let buffer_size = match default.buffer_size() {
             cpal::SupportedBufferSize::Range { min, max } => {
                 cpal::BufferSize::Fixed(256u32.clamp(*min, *max))
@@ -101,17 +99,12 @@ impl Output {
             sample_rate: sample_rate.unwrap_or_else(|| default.sample_rate()),
             buffer_size,
         };
-        let queue_frames = match buffer_size {
-            cpal::BufferSize::Fixed(frames) => QUEUE_FRAMES.max(frames as usize * 4),
-            cpal::BufferSize::Default => QUEUE_FRAMES,
-        };
         Ok(Output {
             selection: id.map(str::to_string),
             name: device.to_string(),
             device,
             config,
             health: Arc::default(),
-            queue_frames,
             requested_buffer,
         })
     }
@@ -143,11 +136,10 @@ impl Output {
         input: Option<AudioInput>,
         config: RealtimeConfig,
     ) -> Result<Running, String> {
-        let channels = usize::from(self.config.channels);
-        let (playback, worker) = RenderWorker::start(
+        let (playback, helpers) = Playback::start(
             server,
-            channels,
-            self.queue_frames,
+            usize::from(self.config.channels),
+            self.config.sample_rate,
             self.health.clone(),
             input,
             config,
@@ -162,7 +154,7 @@ impl Output {
             health: self.health,
             channels: self.config.channels,
             sample_rate: self.config.sample_rate,
-            _worker: worker,
+            _helpers: helpers,
         })
     }
 }
@@ -292,7 +284,7 @@ pub struct Running {
     health: Arc<Health>,
     channels: u16,
     sample_rate: u32,
-    _worker: RenderWorker,
+    _helpers: Helpers,
 }
 
 impl Running {
@@ -302,7 +294,7 @@ impl Running {
     }
 
     /// Open the default output device again, at the rate the session runs at, and carry on playing from
-    /// the same queue. The session's clock waits while there is no device.
+    /// the same renderer. The session's clock waits while there is no device.
     pub fn reopen(&mut self) -> Result<String, String> {
         self.stream = None;
         let output = Output::open_selected(
@@ -318,122 +310,99 @@ impl Running {
     }
 }
 
-/// About 43ms at 48kHz. This bounds control latency and lets the worker run
-/// independently of device callbacks. Frames are timestamped so a late worker
-/// cannot replay old audio after an underrun.
-const QUEUE_FRAMES: usize = 2048;
-
-struct Frame {
-    at: u64,
-    epoch: u64,
-    samples: [f32; MAX_CHANNELS],
-}
-
+/// The sound card's callback renders the audio itself, as the session's clock advances: there is no
+/// render thread and no queue between the engine and the device. Notes are prepared ahead of it by
+/// the planner, so the callback only mixes.
 struct Playback {
-    queue: Consumer<Frame>,
-    render_thread: Option<thread::Thread>,
+    renderer: RealtimeRenderer,
     channels: usize,
+    sample_rate: f64,
     clock: Arc<AtomicU64>,
-    epoch: Arc<AtomicU64>,
     health: Arc<Health>,
-    next: u64,
-    waiting: Option<Frame>,
-    queue_frames: usize,
     probe: Option<Arc<niminal_server::ClockProbe>>,
 }
 
-impl Playback {
-    /// The complete device callback: bounded work, no allocation, no locks,
-    /// and silence on starvation. The device clock advances even during silence.
-    fn read(&mut self, data: &mut [f32]) {
-        data.fill(0.0);
-        if let Some(probe) = &self.probe {
-            probe.record(self.next);
-        }
-        // Usually the queue contains exactly the next stretch of audio. Read it in place and
-        // release the slots once per callback, avoiding a ring update and a Frame copy per sample.
-        let frames = data.len() / self.channels;
-        if self.waiting.is_none()
-            && let Ok(chunk) = self.queue.read_chunk(frames)
-        {
-            let (first, second) = chunk.as_slices();
-            if first
-                .iter()
-                .chain(second)
-                .enumerate()
-                .all(|(i, f)| f.at == self.next + i as u64)
-            {
-                let mut epoch = self.epoch.load(Ordering::Acquire);
-                for (i, (frame, output)) in first
-                    .iter()
-                    .chain(second)
-                    .zip(data.chunks_exact_mut(self.channels))
-                    .enumerate()
-                {
-                    if i % block_size() == 0 {
-                        epoch = self.epoch.load(Ordering::Acquire);
-                    }
-                    if frame.epoch == epoch {
-                        output.copy_from_slice(&frame.samples[..self.channels]);
-                    }
-                }
-                chunk.commit_all();
-                self.next += frames as u64;
-                self.clock.store(self.next, Ordering::Release);
-                if let Some(renderer) = &self.render_thread {
-                    renderer.unpark();
-                }
-                return;
-            }
-        }
-        let mut epoch = self.epoch.load(Ordering::Acquire);
-        let mut missed = false;
-        let mut stale_budget = self.queue_frames;
-        for (i, output) in data.chunks_exact_mut(self.channels).enumerate() {
-            // A panic arriving during a large callback takes effect within one
-            // engine block rather than waiting for the next device callback.
-            if i % block_size() == 0 {
-                epoch = self.epoch.load(Ordering::Acquire);
-            }
-            loop {
-                if self.waiting.is_none() {
-                    self.waiting = self.queue.pop().ok();
-                }
-                match self.waiting.as_ref() {
-                    Some(frame) if frame.at < self.next && stale_budget > 0 => {
-                        self.waiting = None;
-                        stale_budget -= 1;
-                    }
-                    _ => break,
-                }
-            }
-            if self.waiting.as_ref().is_some_and(|f| f.at == self.next) {
-                if let Some(frame) = self.waiting.take()
-                    && frame.epoch == epoch
-                {
-                    output.copy_from_slice(&frame.samples[..self.channels]);
-                }
-            } else {
-                missed = true;
-            }
-            self.next += 1;
-        }
-        self.clock.store(self.next, Ordering::Release);
-        if let Some(renderer) = &self.render_thread {
-            renderer.unpark();
-        }
-        if missed {
-            self.health.underruns.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-}
-
-struct RenderWorker {
+/// What runs beside the callback: the planner, and the sender of `midi_out` notes.
+struct Helpers {
     stop: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
     planner: Option<JoinHandle<()>>,
     /// Sends the notes of `midi_out` instruments as the sound card plays them.
     _midi: Option<crate::midi_out::MidiOutput>,
+}
+
+impl Playback {
+    fn start(
+        server: Shared,
+        channels: usize,
+        sample_rate: u32,
+        health: Arc<Health>,
+        input: Option<AudioInput>,
+        config: RealtimeConfig,
+    ) -> Result<(Playback, Helpers), String> {
+        let (probe, mut renderer) = {
+            let mut d = lock(&server);
+            let probe = d.session().clock_probe();
+            let mut renderer = d.session_mut().start_realtime(config);
+            if let Some(input) = input {
+                renderer.set_audio_input(input);
+            }
+            (probe, renderer)
+        };
+        let clock = Arc::new(AtomicU64::new(renderer.clock()));
+        let (midi_tx, midi_rx) = RingBuffer::new(1024);
+        let midi = crate::midi_out::MidiOutput::start(clock.clone(), midi_rx);
+        renderer.set_midi_output(midi_tx, Some(midi.wake_handle()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let planner = start_planner(server, stop.clone(), health.clone())
+            .map_err(|e| format!("can't start event preparation: {e}"))?;
+        let playback = Playback {
+            renderer,
+            channels,
+            sample_rate: f64::from(sample_rate),
+            clock,
+            health,
+            probe: Some(probe),
+        };
+        let helpers = Helpers {
+            stop,
+            planner: Some(planner),
+            _midi: Some(midi),
+        };
+        Ok((playback, helpers))
+    }
+
+    /// The complete device callback: bounded work, no allocation, no locks, and silence if the engine
+    /// panics. The session's clock advances by exactly the frames asked for.
+    fn read(&mut self, data: &mut [f32]) {
+        data.fill(0.0);
+        if let Some(probe) = &self.probe {
+            probe.record(self.renderer.clock());
+        }
+        let started = Instant::now();
+        let channels = self.channels;
+        let frames = data.len() / channels;
+        let renderer = &mut self.renderer;
+        let mut written = 0;
+        let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            renderer.render(frames, &mut |block, n| {
+                for (c, plane) in block.iter().take(channels).enumerate() {
+                    for (i, sample) in plane[..n].iter().enumerate() {
+                        data[(written + i) * channels + c] = *sample;
+                    }
+                }
+                written += n;
+            });
+        }));
+        if rendered.is_err() {
+            data.fill(0.0);
+            self.renderer.request_panic();
+            self.health.panics.fetch_add(1, Ordering::Relaxed);
+        }
+        self.clock.store(self.renderer.clock(), Ordering::Release);
+        if started.elapsed().as_secs_f64() * self.sample_rate > frames as f64 {
+            self.health.underruns.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 }
 
 /// How many windows the planner makes while it holds the server, so that a change after a big edit
@@ -487,106 +456,7 @@ fn start_planner(
         })
 }
 
-impl RenderWorker {
-    fn start(
-        server: Shared,
-        channels: usize,
-        queue_frames: usize,
-        health: Arc<Health>,
-        input: Option<AudioInput>,
-        config: RealtimeConfig,
-    ) -> Result<(Playback, Self), String> {
-        let (producer, consumer) = RingBuffer::new(queue_frames);
-        let (next, epoch, mut renderer, probe) = {
-            let mut d = lock(&server);
-            let probe = d.session().clock_probe();
-            let next = d.session().clock();
-            let epoch = d.session().panic_epoch();
-            let mut renderer = d.session_mut().start_realtime(config);
-            if let Some(input) = input {
-                renderer.set_audio_input(input);
-            }
-            (next, epoch, renderer, probe)
-        };
-        let clock = Arc::new(AtomicU64::new(next));
-        let (midi_tx, midi_rx) = RingBuffer::new(1024);
-        let midi = crate::midi_out::MidiOutput::start(clock.clone(), midi_rx);
-        renderer.set_midi_output(midi_tx, Some(midi.wake_handle()));
-        let mut playback = Playback {
-            queue: consumer,
-            render_thread: None,
-            channels,
-            clock: clock.clone(),
-            epoch: epoch.clone(),
-            health: health.clone(),
-            next,
-            waiting: None,
-            queue_frames,
-            probe: Some(probe),
-        };
-        let stop = Arc::new(AtomicBool::new(false));
-        let flag = stop.clone();
-        let planner = start_planner(server, stop.clone(), health.clone())
-            .map_err(|e| format!("can't start event preparation: {e}"))?;
-        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
-        let thread = thread::Builder::new()
-            .name("niminal-render".into())
-            .spawn(move || {
-                let mut producer = producer;
-                prefer_low_latency_scheduling();
-                // Prime the queue before starting the sound card.
-                fill_queue(
-                    &mut renderer,
-                    &mut producer,
-                    queue_frames,
-                    next,
-                    &epoch,
-                    &health,
-                );
-                let _ = ready_tx.send(());
-                // Top the queue up in chunks, and sleep until the sound card has used enough for the next one.
-                let chunk = block_size() * 8;
-                while !flag.load(Ordering::Relaxed) {
-                    let free = producer.slots();
-                    if free >= chunk {
-                        fill_queue(
-                            &mut renderer,
-                            &mut producer,
-                            chunk,
-                            clock.load(Ordering::Acquire),
-                            &epoch,
-                            &health,
-                        );
-                    } else {
-                        // The callback wakes us after consuming audio. The timeout also lets shutdown
-                        // and device loss make progress when there are no callbacks.
-                        thread::park_timeout(Duration::from_millis(20));
-                    }
-                }
-            });
-        let thread = match thread {
-            Ok(thread) => thread,
-            Err(error) => {
-                stop.store(true, Ordering::Relaxed);
-                let _ = planner.join();
-                return Err(format!("can't start the audio render worker: {error}"));
-            }
-        };
-        playback.render_thread = Some(thread.thread().clone());
-        let worker = Self {
-            stop,
-            thread: Some(thread),
-            planner: Some(planner),
-            _midi: Some(midi),
-        };
-        ready_rx
-            .recv()
-            .map_err(|_| "the audio render worker stopped before starting".to_string())?;
-        Ok((playback, worker))
-    }
-}
-
-/// Without this macOS may park the render thread for tens of milliseconds, which dries the queue.
+/// Without this macOS may park a thread that has deadlines for tens of milliseconds.
 pub fn prefer_low_latency_scheduling() {
     #[cfg(target_os = "macos")]
     // SAFETY: sets the scheduling class of the calling thread; nothing else is touched.
@@ -595,61 +465,11 @@ pub fn prefer_low_latency_scheduling() {
     }
 }
 
-fn fill_queue(
-    renderer: &mut RealtimeRenderer,
-    producer: &mut Producer<Frame>,
-    frames: usize,
-    played: u64,
-    epoch: &AtomicU64,
-    health: &Health,
-) {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        // Catch up in bounded slices. Audio missed by the device stays missed;
-        // events and DSP still advance to preserve the session's timeline.
-        let behind = played
-            .saturating_sub(renderer.clock())
-            .min((block_size() * 8) as u64) as usize;
-        if behind > 0 {
-            renderer.render(behind, &mut |_, _| {});
-        }
-        if renderer.clock() < played {
-            return;
-        }
-        let mut at = renderer.clock();
-        let epoch = epoch.load(Ordering::Acquire);
-        renderer.render(frames, &mut |block, n| {
-            // Publish one DSP block at a time instead of synchronizing the ring for every sample.
-            // The consumer only frees slots, so the caller's capacity check still holds here.
-            if let Ok(chunk) = producer.write_chunk_uninit(n) {
-                chunk.fill_from_iter((0..n).map(|i| {
-                    let mut samples = [0.0; MAX_CHANNELS];
-                    for (sample, channel) in samples.iter_mut().zip(block) {
-                        *sample = channel[i];
-                    }
-                    Frame {
-                        at: at + i as u64,
-                        epoch,
-                        samples,
-                    }
-                }));
-            }
-            at += n as u64;
-        });
-    }));
-    if result.is_err() {
-        renderer.request_panic();
-        health.panics.fetch_add(1, Ordering::Relaxed);
-    }
-}
-
-impl Drop for RenderWorker {
+impl Drop for Helpers {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            thread.thread().unpark();
-            let _ = thread.join();
-        }
         if let Some(planner) = self.planner.take() {
+            planner.thread().unpark();
             let _ = planner.join();
         }
     }
@@ -805,85 +625,43 @@ mod tests {
         }
     }
 
-    fn playback() -> (Producer<Frame>, Playback) {
-        let (tx, rx) = RingBuffer::new(QUEUE_FRAMES);
-        (
-            tx,
-            Playback {
-                queue: rx,
-                render_thread: None,
-                channels: 2,
-                clock: Arc::new(AtomicU64::new(0)),
-                epoch: Arc::new(AtomicU64::new(0)),
-                health: Arc::default(),
-                next: 0,
-                waiting: None,
-                queue_frames: QUEUE_FRAMES,
-                probe: None,
-            },
-        )
-    }
-
-    fn frame(at: u64, epoch: u64, left: f32, right: f32) -> Frame {
-        let mut samples = [0.0; MAX_CHANNELS];
-        samples[0] = left;
-        samples[1] = right;
-        Frame { at, epoch, samples }
+    fn tone_session() -> niminal_server::Session {
+        let mut session =
+            niminal_server::Session::new(48_000.0, niminal_lang::Layout::Stereo).without_limiter();
+        play_tone(&mut session);
+        session
     }
 
     #[test]
     fn the_callback_allocates_nothing_and_interleaves_every_channel() {
-        let (mut tx, mut playback) = playback();
-        for at in 0..16 {
-            tx.push(frame(at, 0, at as f32, -(at as f32))).ok().unwrap();
-        }
-        let mut audio = [0.0; 32];
+        let mut reference = tone_session();
+        let expected = reference.process(512);
+        let mut session = tone_session();
+        let renderer = session.start_realtime(RealtimeConfig::default());
+        session.prepare_realtime();
+        let mut playback = Playback {
+            renderer,
+            channels: 2,
+            sample_rate: 48_000.0,
+            clock: Arc::new(AtomicU64::new(0)),
+            health: Arc::default(),
+            probe: None,
+        };
+        let mut audio = [0.0; 1024];
         ALLOCATIONS.with(|n| n.set(0));
         COUNTING.with(|on| on.set(true));
         playback.read(&mut audio);
         COUNTING.with(|on| on.set(false));
         assert_eq!(ALLOCATIONS.with(Cell::get), 0);
         for (i, pair) in audio.as_chunks::<2>().0.iter().enumerate() {
-            assert_eq!(*pair, [i as f32, -(i as f32)]);
+            assert_eq!(*pair, [expected[0][i], expected[1][i]], "frame {i}");
         }
-        assert_eq!(playback.clock.load(Ordering::Acquire), 16);
-    }
-
-    #[test]
-    fn starvation_is_silent_and_old_audio_is_not_replayed() {
-        let (mut tx, mut playback) = playback();
-        let mut audio = [1.0; 8];
-        playback.read(&mut audio);
-        assert_eq!(audio, [0.0; 8]);
-        assert_eq!(playback.health.underruns.load(Ordering::Relaxed), 1);
-        for at in 0..8 {
-            tx.push(frame(at, 0, at as f32, 0.5)).ok().unwrap();
-        }
-        playback.read(&mut audio);
-        assert_eq!(audio, [4.0, 0.5, 5.0, 0.5, 6.0, 0.5, 7.0, 0.5]);
-        assert_eq!(playback.clock.load(Ordering::Acquire), 8);
-    }
-
-    #[test]
-    fn panic_discards_audio_already_waiting_in_the_output_queue() {
-        let (mut tx, mut playback) = playback();
-        for at in 0..4 {
-            tx.push(frame(at, 0, 0.5, 0.5)).ok().unwrap();
-        }
-        playback.epoch.store(1, Ordering::Release);
-        tx.push(frame(4, 1, 0.25, 0.75)).ok().unwrap();
-        let mut audio = [1.0; 10];
-        playback.read(&mut audio);
-        assert_eq!(&audio[..8], &[0.0; 8]);
-        assert_eq!(&audio[8..], &[0.25, 0.75]);
+        assert_eq!(playback.clock.load(Ordering::Acquire), 512);
     }
 
     #[test]
     fn preparation_carries_on_after_another_thread_panics_holding_the_server() {
-        let mut session =
-            niminal_server::Session::new(48_000.0, niminal_lang::Layout::Stereo).without_limiter();
-        play_tone(&mut session);
-        let server: Shared = Arc::new(Mutex::new(EngineServer::new(session)));
+        let server: Shared = Arc::new(Mutex::new(EngineServer::new(tone_session())));
         let poisoner = server.clone();
         let _ = thread::spawn(move || {
             let _guard = poisoner.lock().unwrap();
@@ -891,8 +669,9 @@ mod tests {
         })
         .join();
         assert!(server.is_poisoned());
-        let (mut playback, _worker) =
-            RenderWorker::start(server, 2, QUEUE_FRAMES, Arc::default(), None, RealtimeConfig::default()).unwrap();
+        let (mut playback, _helpers) =
+            Playback::start(server, 2, 48_000, Arc::default(), None, RealtimeConfig::default())
+                .unwrap();
         // the planner keeps feeding the renderer, so the tone is still heard
         let mut heard = false;
         for _ in 0..50 {
@@ -927,25 +706,21 @@ mod tests {
 
     #[test]
     fn a_control_lock_cannot_block_the_callback_or_change_its_audio() {
-        let mut session =
-            niminal_server::Session::new(48_000.0, niminal_lang::Layout::Stereo).without_limiter();
-        play_tone(&mut session);
-        let mut reference =
-            niminal_server::Session::new(48_000.0, niminal_lang::Layout::Stereo).without_limiter();
-        play_tone(&mut reference);
-        let expected = reference.process(QUEUE_FRAMES * 4);
-        let server = Arc::new(Mutex::new(EngineServer::new(session)));
-        let (mut playback, worker) =
-            RenderWorker::start(server.clone(), 2, QUEUE_FRAMES, Arc::default(), None, RealtimeConfig::default()).unwrap();
+        const FRAMES: usize = 2048;
+        let mut reference = tone_session();
+        let expected = reference.process(FRAMES * 4);
+        let server = Arc::new(Mutex::new(EngineServer::new(tone_session())));
+        let (mut playback, helpers) =
+            Playback::start(server.clone(), 2, 48_000, Arc::default(), None, RealtimeConfig::default())
+                .unwrap();
+        // let the planner prepare the notes before something holds the server
+        thread::sleep(Duration::from_millis(200));
         let guard = lock(&server);
-        let mut audio = vec![0.0; QUEUE_FRAMES * 2];
+        let mut audio = vec![0.0; FRAMES * 2];
         for batch in 0..4 {
-            if batch > 0 {
-                thread::sleep(Duration::from_millis(5));
-            }
             playback.read(&mut audio);
             for (i, pair) in audio.as_chunks::<2>().0.iter().enumerate() {
-                let at = batch * QUEUE_FRAMES + i;
+                let at = batch * FRAMES + i;
                 assert_eq!(
                     *pair,
                     [expected[0][at], expected[1][at]],
@@ -953,8 +728,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(playback.health.underruns.load(Ordering::Relaxed), 0);
         drop(guard);
-        drop(worker);
+        drop(helpers);
     }
 }

@@ -56,8 +56,10 @@ struct ChannelState {
     dc_x1: f64,
     dc_y1: f64,
     delay: Vec<f64>,
-    /// The latest `TAPS` samples after the DC blocker, newest first.
-    recent: [f64; TAPS],
+    /// The latest `TAPS` samples after the DC blocker, newest first, from `head`. Each is stored
+    /// twice, `TAPS` apart, so that they are always one slice and a new sample moves nothing.
+    recent: [f64; 2 * TAPS],
+    head: usize,
     /// Samples in `recent` large enough to require true peak interpolation.
     interpolation_candidates: usize,
 }
@@ -87,7 +89,8 @@ impl Master {
                     dc_x1: 0.0,
                     dc_y1: 0.0,
                     delay: vec![0.0; window],
-                    recent: [0.0; TAPS],
+                    recent: [0.0; 2 * TAPS],
+                    head: 0,
                     interpolation_candidates: 0,
                 })
                 .collect(),
@@ -114,7 +117,7 @@ impl Master {
             channel.dc_x1 = 0.0;
             channel.dc_y1 = 0.0;
             channel.delay.fill(0.0);
-            channel.recent = [0.0; TAPS];
+            channel.recent = [0.0; 2 * TAPS];
             channel.interpolation_candidates = 0;
         }
         self.required.fill(1.0);
@@ -219,19 +222,21 @@ impl Master {
             let candidate = |sample: f64| sample.abs() * self.between_reach > self.ceiling;
             state.interpolation_candidates = state.interpolation_candidates
                 + usize::from(candidate(x))
-                - usize::from(candidate(state.recent[TAPS - 1]));
-            state.recent.rotate_right(1);
-            state.recent[0] = x;
+                - usize::from(candidate(state.recent[state.head + TAPS - 1]));
+            state.head = state.head.checked_sub(1).unwrap_or(TAPS - 1);
+            state.recent[state.head] = x;
+            state.recent[state.head + TAPS] = x;
+            let recent = &state.recent[state.head..state.head + TAPS];
             // The sample from `HALF` ago is the one going into the lookahead, so the stretch after it
             // can be looked at with samples from before and after.
-            let sample = state.recent[HALF];
+            let sample = recent[HALF];
             state.delay[p] = sample;
             peak = peak.max(sample.abs());
             // the stretches between samples need looking at only if they could reach the ceiling
             if state.interpolation_candidates > 0 {
                 let between = self.between.iter().map(|w| {
                     w.iter()
-                        .zip(&state.recent)
+                        .zip(recent)
                         .map(|(w, r)| w * r)
                         .sum::<f64>()
                         .abs()

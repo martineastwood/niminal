@@ -396,9 +396,14 @@ fn run_live(args: LiveArgs) -> Result<(), String> {
         });
     }
     println!("nimlive listening on ws://127.0.0.1:{}", server.port());
+    // Events go to the server every 25ms; the files are looked at a tenth as often.
+    let mut ticks = 0u32;
     loop {
         lock(&live).live_mut().advance();
-        if let (Some(path), Some((files, last))) = (file.as_deref(), watched.as_mut()) {
+        ticks = ticks.wrapping_add(1);
+        if ticks.is_multiple_of(10)
+            && let (Some(path), Some((files, last))) = (file.as_deref(), watched.as_mut())
+        {
             let modified = newest(files);
             if modified.is_some() && modified != *last {
                 (*files, *last) = load(&live, path, None);

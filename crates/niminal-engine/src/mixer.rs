@@ -98,6 +98,8 @@ impl Buses {
     /// Start a block of `frames` samples: the buses hold what delayed sends put in a block ago
     /// (exactly `BLOCK` samples ago, whatever the length of the blocks in between).
     pub fn begin_block(&mut self, frames: usize) {
+        let (first, rest) = self.ring_split(frames);
+        let pos = self.late_pos;
         for ((data, late), staged) in self
             .data
             .iter_mut()
@@ -107,28 +109,38 @@ impl Buses {
             for ((d, l), s) in data.iter_mut().zip(late.iter_mut()).zip(staged.iter_mut()) {
                 s.fill(0.0);
                 d.fill(0.0);
-                for (i, out) in d[..frames].iter_mut().enumerate() {
-                    let at = (self.late_pos + i) % block_size();
-                    *out = l[at];
-                    l[at] = 0.0;
-                }
+                d[..first].copy_from_slice(&l[pos..pos + first]);
+                l[pos..pos + first].fill(0.0);
+                d[first..frames].copy_from_slice(&l[..rest]);
+                l[..rest].fill(0.0);
             }
         }
     }
 
+    /// How `frames` samples written at `late_pos` of a ring one block long divide: this many up to
+    /// the end of the ring, then this many from its start.
+    fn ring_split(&self, frames: usize) -> (usize, usize) {
+        let first = frames.min(block_size() - self.late_pos);
+        (first, frames - first)
+    }
+
     /// Finish the block: what delayed sends staged waits to arrive in `BLOCK` samples.
     pub fn end_block(&mut self, frames: usize) {
+        let (first, rest) = self.ring_split(frames);
+        let pos = self.late_pos;
         for (history, data) in self.history.iter_mut().zip(&self.data) {
             for (h, d) in history.iter_mut().zip(data) {
-                for i in 0..frames {
-                    h[(self.late_pos + i) % block_size()] = d[i];
-                }
+                h[pos..pos + first].copy_from_slice(&d[..first]);
+                h[..rest].copy_from_slice(&d[first..frames]);
             }
         }
         for (late, staged) in self.late.iter_mut().zip(&self.staged) {
             for (l, s) in late.iter_mut().zip(staged) {
-                for i in 0..frames {
-                    l[(self.late_pos + i) % block_size()] += s[i];
+                for (l, s) in l[pos..pos + first].iter_mut().zip(&s[..first]) {
+                    *l += s;
+                }
+                for (l, s) in l[..rest].iter_mut().zip(&s[first..frames]) {
+                    *l += s;
                 }
             }
         }

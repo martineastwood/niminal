@@ -183,6 +183,7 @@ pub fn lock<S>(service: &Mutex<S>) -> std::sync::MutexGuard<'_, S> {
 
 pub struct Server {
     port: u16,
+    addr: std::net::SocketAddr,
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
 }
@@ -200,8 +201,8 @@ impl Server {
         }
         let listener = TcpListener::bind((config.listen, config.port))
             .map_err(|e| format!("can't listen on {}:{}: {e}", config.listen, config.port))?;
-        listener.set_nonblocking(true).map_err(|e| e.to_string())?;
-        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        let addr = listener.local_addr().map_err(|e| e.to_string())?;
+        let port = addr.port();
 
         let stop = Arc::new(AtomicBool::new(false));
         let outboxes: Outboxes = Arc::default();
@@ -216,6 +217,7 @@ impl Server {
                 while !stop.load(Ordering::Relaxed) {
                     clients.retain(|c| !c.is_finished());
                     match listener.accept() {
+                        Ok(_) if stop.load(Ordering::Relaxed) => break,
                         Ok((stream, _)) if clients.len() >= MAX_CLIENTS => drop(stream),
                         Ok((stream, _)) => {
                             let (server, stop, outboxes, token) = (
@@ -232,9 +234,7 @@ impl Server {
                                 clients.push(handle);
                             }
                         }
-                        Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                            thread::sleep(Duration::from_millis(25))
-                        }
+                        Err(e) if e.kind() == ErrorKind::Interrupted => {}
                         Err(_) => break,
                     }
                 }
@@ -258,13 +258,15 @@ impl Server {
                             }
                         }
                     }
-                    thread::sleep(Duration::from_millis(50));
+                    let nobody = outboxes.lock().unwrap_or_else(|e| e.into_inner()).is_empty();
+                    thread::sleep(Duration::from_millis(if nobody { 250 } else { 50 }));
                 }
             }));
         }
 
         Ok(Server {
             port,
+            addr,
             stop,
             threads,
         })
@@ -281,6 +283,8 @@ impl Server {
 
     fn shut_down(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        // the accept thread waits for a client: give it one to notice the stop
+        let _ = TcpStream::connect(self.addr);
         for t in self.threads.drain(..) {
             let _ = t.join();
         }
