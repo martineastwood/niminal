@@ -32,6 +32,9 @@ struct ReplayArgs {
     /// Turn off the master limiter.
     #[arg(long)]
     no_limiter: bool,
+    /// The `--control-step` the server that recorded the log ran with.
+    #[arg(long, default_value_t = niminal_engine::DEFAULT_CONTROL_STEP)]
+    control_step: usize,
 }
 
 #[derive(Args)]
@@ -48,6 +51,10 @@ struct ServerArgs {
     /// land on block boundaries; smaller blocks are tighter, larger ones cheaper.
     #[arg(long, default_value_t = niminal_engine::DEFAULT_BLOCK)]
     block_size: usize,
+    /// Samples between the runs of a `control { ... }` scope, from 1 to 1024, whatever the block
+    /// size: a smaller step tracks fast modulation more closely and costs more.
+    #[arg(long, default_value_t = niminal_engine::DEFAULT_CONTROL_STEP)]
+    control_step: usize,
     /// Frames in each sound card callback: smaller is lower latency but less forgiving. By default 256,
     /// or what the device allows nearest to it. Not the same as `--block-size`.
     #[arg(long)]
@@ -118,7 +125,11 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Replay(args) => run_replay(&args.log, &args.out, args.channels, args.no_limiter),
+        Command::Replay(args) => {
+            niminal_engine::set_control_step(args.control_step)
+                .map_err(|e| format!("error: {e}"))
+                .and_then(|()| run_replay(&args.log, &args.out, args.channels, args.no_limiter))
+        }
         Command::Server(mut args) => {
             install_crash_log();
             if args.log.is_none() && !args.no_log {
@@ -250,6 +261,7 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
         channels,
         sample_rate,
         block_size,
+        control_step,
         buffer_size,
         device,
         out_device,
@@ -267,6 +279,7 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
         ..
     } = args;
     niminal_engine::set_block_size(block_size)?;
+    niminal_engine::set_control_step(control_step)?;
     if max_voices == 0 {
         return Err("error: --max-voices must be at least 1".into());
     }

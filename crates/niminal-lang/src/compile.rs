@@ -409,6 +409,8 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         }
     }
     let mut items = desugar(parsed);
+    let prelude = crate::prelude::needed(source, &items);
+    items.extend(prelude);
     let mut errors = Vec::new();
 
     let tuning = tuning_of(&items).unwrap_or_else(|d| {

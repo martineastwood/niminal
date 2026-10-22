@@ -49,27 +49,44 @@ Rates are worked out for arithmetic, but anything with state (an oscillator, an 
 
 ```nml
 instr acid(freq: hz) {
-  sweep = control { osc(sine, 0.3hz).range(300hz..3khz) }
+  sweep = control { lfo(0.3hz).unipolar.range(300hz..3khz) }
   osc(saw, freq).lpf(cutoff: sweep.smooth, res: 0.3)
 }
 ```
 
-- **Time is a block's.** Inside the scope `sample_rate` is the control rate (the sample rate divided by `--block-size`), so `osc(sine, 0.3hz)` is still 0.3hz and `env[...]` times are still seconds. A scope's own time steps are one block, so keep it to slow movement: the highest usable frequency is half the control rate (375hz at 64 samples and 48khz), and an envelope segment shorter than a block is a single step.
-- **Inputs are read at the start of each block.** A parameter, `ctl` or other value from outside the scope is seen once per block, as with `.control`. In a `fn` with state, only parameters can be read this way and anything else that changes every sample is an error.
-- **The result has the `control` rate** and is held through the block. A bare held value steps once per block; where that is audible (a cutoff sweep, a gain) smooth it:
+- **Time is a control step's.** A scope runs once every 64 samples by default (750 times a second at 48khz), whatever `--block-size` is; `--control-step N` changes that, from 1 to 1024, and a step can begin anywhere inside a block. Inside the scope `sample_rate` is the control rate, so `osc(sine, 0.3hz)` is still 0.3hz and `env[...]` times are still seconds. Keep a scope to slow movement: the highest usable frequency is half the control rate (375hz at the default), and an envelope segment shorter than a step (1.3ms) is a single jump. `nimlive explain` warns about both, for the step it is given with `--control-step`.
+- **Inputs are read when the scope runs.** A parameter, `ctl` or other value from outside the scope is seen once per block, as with `.control`. In a `fn` with state, only parameters can be read this way and anything else that changes every sample is an error.
+- **The result has the `control` rate** and is held until the next run. A bare held value steps every 64 samples; where that is audible (a cutoff sweep, a gain) smooth it:
 
 | Written | Result |
 | --- | --- |
 | `x` | Held: a step each block. The cheapest, and right for slow movement |
 | `x.hold` | The same, checked: an error unless `x` changes at most once per block |
-| `x.smooth` | A linear ramp from the previous block's value to this block's, in instrument bodies |
-| `x.smooth(5ms)` | A one-pole lag at the sample rate. Works in a `fn` with state too |
+| `x.smooth` | A linear ramp to each new value over one step |
+| `x.smooth(5ms)` | A one-pole lag at the sample rate |
 
 - **Scopes can appear any number of times** in an instrument, `fn` or node, each with its own state. They can't be inside an `if` or `match` branch of a `fn` with state; put the branch inside the scope.
 - **`control fn`** makes a whole function a control scope: `control fn lfo(rate: hz) { osc(sine, rate) }` is `fn lfo(rate: hz) { control { osc(sine, rate) } }`. Every call runs once per block, with state of its own. Its body has one clock, so it can use `state`, branches and any parameters. It has one result; `.smooth` the result at the call site where a step would be heard.
-- The sound depends on `--block-size`, because a step lasts a block: the same file at 32 and 256 samples has different step sizes (the frequency of a scope's LFO and its envelope times are the same).
+- The sound doesn't depend on `--block-size` or on how the audio is split into calls. A smaller `--control-step` follows fast movement more closely, at the cost of running the scope more often. In a `fn` with state the scope's value is read once per block, so a step shorter than the block adds time accuracy but not finer steps.
 
-Use `nimlive explain FILE` to see what an instrument runs every sample and what runs once per block, and the editor's rate hints to see the rate of each value in an instrument body. See [Editor and LSP](/reference/editor/).
+### Ready-made modulators
+
+These are `control fn`s every file can call; a file that defines its own `lfo` (or any of the others) uses that instead.
+
+| Call | Gives |
+| --- | --- |
+| `lfo(2hz)`, `lfo(0.3hz, shape: tri)` | -1 to 1; `shape` is `sine` (default), `tri`, `saw` or `square` |
+| `random_steps(4hz)` | A new random value from -1 to 1 at that rate, held between |
+| `random_glide(3hz, glide: 200ms)` | The same, sliding to each new value |
+
+```nml
+instr acid(freq: hz = 110hz) {
+  sweep = lfo(0.3hz).unipolar.range(300hz..3khz)
+  osc(saw, freq).lpf(cutoff: sweep.smooth, res: 0.3)
+}
+```
+
+Use `nimlive explain FILE` to see what an instrument runs every sample and what runs once per block (it also suggests a `control` scope for an LFO or envelope that only sets a parameter, and warns about what a scope can't do), and the editor's rate hints to see the rate of each value in an instrument body. See [Editor and LSP](/reference/editor/).
 
 ## Tuning
 

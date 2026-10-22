@@ -3,7 +3,7 @@
 
 instr acid(freq: hz = 110hz) {
   // a 0.3hz sweep: one value per block, ramped so the cutoff doesn't step
-  sweep = control { osc(sine, 0.3hz).range(300hz..3khz) }
+  sweep = control { lfo(0.3hz).unipolar.range(300hz..3khz) }
   amp = env[0 2ms 1 300ms.exp 0]
   osc(saw, freq).lpf(cutoff: sweep.smooth, res: 0.3) * amp
 }

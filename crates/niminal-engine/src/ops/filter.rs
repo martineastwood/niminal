@@ -47,16 +47,18 @@ impl Svf {
         if (cutoff, res) == self.cached_for {
             return;
         }
+        // the resonance rarely moves with the cutoff, and its power is the dearer half
+        if res != self.cached_for.1 {
+            const Q_MIN: f64 = std::f64::consts::FRAC_1_SQRT_2;
+            const Q_MAX: f64 = 25.0;
+            let q = Q_MIN * (Q_MAX / Q_MIN).powf(f64::from(res).clamp(0.0, 1.0));
+            self.k = 1.0 / q;
+        }
         self.cached_for = (cutoff, res);
 
         let sr = f64::from(self.sample_rate);
         let fc = f64::from(cutoff).clamp(5.0, sr * 0.45);
         let g = (std::f64::consts::PI * fc / sr).tan();
-
-        const Q_MIN: f64 = std::f64::consts::FRAC_1_SQRT_2;
-        const Q_MAX: f64 = 25.0;
-        let q = Q_MIN * (Q_MAX / Q_MIN).powf(f64::from(res).clamp(0.0, 1.0));
-        self.k = 1.0 / q;
         self.a1 = 1.0 / (1.0 + g * (g + self.k));
         self.a2 = g * self.a1;
         self.a3 = g * self.a2;

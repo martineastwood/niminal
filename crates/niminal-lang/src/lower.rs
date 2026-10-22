@@ -1521,7 +1521,7 @@ impl<'a> Lower<'a> {
                 ExprKind::For { body, .. } if !(last && ends_with_value(body)) => {
                     self.for_stmt(e).map(|()| None)
                 }
-                _ if self.mode == Mode::Node => {
+                _ if self.mode == Mode::Node && !self.in_fn => {
                     Err(Diagnostic::new("a node makes sound through `out`", e.span)
                         .with_help("write `out = ...`"))
                 }
@@ -5703,6 +5703,7 @@ impl Lower<'_> {
                 self.names,
                 self.tempo,
                 true,
+                matches!(dsp_scope, Some(DspScope::Control)),
             )?
         } else {
             crate::kernel::compile_kernel(def, &kargs, self.registry, self.names, self.tempo)?

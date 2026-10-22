@@ -42,6 +42,9 @@ struct RenderArgs {
     /// Turn off the master limiter (offline renders only).
     #[arg(long)]
     no_limiter: bool,
+    /// Samples between the runs of a `control { ... }` scope, from 1 to 1024.
+    #[arg(long, default_value_t = niminal_engine::DEFAULT_CONTROL_STEP)]
+    control_step: usize,
     /// Render this many bars of a piece that plays until stopped.
     #[arg(long, conflicts_with = "seconds")]
     bars: Option<f64>,
@@ -105,6 +108,9 @@ enum Command {
     Explain {
         /// The `.nml` file to compile.
         file: PathBuf,
+        /// Samples between the runs of a `control { ... }` scope, as for `niminal server`.
+        #[arg(long, default_value_t = niminal_engine::DEFAULT_CONTROL_STEP)]
+        control_step: usize,
     },
     /// Run the language server (LSP over stdin and stdout) for an editor.
     Lsp,
@@ -120,7 +126,8 @@ enum Command {
     },
 }
 
-fn run_explain(file: &Path) -> Result<(), String> {
+fn run_explain(file: &Path, control_step: usize) -> Result<(), String> {
+    niminal_engine::set_control_step(control_step).map_err(|e| format!("error: {e}"))?;
     let source = read(file)?;
     let name = file.display().to_string();
     let dir = file.parent().unwrap_or(Path::new("."));
@@ -146,7 +153,7 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Render(args) => run_render(args),
         Command::Live(args) => run_live(args),
-        Command::Explain { file } => run_explain(&file),
+        Command::Explain { file, control_step } => run_explain(&file, control_step),
         Command::Lsp => {
             if niminal_lsp::run(std::io::stdin().lock(), std::io::stdout().lock()) == 0 {
                 Ok(())
@@ -217,8 +224,10 @@ fn run_render(args: RenderArgs) -> Result<(), String> {
         seconds,
         from,
         to,
+        control_step,
         ..
     } = args;
+    niminal_engine::set_control_step(control_step).map_err(|e| format!("error: {e}"))?;
     let file = file.as_path();
     let (score, input, from, to) = (
         score.as_deref(),

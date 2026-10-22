@@ -1,0 +1,73 @@
+// @vitest-environment happy-dom
+import { afterEach, expect, it, vi } from 'vitest';
+import { PatternGrid } from './grid';
+import { newProject } from './project';
+
+Element.prototype.scrollIntoView = () => {};
+// happy-dom does not expose the browser's Option convenience constructor.
+vi.stubGlobal('Option', function (text: string, value: string) {
+  const option = document.createElement('option'); option.textContent = text; option.value = value; return option;
+});
+afterEach(() => document.body.replaceChildren());
+
+function setup() {
+  const parent = document.createElement('div'); parent.tabIndex = 0; document.body.append(parent);
+  const project = newProject(), edited = vi.fn(), audition = vi.fn(), play = vi.fn();
+  const grid = new PatternGrid(parent, () => project, () => 4, edited, vi.fn(), audition, play);
+  grid.render();
+  const key = (key: string, options: KeyboardEventInit = {}) => parent.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...options }));
+  const click = (row: number, track: number) => parent.querySelector<HTMLElement>(`#cell-${row}-${track}`)!.click();
+  return { parent, project, grid, key, click, edited, audition, play };
+}
+
+function clipboard(parent: HTMLElement, type: 'copy' | 'paste', text = '') {
+  let copied = '';
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'clipboardData', { value: { getData: () => text, setData: (_: string, value: string) => { copied = value; } } });
+  parent.dispatchEvent(event);
+  return copied;
+}
+
+it('enters and auditions a note, then undoes/redoes it through grid keyboard shortcuts', () => {
+  const { project, key, click, audition, edited } = setup();
+  click(1, 0); key('z');
+  expect(project.tracks[0].notes[1]).toBe('C-4');
+  expect(audition).toHaveBeenCalledWith('tone', 'C-4', 0);
+  key('z', { metaKey: true }); expect(project.tracks[0].notes[1]).toBeNull();
+  key('z', { metaKey: true, shiftKey: true }); expect(project.tracks[0].notes[1]).toBe('C-4');
+  expect(edited).toHaveBeenCalledTimes(3);
+});
+
+it('copies a rectangular selection and treats a multi-cell paste as one undoable edit', () => {
+  const { parent, project, key, click } = setup();
+  click(0, 0); key('ArrowDown', { shiftKey: true }); key('ArrowDown', { shiftKey: true }); key('ArrowRight', { shiftKey: true });
+  expect(clipboard(parent, 'copy')).toBe('C-4\t---\n---\t---\n---\t---');
+  key('Delete'); expect(project.tracks[0].notes[0]).toBeNull();
+  key('z', { ctrlKey: true }); expect(project.tracks[0].notes[0]).toBe('C-4');
+  clipboard(parent, 'paste', 'F#3\tA-3\n---\tC-4');
+  expect(project.tracks[0].notes[0]).toBe('F#3'); expect(project.tracks[1].notes[0]).toBe('A-3');
+  expect(project.tracks[1].notes[1]).toBe('C-4');
+  key('z', { ctrlKey: true });
+  expect(project.tracks[0].notes[0]).toBe('C-4'); expect(project.tracks[1].notes[0]).toBeNull(); expect(project.tracks[1].notes[1]).toBeNull();
+});
+
+it('clips a pasted block at the pattern edge and ignores malformed or empty clipboard data', () => {
+  const { parent, project, click, grid } = setup();
+  click(31, 3); clipboard(parent, 'paste', 'D-3\tE-3\nF-3\tG-3');
+  expect(project.tracks[3].notes[31]).toBe('D-3');
+  expect(project.tracks[3].notes).toHaveLength(32);
+  clipboard(parent, 'paste', 'not notes'); clipboard(parent, 'paste', '');
+  expect(project.tracks[3].notes[31]).toBe('D-3');
+  grid.undo(); expect(project.tracks[3].notes[31]).toBeNull();
+});
+
+it('keeps selector typing out of the note grid and space playback local to the grid', () => {
+  const { parent, project, key, play } = setup();
+  const select = parent.querySelector('select')!;
+  select.dispatchEvent(new KeyboardEvent('keydown', { key: 's', bubbles: true }));
+  expect(project.tracks[0].notes[0]).toBe('C-4');
+  key(' '); expect(play).toHaveBeenCalledTimes(1);
+  const code = document.createElement('textarea'); document.body.append(code);
+  code.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+  expect(play).toHaveBeenCalledTimes(1);
+});

@@ -183,6 +183,8 @@ struct Kb<'a> {
     frame: Frame,
     /// Set inside a branch: state is only written when this register is not 0.
     guard: Option<usize>,
+    /// This kernel is the body of a `control` scope, so everything in it already runs once per step.
+    in_control: bool,
     /// Set while working out a value at a fixed rate (a state's starting value, `x.init`).
     force: Option<Section>,
     /// The functions being copied in, outermost first, to catch recursion.
@@ -200,7 +202,7 @@ pub(crate) fn compile_kernel(
     names: &Names,
     tempo: Tempo,
 ) -> Res<(Kernel, KernelResult)> {
-    compile_scoped_kernel(def, args, registry, names, tempo, false)
+    compile_scoped_kernel(def, args, registry, names, tempo, false, false)
 }
 
 pub(crate) fn compile_scoped_kernel(
@@ -210,6 +212,7 @@ pub(crate) fn compile_scoped_kernel(
     names: &Names,
     tempo: Tempo,
     instrument_scope: bool,
+    in_control: bool,
 ) -> Res<(Kernel, KernelResult)> {
     compile_scope_depth(
         def,
@@ -219,9 +222,11 @@ pub(crate) fn compile_scoped_kernel(
         tempo,
         instrument_scope,
         usize::from(instrument_scope),
+        in_control,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_scope_depth(
     def: &FnDef,
     args: &[KArg],
@@ -230,6 +235,7 @@ fn compile_scope_depth(
     tempo: Tempo,
     instrument_scope: bool,
     scope_depth: usize,
+    in_control: bool,
 ) -> Res<(Kernel, KernelResult)> {
     if scope_depth > 16 {
         return Err(Diagnostic::new(
@@ -241,6 +247,7 @@ fn compile_scope_depth(
     let mut kb = Kb {
         instrument_scope,
         scope_depth,
+        in_control,
         registry,
         names,
         tempo,
@@ -2431,6 +2438,18 @@ impl Kb<'_> {
             return Err(usage());
         }
         let control = name == "control";
+        if control && self.in_control {
+            // already once per step: the body runs here, with state of its own
+            let def = funcs::lambda(&[], body, span);
+            let captures = self
+                .frame
+                .scope
+                .iter()
+                .filter(|(n, _)| funcs::reads(&def, n))
+                .map(|(n, v)| (n.clone(), v.clone()))
+                .collect();
+            return self.call_captured(&def, &def.name, &[], captures);
+        }
         if control && self.guard.is_some() {
             return Err(Diagnostic::new(
                 "a `control` scope can't be inside an `if` or `match` branch",
@@ -2531,6 +2550,7 @@ impl Kb<'_> {
             self.tempo,
             true,
             self.scope_depth + 1,
+            control || self.in_control,
         )?;
         let custom = Box::new(niminal_engine::ops::Custom::new(Arc::new(kernel)));
         let op: Box<dyn niminal_engine::Opcode> = if name == "spawn" {
@@ -2859,11 +2879,24 @@ impl Kb<'_> {
                 });
             }
             "smooth" if args.len() == 1 && args[0].receiver => {
-                return Err(Diagnostic::new(
-                    "a linear `.smooth` is for instrument bodies",
-                    span,
-                )
-                .with_help("in a `fn` with state, give a time: `.smooth(5ms)`"));
+                let value = self.value(&args[0].value)?;
+                return self.map_value(value, span, |this, v| {
+                    if v.rate > Rate::Control {
+                        return Err(Diagnostic::new(
+                            "`smooth` is for values that change at most once per block",
+                            span,
+                        )
+                        .with_help("compute it in a `control { ... }` scope, or read it with `.control`"));
+                    }
+                    match this.emit_native(
+                        Box::new(niminal_engine::ops::Ramp::default()),
+                        vec![NativeInput::Reg(v.reg)],
+                        v.unit,
+                    ) {
+                        KVal::Num(smoothed) => Ok(smoothed),
+                        _ => unreachable!("a native gives one number"),
+                    }
+                });
             }
             "smooth" if args.len() == 2 && args[0].receiver => {
                 // `x.smooth(5ms)` is a one-pole lag

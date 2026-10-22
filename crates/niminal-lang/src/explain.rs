@@ -5,6 +5,12 @@ use std::fmt::Write;
 
 use niminal_engine::{Graph, KernelStats};
 
+/// An oscillator at or below this many hz that only sets a parameter is an LFO.
+const LFO_HZ: f32 = 30.0;
+
+/// `explain` works at the rate `niminal server` and `nimlive render` default to.
+const SAMPLE_RATE: f32 = 48_000.0;
+
 use crate::program::Program;
 
 impl Program {
@@ -50,7 +56,28 @@ fn report(out: &mut String, name: &str, graph: &Graph) {
     let mut sample_ops: Vec<String> = Vec::new();
     let mut block_ops: Vec<String> = Vec::new();
     let mut kernels: Vec<(String, KernelStats)> = Vec::new();
-    for (op, stats) in graph.describe() {
+    let mut suggestions: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+    for node in graph.describe(SAMPLE_RATE) {
+        for warning in &node.warnings {
+            warnings.push(warning.clone());
+        }
+        let (op, stats) = (node.name, node.stats);
+        if node.modulation_only {
+            match op.as_str() {
+                "osc" => {
+                    if let Some(Some(hz)) = node.inputs.first().copied().filter(|f| f.is_some_and(|f| f <= LFO_HZ)) {
+                        suggestions.push(format!(
+                            "an oscillator at {hz}hz only sets a parameter: `control {{ osc(..) }}` runs it once per block"
+                        ));
+                    }
+                }
+                "env" => suggestions.push(
+                    "an envelope only sets a parameter: `control { env[..] }` runs it once per block (a segment shorter than a block becomes one step)".to_string(),
+                ),
+                _ => {}
+            }
+        }
         match stats {
             None => sample_ops.push(op),
             Some(stats) => {
@@ -88,6 +115,12 @@ fn report(out: &mut String, name: &str, graph: &Graph) {
             format!(" ({})", tally(&block_ops))
         }
     );
+    for warning in warnings {
+        let _ = writeln!(out, "  warning: {warning}");
+    }
+    for suggestion in suggestions {
+        let _ = writeln!(out, "  could run once per block: {suggestion}");
+    }
     for (op, stats) in kernels {
         let label = if stats.control_scope {
             "control scope".to_string()

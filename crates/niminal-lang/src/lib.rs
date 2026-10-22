@@ -21,6 +21,7 @@ mod modules;
 mod namespace;
 mod opcodes;
 mod parser;
+mod prelude;
 mod program;
 mod project;
 pub use project::{Entry, Located, Origin, Piece, Problem, Project};

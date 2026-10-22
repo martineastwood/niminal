@@ -13,8 +13,14 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+niminal-ws = { path = "../../crates/niminal-ws" }
+niminal-lang = { path = "../../crates/niminal-lang" }
 rfd = "0.17"
 niminal-lsp = { path = "../../sequencer/lsp" }
 
 [profile.dev]
 debug = "line-tables-only"
+
+[dev-dependencies]
+niminal-server = { path = "../../crates/niminal-server" }

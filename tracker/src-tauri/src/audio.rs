@@ -1,0 +1,370 @@
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+use std::time::Duration;
+
+use niminal_ws::Client;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use crate::pattern::{Pattern, Playback, Track, pitch};
+use crate::{
+    mixer,
+    sound::{Kind, Sound},
+};
+
+#[derive(Clone, Default, Serialize)]
+pub struct Status {
+    pub connected: bool,
+    pub playing: bool,
+    pub row: Option<usize>,
+    pub sample_rate: f64,
+    pub skipped_rows: u64,
+    pub late_events: u64,
+    pub error: Option<String>,
+    pub instruments: BTreeMap<String, String>,
+    pub effects: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum Command {
+    Connect {
+        port: u16,
+        token: Option<String>,
+    },
+    Disconnect,
+    Apply {
+        id: String,
+        source: String,
+        kind: Kind,
+    },
+    Play {
+        pattern: Pattern,
+    },
+    Update {
+        pattern: Pattern,
+    },
+    Audition {
+        instrument: String,
+        note: String,
+        track: usize,
+    },
+    Stop,
+}
+
+type Request = (Command, mpsc::Sender<Result<Status, String>>);
+
+pub struct Audio {
+    sender: mpsc::Sender<Request>,
+    status: Arc<Mutex<Status>>,
+}
+
+impl Audio {
+    pub fn new() -> Self {
+        let (sender, receiver) = mpsc::channel::<Request>();
+        let status = Arc::new(Mutex::new(Status::default()));
+        let shared = status.clone();
+        thread::Builder::new()
+            .name("tracker-playback".into())
+            .spawn(move || {
+                let mut worker = Worker::default();
+                loop {
+                    match receiver.recv_timeout(Duration::from_millis(25)) {
+                        Ok((command, reply)) => {
+                            let result = worker.command(command);
+                            if let Err(error) = &result {
+                                worker.status.error = Some(error.clone());
+                            }
+                            *shared.lock().unwrap_or_else(|e| e.into_inner()) =
+                                worker.status.clone();
+                            let _ = reply.send(result.map(|()| worker.status.clone()));
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                    if worker.playback.is_some() {
+                        if let Err(error) = worker.tick() {
+                            let _ = worker.stop();
+                            worker.status.error = Some(error);
+                        }
+                        *shared.lock().unwrap_or_else(|e| e.into_inner()) = worker.status.clone();
+                    }
+                }
+                let _ = worker.stop();
+            })
+            .expect("could not start tracker playback worker");
+        Self { sender, status }
+    }
+
+    pub fn status(&self) -> Status {
+        self.status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+}
+
+#[derive(Default)]
+struct Worker {
+    client: Option<Client>,
+    status: Status,
+    sounds: BTreeMap<String, Sound>,
+    mixer: Vec<Track>,
+    playback: Option<Playback>,
+}
+
+impl Worker {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let result = self
+            .client
+            .as_mut()
+            .ok_or("Connect to niminal first")?
+            .call_raw(method, params);
+        match result {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => {
+                let mut message = error["message"]
+                    .as_str()
+                    .unwrap_or("Engine rejected the request")
+                    .to_string();
+                if let Some(problems) = error["data"]["problems"].as_array() {
+                    for problem in problems {
+                        if let Some(text) = problem["message"].as_str() {
+                            message.push_str(&format!("\n{text}"));
+                        }
+                    }
+                }
+                Err(message)
+            }
+            Err(error) => {
+                self.client = None;
+                self.playback = None;
+                self.sounds.clear();
+                self.mixer.clear();
+                self.status = Status {
+                    error: Some(error.clone()),
+                    ..Status::default()
+                };
+                Err(format!("Engine disconnected: {error}"))
+            }
+        }
+    }
+
+    fn send_events(&mut self, events: Vec<Value>) -> Result<(), String> {
+        if events.is_empty() {
+            return Ok(());
+        }
+        let reply = self.call("events.send", json!({"events": events}))?;
+        self.status.late_events += reply["late"].as_u64().unwrap_or(0);
+        Ok(())
+    }
+
+    fn clock(&mut self) -> Result<u64, String> {
+        self.call("clock", json!({}))?["sample"]
+            .as_u64()
+            .ok_or("Engine returned an invalid sample clock".into())
+    }
+
+    fn stop(&mut self) -> Result<(), String> {
+        self.playback = None;
+        self.status.playing = false;
+        self.status.row = None;
+        if self.client.is_some() {
+            // Panic does not cancel future events, so cancel the queue first.
+            self.call(
+                "events.cancel",
+                json!({"tag":"tracker-pattern", "from":"now"}),
+            )?;
+            self.call("panic", json!({}))?;
+        }
+        Ok(())
+    }
+
+    fn command(&mut self, command: Command) -> Result<(), String> {
+        self.status.error = None;
+        match command {
+            Command::Connect { port, token } => {
+                self.stop()?;
+                self.client = None;
+                self.sounds.clear();
+                self.mixer.clear();
+                self.status = Status::default();
+                let (client, hello) =
+                    Client::connect_as(port, token.as_deref(), "niminal-tracker")?;
+                self.status.sample_rate = hello["sample_rate"]
+                    .as_f64()
+                    .filter(|rate| *rate > 0.0)
+                    .ok_or("Invalid engine sample rate")?;
+                self.client = Some(client);
+                self.send_events(vec![
+                    json!({"op":"routing", "at":"now", "edits":mixer::setup()}),
+                ])?;
+                self.status.connected = true;
+            }
+            Command::Disconnect => {
+                let result = self.stop();
+                self.client = None;
+                self.sounds.clear();
+                self.mixer.clear();
+                self.status = Status::default();
+                result?;
+            }
+            Command::Apply { id, source, kind } => {
+                let sound = Sound::parse(kind, source)?;
+                if self
+                    .sounds
+                    .iter()
+                    .any(|(other, s)| other != &id && s.target == sound.target)
+                {
+                    return Err(format!(
+                        "The name {} is already used by another slot",
+                        sound.target
+                    ));
+                }
+                let mut sounds = self.sounds.clone();
+                sounds.insert(id, sound);
+                let source = sounds
+                    .values()
+                    .map(|s| s.engine_source.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let instruments = sounds
+                    .iter()
+                    .filter(|(_, s)| s.fx_source.is_none())
+                    .map(|(id, s)| (id.clone(), s.target.clone()))
+                    .collect();
+                let effects: BTreeMap<_, _> = sounds
+                    .iter()
+                    .filter(|(_, s)| s.fx_source.is_some())
+                    .map(|(id, s)| (id.clone(), s.target.clone()))
+                    .collect();
+                let mut edits: Vec<_> = sounds
+                    .values()
+                    .filter_map(|s| {
+                        s.fx_source
+                            .as_ref()
+                            .map(|body| json!({"op":"fx", "name":s.target, "source":body}))
+                    })
+                    .collect();
+                edits.extend(mixer::replacements(&self.mixer, &effects)?);
+                self.send_events(vec![
+                    json!({"op":"transaction", "at":"now", "source":source, "edits":edits}),
+                ])?;
+                self.sounds = sounds;
+                self.status.instruments = instruments;
+                self.status.effects = effects;
+            }
+            Command::Play { pattern } => {
+                pattern.validate()?;
+                self.check_assignments(&pattern)?;
+                self.set_mixer(&pattern)?;
+                self.stop()?;
+                let sample = self.clock()?;
+                self.status.skipped_rows = 0;
+                self.status.late_events = 0;
+                self.playback = Some(Playback {
+                    origin: sample + (self.status.sample_rate * 0.15).round() as u64,
+                    next_row: 0,
+                    pattern,
+                });
+                self.status.playing = true;
+                self.tick()?;
+            }
+            Command::Update { pattern } => {
+                pattern.validate()?;
+                self.check_assignments(&pattern)?;
+                if let Some(playback) = &self.playback
+                    && (pattern.bpm != playback.pattern.bpm
+                        || pattern.rows_per_beat != playback.pattern.rows_per_beat)
+                {
+                    return Err("Stop playback before changing tempo or rows per beat".into());
+                }
+                self.set_mixer(&pattern)?;
+                if let Some(playback) = &mut self.playback {
+                    playback.pattern = pattern;
+                }
+            }
+            Command::Audition {
+                instrument,
+                note,
+                track,
+            } => {
+                if track >= 4 {
+                    return Err("Invalid audition track".into());
+                }
+                let target = self
+                    .status
+                    .instruments
+                    .get(&instrument)
+                    .ok_or("Apply this instrument before auditioning")?
+                    .clone();
+                self.send_events(vec![json!({"op":"note", "at":"now", "target":target, "to":format!("track_{track}"), "dur":"200ms", "args":{"freq":pitch(&note)?}})])?;
+            }
+            Command::Stop => self.stop()?,
+        }
+        Ok(())
+    }
+
+    fn check_assignments(&self, pattern: &Pattern) -> Result<(), String> {
+        for track in &pattern.tracks {
+            if let Some(id) = &track.instrument
+                && !self.status.instruments.contains_key(id)
+            {
+                return Err(format!(
+                    "Apply the instrument assigned to {} first",
+                    track.name
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn set_mixer(&mut self, pattern: &Pattern) -> Result<(), String> {
+        let events = mixer::events(&pattern.tracks, &self.mixer, &self.status.effects)?;
+        self.send_events(events)?;
+        self.mixer = pattern.tracks.clone();
+        Ok(())
+    }
+
+    fn tick(&mut self) -> Result<(), String> {
+        let sample = self.clock()?;
+        let sr = self.status.sample_rate;
+        if let Some(playback) = &mut self.playback {
+            self.status.row = playback.position(sample, sr);
+            let (events, skipped) = playback.events_until(
+                sample + (sr * 0.02) as u64,
+                sample + (sr * 0.2) as u64,
+                sr,
+                &self.status.instruments,
+            )?;
+            self.status.skipped_rows += skipped;
+            self.send_events(events)?;
+        }
+        Ok(())
+    }
+}
+
+#[tauri::command]
+pub async fn audio_command(
+    command: Command,
+    audio: tauri::State<'_, Audio>,
+) -> Result<Status, String> {
+    let sender = audio.sender.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (reply, response) = mpsc::channel();
+        sender.send((command, reply)).map_err(|e| e.to_string())?;
+        response.recv().map_err(|e| e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn audio_status(audio: tauri::State<'_, Audio>) -> Status {
+    audio.status()
+}
+
+#[cfg(test)]
+#[path = "audio_tests.rs"]
+mod tests;

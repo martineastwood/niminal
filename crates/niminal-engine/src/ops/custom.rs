@@ -378,6 +378,8 @@ pub struct Custom {
     started: bool,
     /// State carried over from an earlier definition, which the note-start section must not reset.
     carried: bool,
+    /// Samples in the block being processed, for opcodes that run once per block.
+    block_frames: usize,
     /// This copy's own built-in opcodes, with their state.
     natives: Vec<Box<dyn Opcode>>,
     native_inputs: Vec<Vec<f32>>,
@@ -414,6 +416,7 @@ impl Custom {
             sample_rate: 48_000.0,
             started: false,
             carried: false,
+            block_frames: 1,
         }
     }
 
@@ -502,19 +505,27 @@ impl Custom {
                         continue;
                     }
                     let call = &k.natives[index];
+                    // a native run once per block (a control scope) sees its inputs held through it
+                    let held = if section == Section::Block {
+                        self.block_frames
+                    } else {
+                        1
+                    };
                     for (value, input) in self.native_inputs.iter_mut().zip(&call.inputs) {
-                        value[0] = match *input {
+                        let x = match *input {
                             NativeInput::Reg(r) => regs[r] as f32,
                             NativeInput::Const(c) => c as f32,
                         };
+                        value[..held].fill(x);
                     }
                     let op = &mut self.natives[index];
+                    let frames = held;
                     op.process_slots(
                         ctx,
                         &self.native_inputs,
                         &self.native_indices[..call.inputs.len()],
                         &mut self.native_outputs[..op.outputs()],
-                        1,
+                        frames,
                     );
                     for (k, output) in self.native_outputs.iter().take(op.outputs()).enumerate() {
                         regs[dst + k] = f64::from(output[0]);
@@ -573,6 +584,7 @@ impl Custom {
             self.run(Section::Init, ctx, &input, 0);
             self.started = true;
         }
+        self.block_frames = frames;
         self.run(Section::Block, ctx, &input, 0);
         let kernel = self.kernel.clone();
         for i in 0..frames {
@@ -649,6 +661,41 @@ impl Opcode for Custom {
     }
     fn latency(&self) -> usize {
         self.kernel.latency
+    }
+
+    fn control_warnings(&self, sample_rate: f32) -> Vec<String> {
+        self.natives
+            .iter()
+            .flat_map(|n| n.control_warnings(sample_rate))
+            .collect()
+    }
+
+    fn step_warnings(&self, step: f32) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for (native, template) in self.natives.iter().zip(&self.kernel.natives) {
+            out.extend(native.step_warnings(step));
+            if native.name() == "osc"
+                && let Some(i) = native.ports().iter().position(|p| p.name == "freq")
+                && let Some(hz) = match template.inputs.get(i) {
+                    Some(NativeInput::Const(hz)) => Some(*hz),
+                    Some(NativeInput::Reg(reg)) => self.kernel.init.iter().find_map(|instr| {
+                        matches!(instr, Instr::Const { dst, .. } if dst == reg)
+                            .then(|| match instr {
+                                Instr::Const { value, .. } => *value,
+                                _ => unreachable!(),
+                            })
+                    }),
+                    None => None,
+                }
+                && hz > 0.5 / f64::from(step)
+            {
+                out.push(format!(
+                    "an oscillator at {hz}hz is above half the control rate ({}hz), so it aliases",
+                    (0.5 / step).round()
+                ));
+            }
+        }
+        out
     }
 
     fn kernel_stats(&self) -> Option<crate::KernelStats> {

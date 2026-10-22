@@ -1,5 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod audio;
+mod mixer;
+mod pattern;
+mod sound;
+
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
@@ -59,10 +64,13 @@ async fn save_project(source: String) -> Result<bool, String> {
 fn main() {
     tauri::Builder::default()
         .manage(LanguageServer::default())
+        .manage(audio::Audio::new())
         .invoke_handler(tauri::generate_handler![
             lsp_message,
             open_project,
-            save_project
+            save_project,
+            audio::audio_command,
+            audio::audio_status
         ])
         .run(tauri::generate_context!())
         .expect("could not run niminal tracker");

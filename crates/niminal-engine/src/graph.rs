@@ -470,6 +470,19 @@ const CONST_BASE: usize = 1 << 20;
 const NODE_BASE: usize = 1 << 21;
 const INPUT_BASE: usize = 1 << 22;
 
+/// One node of a compiled graph, as `explain` shows it.
+pub struct NodeReport {
+    pub name: String,
+    /// What its kernel runs in each section, if it has one.
+    pub stats: Option<crate::KernelStats>,
+    /// Nothing reads it as signal: it only sets parameters of other nodes.
+    pub modulation_only: bool,
+    /// Each input's value if it is a constant.
+    pub inputs: Vec<Option<f32>>,
+    /// For a `control` scope: what its timing gets wrong at this sample rate.
+    pub warnings: Vec<String>,
+}
+
 /// An immutable compiled graph, shared between voices.
 pub struct Graph {
     latency: usize,
@@ -733,11 +746,68 @@ impl Graph {
     }
 
     /// Number of DSP nodes that contribute audio or observable effects.
-    /// The name of each node, in execution order, and what its kernel does if it has one.
-    pub fn describe(&self) -> Vec<(String, Option<crate::KernelStats>)> {
+    /// What each node is, in execution order, for `explain`.
+    pub fn describe(&self, sample_rate: f32) -> Vec<NodeReport> {
+        let (n_params, n_consts) = (self.params.len(), self.consts.len());
+        let n_fixed = n_params + n_consts + self.n_inputs;
+        let const_value = |slot: usize| {
+            (n_params..n_params + n_consts)
+                .contains(&slot)
+                .then(|| self.consts[slot - n_params])
+        };
+        let mut owner = vec![usize::MAX; self.results];
+        for (i, node) in self.nodes.iter().enumerate() {
+            owner[node.first..node.first + node.outputs].fill(i);
+        }
+        let producer = |slot: usize| {
+            slot.checked_sub(n_fixed)
+                .and_then(|r| owner.get(r).copied())
+                .filter(|&i| i != usize::MAX)
+        };
+        // Which nodes reach the output (or a send) through a signal path, rather than only
+        // setting a parameter of another node.
+        let mut signal = vec![false; self.nodes.len()];
+        let sends = self.sends.iter().map(|s| s.2);
+        for slot in self.output_slots.iter().copied().chain(sends) {
+            if let Some(i) = producer(slot) {
+                signal[i] = true;
+            }
+        }
+        for (i, node) in self.nodes.iter().enumerate().rev() {
+            let ports = node.op.ports();
+            // arithmetic passes every input on; anything else passes its audio inputs
+            let arithmetic = ports
+                .iter()
+                .all(|p| matches!(&*p.name, "x" | "a" | "b" | "cond" | "idx"));
+            let effects = node.op.has_side_effects();
+            if !signal[i] && !effects {
+                continue;
+            }
+            for (k, &slot) in node.inputs.iter().enumerate() {
+                let passes = arithmetic
+                    || effects
+                    || ports.get(k).is_none_or(|p| {
+                        matches!(&*p.name, "x" | "chain" | "sidechain")
+                    });
+                if passes && let Some(j) = producer(slot) {
+                    signal[j] = true;
+                }
+            }
+        }
         self.nodes
             .iter()
-            .map(|n| (n.op.name().to_string(), n.op.kernel_stats()))
+            .enumerate()
+            .map(|(i, node)| NodeReport {
+                name: node.op.name().to_string(),
+                stats: node.op.kernel_stats(),
+                modulation_only: !signal[i],
+                warnings: node.op.control_warnings(sample_rate),
+                inputs: node
+                    .inputs
+                    .iter()
+                    .map(|&slot| const_value(slot))
+                    .collect(),
+            })
             .collect()
     }
 

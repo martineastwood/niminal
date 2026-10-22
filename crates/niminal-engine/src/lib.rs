@@ -23,15 +23,15 @@ mod waveform;
 pub use waveform::{WAVEFORM_FRAMES, Waveform};
 
 pub use array::{Array, wrapped_index};
-pub use graph::{Graph, GraphBuilder, GraphError, Src};
+pub use graph::{Graph, GraphBuilder, GraphError, NodeReport, Src};
 pub use master::{DEFAULT_CEILING, Master};
 pub use mixer::{
     Buses, ChainInput, DEFAULT_MAX_VOICES, Fork, MAX_CHANNELS, Meter, Mixer, NodeDef, NodeLoad,
     Profile, Route, Stems, Transfer, VoiceId, execution_order,
 };
 pub use opcode::{
-    Clock, DEFAULT_BLOCK, KernelStats, MAX_BLOCK, MAX_INPUTS, MIN_BLOCK, Opcode, Port, ProcessCtx, TAIL_LEVEL,
-    block_size, blocks, set_block_size,
+    Clock, DEFAULT_BLOCK, DEFAULT_CONTROL_STEP, KernelStats, MAX_BLOCK, MAX_INPUTS, MIN_BLOCK, Opcode, Port, ProcessCtx, TAIL_LEVEL,
+    block_size, blocks, control_step, set_block_size, set_control_step,
 };
 pub use table::{Buffer, Edge, Table};
 pub use voice::{Priority, Voice, VoiceRule};

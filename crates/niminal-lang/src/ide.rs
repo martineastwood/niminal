@@ -321,6 +321,15 @@ pub fn builtin_ops() -> Vec<OpInfo> {
         ops.extend(envelope_ops());
         ops.extend(array_ops());
         ops.push(op_info("spawn", "Start an independent layer on each positive trigger edge: `spawn(trigger, dur: 100ms, max: 8) { ... }`. Inputs are captured at the trigger; a full pool drops new triggers.", false, &[("trigger", "number", true), ("dur", "time", true), ("max", "constant integer", false), ("body", "function", true)]));
+        for (name, doc) in crate::prelude::DOCS {
+            let params: &[(&str, &str, bool)] = match name {
+                "lfo" => &[("rate", "hz", true), ("shape", "sine, tri, saw or square", false)],
+                "unipolar" => &[("x", "number", true)],
+                "random_steps" => &[("rate", "hz", true), ("seed", "number", false)],
+                _ => &[("rate", "hz", true), ("glide", "time", false), ("seed", "number", false)],
+            };
+            ops.push(op_info(name, doc, false, params));
+        }
         ops.push(op_info("control", "Run a body once per block instead of every sample: `control { osc(sine, 2hz) }`. Oscillators, envelopes and state inside advance by a block's time, values from outside are read at the start of the block, and the result is held through the block (use `.smooth` or `.smooth(5ms)` on it where a step would be heard). Cheap for slow modulation.", false, &[("body", "function", true)]));
         ops.push(op_info("oversample", "Run sample DSP at 2x, 4x or 8x with filtered rate conversion: `oversample(4) { ... }`. Adds 16 samples of conversion latency; parallel paths are aligned automatically.", false, &[("factor", "constant integer", true), ("body", "function", true)]));
         ops.push(op_info("reset_on", "Restart state created inside `reset_on(trigger) { ... }` at each positive edge, before that sample. Signals outside the scope keep running.", false, &[("trigger", "number", true), ("body", "function", true)]));

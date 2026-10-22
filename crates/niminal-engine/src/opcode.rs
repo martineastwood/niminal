@@ -8,6 +8,41 @@ pub const DEFAULT_BLOCK: usize = 64;
 pub const MIN_BLOCK: usize = 16;
 pub const MAX_BLOCK: usize = 1024;
 
+/// Samples between the steps of a `control` scope unless the server is started with another.
+pub const DEFAULT_CONTROL_STEP: usize = 64;
+
+static CONTROL_STEP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Samples between the runs of a `control` scope, whatever the block size, like a control period.
+/// Fixed for the life of the process: it is whatever [`set_control_step`] chose before the first
+/// call here, else [`DEFAULT_CONTROL_STEP`].
+pub fn control_step() -> usize {
+    use std::sync::atomic::Ordering::Relaxed;
+    match CONTROL_STEP.load(Relaxed) {
+        0 => match CONTROL_STEP.compare_exchange(0, DEFAULT_CONTROL_STEP, Relaxed, Relaxed) {
+            Ok(_) => DEFAULT_CONTROL_STEP,
+            Err(set) => set,
+        },
+        n => n,
+    }
+}
+
+/// Choose the control step, from 1 to [`MAX_BLOCK`] samples. It must happen before anything is
+/// built, since scopes take their timing from it.
+pub fn set_control_step(n: usize) -> Result<(), String> {
+    use std::sync::atomic::Ordering::Relaxed;
+    if !(1..=MAX_BLOCK).contains(&n) {
+        return Err(format!(
+            "control step must be from 1 to {MAX_BLOCK} samples, not {n}"
+        ));
+    }
+    match CONTROL_STEP.compare_exchange(0, n, Relaxed, Relaxed) {
+        Ok(_) => Ok(()),
+        Err(set) if set == n => Ok(()),
+        Err(set) => Err(format!("the control step is already {set}")),
+    }
+}
+
 static BLOCK_SIZE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Samples per processing block. Control changes and bus sends are
@@ -258,6 +293,16 @@ pub trait Opcode: Send + Sync + std::any::Any {
     fn kernel_stats(&self) -> Option<KernelStats> {
         None
     }
+
+    /// Problems with running this opcode only once every `step` seconds, as inside a `control` scope.
+    fn step_warnings(&self, _step: f32) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// For a `control` scope: problems with its timing at this sample rate.
+    fn control_warnings(&self, _sample_rate: f32) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Lets a boxed opcode be added to a graph like any other.
@@ -368,5 +413,13 @@ impl Opcode for Box<dyn Opcode> {
 
     fn kernel_stats(&self) -> Option<KernelStats> {
         (**self).kernel_stats()
+    }
+
+    fn step_warnings(&self, step: f32) -> Vec<String> {
+        (**self).step_warnings(step)
+    }
+
+    fn control_warnings(&self, sample_rate: f32) -> Vec<String> {
+        (**self).control_warnings(sample_rate)
     }
 }

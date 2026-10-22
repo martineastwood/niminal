@@ -234,6 +234,20 @@ macro_rules! op_enum {
                     Op::Dynamic(v) => v.kernel_stats(),
                 }
             }
+            fn step_warnings(&self, step: f32) -> Vec<String> {
+                match self {
+                    $( Op::$IV(v) => v.step_warnings(step), )*
+                    $( Op::$BV(v) => v.step_warnings(step), )*
+                    Op::Dynamic(v) => v.step_warnings(step),
+                }
+            }
+            fn control_warnings(&self, sample_rate: f32) -> Vec<String> {
+                match self {
+                    $( Op::$IV(v) => v.control_warnings(sample_rate), )*
+                    $( Op::$BV(v) => v.control_warnings(sample_rate), )*
+                    Op::Dynamic(v) => v.control_warnings(sample_rate),
+                }
+            }
         }
     };
 }

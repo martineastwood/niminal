@@ -111,6 +111,11 @@ pub enum EnvField {
     Level(usize),
 }
 
+/// Milliseconds with one decimal, for messages.
+pub(crate) fn ms(seconds: f32) -> String {
+    format!("{:.1}ms", seconds * 1000.0)
+}
+
 impl Env {
     pub fn new(start: f32, segments: Vec<Segment>, sustain_at: Option<usize>) -> Self {
         if let Some(s) = sustain_at {
@@ -318,5 +323,19 @@ impl Opcode for Env {
 
     fn is_envelope(&self) -> bool {
         true
+    }
+
+    fn step_warnings(&self, step: f32) -> Vec<String> {
+        self.segments
+            .iter()
+            .filter(|s| s.dur > 0.0 && s.dur < step)
+            .map(|s| {
+                format!(
+                    "an envelope segment of {} is shorter than one control step ({}), so it is a single jump",
+                    ms(s.dur),
+                    ms(step)
+                )
+            })
+            .collect()
     }
 }

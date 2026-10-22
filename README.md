@@ -67,7 +67,7 @@ The language server (`nimlive lsp`) works without a server for hover, completion
 
 ## Tracker prototype
 
-[`tracker/`](tracker/) is an independent Tauri desktop app with a keyboard-driven pattern grid and a CodeMirror instrument/effect editor using the niminal LSP. This first prototype covers editing and project save/load; audio playback is not wired up yet. See its [README](tracker/README.md) for development and build commands.
+[`tracker/`](tracker/) is an independent Tauri desktop app with a keyboard-driven pattern grid and a CodeMirror instrument/effect editor using the niminal LSP. It supports looping playback, auditioning, a track mixer with effects, pattern selection/copy/paste/undo, and project save/load. See its [README](tracker/README.md) for development and build commands.
 
 ## What you get
 
