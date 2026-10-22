@@ -1,0 +1,54 @@
+// Delay lines. A string is plucked into a multitap delay from the standard library, and a delay line
+// written here reads many taps at once and filters its output with a 16-tap FIR in one line each.
+// Render with:  nimlive render examples/multitap.nml --out multitap.wav
+use std/physical
+use std/delays
+
+config { channels: stereo }
+tempo 100bpm
+
+bus space: stereo
+fx space_return {
+  out = space.reverb(room: 0.6, damp: 0.5)
+}
+
+/// A comb of eight taps at related times, each a little quieter, summed and then darkened by a
+/// moving average over the last sixteen samples. `taps` reads the delay line at all eight times in one
+/// step; `fir` is the sixteen multiplications and the sum, also in one.
+const spacings = [331, 662, 993, 1324, 1655, 1986, 2317, 2648]
+const falloff = [1, 0.8, 0.64, 0.51, 0.41, 0.33, 0.26, 0.21]
+const box = (0..<16).map(1 / 16)
+fn comb_cloud(x, mix: 0..1 = 0.4) {
+  state line = zeros(4096)
+  state soft = zeros(32)
+  state pos = 0
+  state at = 0
+  line[pos] = x
+  echoes = line.taps(spacings, pos).dot(falloff)
+  soft[at] = echoes
+  darker = soft.fir(box, at)
+  pos = (pos + 1).mod(4096)
+  at = (at + 1).mod(32)
+  x + darker * mix
+}
+
+instr pluck(freq: init hz, decay: 0..1 = 0.997) {
+  tail = 4sec
+  out = (noise() * env[1 3ms 0]).string(freq, decay: decay).gain(-6db)
+  out += out.multitap([180ms, 360ms, 540ms], [0.5, 0.3, 0.18])
+  space += out.gain(-12db)
+}
+
+instr clicks(freq: hz) {
+  tail = 2sec
+  out = (osc(square, freq) * env[1 1ms 0]).comb_cloud(mix: 0.6).gain(-10db)
+  space += out.gain(-10db)
+}
+
+pluck(freq: e3) for 1beat
+at 1beat pluck(freq: b3) for 1beat
+at 2beats pluck(freq: g4, decay: 0.994) for 1beat
+at 3beats pluck(freq: e4) for 1beat
+at 4beats clicks(freq: 800hz) for 1/8beat
+at 5beats clicks(freq: 1200hz) for 1/8beat
+at 6beats clicks(freq: 500hz) for 1/8beat

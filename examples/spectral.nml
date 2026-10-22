@@ -1,0 +1,49 @@
+// Spectral effects with `frames`: the function runs on a window of 1024 samples every half window,
+// with `fft` to get at the spectrum and `ifft` to come back. One is written here (a tilt that darkens
+// the sound); the others come from the standard library. Each is 1024 samples late, which the
+// compiler makes up for wherever a signal is mixed with its own dry copy.
+// Render with:  nimlive render examples/spectral.nml --out spectral.wav
+use std/spectral
+use std/reverb
+
+config { channels: stereo }
+tempo 90bpm
+
+bus space: stereo
+fx space_return {
+  out = space.reverb(room: 0.5, damp: 0.6)
+}
+
+/// Fade the spectrum from full at the bottom to nothing at the top, which is a gentle low-pass.
+const tilt = (0..<513).map(1 - it / 513)
+fn darken(x) {
+  x.frames(1024, fn(w) {
+    s = fft(w)
+    ifft(s[0] * tilt, s[1] * tilt)
+  })
+}
+
+instr pad(freq: hz, bright: 0..1 = 0.5) {
+  level = env[0 300ms 1 | 900ms 0]
+  chord = osc(saw, [freq, freq * 1.5, freq * 2.01]).sum * 0.2
+  out = chord.darken().blur(amount: bright) * level
+  space += out.gain(-6db)
+}
+
+instr hiss(amount: 0..1 = 0.4) {
+  level = env[0 100ms 1 | 600ms 0]
+  out = (noise() * 0.5).band_keep(lo: 0.05, hi: 0.2).robot() * level * amount
+  space += out.gain(-6db)
+}
+
+instr hall(freq: hz) {
+  level = env[1 | 2sec 0]
+  src = osc(sine, freq) * env[1 30ms 0]
+  out = src.fdn(time: 3.5sec, damp: 4khz) * level
+  space += out.gain(8db)
+}
+
+pad(freq: a2) for 4beats
+at 4beats pad(freq: f2, bright: 0.9) for 4beats
+at 8beats hiss() for 2beats
+at 10beats hall(freq: a3) for 1beat

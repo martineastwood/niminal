@@ -243,6 +243,8 @@ fn chime(x, freq: init hz) {
 }
 ```
 
+Whole pieces that use these forms, with audio, are on the [standard library](/reference/language/standard-library/#examples) page (`examples/modal.nml` and `examples/multitap.nml`).
+
 `init` on `freq` lets everything that depends only on it be worked out when the note starts. These forms need a function with state; using one makes a function a kernel. These names, like the other built-ins, can't be used for a function you write: see [Reserved words](/reference/reserved-words/).
 
 ## Frames and the FFT
@@ -264,6 +266,8 @@ fn low(x) {
   })
 }
 ```
+
+`examples/spectral.nml` is a piece built from `frames`, `fft` and `ifft`.
 
 ## Tables as arguments
 

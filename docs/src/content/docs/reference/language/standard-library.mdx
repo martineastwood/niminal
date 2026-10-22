@@ -3,6 +3,8 @@ title: Standard library
 description: Filters, physical models, delays, a reverb and spectral effects, written in niminal and shipped with it.
 ---
 
+import Example from '../../../../components/Example.astro';
+
 The modules under `std/` come with niminal. They are ordinary niminal source, read from the program itself, so `use std/filters` works anywhere and nothing needs installing. They are also the best examples of what [functions](/reference/language/functions/) can do, so read them: they are short.
 
 ```nml
@@ -69,6 +71,26 @@ These use [`frames`](/reference/language/functions/#frames-and-the-fft), so each
 | `robot(x, size: 1024)` | Keeps every magnitude and zeroes every phase: a buzz at the frame rate. |
 | `blur(x, amount: 0.9, size: 1024)` | Mixes each spectrum with the ones before it: a long wash. |
 | `denoise(x, threshold: 0.01, size: 1024)` | Silences the bins quieter than `threshold`: a spectral noise gate. |
+
+## Examples
+
+Each of these is a whole piece: the code is the file that made the sound.
+
+**Struck things.** A drum, a bar and a bell from `std/physical`, and a sixteen-mode glass written by hand with one vector line for all the modes.
+
+<Example file="modal.nml" />
+
+**Delay lines.** A plucked string into `multitap`, and a comb written with `taps` and darkened by a 16-tap `fir`.
+
+<Example file="multitap.nml" />
+
+**Spectral effects.** A tilt written with `frames`, `fft` and `ifft`, then `blur`, `band_keep`, `robot` and the `fdn` reverb.
+
+<Example file="spectral.nml" />
+
+**Filters and a waveshaper.** The ladder swept and made to sing, two band-passes as a vowel, and a Chebyshev table on a sine.
+
+<Example file="library.nml" />
 
 ## Writing your own
 

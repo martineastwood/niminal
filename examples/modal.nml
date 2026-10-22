@@ -1,0 +1,68 @@
+// Struck things (a short noise burst has little energy for a narrow resonator, hence the big gains). The drum, bar and bell come from the standard library; the glass is a bank of
+// resonators written here in a dozen lines, using one vector line for all sixteen modes.
+// Render with:  nimlive render examples/modal.nml --out modal.wav
+use std/physical
+
+config { channels: stereo }
+tempo 92bpm
+
+bus space: stereo
+fx space_return {
+  out = space.reverb(room: 0.7, damp: 0.5)
+}
+
+/// Sixteen resonators in parallel, at the ratios of a stiff glass rod. `freq` is read once per
+/// note, so everything that depends only on it is worked out when the note starts.
+const rod = [1, 2.76, 5.4, 8.93, 13.34, 18.64, 24.8, 31.9, 39.9, 49.3, 60.2, 72.6, 86.5, 101.9, 118.9, 137.4]
+fn glass(x, freq: init hz, decay: 0..1 = 0.9996) {
+  state s1 = zeros(16)
+  state s2 = zeros(16)
+  w = 2 * pi * freq / sample_rate * rod
+  y = x * (2 * (1 - decay) * sin(w)) + 2 * decay * cos(w) * s1 - decay * decay * s2
+  s2 = s1
+  s1 = y
+  y.sum
+}
+
+/// A short noise burst, which is what strikes all of them.
+fn strike(length: sec) {
+  noise() * env[1 length 0]
+}
+
+instr tom(freq: init hz = 110hz) {
+  tail = 3sec
+  out = strike(2ms).drum(freq, decay: 0.9993).gain(20db)
+  space += out.gain(-14db)
+}
+
+instr marimba(freq: init hz) {
+  tail = 3sec
+  out = strike(3ms).free_bar(freq, decay: 0.9995).gain(26db)
+  space += out.gain(-10db)
+}
+
+instr bell_hit(freq: init hz) {
+  tail = 5sec
+  out = strike(1ms).bell(freq, decay: 0.99985).gain(34db)
+  space += out.gain(-8db)
+}
+
+instr tinkle(freq: init hz) {
+  tail = 4sec
+  out = strike(1ms).glass(freq: freq).gain(30db)
+  space += out.gain(-8db)
+}
+
+tom(freq: 90hz) for 1beat
+at 1beat tom(freq: 120hz) for 1beat
+at 2beats tom(freq: 150hz) for 1beat
+at 3beats tom(freq: 90hz) for 1beat
+
+at 4beats marimba(freq: c4) for 1beat
+at 5beats marimba(freq: e4) for 1beat
+at 6beats marimba(freq: g4) for 1beat
+at 7beats marimba(freq: c5) for 1beat
+
+at 8beats bell_hit(freq: g3) for 1beat
+at 10beats tinkle(freq: d5) for 1beat
+at 11beats tinkle(freq: a5) for 1beat

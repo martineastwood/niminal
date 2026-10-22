@@ -1,0 +1,41 @@
+// The filters in the standard library, and a waveshaper from a table. The ladder is swept by an
+// envelope and made to sing; a band-pass picks out a vowel-like formant; a Chebyshev table adds
+// harmonics to a sine.
+// Render with:  nimlive render examples/library.nml --out library.wav
+use std/filters
+
+tempo 108bpm
+
+/// Adds the 2nd and 3rd harmonics of whatever goes in, as the table says.
+const warmth = cheby([1, 0.4, 0.2])
+
+instr acid_ish(freq: hz, res: 0..1 = 0.6) {
+  level = env[1 | 400ms 0]
+  sweep = env[1 40ms 0.15 | 300ms 0]
+  out = (osc(saw, freq).ladder(150hz + sweep * 3khz, res: res) * level).gain(-9db)
+}
+
+instr vowel(freq: hz, ah: 0..1 = 0.5) {
+  level = env[0 30ms 1 | 300ms 0]
+  source = osc(saw, freq)
+  formants = source.biquad_bp(700hz + ah * 400hz, q: 6) + source.biquad_bp(1100hz + ah * 800hz, q: 8) * 0.6
+  out = (formants * level).gain(-6db)
+}
+
+instr bass(freq: hz) {
+  level = env[0 8ms 1 200ms 0.7 | 150ms 0]
+  out = (osc(sine, freq) * 0.8).waveshape(warmth).onepole_lp(900hz) * level * 0.45
+}
+
+acid_ish(freq: a2) for 1/2beat
+at 1/2beat acid_ish(freq: a2) for 1/2beat
+at 1beat acid_ish(freq: c3, res: 0.85) for 1/2beat
+at 3/2beats acid_ish(freq: e3) for 1/2beat
+at 2beats acid_ish(freq: a2, res: 0.9) for 1beat
+
+at 4beats vowel(freq: a3, ah: 0.2) for 2beats
+at 6beats vowel(freq: c4, ah: 0.8) for 2beats
+
+at 8beats bass(freq: a1) for 1beat
+at 9beats bass(freq: c2) for 1beat
+at 10beats bass(freq: e2) for 2beats

@@ -3,3 +3,7 @@ room.nml
 groove.nml
 synth_drums.nml
 song.nml song
+modal.nml
+multitap.nml
+spectral.nml
+library.nml
