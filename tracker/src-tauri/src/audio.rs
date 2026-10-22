@@ -386,6 +386,19 @@ impl Worker {
             }
             for pattern in &song.patterns {
                 for lane in &pattern.fx[index] {
+                    if let Some(envelope) = &lane.envelope {
+                        for point in &envelope.points {
+                            let target =
+                                lane.target.as_ref().ok_or("Choose an envelope parameter")?;
+                            crate::commands::edit(
+                                target,
+                                &point.value.to_string(),
+                                index,
+                                track,
+                                &self.status.effect_parameters,
+                            )?;
+                        }
+                    }
                     for value in lane.values.iter().flatten() {
                         let target = lane.target.as_ref().ok_or("Choose a lane parameter")?;
                         crate::commands::edit(

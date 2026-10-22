@@ -8,7 +8,9 @@ export interface Track { name: string; instrument: string | null; effects: Effec
 export interface Parameter { name: string; min: number; max: number; default: number; unit: string | null }
 export type EffectParameters = Record<string, Parameter[]>;
 export type FxTarget = { kind: 'volume' } | { kind: 'pan' } | { kind: 'effect'; device: number; parameter: string };
-export interface FxLane { target: FxTarget | null; values: (string | null)[] }
+export interface EnvelopePoint { row: number; value: number }
+export interface Envelope { enabled: boolean; mode: 'hold' | 'linear'; points: EnvelopePoint[] }
+export interface FxLane { target: FxTarget | null; values: (string | null)[]; envelope?: Envelope }
 export const emptyFxLane = (rows: number): FxLane => ({ target: { kind: 'volume' }, values: Array(rows).fill(null) });
 export interface Pattern { id: string; name: string; rows: number; notes: (string | null)[][]; fx: FxLane[][] }
 export interface Song { bpm: number; rows_per_beat: number; tracks: Track[]; patterns: Pattern[]; sequence: string[] }
@@ -33,7 +35,7 @@ export function makePattern(project: Project, source?: Pattern): Pattern {
     id: `pattern_${crypto.randomUUID().replaceAll('-', '_')}`,
     name: source ? `${source.name} variation` : `Pattern ${project.patterns.length.toString().padStart(2, '0')}`,
     rows: source?.rows ?? 32,
-    fx: source ? source.fx.map(track => track.map(column => ({ target: column.target && { ...column.target }, values: [...column.values] }))) : Array.from({ length: project.tracks.length }, () => [emptyFxLane(32)]),
+    fx: source ? source.fx.map(track => track.map(column => ({ target: column.target && { ...column.target }, values: [...column.values], ...(column.envelope ? { envelope: structuredClone(column.envelope) } : {}) }))) : Array.from({ length: project.tracks.length }, () => [emptyFxLane(32)]),
     notes: source ? source.notes.map(track => [...track]) : Array.from({ length: project.tracks.length }, () => Array(32).fill(null)),
   };
   project.patterns.push(pattern);
@@ -63,7 +65,7 @@ export function readProject(raw: string): Project {
       !value.patterns.every((p: Pattern) => p && typeof p.id === 'string' && /^[a-zA-Z_][\w-]*$/.test(p.id) && typeof p.name === 'string' &&
         Number.isInteger(p.rows) && p.rows >= 1 && p.rows <= 256 && Array.isArray(p.notes) && p.notes.length === value.tracks.length &&
         p.notes.every(track => Array.isArray(track) && track.length >= p.rows && track.length <= 256 && track.every(n => n === null || typeof n === 'string' && /^[A-G][#-][0-8]$/.test(n))) &&
-        Array.isArray(p.fx) && p.fx.length === value.tracks.length && p.fx.every(track => Array.isArray(track) && track.length >= 1 && track.length <= 4 && track.every(column => column && validTarget(column.target) && Array.isArray(column.values) && column.values.length >= p.rows && column.values.length <= 256 && column.values.every(v => v === null || typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) && (column.target !== null || column.values.every(v => v === null))))) ||
+        Array.isArray(p.fx) && p.fx.length === value.tracks.length && p.fx.every(track => Array.isArray(track) && track.length >= 1 && track.length <= 4 && track.every(column => column && validEnvelope(column.envelope) && validTarget(column.target) && Array.isArray(column.values) && column.values.length >= p.rows && column.values.length <= 256 && column.values.every(v => v === null || typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) && (column.target !== null || column.values.every(v => v === null) && !column.envelope?.points.length)))) ||
       new Set(value.patterns.map((p: Pattern) => p.id)).size !== value.patterns.length ||
       !Array.isArray(value.sequence) || value.sequence.length < 1 || value.sequence.length > 1024 ||
       !value.sequence.every((id: unknown) => value.patterns.some((p: Pattern) => p.id === id))) {
@@ -94,7 +96,7 @@ export function restoreTrack(project: Project, deleted: DeletedTrack): boolean {
     const restored = [...(deleted.notes.get(pattern.id) ?? [])];
     while (restored.length < pattern.rows) restored.push(null);
     pattern.notes.splice(deleted.index, 0, restored);
-    const fx = (deleted.fx.get(pattern.id) ?? [emptyFxLane(pattern.rows)]).map(column => ({ target: column.target && { ...column.target }, values: [...column.values] }));
+    const fx = (deleted.fx.get(pattern.id) ?? [emptyFxLane(pattern.rows)]).map(column => ({ target: column.target && { ...column.target }, values: [...column.values], ...(column.envelope ? { envelope: structuredClone(column.envelope) } : {}) }));
     for (const column of fx) while (column.values.length < pattern.rows) column.values.push(null);
     pattern.fx.splice(deleted.index, 0, fx);
   }
@@ -103,6 +105,9 @@ export function restoreTrack(project: Project, deleted: DeletedTrack): boolean {
 
 export function validTarget(target: FxTarget | null): boolean {
   return target === null || !!target && (target.kind === 'volume' || target.kind === 'pan' || target.kind === 'effect' && Number.isInteger(target.device) && target.device >= 0 && target.device < 8 && typeof target.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(target.parameter));
+}
+function validEnvelope(envelope: Envelope | undefined) {
+  return envelope === undefined || !!envelope && typeof envelope.enabled === 'boolean' && ['hold', 'linear'].includes(envelope.mode) && Array.isArray(envelope.points) && envelope.points.length <= 4097 && envelope.points.every((p, i) => p && Number.isFinite(p.row) && p.row >= 0 && p.row <= 256 && Number.isFinite(p.value) && (i === 0 || p.row > envelope.points[i - 1].row));
 }
 function validLfo(value: Lfo) {
   return value && typeof value.enabled === 'boolean' && ['sine', 'triangle', 'saw', 'square'].includes(value.shape) &&

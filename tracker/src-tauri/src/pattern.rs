@@ -41,9 +41,52 @@ impl Lfo {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct EnvelopePoint {
+    pub row: f64,
+    pub value: f64,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Envelope {
+    pub enabled: bool,
+    pub mode: String,
+    pub points: Vec<EnvelopePoint>,
+}
+impl Envelope {
+    pub fn valid(&self) -> bool {
+        ["hold", "linear"].contains(&self.mode.as_str())
+            && self.points.len() <= 4097
+            && self.points.iter().enumerate().all(|(i, p)| {
+                p.row.is_finite()
+                    && (0.0..=256.0).contains(&p.row)
+                    && p.value.is_finite()
+                    && (i == 0 || p.row > self.points[i - 1].row)
+            })
+    }
+    pub fn value(&self, row: f64, db: bool) -> Option<f64> {
+        let before = self.points.iter().rev().find(|p| p.row <= row)?;
+        let Some(after) = self.points.iter().find(|p| p.row > row) else {
+            return Some(before.value);
+        };
+        if self.mode == "hold" {
+            return Some(before.value);
+        }
+        let fraction = (row - before.row) / (after.row - before.row);
+        Some(if db {
+            20.0 * (10.0_f64.powf(before.value / 20.0) * (1.0 - fraction)
+                + 10.0_f64.powf(after.value / 20.0) * fraction)
+                .log10()
+        } else {
+            before.value + (after.value - before.value) * fraction
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FxLane {
     pub target: Option<crate::commands::FxTarget>,
     pub values: Vec<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub envelope: Option<Envelope>,
 }
 impl FxLane {
     #[cfg(test)]
@@ -51,6 +94,7 @@ impl FxLane {
         Self {
             target: Some(crate::commands::FxTarget::Volume),
             values: vec![None; rows],
+            envelope: None,
         }
     }
 }
@@ -124,7 +168,13 @@ impl Song {
                 return Err("Patterns need 1–4 FX columns per track".into());
             }
             for lane in pattern.fx.iter().flatten() {
-                if lane.target.is_none() && lane.values.iter().any(Option::is_some) {
+                if lane.envelope.as_ref().is_some_and(|e| !e.valid()) {
+                    return Err("Invalid automation envelope".into());
+                }
+                if lane.target.is_none()
+                    && (lane.values.iter().any(Option::is_some)
+                        || lane.envelope.as_ref().is_some_and(|e| !e.points.is_empty()))
+                {
                     return Err("Choose a parameter for every populated lane".into());
                 }
                 if lane
@@ -306,6 +356,88 @@ impl Playback {
             for (index, track) in self.song.tracks.iter().enumerate() {
                 let mut edits = Vec::new();
                 for lane in &position.pattern.fx[index] {
+                    if let (Some(envelope), Some(target)) = (&lane.envelope, &lane.target)
+                        && envelope.enabled
+                    {
+                        let start = position.row as f64;
+                        let end = start + 1.0;
+                        let mut breaks = vec![start];
+                        breaks.extend(
+                            envelope
+                                .points
+                                .iter()
+                                .filter(|p| p.row > start && p.row < end)
+                                .map(|p| p.row),
+                        );
+                        breaks.push(end);
+                        let db = match target {
+                            crate::commands::FxTarget::Volume => true,
+                            crate::commands::FxTarget::Effect { device, parameter } => track
+                                .effects
+                                .get(*device)
+                                .and_then(|slot| self.parameters.get(&slot.definition))
+                                .and_then(|params| params.iter().find(|p| p.name == *parameter))
+                                .is_some_and(|p| p.unit.as_deref() == Some("db")),
+                            _ => false,
+                        };
+                        for pair in breaks.windows(2) {
+                            let Some(value) = envelope.value(pair[0], db) else {
+                                continue;
+                            };
+                            let point_at = at
+                                + ((pair[0] - start) * self.song.row_samples(sample_rate)).round()
+                                    as u64;
+                            let end_at = at
+                                + ((pair[1] - start) * self.song.row_samples(sample_rate)).round()
+                                    as u64;
+                            let mut point_edits = Vec::new();
+                            if let crate::commands::FxTarget::Effect { device, parameter } = target
+                                && track.effects[*device]
+                                    .modulations
+                                    .get(parameter)
+                                    .is_some_and(|lfo| lfo.enabled)
+                            {
+                                point_edits.push(json!({"op":"map", "id":format!("fx_{index}_{device}"), "param":parameter, "source":null}));
+                            }
+                            point_edits.push(crate::commands::edit(
+                                target,
+                                &value.to_string(),
+                                index,
+                                track,
+                                &self.parameters,
+                            )?);
+                            events.push(json!({"op":"routing", "at":point_at, "tag":"tracker-pattern", "edits":point_edits}));
+                            if envelope.mode == "linear" && end_at > point_at + 1 {
+                                let value = envelope.value(pair[1], db).unwrap();
+                                let mut ramp = crate::commands::edit(
+                                    target,
+                                    &value.to_string(),
+                                    index,
+                                    track,
+                                    &self.parameters,
+                                )?;
+                                ramp["glide"] = json!((end_at - point_at - 1) as f64 / sample_rate);
+                                events.push(json!({"op":"routing", "at":point_at+1, "tag":"tracker-pattern", "edits":[ramp]}));
+                            }
+                        }
+                        if envelope.mode == "hold"
+                            && position.row + 1 == position.pattern.rows
+                            && let Some(point) = envelope
+                                .points
+                                .iter()
+                                .find(|p| p.row == position.pattern.rows as f64)
+                        {
+                            let edit = crate::commands::edit(
+                                target,
+                                &point.value.to_string(),
+                                index,
+                                track,
+                                &self.parameters,
+                            )?;
+                            events.push(json!({"op":"routing", "at":self.row_at(self.next_row+1, sample_rate), "tag":"tracker-pattern", "edits":[edit]}));
+                        }
+                        continue;
+                    }
                     let (Some(target), Some(value)) = (&lane.target, &lane.values[position.row])
                     else {
                         continue;

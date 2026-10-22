@@ -19,7 +19,7 @@ The tracker creates protocol descriptions of these resources. The LFO waveform i
 
 Future auxiliary FX tracks should be native send/return buses: source-track routing sends audio into a niminal bus, a native return effect chain processes it, and native routing returns it to the master or another permitted destination. The tracker should expose those existing resources rather than add an internal channel mixer or renderer. If the engine protocol needs a missing primitive, add it to niminal and test it there.
 
-Automation envelopes, additional row commands, instrument macros and modulation devices should address the same native parameters. Per-note envelopes belong to niminal instrument definitions/voice controls; they must not be approximated by changing a shared track parameter.
+Graphical envelopes address the same named native parameters as row lanes. The scheduler divides a row at envelope points and sends sample-timed native sets/glides for each segment; niminal generates the ramps. UI interpolation only previews those native glides. Additional targets, instrument macros and modulation devices should address the same native parameters. Per-note envelopes belong to niminal instrument definitions/voice controls; they must not be approximated by changing a shared track parameter.
 
 Renoise references informing the UI/data model:
 

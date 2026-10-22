@@ -1,4 +1,4 @@
-import type { EffectParameters, FxTarget, Parameter, Project } from './project';
+import type { EffectParameters, FxTarget, Parameter, Envelope, Project } from './project';
 
 export interface LaneParameter extends Parameter { label: string }
 export function targetKey(target: FxTarget | null) { return target ? JSON.stringify(target) : ''; }
@@ -39,7 +39,18 @@ export function remapEffectLanes(project: Project, track: number, map: (device: 
   for (const pattern of project.patterns) for (const lane of pattern.fx[track]) {
     if (lane.target?.kind !== 'effect') continue;
     const device = map(lane.target.device);
-    if (device === null) { lane.target = null; lane.values.fill(null); }
+    if (device === null) { lane.target = null; lane.values.fill(null); delete lane.envelope; }
     else lane.target.device = device;
   }
+}
+
+// Native glides interpolate engine units; dB controls are linear in gain.
+export function envelopeValue(envelope: Envelope, row: number, db = false): number | null {
+  const before = [...envelope.points].reverse().find(p => p.row <= row);
+  if (!before) return null;
+  const after = envelope.points.find(p => p.row > row);
+  if (envelope.mode === 'hold' || !after) return before.value;
+  const fraction = (row - before.row) / (after.row - before.row);
+  if (db) return 20 * Math.log10(10 ** (before.value / 20) * (1 - fraction) + 10 ** (after.value / 20) * fraction);
+  return before.value + (after.value - before.value) * fraction;
 }

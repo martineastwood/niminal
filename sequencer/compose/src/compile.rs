@@ -179,13 +179,20 @@ pub fn compile_with(
     }
 
     let dsp = project(source, &parsed, tempo, true).map_err(|d| vec![d])?;
-    let program = match niminal_lang::compile_with(&dsp.text, options) {
+    let mut program = match niminal_lang::compile_with(&dsp.text, options) {
         Ok(program) => program,
         Err(found) => {
             errors.extend(found.into_iter().map(|d| locate(&dsp, d)));
             return Err(errors);
         }
     };
+    // the program was made from the DSP text, which leaves out comments, timing and notes, so what
+    // it says about places in the text is moved to where those places are in the composition
+    for instrument in &mut program.instruments {
+        for hint in &mut instrument.rate_hints {
+            hint.span = dsp.locate(hint.span);
+        }
+    }
     let tempo = Tempo {
         tuning: program.tempo.tuning,
         ..tempo

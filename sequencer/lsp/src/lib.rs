@@ -664,9 +664,48 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .map(|h| (h["position"]["line"].as_u64().unwrap(), h["label"].as_str().unwrap()))
+            .map(|h| {
+                (
+                    h["position"]["line"].as_u64().unwrap(),
+                    h["label"].as_str().unwrap(),
+                )
+            })
             .collect();
         assert_eq!(labels, [(1, "· control"), (2, "· audio")]);
+    }
+
+    #[test]
+    fn inlay_hints_sit_after_the_name_whatever_comes_before_it_in_the_file() {
+        // comments, timing and notes are left out of what is compiled, so the places it reports
+        // have to be moved back to where they are in the file
+        let mut server = Server::new();
+        open(
+            &mut server,
+            "// a header\ntempo 100bpm\n\ninstr a(freq: hz) {\n  slow = control { osc(sine, 2hz) }\n  fast = osc(sine, freq)\n  fast * slow\n}\n\ninstr b(freq: hz) {\n  level = osc(sine, freq)\n  level\n}\na(freq: a3) for 1beat\n",
+        );
+        let hints = request(
+            &mut server,
+            1,
+            "textDocument/inlayHint",
+            json!({ "textDocument": { "uri": URI } }),
+        );
+        let places: Vec<_> = hints
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| {
+                (
+                    h["position"]["line"].as_u64().unwrap(),
+                    h["position"]["character"].as_u64().unwrap(),
+                    h["label"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        // just after `slow`, `fast` and `level`
+        assert_eq!(
+            places,
+            [(4, 6, "· control"), (5, 6, "· audio"), (10, 7, "· audio")]
+        );
     }
 
     #[test]

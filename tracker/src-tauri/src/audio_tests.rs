@@ -512,3 +512,101 @@ fn library_effects_expose_controls_and_render_on_mono_and_stereo_engines() {
         worker.command(Command::Disconnect).unwrap();
     }
 }
+
+#[test]
+fn graphical_envelopes_render_native_linear_ramps_at_fractional_rows() {
+    use crate::{
+        commands::FxTarget,
+        pattern::{Envelope, EnvelopePoint},
+    };
+    let engine = Arc::new(Mutex::new(EngineServer::new(
+        Session::new(48000.0, Layout::Stereo).without_limiter(),
+    )));
+    let server = Server::start(
+        engine.clone(),
+        ServerConfig {
+            port: 0,
+            ..ServerConfig::default()
+        },
+    )
+    .unwrap();
+    let mut worker = Worker::default();
+    worker
+        .command(Command::Connect {
+            port: server.port(),
+            token: None,
+        })
+        .unwrap();
+    worker
+        .command(Command::Apply {
+            id: "tone".into(),
+            source: "instr constant(freq: hz) { [0.25, 0.25].to_layout(stereo) }".into(),
+            kind: Kind::Instr,
+        })
+        .unwrap();
+    worker
+        .command(Command::Apply {
+            id: "gain".into(),
+            source: "fx gain(amount: 0..1 = 1) { out = it * amount }".into(),
+            kind: Kind::Fx,
+        })
+        .unwrap();
+    let mut song = test_song(None);
+    song.bpm = 20.0;
+    song.rows_per_beat = 1;
+    song.patterns[0].notes[0][0] = Some("C-4".into());
+    song.tracks[0].effects.push(EffectSlot {
+        definition: "gain".into(),
+        ..Default::default()
+    });
+    let lane = &mut song.patterns[0].fx[0][0];
+    lane.target = Some(FxTarget::Effect {
+        device: 0,
+        parameter: "amount".into(),
+    });
+    lane.values[0] = Some("1".into()); // Envelope takes priority over row values.
+    lane.envelope = Some(Envelope {
+        enabled: true,
+        mode: "linear".into(),
+        points: vec![
+            EnvelopePoint {
+                row: 0.0,
+                value: 0.0,
+            },
+            EnvelopePoint {
+                row: 0.5,
+                value: 1.0,
+            },
+        ],
+    });
+    worker
+        .command(Command::Play {
+            song: song.clone(),
+            mode: Mode::Pattern,
+            pattern_id: "p0".into(),
+            start_position: 0,
+        })
+        .unwrap();
+    let origin = worker.playback.as_ref().unwrap().origin as usize;
+    let audio = engine.lock().unwrap().session_mut().process(origin + 80000);
+    for channel in audio {
+        assert!(channel[origin + 1].abs() < 0.0001);
+        assert!(
+            (channel[origin + 36000] - 0.125).abs() < 0.001,
+            "midpoint {}",
+            channel[origin + 36000]
+        );
+        assert!(
+            (channel[origin + 72000] - 0.25).abs() < 0.001,
+            "endpoint {}",
+            channel[origin + 72000]
+        );
+        assert!(
+            channel[origin + 100..origin + 71000]
+                .windows(2)
+                .all(|s| (s[1] - s[0]).abs() < 0.0001)
+        );
+    }
+    worker.command(Command::Stop).unwrap();
+    worker.command(Command::Disconnect).unwrap();
+}

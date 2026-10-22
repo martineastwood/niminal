@@ -78,13 +78,30 @@ Starting/stopping restores the saved manual volume/pan/parameter values rather t
 
 The tracker does not implement an audio engine, buffers, channels, oscillators or filters. See [audio ownership and future send tracks](ARCHITECTURE.md).
 
+## Graphical automation
+
+Click **Automation** in the top bar, or **⌁** beside a named lane header, to open the lower envelope editor. It can be minimised independently; **Focus pattern** hides it along with the other panels. Resize it using its lower-right corner.
+
+Choose a track and one of its named parameter lanes. **Use envelope** switches that lane between its saved row values and the envelope; both are retained in the project. The active envelope is shown in blue in the pattern grid. Clicking those cells opens the envelope editor. Slider **↳** switches the matching lane back to row values.
+
+- **Points**: click to add a point, drag a point to move it, right-click to delete it.
+- **Draw**: click and drag to paint a sequence of points.
+- **Snap**: row, beat, or 1/16 row. The horizontal axis is pattern time; the vertical axis uses the target parameter’s range.
+- **Linear** ramps continuously between points; **Hold** changes only at points. Native niminal parameter glides generate the ramps. Volume/dB controls interpolate in linear gain, which the graph displays as a curve on its dB axis.
+- Select a point and use **Row** / **Value** for exact placement and unit-aware values. **Delete point** removes it.
+- Undo/redo buttons cover envelope edits; Cmd/Ctrl+Z works with the graph focused. One drag/draw gesture is one undo entry. **Clear envelope** removes the points and returns to row values.
+
+Envelopes belong to a pattern and repeat with it. Reused pattern references share the same envelope; duplicating a variation makes an independent copy. Pattern shortening retains hidden points. Before its first point, a parameter retains its current value; after the last, it holds that value until another event changes it. Envelopes take control from an LFO at their first active segment. Envelopes and row values never simultaneously control one lane.
+
+Editing during playback affects newly scheduled row intervals; queued intervals retain their earlier shape. At slow tempos that can take up to one row beyond the lookahead. No envelope DSP runs in a UI timer or in the tracker audio path.
+
 ## Timing and scope
 
 A dedicated Rust worker schedules against the engine sample clock. Every row timestamp is derived from one origin, avoiding accumulated rounding drift across loops. UI timers only paint the playhead. Stop cancels pending pattern events before silencing this connection. Disconnect and application exit release the connection's engine resources.
 
 The scheduler works 200 ms ahead. A sufficiently long compile or transport stall can exhaust that window; missed rows are skipped rather than played as a burst, and the UI reports skipped rows and engine-reported late events. Tempo changes require stopping playback in this version.
 
-Not implemented yet: graphical automation envelopes, per-note modulation UI, sample editing, auxiliary send/return UI, meters, and a reusable preset library. Pattern undo covers note and parameter-cell edits, not mixer or source changes.
+Not implemented yet: curved envelope interpolation, per-note modulation UI, sample editing, auxiliary send/return UI, meters, and a reusable preset library. Pattern undo covers note and parameter-cell edits, not mixer or source changes.
 
 ## Check and build
 

@@ -1,4 +1,4 @@
-import { laneParameter, targetKey, formatValue, parseValue } from './automation';
+import { laneParameter, targetKey, formatValue, parseValue, envelopeValue } from './automation';
 import { keyboardNote, emptyFxLane, type FxTarget, type EffectParameters, type Project, type Pattern } from './project';
 import { NoteHistory, parseNotes, type NoteEdit } from './history';
 
@@ -28,6 +28,7 @@ export class PatternGrid {
     private step: () => number = () => 1,
     private parameters: () => EffectParameters = () => ({}),
     private feedback: (text: string) => void = () => {},
+    private openEnvelope: (track: number, fx: number) => void = () => {},
   ) {
     parent.addEventListener('pointerdown', event => {
       const cell = (event.target as HTMLElement).closest<HTMLElement>('[data-column]');
@@ -58,6 +59,7 @@ export class PatternGrid {
       for (const [r, values] of rows.entries()) for (const [c, raw] of values.entries()) {
         const row = Math.min(this.row, this.anchor.row) + r, column = Math.min(this.column, this.anchor.column) + c;
         if (row >= this.pattern().rows || column >= lanes.length) continue;
+        if (lanes[column].fx !== null && this.pattern().fx[lanes[column].track][lanes[column].fx!].envelope?.enabled) { this.feedback('Disable Use envelope before pasting row values into this lane.'); return; }
         let value = raw;
         if (value !== null) {
           const lane = lanes[column], info = lane.fx === null ? null : this.info(lane);
@@ -160,12 +162,14 @@ export class PatternGrid {
         if (lane.target && !choices.some(t => targetKey(t) === targetKey(lane.target))) picker.add(new Option(`Apply FX to inspect ${lane.target.kind === 'effect' ? lane.target.parameter : 'parameter'}`, targetKey(lane.target)));
         picker.value = targetKey(lane.target); picker.title = laneParameter(lane.target, index, project, this.parameters())?.label ?? 'Connect and Apply effects to expose more parameters';
         picker.onchange = () => {
-          if (lane.values.some(value => value !== null)) { picker.value = targetKey(lane.target); this.feedback('Clear this lane’s values before choosing a different parameter.'); return; }
+          if (lane.values.some(value => value !== null) || lane.envelope?.points.length) { picker.value = targetKey(lane.target); this.feedback('Clear this lane’s values before choosing a different parameter.'); return; }
           const target: FxTarget | null = picker.value ? JSON.parse(picker.value) : null;
           if (target && pattern.fx[index].some(other => other !== lane && targetKey(other.target) === targetKey(target))) { picker.value = targetKey(lane.target); this.feedback('That parameter already has a lane in this track.'); return; }
           lane.target = target; this.resetHistory(); this.edited(); this.render();
         };
-        columns.append(picker);
+        const control = document.createElement('div'); control.className = 'lane-heading';
+        const graph = document.createElement('button'); graph.textContent = '⌁'; graph.title = `Edit ${picker.title} envelope`; graph.setAttribute('aria-label', `${track.name} lane ${column + 1} automation`); graph.onclick = () => this.openEnvelope(index, column);
+        control.append(picker, graph); columns.append(control);
       }
       const adjust = document.createElement('div'); adjust.className = 'fx-column-tools';
       for (const [delta, text] of [[-1, '−'], [1, '+']] as const) {
@@ -173,7 +177,7 @@ export class PatternGrid {
         button.disabled = delta < 0 ? pattern.fx[index].length === 1 : pattern.fx[index].length === 4;
         button.onclick = () => {
           if (delta > 0) pattern.fx[index].push({ target: null, values: Array(Math.max(...pattern.notes.map(notes => notes.length))).fill(null) });
-          else if (pattern.fx[index].at(-1)!.values.some(value => value !== null)) { this.feedback('Clear the last parameter lane before hiding it.'); return; }
+          else if ((pattern.fx[index].at(-1)!.values.some(value => value !== null) || pattern.fx[index].at(-1)!.envelope?.points.length)) { this.feedback('Clear the last parameter lane before hiding it.'); return; }
           else pattern.fx[index].pop();
           this.resetHistory(); this.selectTrack(index); this.edited();
         }; adjust.append(button);
@@ -191,7 +195,8 @@ export class PatternGrid {
           const c = column++, value = lane.values[row], cell = document.createElement('div'); cell.setAttribute('role', 'gridcell');
           cell.className = `${lane.fx === null ? 'note' : 'fx-command'} ${value ? 'filled' : ''}`; cell.dataset.noteRow = String(row); cell.dataset.column = String(c);
           cell.id = this.id(row, lane); cell.textContent = value === null ? (lane.fx === null ? '···' : '·') : lane.fx === null ? value : formatValue(value, this.info(lane));
-          if (lane.fx !== null) { cell.title = `${this.info(lane)?.label ?? 'Choose a parameter above'} · Click to edit; drag ⋮ vertically to adjust. Blank holds the previous value.`; if (value !== null && this.info(lane)) { const handle = document.createElement('span'); handle.className = 'value-drag'; handle.textContent = '⋮'; handle.title = 'Drag vertically to adjust'; handle.onpointerdown = event => this.dragValue(event, cell, lane, row, c); cell.append(handle); } }
+          if (lane.fx !== null && pattern.fx[track][lane.fx].envelope?.enabled) { const envelope = pattern.fx[track][lane.fx].envelope!; const v = envelopeValue(envelope, row, this.info(lane)?.unit === 'db'); cell.textContent = v === null ? '·' : formatValue(v, this.info(lane)); cell.classList.add('envelope-cell'); }
+          if (lane.fx !== null) { cell.title = `${this.info(lane)?.label ?? 'Choose a parameter above'} · Click to edit; drag ⋮ vertically to adjust. Blank holds the previous value.`; if (value !== null && this.info(lane) && !pattern.fx[track][lane.fx].envelope?.enabled) { const handle = document.createElement('span'); handle.className = 'value-drag'; handle.textContent = '⋮'; handle.title = 'Drag vertically to adjust'; handle.onpointerdown = event => this.dragValue(event, cell, lane, row, c); cell.append(handle); } }
           cell.onclick = event => {
             if (this.dragged) { this.dragged = false; return; }
             if (!event.shiftKey) this.anchor = { row, column: c };
@@ -214,18 +219,26 @@ export class PatternGrid {
     if ((event.target as HTMLElement).closest('input')) return;
     const rows: string[] = [], lanes = this.lanes;
     for (let row = Math.min(this.row, this.anchor.row); row <= Math.max(this.row, this.anchor.row); row++) {
-      const values: string[] = []; for (let c = Math.min(this.column, this.anchor.column); c <= Math.max(this.column, this.anchor.column); c++) values.push(lanes[c].values[row] === null ? '---' : lanes[c].fx === null ? lanes[c].values[row]! : formatValue(lanes[c].values[row]!, this.info(lanes[c]))); rows.push(values.join('\t'));
+      const values: string[] = [];
+      for (let c = Math.min(this.column, this.anchor.column); c <= Math.max(this.column, this.anchor.column); c++) {
+        const lane = lanes[c], envelope = lane.fx === null ? undefined : this.pattern().fx[lane.track][lane.fx].envelope;
+        const value = envelope?.enabled ? envelopeValue(envelope, row, this.info(lane)?.unit === 'db') : lane.values[row];
+        values.push(value === null ? '---' : lane.fx === null ? String(value) : formatValue(value, this.info(lane)));
+      }
+      rows.push(values.join('\t'));
     }
     event.clipboardData?.setData('text/plain', rows.join('\n')); event.preventDefault();
   }
   private clearSelection() {
     const edits: NoteEdit[] = [];
-    this.lanes.forEach((lane, column) => { for (let row = 0; row < this.pattern().rows; row++) if (this.selected(row, column)) edits.push({ row, track: column, before: lane.values[row], after: null }); }); this.apply(edits);
+    this.lanes.forEach((lane, column) => { if (lane.fx !== null && this.pattern().fx[lane.track][lane.fx].envelope?.enabled) return; for (let row = 0; row < this.pattern().rows; row++) if (this.selected(row, column)) edits.push({ row, track: column, before: lane.values[row], after: null }); }); this.apply(edits);
   }
   private advance() { this.row = (this.row + Math.max(0, Math.min(256, Math.trunc(this.step()) || 0))) % this.pattern().rows; this.anchor = { row: this.row, column: this.column }; }
   private info(lane: Lane) { return laneParameter(lane.fx === null ? null : this.pattern().fx[lane.track][lane.fx].target, lane.track, this.project(), this.parameters()); }
   private editValue(row: number, column: number, initial?: string) {
-    const lane = this.lanes[column], info = this.info(lane), cell = this.parent.querySelector<HTMLElement>(`#${this.id(row, lane)}`);
+    const lane = this.lanes[column];
+    if (lane.fx !== null && this.pattern().fx[lane.track][lane.fx].envelope?.enabled) { this.openEnvelope(lane.track, lane.fx); return; }
+    const info = this.info(lane), cell = this.parent.querySelector<HTMLElement>(`#${this.id(row, lane)}`);
     if (!info || !cell) { this.feedback('Choose a lane parameter first. Connect and Apply an effect to expose its controls.'); return; }
     const input = document.createElement('input'); input.className = 'lane-value'; input.setAttribute('aria-label', `${info.label} row ${row}`);
     input.value = initial ?? (lane.values[row] === null ? '' : formatValue(lane.values[row]!, info));
@@ -260,6 +273,7 @@ export class PatternGrid {
       if (fx < 0) { this.feedback('Add or clear a parameter lane before recording this control (maximum four per track).'); return; }
       columns[fx].target = { ...target }; this.resetHistory();
     }
+    const envelope = columns[fx].envelope; if (envelope) envelope.enabled = false;
     const column = this.lanes.findIndex(lane => lane.track === track && lane.fx === fx); this.column = column;
     this.apply([{ row: this.row, track: column, before: columns[fx].values[this.row], after: String(value) }]);
     this.advance(); this.render(); this.parent.focus();

@@ -71,3 +71,13 @@ it('round trips named lanes, chains and LFO settings and rejects malformed value
   project.patterns[0].fx[0][0].values[4] = null;
   project.tracks[0].effects[0].modulations.cutoff.period = 0; expect(() => readProject(JSON.stringify(project))).toThrow();
 });
+
+it('saves envelopes, deep-copies them into variations, retains hidden points and rejects invalid ordering', () => {
+  const project = newProject(), lane = project.patterns[0].fx[0][0];
+  lane.envelope = { enabled: true, mode: 'linear', points: [{ row: 0, value: -6 }, { row: 31.5, value: 0 }] };
+  expect(readProject(JSON.stringify(project))).toEqual(project);
+  const copy = makePattern(project, project.patterns[0]); copy.fx[0][0].envelope!.points[0].value = -12;
+  expect(lane.envelope.points[0].value).toBe(-6);
+  resizePattern(copy, 16); resizePattern(copy, 32); expect(copy.fx[0][0].envelope!.points[1].row).toBe(31.5);
+  lane.envelope.points.reverse(); expect(() => readProject(JSON.stringify(project))).toThrow();
+});
