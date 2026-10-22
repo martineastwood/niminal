@@ -233,7 +233,7 @@ const grid = new PatternGrid(element('grid'), () => project, () => arrangement.p
     grid.selectTrack(track); showPanel('automation', true); envelopeEditor?.select(track, lane);
   });
 envelopeEditor = new EnvelopeEditor(element('automation'), () => project, () => arrangement.pattern, () => audioStatus.effect_parameters,
-  () => { editedPattern(); grid.render(); }, track => grid.selectTrack(track));
+  () => { editedPattern(); grid.render(); });
 grid.modeChanged = on => { element('grid-wrap').classList.toggle('recording', on); element('record').setAttribute('aria-pressed', String(on)); };
 element('record').onclick = () => { grid.setRecording(!grid.recording); element('grid').focus(); };
 element('undo').onclick = () => { grid.undo(); element('grid').focus(); };

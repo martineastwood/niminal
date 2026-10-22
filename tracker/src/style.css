@@ -104,7 +104,7 @@ aside.names-hidden { width: 84px; }
 .colour-popover input[type=color] { grid-column: span 3; width: 100%; height: 20px; padding: 0; border: 1px solid var(--line); background: none; }
 .swatch-reset { grid-column: span 3; height: 20px; font-size: 10px; }
 .track-header.selected-track { background: color-mix(in srgb, var(--track-colour) 16%, #30343a); }
-.track-heading, .track-source { display: flex; align-items: center; gap: 2px; padding: 0 3px; height: 17px; }
+.track-heading, .track-source { display: flex; align-items: center; gap: 2px; padding: 0 3px; height: 17px; /* stay one track wide however many lanes there are */ width: 150px; }
 .track-name { flex: 1; min-width: 0; height: 17px; padding: 0 2px; border: 0; background: transparent; color: var(--hi); font-weight: 600; text-align: left; overflow: hidden; text-overflow: ellipsis; }
 .track-name:hover { background: transparent; color: var(--accent-text); }
 .track-tools, .fx-column-tools { display: flex; gap: 1px; flex-shrink: 0; }

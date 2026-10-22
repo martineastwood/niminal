@@ -6,7 +6,7 @@ vi.stubGlobal('Option', function (text: string, value: string) { const option=do
 afterEach(() => { document.body.replaceChildren(); vi.restoreAllMocks(); });
 it('draws snapped points, edits exact values, and undoes a whole gesture', () => {
   const project=newProject(), parent=document.createElement('div'), changed=vi.fn(); document.body.append(parent);
-  const editor=new EnvelopeEditor(parent,()=>project,()=>project.patterns[0],()=>({}),changed,vi.fn()); editor.render();
+  const editor=new EnvelopeEditor(parent,()=>project,()=>project.patterns[0],()=>({}),changed); editor.render();
   const graph=parent.querySelector('svg')!;
   vi.spyOn(graph,'getBoundingClientRect').mockReturnValue({left:0,top:0,width:1000,height:200} as DOMRect);
   graph.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:1,clientX:76,clientY:174}));
