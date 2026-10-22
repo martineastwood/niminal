@@ -366,11 +366,12 @@ fn run_live(args: LiveArgs) -> Result<(), String> {
         return Err("the server did not return its audio format".into());
     };
     let layout = niminal_lang::Layout::standard(channels as u16)?;
-    let live: LiveShared = Arc::new(Mutex::new(LiveServer::new(Live::new(
-        Box::new(link),
-        sample_rate,
-        layout,
-    ))));
+    // Over a socket each look at the engine's clock is a round trip that locks the engine, so count
+    // between looks: the sequencer works 100ms ahead and the count is never ahead of the engine.
+    let live: LiveShared = Arc::new(Mutex::new(LiveServer::new(
+        Live::new(Box::new(link), sample_rate, layout)
+            .with_clock_sync(Duration::from_millis(250)),
+    )));
     let server = Server::start(
         live.clone(),
         ServerConfig {

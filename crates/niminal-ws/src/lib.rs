@@ -9,12 +9,18 @@ use std::net::{IpAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use niminal_server::{ClientId, EngineServer};
 use serde_json::{Value, json};
 use tungstenite::protocol::WebSocketConfig;
 use tungstenite::{Error, Message, WebSocket};
+
+/// How often a client's thread looks up from reading to send what is waiting for it: as often as notifications
+/// are collected.
+const READ_TICK: Duration = Duration::from_millis(50);
+/// How often it asks the server whether the client is still known.
+const CONNECTED_CHECK: Duration = Duration::from_millis(500);
 
 type Outboxes = Arc<Mutex<HashMap<ClientId, Arc<Mutex<Outbox>>>>>;
 #[derive(Default)]
@@ -315,10 +321,8 @@ fn serve<S: Service>(
     let Ok(mut ws) = tungstenite::accept_with_config(stream, Some(config)) else {
         return;
     };
-    // Then reads wake up often, to notice the server stopping and to send notifications.
-    let _ = ws
-        .get_ref()
-        .set_read_timeout(Some(Duration::from_millis(20)));
+    // Then reads wake up now and then, to notice the server stopping and to send notifications.
+    let _ = ws.get_ref().set_read_timeout(Some(READ_TICK));
 
     let outbox = Arc::new(Mutex::new(Outbox::default()));
     let client = lock(&server).connect();
@@ -328,10 +332,16 @@ fn serve<S: Service>(
         .insert(client, outbox.clone());
 
     let mut authenticated = token.is_none();
+    let mut checked = Instant::now();
     while !stop.load(Ordering::Relaxed) {
-        if !lock(&server).is_connected(client)
-            || outbox.lock().unwrap_or_else(|e| e.into_inner()).closed
-        {
+        // the server can drop a client (a new session does), but looking costs it a lock
+        if checked.elapsed() >= CONNECTED_CHECK {
+            checked = Instant::now();
+            if !lock(&server).is_connected(client) {
+                break;
+            }
+        }
+        if outbox.lock().unwrap_or_else(|e| e.into_inner()).closed {
             break;
         }
         match ws.read() {

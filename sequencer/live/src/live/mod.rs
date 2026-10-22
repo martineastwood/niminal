@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use niminal_compose::{
     Action, Clip, CommandAction, Composition, InputSource, PlayInfo, Quantize, Schedule, Scheduled,
@@ -211,6 +212,10 @@ pub struct Live {
     clock: u64,
     /// How far ahead of the clock events are sent, in samples.
     lookahead: u64,
+    /// How long [`Live::advance`] goes on counting the engine's clock for itself before asking again.
+    clock_sync: Duration,
+    /// When the engine last said where its clock was, and the sample it said.
+    synced: Option<(Instant, u64)>,
     engine: Option<ClockInfo>,
     /// The notes held open by a keyboard, by the id the engine knows them by, and the instrument of each.
     held: HashMap<u64, String>,
@@ -273,6 +278,8 @@ impl Live {
             defaults: QuantizeDefaults::default(),
             clock: 0,
             lookahead: (f64::from(sample_rate) * LOOKAHEAD_SECONDS) as u64,
+            clock_sync: Duration::ZERO,
+            synced: None,
             engine: None,
             held: HashMap::new(),
             keyboard: Keyboard::default(),
@@ -311,6 +318,13 @@ impl Live {
     /// Work this far ahead of the engine's clock, in seconds.
     pub fn with_lookahead(mut self, seconds: f64) -> Live {
         self.lookahead = (f64::from(self.sample_rate) * seconds) as u64;
+        self
+    }
+
+    /// Count the engine's clock between asking, which costs the engine a round trip: [`Live::advance`] asks
+    /// again only after this long. By default it asks every time.
+    pub fn with_clock_sync(mut self, every: Duration) -> Live {
+        self.clock_sync = every;
         self
     }
 
@@ -403,11 +417,25 @@ impl Live {
         }
     }
 
+    /// Know where the engine is: by asking it, or if it said recently, by counting the time since. The count
+    /// starts when its answer arrived, so it never runs ahead of the engine.
+    fn tick(&mut self) -> bool {
+        if let Some((at, sample)) = self.synced
+            && at.elapsed() < self.clock_sync
+        {
+            let since = (at.elapsed().as_secs_f64() * f64::from(self.sample_rate)) as u64;
+            self.clock = self.clock.max(sample + since);
+            return true;
+        }
+        self.look()
+    }
+
     /// Ask the engine where it is and take in what it has to say.
     fn look(&mut self) -> bool {
         match self.link.request(EngineRequest::Clock {}) {
             Ok(EngineReply::Clock(info)) => {
                 self.clock = self.clock.max(info.sample);
+                self.synced = Some((Instant::now(), info.sample));
                 self.engine = Some(info);
             }
             Ok(_) => {}
@@ -449,7 +477,7 @@ impl Live {
     }
 
     fn advance_by(&mut self, horizon: Option<u64>) {
-        if !self.look() {
+        if !self.tick() {
             return;
         }
         let horizon = horizon
