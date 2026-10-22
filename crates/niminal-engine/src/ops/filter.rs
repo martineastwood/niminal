@@ -65,6 +65,28 @@ impl Svf {
     }
 }
 
+impl Svf {
+    #[inline(always)]
+    fn step(&mut self, x: f32, cutoff: f32, res: f32) -> f32 {
+        self.update(cutoff, res);
+        let x = f64::from(x);
+
+        let v3 = x - self.ic2;
+        let v1 = self.a1 * self.ic1 + self.a2 * v3;
+        let v2 = self.ic2 + self.a2 * self.ic1 + self.a3 * v3;
+        self.ic1 = flush(2.0 * v1 - self.ic1);
+        self.ic2 = flush(2.0 * v2 - self.ic2);
+
+        let y = match self.mode {
+            FilterMode::Low => v2,
+            FilterMode::Band => v1,
+            FilterMode::High => x - self.k * v1 - v2,
+            FilterMode::Notch => x - self.k * v1,
+        };
+        y as f32
+    }
+}
+
 impl Opcode for Svf {
     fn reset(&mut self) { self.ic1 = 0.0; self.ic2 = 0.0; }
     fn name(&self) -> &'static str {
@@ -103,22 +125,60 @@ impl Opcode for Svf {
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         for (i, o) in out.iter_mut().enumerate() {
-            self.update(inputs[1][i], inputs[2][i]);
-            let x = f64::from(inputs[0][i]);
-
-            let v3 = x - self.ic2;
-            let v1 = self.a1 * self.ic1 + self.a2 * v3;
-            let v2 = self.ic2 + self.a2 * self.ic1 + self.a3 * v3;
-            self.ic1 = flush(2.0 * v1 - self.ic1);
-            self.ic2 = flush(2.0 * v2 - self.ic2);
-
-            let y = match self.mode {
-                FilterMode::Low => v2,
-                FilterMode::Band => v1,
-                FilterMode::High => x - self.k * v1 - v2,
-                FilterMode::Notch => x - self.k * v1,
-            };
-            *o = y as f32;
+            *o = self.step(inputs[0][i], inputs[1][i], inputs[2][i]);
         }
+    }
+
+    fn has_process_one(&self) -> bool {
+        true
+    }
+
+    fn process_one(&mut self, _ctx: &ProcessCtx, inputs: &[f32]) -> f32 {
+        self.step(inputs[0], inputs[1], inputs[2])
+    }
+}
+
+#[cfg(test)]
+mod one_sample_tests {
+    use super::*;
+    use crate::ops::{Lag, Osc, Wave};
+
+    /// A one-sample path must give exactly what the block path gives.
+    fn same(mut block: Box<dyn Opcode>, mut one: Box<dyn Opcode>) {
+        let n = 300;
+        let ports = block.ports().len();
+        let inputs: Vec<Vec<f32>> = (0..ports)
+            .map(|p| {
+                (0..n)
+                    .map(|i| match block.ports()[p].name.as_ref() {
+                        "cutoff" | "freq" => 200.0 + 5.0 * i as f32,
+                        "res" => 0.1 + 0.002 * i as f32,
+                        "time" => 0.001 * (1 + i % 7) as f32,
+                        _ => ((i * 7 + p) % 13) as f32 / 13.0 - 0.5,
+                    })
+                    .collect()
+            })
+            .collect();
+        block.prepare(48_000.0);
+        one.prepare(48_000.0);
+        let ctx = ProcessCtx::new(48_000.0, true);
+        let refs: Vec<&[f32]> = inputs.iter().map(Vec::as_slice).collect();
+        let mut expected = vec![0.0; n];
+        block.process(&ctx, &refs, &mut expected);
+        assert!(one.has_process_one());
+        for i in 0..n {
+            let x: Vec<f32> = inputs.iter().map(|v| v[i]).collect();
+            assert_eq!(one.process_one(&ctx, &x), expected[i], "sample {i} of {}", one.name());
+        }
+    }
+
+    #[test]
+    fn the_one_sample_paths_match_the_block_paths() {
+        same(Box::new(Svf::new(FilterMode::Low)), Box::new(Svf::new(FilterMode::Low)));
+        same(Box::new(Svf::new(FilterMode::High)), Box::new(Svf::new(FilterMode::High)));
+        same(Box::new(Osc::new(Wave::Saw)), Box::new(Osc::new(Wave::Saw)));
+        same(Box::new(Osc::new(Wave::Pulse)), Box::new(Osc::new(Wave::Pulse)));
+        same(Box::new(Osc::new(Wave::Sine)), Box::new(Osc::new(Wave::Sine)));
+        same(Box::new(Lag::default()), Box::new(Lag::default()));
     }
 }

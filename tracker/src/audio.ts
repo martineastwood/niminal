@@ -1,8 +1,8 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import type { Pattern } from './project';
+import type { Song } from './project';
 
 export interface AudioStatus {
-  connected: boolean; playing: boolean; row: number | null; sample_rate: number;
+  connected: boolean; playing: boolean; row: number | null; pattern_id: string | null; sequence_position: number | null; sample_rate: number;
   skipped_rows: number; late_events: number; error: string | null;
   instruments: Record<string, string>; effects: Record<string, string>;
 }
@@ -10,11 +10,12 @@ type Command =
   | { op: 'connect'; port: number; token: string | null }
   | { op: 'disconnect' | 'stop' }
   | { op: 'apply'; id: string; source: string; kind: 'instr' | 'fx' }
-  | { op: 'play' | 'update'; pattern: Pattern }
+  | { op: 'play'; song: Song; mode: 'pattern' | 'song'; pattern_id: string; start_position: number }
+  | { op: 'update'; song: Song }
   | { op: 'audition'; instrument: string; note: string; track: number };
 
 export let audioStatus: AudioStatus = {
-  connected: false, playing: false, row: null, sample_rate: 0,
+  connected: false, playing: false, row: null, pattern_id: null, sequence_position: null, sample_rate: 0,
   skipped_rows: 0, late_events: 0, error: null, instruments: {}, effects: {},
 };
 let receive: (status: AudioStatus) => void = () => {};

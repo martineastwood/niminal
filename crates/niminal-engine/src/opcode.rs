@@ -294,6 +294,18 @@ pub trait Opcode: Send + Sync + std::any::Any {
         None
     }
 
+    /// Whether [`Opcode::process_one`] is implemented. A kernel runs its opcodes a sample at a time,
+    /// and an opcode that can take one sample directly skips building slices for it.
+    fn has_process_one(&self) -> bool {
+        false
+    }
+
+    /// One sample, for an opcode with one result that says it has [`Opcode::has_process_one`]:
+    /// `inputs` has one value for each port.
+    fn process_one(&mut self, _ctx: &ProcessCtx, _inputs: &[f32]) -> f32 {
+        unreachable!("{} has no one-sample path", self.name())
+    }
+
     /// Problems with running this opcode only once every `step` seconds, as inside a `control` scope.
     fn step_warnings(&self, _step: f32) -> Vec<String> {
         Vec::new()
@@ -413,6 +425,14 @@ impl Opcode for Box<dyn Opcode> {
 
     fn kernel_stats(&self) -> Option<KernelStats> {
         (**self).kernel_stats()
+    }
+
+    fn has_process_one(&self) -> bool {
+        (**self).has_process_one()
+    }
+
+    fn process_one(&mut self, ctx: &ProcessCtx, inputs: &[f32]) -> f32 {
+        (**self).process_one(ctx, inputs)
     }
 
     fn step_warnings(&self, step: f32) -> Vec<String> {

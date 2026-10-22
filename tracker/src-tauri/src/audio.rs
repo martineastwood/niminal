@@ -7,7 +7,7 @@ use niminal_ws::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::pattern::{Pattern, Playback, Track, pitch};
+use crate::pattern::{Mode, Playback, Song, Track, pitch};
 use crate::{
     mixer,
     sound::{Kind, Sound},
@@ -18,6 +18,8 @@ pub struct Status {
     pub connected: bool,
     pub playing: bool,
     pub row: Option<usize>,
+    pub pattern_id: Option<String>,
+    pub sequence_position: Option<usize>,
     pub sample_rate: f64,
     pub skipped_rows: u64,
     pub late_events: u64,
@@ -40,10 +42,13 @@ pub enum Command {
         kind: Kind,
     },
     Play {
-        pattern: Pattern,
+        song: Song,
+        mode: Mode,
+        pattern_id: String,
+        start_position: usize,
     },
     Update {
-        pattern: Pattern,
+        song: Song,
     },
     Audition {
         instrument: String,
@@ -170,6 +175,8 @@ impl Worker {
         self.playback = None;
         self.status.playing = false;
         self.status.row = None;
+        self.status.pattern_id = None;
+        self.status.sequence_position = None;
         if self.client.is_some() {
             // Panic does not cancel future events, so cancel the queue first.
             self.call(
@@ -255,34 +262,37 @@ impl Worker {
                 self.status.instruments = instruments;
                 self.status.effects = effects;
             }
-            Command::Play { pattern } => {
-                pattern.validate()?;
-                self.check_assignments(&pattern)?;
-                self.set_mixer(&pattern)?;
+            Command::Play {
+                song,
+                mode,
+                pattern_id,
+                start_position,
+            } => {
+                self.check_assignments(&song)?;
+                let mut playback = Playback::new(0, song, mode, pattern_id, start_position)?;
+                self.set_mixer(&playback.song)?;
                 self.stop()?;
-                let sample = self.clock()?;
+                playback.origin = self.clock()? + (self.status.sample_rate * 0.15).round() as u64;
                 self.status.skipped_rows = 0;
                 self.status.late_events = 0;
-                self.playback = Some(Playback {
-                    origin: sample + (self.status.sample_rate * 0.15).round() as u64,
-                    next_row: 0,
-                    pattern,
-                });
+                self.playback = Some(playback);
                 self.status.playing = true;
                 self.tick()?;
             }
-            Command::Update { pattern } => {
-                pattern.validate()?;
-                self.check_assignments(&pattern)?;
+            Command::Update { song } => {
+                song.validate()?;
+                self.check_assignments(&song)?;
                 if let Some(playback) = &self.playback
-                    && (pattern.bpm != playback.pattern.bpm
-                        || pattern.rows_per_beat != playback.pattern.rows_per_beat)
+                    && !playback.song.same_timeline(&song)
                 {
-                    return Err("Stop playback before changing tempo or rows per beat".into());
+                    return Err(
+                        "Stop playback before changing the sequence, pattern lengths or tempo"
+                            .into(),
+                    );
                 }
-                self.set_mixer(&pattern)?;
+                self.set_mixer(&song)?;
                 if let Some(playback) = &mut self.playback {
-                    playback.pattern = pattern;
+                    playback.song = song;
                 }
             }
             Command::Audition {
@@ -306,8 +316,8 @@ impl Worker {
         Ok(())
     }
 
-    fn check_assignments(&self, pattern: &Pattern) -> Result<(), String> {
-        for track in &pattern.tracks {
+    fn check_assignments(&self, song: &Song) -> Result<(), String> {
+        for track in &song.tracks {
             if let Some(id) = &track.instrument
                 && !self.status.instruments.contains_key(id)
             {
@@ -320,10 +330,10 @@ impl Worker {
         Ok(())
     }
 
-    fn set_mixer(&mut self, pattern: &Pattern) -> Result<(), String> {
-        let events = mixer::events(&pattern.tracks, &self.mixer, &self.status.effects)?;
+    fn set_mixer(&mut self, song: &Song) -> Result<(), String> {
+        let events = mixer::events(&song.tracks, &self.mixer, &self.status.effects)?;
         self.send_events(events)?;
-        self.mixer = pattern.tracks.clone();
+        self.mixer = song.tracks.clone();
         Ok(())
     }
 
@@ -331,7 +341,10 @@ impl Worker {
         let sample = self.clock()?;
         let sr = self.status.sample_rate;
         if let Some(playback) = &mut self.playback {
-            self.status.row = playback.position(sample, sr);
+            let position = playback.position(sample, sr);
+            self.status.row = position.as_ref().map(|p| p.row);
+            self.status.pattern_id = position.as_ref().map(|p| p.pattern.id.clone());
+            self.status.sequence_position = position.as_ref().and_then(|p| p.sequence_position);
             let (events, skipped) = playback.events_until(
                 sample + (sr * 0.02) as u64,
                 sample + (sr * 0.2) as u64,
@@ -339,7 +352,13 @@ impl Worker {
                 &self.status.instruments,
             )?;
             self.status.skipped_rows += skipped;
+            let finished = playback.finished(sample, sr);
             self.send_events(events)?;
+            if finished {
+                // Natural song completion lets the final notes and effects ring out.
+                self.playback = None;
+                self.status.playing = false;
+            }
         }
         Ok(())
     }

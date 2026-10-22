@@ -4,7 +4,7 @@ import { keyboardNote, newProject, readProject } from './project';
 it('round trips source and notes and rejects unsupported project data', () => {
   const project = newProject();
   project.definitions[0].source += '// saved edit\n';
-  project.tracks[2].notes[7] = 'F#3';
+  project.patterns[0].notes[2][7] = 'F#3';
   expect(readProject(JSON.stringify(project))).toEqual(project);
   expect(() => readProject('{"version":1}')).toThrow();
   project.definitions.push(project.definitions[0]);

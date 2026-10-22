@@ -210,66 +210,86 @@ impl Opcode for Osc {
     }
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-        let sr = f64::from(self.sample_rate);
         let position = inputs.get(3);
         for (i, o) in out.iter_mut().enumerate() {
-            let inc = f64::from(inputs[0][i]) / sr;
-            let dt = inc.abs().min(0.5);
-            let t = wrap(self.phase + f64::from(inputs[1][i]));
-
-            if let Some(bank) = &self.bank {
-                let pos = position
-                    .map(|p| f64::from(p[i]))
-                    .unwrap_or(0.0)
-                    .clamp(0.0, 1.0);
-                let slots = (bank.len() - 1) as f64;
-                let p = pos * slots;
-                let a = p as usize;
-                let b = (a + 1).min(bank.len() - 1);
-                let w = (p - a as f64) as f32;
-                let low = bank[a].read(t, inc);
-                let high = bank[b].read(t, inc);
-                *o = low + (high - low) * w;
-                self.phase = wrap(self.phase + inc);
-                continue;
-            }
-
-            if let Some(table) = &self.table {
-                *o = table.read(t, inc);
-                self.phase = wrap(self.phase + inc);
-                continue;
-            }
-
-            let v = match self.wave {
-                Wave::Sine => {
-                    *o = SINE_TABLE.read(t, inc);
-                    self.phase = wrap(self.phase + inc);
-                    continue;
-                }
-                Wave::Saw => 2.0 * t - 1.0 - poly_blep(t, dt),
-                Wave::Square | Wave::Pulse => {
-                    let w = if self.wave == Wave::Square {
-                        0.5
-                    } else {
-                        f64::from(inputs[2][i]).clamp(0.01, 0.99)
-                    };
-                    let naive = if t < w { 1.0 } else { -1.0 };
-                    naive + poly_blep(t, dt) - poly_blep(wrap(t - w), dt)
-                }
-                Wave::Tri => {
-                    if t < 0.25 {
-                        4.0 * t
-                    } else if t < 0.75 {
-                        2.0 - 4.0 * t
-                    } else {
-                        4.0 * t - 4.0
-                    }
-                }
-            };
-
-            *o = v as f32;
-            self.phase = wrap(self.phase + inc);
+            *o = self.step(
+                inputs[0][i],
+                inputs[1][i],
+                inputs.get(2).map_or(0.5, |w| w[i]),
+                position.map_or(0.0, |p| p[i]),
+            );
         }
+    }
+
+    fn has_process_one(&self) -> bool {
+        true
+    }
+
+    fn process_one(&mut self, _ctx: &ProcessCtx, inputs: &[f32]) -> f32 {
+        self.step(
+            inputs[0],
+            inputs[1],
+            inputs.get(2).copied().unwrap_or(0.5),
+            inputs.get(3).copied().unwrap_or(0.0),
+        )
+    }
+}
+
+impl Osc {
+    /// One sample from `freq`, `phase_mod`, the pulse `width` and the bank `position`.
+    #[inline(always)]
+    fn step(&mut self, freq: f32, phase_mod: f32, width: f32, position: f32) -> f32 {
+        let sr = f64::from(self.sample_rate);
+        let inc = f64::from(freq) / sr;
+        let dt = inc.abs().min(0.5);
+        let t = wrap(self.phase + f64::from(phase_mod));
+
+        if let Some(bank) = &self.bank {
+            let pos = f64::from(position).clamp(0.0, 1.0);
+            let slots = (bank.len() - 1) as f64;
+            let p = pos * slots;
+            let a = p as usize;
+            let b = (a + 1).min(bank.len() - 1);
+            let w = (p - a as f64) as f32;
+            let low = bank[a].read(t, inc);
+            let high = bank[b].read(t, inc);
+            self.phase = wrap(self.phase + inc);
+            return low + (high - low) * w;
+        }
+
+        if let Some(table) = &self.table {
+            self.phase = wrap(self.phase + inc);
+            return table.read(t, inc);
+        }
+
+        let v = match self.wave {
+            Wave::Sine => {
+                self.phase = wrap(self.phase + inc);
+                return SINE_TABLE.read(t, inc);
+            }
+            Wave::Saw => 2.0 * t - 1.0 - poly_blep(t, dt),
+            Wave::Square | Wave::Pulse => {
+                let w = if self.wave == Wave::Square {
+                    0.5
+                } else {
+                    f64::from(width).clamp(0.01, 0.99)
+                };
+                let naive = if t < w { 1.0 } else { -1.0 };
+                naive + poly_blep(t, dt) - poly_blep(wrap(t - w), dt)
+            }
+            Wave::Tri => {
+                if t < 0.25 {
+                    4.0 * t
+                } else if t < 0.75 {
+                    2.0 - 4.0 * t
+                } else {
+                    4.0 * t - 4.0
+                }
+            }
+        };
+
+        self.phase = wrap(self.phase + inc);
+        v as f32
     }
 }
 

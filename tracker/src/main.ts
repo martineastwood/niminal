@@ -1,7 +1,8 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { EditorView } from '@codemirror/view';
 import { editorState, connectLanguageServer } from './editor';
-import { newProject, readProject, storageKey, type Definition, type Pattern } from './project';
+import { newProject, readProject, storageKey, resizePattern, type Definition, type Song } from './project';
+import { Arrangement } from './arrangement';
 import { PatternGrid } from './grid';
 import { renderMixer } from './mixer';
 import { audioCommand, audioStatus, observeAudio } from './audio';
@@ -9,21 +10,26 @@ import './style.css';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
-  <header><div class="brand">niminal <span>tracker</span></div><span class="badge">ALPHA</span><div class="project-actions"><button id="import">Open project</button><button id="export">Save project</button></div></header>
+  <header><div class="brand">niminal <span>tracker</span></div><span class="badge">ALPHA</span><div class="project-actions"><button id="toggle-mixer" aria-expanded="false">Mixer</button><button id="toggle-code" aria-expanded="false">Code editor</button><button id="focus-pattern">Focus pattern</button><button id="import">Open project</button><button id="export">Save project</button></div></header>
   <main>
-    <aside><div class="section-title">SOUND LIBRARY</div><div id="definitions"></div><div class="add-buttons"><button id="new-instrument">+ Instrument</button><button id="new-effect">+ Effect</button></div><p class="aside-help">Select a sound to edit its code.<br>Project copies are saved locally.</p></aside>
+    <aside><div class="section-title">SEQUENCE</div><div id="sequence"></div><div class="sequence-actions"><button id="new-pattern" data-structure>+ Blank</button><button id="variation" data-structure>Duplicate as variation</button><button id="reuse" data-structure>Reuse pattern</button><button id="move-up" data-structure>↑ Move</button><button id="move-down" data-structure>↓ Move</button><button id="remove-step" data-structure>Remove step</button></div><p class="aside-help">Reuse shares edits.<br>A variation is an independent copy.</p><details id="sound-library"><summary>SOUND LIBRARY</summary><div id="definitions"></div><div class="add-buttons"><button id="new-instrument">+ Instrument</button><button id="new-effect">+ Effect</button></div><p class="aside-help">Select a sound to edit its code.<br>Project copies are saved locally.</p></details></aside>
     <section class="workspace">
       <div class="engine-toolbar"><label>Engine port <input id="engine-port" type="number" min="1" max="65535" value="7401"></label><input id="engine-token" type="password" placeholder="Token (optional)" aria-label="Engine token"><button id="connect">Connect</button><span id="audio-status">Start niminal server, then connect</span></div>
-      <div class="pattern-toolbar"><div><strong>Pattern 00</strong><span class="muted">32 rows · 4 tracks</span></div><label>Octave <input id="octave" type="number" min="0" max="8" value="4"></label><label>BPM <input id="bpm" type="number" min="20" max="300" step="1"></label><label>Rows/beat <input id="rows-per-beat" type="number" min="1" max="16"></label><button id="undo">Undo notes</button><button id="redo">Redo</button><button id="play">Play loop</button><button id="stop">Stop</button></div>
+      <div class="transport-toolbar"><button id="play">Loop pattern</button><button id="play-song" title="Play from the selected sequence step to the end">Play song</button><button id="stop">Stop</button><label><input id="follow" type="checkbox" checked> Follow playback</label><span id="play-position" class="muted"></span><label>BPM <input id="bpm" type="number" min="20" max="300" step="1"></label><label>Rows/beat <input id="rows-per-beat" type="number" min="1" max="16"></label></div>
+      <div class="pattern-toolbar"><div><strong id="pattern-number">Pattern 00</strong><select id="pattern-picker" aria-label="Pattern to edit"></select><input id="pattern-name" aria-label="Pattern name"><span id="pattern-uses" class="muted"></span></div><label>Rows <input id="pattern-rows" type="number" min="1" max="256" data-structure></label><label>Octave <input id="octave" type="number" min="0" max="8" value="4"></label><button id="undo">Undo notes</button><button id="redo">Redo</button></div>
       <div id="grid" tabindex="0" role="grid" aria-label="Pattern editor"></div>
       <div class="grid-help">Z S X D C V G B H N J M: notes · Arrows: move · Delete: clear · Shift+arrows: select · Cmd/Ctrl+C/V: copy/paste · Cmd/Ctrl+Z: undo · Space: play/stop · F6: switch editor</div>
-      <div id="mixer" aria-label="Track mixer"></div>
-      <section class="instrument-editor"><div class="editor-toolbar"><div><span id="definition-kind" class="badge"></span><input id="definition-name" aria-label="Definition name"></div><div><span id="apply-status" class="muted"></span><button id="apply">Apply</button><button id="audition">Audition</button><button id="expand">Expand editor</button></div></div><div id="code"></div><div class="editor-help">Hover for documentation or errors · Ctrl+Space: completion · Shift+Alt+F: format</div></section>
+      <section id="mixer-panel" hidden><div class="panel-heading">TRACK MIXER<button id="close-mixer">Minimise</button></div><div id="mixer" aria-label="Track mixer"></div></section>
+      <section class="instrument-editor" id="code-panel" hidden><div class="editor-toolbar"><div><span id="definition-kind" class="badge"></span><input id="definition-name" aria-label="Definition name"></div><div><span id="apply-status" class="muted"></span><button id="apply">Apply</button><button id="audition">Audition</button><button id="expand">Expand editor</button><button id="close-code">Minimise</button></div></div><div id="code"></div><div class="editor-help">Hover for documentation or errors · Ctrl+Space: completion · Shift+Alt+F: format</div></section>
     </section>
   </main><footer><span id="status">Starting editor…</span><span id="save-status">Local autosave</span></footer>`;
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-const status = (text: string) => { element('status').textContent = text; };
+function setText(id: string, value: string) {
+  const node = element(id);
+  if (node.textContent !== value) node.textContent = value;
+}
+const status = (text: string) => { setText('status', text); };
 let project = newProject();
 try { const raw = localStorage.getItem(storageKey); if (raw) project = readProject(raw); }
 catch (error) { status(`Could not restore project: ${error}`); }
@@ -35,13 +41,15 @@ let updateTimer: number | undefined;
 let transportRevision = 0;
 let starting = false;
 let audioError: string | null = null;
+let connectionPending: 'connect' | 'disconnect' | null = null;
 
 function save() {
   try { localStorage.setItem(storageKey, JSON.stringify(project)); element('save-status').textContent = 'Saved locally'; }
   catch { element('save-status').textContent = 'Autosave failed · use Save project'; }
 }
 
-function selectDefinition(definition: Definition) {
+function selectDefinition(definition: Definition, reveal = true) {
+  if (reveal) showPanel('code', true);
   if (editor) states.set(selected.id, editor.state);
   selected = definition;
   const state = states.get(definition.id) ?? editorState(`file:///niminal-tracker/${definition.id}.nml`, definition.source, source => { definition.source = source; save(); renderApplyStatus(); });
@@ -64,7 +72,7 @@ function renderDefinitions() {
     list.append(button);
   }
 }
-function pattern(): Pattern { return { bpm: project.bpm, rows_per_beat: project.rows_per_beat, tracks: project.tracks }; }
+function song(): Song { return { bpm: project.bpm, rows_per_beat: project.rows_per_beat, tracks: project.tracks, patterns: project.patterns, sequence: project.sequence }; }
 async function action(work: () => Promise<unknown>) {
   audioError = null;
   try { await work(); }
@@ -99,7 +107,7 @@ async function stopPlayback() {
   transportRevision++; starting = false;
   await audioCommand({ op: 'stop' });
 }
-async function togglePlay() {
+async function togglePlay(mode: 'pattern' | 'song' = 'pattern') {
   if (audioStatus.playing || starting) { await stopPlayback(); return; }
   const revision = ++transportRevision;
   starting = true;
@@ -109,7 +117,7 @@ async function togglePlay() {
       if (track.effect) await ensureSound(track.effect);
       if (revision !== transportRevision) return;
     }
-    await audioCommand({ op: 'play', pattern: pattern() });
+    await audioCommand({ op: 'play', song: song(), mode, pattern_id: arrangement.pattern.id, start_position: arrangement.position });
   } finally { if (revision === transportRevision) starting = false; }
 }
 function editedPattern() {
@@ -118,19 +126,23 @@ function editedPattern() {
   updateTimer = window.setTimeout(() => {
     if (audioStatus.connected) void action(async () => {
       await ensureAssignments();
-      await audioCommand({ op: 'update', pattern: pattern() });
+      await audioCommand({ op: 'update', song: song() });
     });
   }, 50);
 }
 async function audition(id: string, note: string, track: number) {
   await ensureSound(id); await ensureAssignments();
-  await audioCommand({ op: 'update', pattern: pattern() });
+  await audioCommand({ op: 'update', song: song() });
   await audioCommand({ op: 'audition', instrument: id, note, track });
 }
-const grid = new PatternGrid(element('grid'), () => project, () => Number(element<HTMLInputElement>('octave').value), editedPattern,
+const arrangement = new Arrangement(element('sequence'), () => project, manual => {
+  if (manual) element<HTMLInputElement>('follow').checked = false;
+  grid.render(); patternControls();
+}, editedPattern);
+const grid = new PatternGrid(element('grid'), () => project, () => arrangement.pattern, () => Number(element<HTMLInputElement>('octave').value), editedPattern,
   id => { if (id) { const definition = project.definitions.find(d => d.id === id); if (definition) selectDefinition(definition); } },
   (id, note, track) => { if (audioStatus.connected && !audioStatus.playing) void action(() => audition(id, note, track)); },
-  () => { void action(togglePlay); });
+  () => { void action(() => togglePlay()); });
 element('undo').onclick = () => { grid.undo(); element('grid').focus(); };
 element('redo').onclick = () => { grid.redo(); element('grid').focus(); };
 function renderApplyStatus() {
@@ -138,17 +150,29 @@ function renderApplyStatus() {
   const ready = (effect ? audioStatus.effects[selected.id] : audioStatus.instruments[selected.id]) !== undefined;
   element<HTMLButtonElement>('apply').disabled = !audioStatus.connected;
   element<HTMLButtonElement>('audition').disabled = !audioStatus.connected || (effect && !project.tracks.some(t => t.effect === selected.id && t.instrument));
-  element('apply-status').textContent = !ready ? 'Not applied' : appliedSources.get(selected.id) === selected.source ? 'Applied' : 'Unapplied edits · playing last applied version';
+  setText('apply-status', !ready ? 'Not applied' : appliedSources.get(selected.id) === selected.source ? 'Applied' : 'Unapplied edits · playing last applied version');
 }
-element('connect').onclick = () => { void action(async () => {
-  transportRevision++; starting = false;
-  appliedSources.clear();
-  if (audioStatus.connected) { await audioCommand({ op: 'disconnect' }); return; }
-  const port = Number(element<HTMLInputElement>('engine-port').value);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Enter an engine port between 1 and 65535');
-  await audioCommand({ op: 'connect', port, token: element<HTMLInputElement>('engine-token').value || null });
-}); };
-element('play').onclick = () => { void action(togglePlay); };
+function renderConnectButton() {
+  setText('connect', connectionPending === 'connect' ? 'Connecting…' : connectionPending === 'disconnect' ? 'Disconnecting…' : audioStatus.connected ? 'Disconnect' : 'Connect');
+  element<HTMLButtonElement>('connect').disabled = connectionPending !== null;
+  element<HTMLInputElement>('engine-port').disabled = connectionPending !== null || audioStatus.connected;
+  element<HTMLInputElement>('engine-token').disabled = connectionPending !== null || audioStatus.connected;
+}
+element('connect').onclick = () => {
+  if (connectionPending) return;
+  connectionPending = audioStatus.connected ? 'disconnect' : 'connect';
+  renderConnectButton();
+  void action(async () => {
+    transportRevision++; starting = false;
+    appliedSources.clear();
+    if (audioStatus.connected) { await audioCommand({ op: 'disconnect' }); return; }
+    const port = Number(element<HTMLInputElement>('engine-port').value);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Enter an engine port between 1 and 65535');
+    await audioCommand({ op: 'connect', port, token: element<HTMLInputElement>('engine-token').value || null });
+  }).finally(() => { connectionPending = null; renderConnectButton(); });
+};
+element('play').onclick = () => { void action(() => togglePlay('pattern')); };
+element('play-song').onclick = () => { void action(() => togglePlay('song')); };
 element('stop').onclick = () => { void action(stopPlayback); };
 element('apply').onclick = () => { const definition = selected; void action(() => applyDefinition(definition)); };
 element('audition').onclick = () => { const definition = selected; void action(async () => {
@@ -188,11 +212,12 @@ function addDefinition(kind: 'instr' | 'fx') {
 element('new-instrument').onclick = () => addDefinition('instr');
 element('new-effect').onclick = () => addDefinition('fx');
 element('expand').onclick = () => {
+  showPanel('code', true);
   const expanded = element('app').classList.toggle('editor-expanded');
   element('expand').textContent = expanded ? 'Show pattern' : 'Expand editor'; editor.requestMeasure();
 };
 document.addEventListener('keydown', event => {
-  if (event.key === 'F6') { event.preventDefault(); if (editor.hasFocus) element('grid').focus(); else editor.focus(); }
+  if (event.key === 'F6') { event.preventDefault(); if (editor.hasFocus) element('grid').focus(); else { showPanel('code', true); editor.focus(); } }
 });
 async function loadProject(raw: string) {
   const loaded = readProject(raw);
@@ -203,7 +228,7 @@ async function loadProject(raw: string) {
   project = loaded; selected = project.definitions[0];
   const definition = selected;
   editor = new EditorView({ state: editorState(`file:///niminal-tracker/${definition.id}.nml`, definition.source, source => { definition.source = source; save(); renderApplyStatus(); }), parent: element('code') });
-  selectDefinition(selected); grid.resetHistory(); grid.render(); mixerView(); timingInputs(); save();
+  selectDefinition(selected, false); arrangement.reset(); grid.resetHistory(); grid.render(); mixerView(); patternControls(); timingInputs(); save();
 }
 element('export').onclick = async () => {
   const source = JSON.stringify(project, null, 2);
@@ -231,15 +256,66 @@ element('import').onclick = async () => {
   };
   input.click();
 };
-selectDefinition(selected); grid.render(); mixerView(); timingInputs();
+function showPanel(panel: 'code' | 'mixer', visible: boolean) {
+  element(`${panel}-panel`).hidden = !visible;
+  element(`toggle-${panel}`).setAttribute('aria-expanded', String(visible));
+  if (panel === 'code') {
+    if (!visible) { element('app').classList.remove('editor-expanded'); setText('expand', 'Expand editor'); }
+    if (editor) editor.requestMeasure();
+  }
+}
+for (const panel of ['code', 'mixer'] as const) {
+  element(`toggle-${panel}`).onclick = () => showPanel(panel, element(`${panel}-panel`).hidden);
+  element(`close-${panel}`).onclick = () => { showPanel(panel, false); element('grid').focus(); };
+}
+element('focus-pattern').onclick = () => { showPanel('code', false); showPanel('mixer', false); element<HTMLDetailsElement>('sound-library').open = false; element('grid').focus(); };
+function patternControls() {
+  const current = arrangement.pattern;
+  setText('pattern-number', `Pattern ${arrangement.number}`);
+  element<HTMLInputElement>('pattern-name').value = current.name;
+  element<HTMLInputElement>('pattern-rows').value = String(current.rows);
+  const uses = project.sequence.filter(id => id === current.id).length;
+  setText('pattern-uses', uses > 1 ? `Shared by ${uses} sequence steps` : uses === 1 ? 'One sequence step' : 'Not sequenced');
+  const picker = element<HTMLSelectElement>('pattern-picker'); picker.replaceChildren();
+  for (const [index, pattern] of project.patterns.entries()) picker.add(new Option(`${String(index).padStart(2, '0')} · ${pattern.name}`, pattern.id));
+  picker.value = current.id;
+}
+element<HTMLSelectElement>('pattern-picker').onchange = event => arrangement.choose((event.target as HTMLSelectElement).value);
+element<HTMLInputElement>('pattern-name').oninput = event => {
+  arrangement.pattern.name = (event.target as HTMLInputElement).value;
+  arrangement.render(); save();
+};
+element<HTMLInputElement>('pattern-name').onchange = patternControls;
+element<HTMLInputElement>('pattern-rows').onchange = event => {
+  if (audioStatus.playing) { patternControls(); return; }
+  resizePattern(arrangement.pattern, Number((event.target as HTMLInputElement).value));
+  grid.render(); patternControls(); editedPattern();
+};
+for (const [id, operation] of [['new-pattern', 'new'], ['variation', 'variation'], ['reuse', 'reuse']] as const) {
+  element(id).onclick = () => { if (!audioStatus.playing) arrangement.insert(operation); };
+}
+element('move-up').onclick = () => { if (!audioStatus.playing) arrangement.move(-1); };
+element('move-down').onclick = () => { if (!audioStatus.playing) arrangement.move(1); };
+element('remove-step').onclick = () => { if (!audioStatus.playing) arrangement.remove(); };
+selectDefinition(selected, false); arrangement.reset(); grid.render(); mixerView(); patternControls(); timingInputs();
 const audioTimer = observeAudio(state => {
-  element('connect').textContent = state.connected ? 'Disconnect' : 'Connect';
+  // Replacing a button's text node during a mouse press can cancel its click
+  // in WebKit. Only change labels when the displayed state actually changes.
+  renderConnectButton();
   element<HTMLButtonElement>('play').disabled = !state.connected || state.playing;
   element<HTMLButtonElement>('stop').disabled = !state.connected;
+  element<HTMLButtonElement>('play-song').disabled = !state.connected || state.playing;
+  for (const input of document.querySelectorAll<HTMLInputElement | HTMLButtonElement>('[data-structure]')) input.disabled = state.playing;
+  arrangement.paint(state.sequence_position, state.playing);
+  if (state.playing && element<HTMLInputElement>('follow').checked && state.pattern_id && (arrangement.pattern.id !== state.pattern_id || state.sequence_position !== null && arrangement.position !== state.sequence_position)) {
+    if (state.sequence_position !== null) arrangement.select(state.sequence_position, false);
+    else { arrangement.choose(state.pattern_id); element<HTMLInputElement>('follow').checked = true; }
+  }
+  setText('play-position', state.playing && state.pattern_id ? `${state.sequence_position === null ? 'Loop' : `Step ${state.sequence_position + 1}`} · row ${state.row ?? '…'}` : '');
   element<HTMLInputElement>('bpm').disabled = state.playing;
   element<HTMLInputElement>('rows-per-beat').disabled = state.playing;
-  element('audio-status').textContent = audioError ?? state.error ?? (state.connected ? `${state.playing ? 'Playing' : 'Connected'} · ${state.sample_rate / 1000} kHz${state.skipped_rows ? ` · ${state.skipped_rows} skipped rows` : ''}${state.late_events ? ` · ${state.late_events} late events` : ''}` : 'Start niminal server, then connect');
-  grid.paint(state.row); renderApplyStatus();
+  setText('audio-status', audioError ?? state.error ?? (state.connected ? `${state.playing ? 'Playing' : 'Connected'} · ${state.sample_rate / 1000} kHz${state.skipped_rows ? ` · ${state.skipped_rows} skipped rows` : ''}${state.late_events ? ` · ${state.late_events} late events` : ''}` : 'Start niminal server, then connect'));
+  grid.paint(state.pattern_id === arrangement.pattern.id ? state.row : null); renderApplyStatus();
 });
 void connectLanguageServer(status);
 window.addEventListener('beforeunload', () => { clearInterval(audioTimer); editor.destroy(); });

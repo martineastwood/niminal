@@ -1,27 +1,25 @@
-import type { Track } from './project';
-
 export interface NoteEdit { track: number; row: number; before: string | null; after: string | null }
 
 export class NoteHistory {
   private past: NoteEdit[][] = [];
   private future: NoteEdit[][] = [];
 
-  apply(tracks: Track[], edits: NoteEdit[]) {
+  apply(tracks: (string | null)[][], edits: NoteEdit[]) {
     edits = edits.filter(edit => edit.before !== edit.after);
     if (!edits.length) return false;
-    for (const edit of edits) tracks[edit.track].notes[edit.row] = edit.after;
+    for (const edit of edits) tracks[edit.track][edit.row] = edit.after;
     this.past.push(edits); if (this.past.length > 500) this.past.shift();
     this.future = [];
     return true;
   }
-  undo(tracks: Track[]) {
+  undo(tracks: (string | null)[][]) {
     const edits = this.past.pop(); if (!edits) return false;
-    for (const edit of edits) tracks[edit.track].notes[edit.row] = edit.before;
+    for (const edit of edits) tracks[edit.track][edit.row] = edit.before;
     this.future.push(edits); return true;
   }
-  redo(tracks: Track[]) {
+  redo(tracks: (string | null)[][]) {
     const edits = this.future.pop(); if (!edits) return false;
-    for (const edit of edits) tracks[edit.track].notes[edit.row] = edit.after;
+    for (const edit of edits) tracks[edit.track][edit.row] = edit.after;
     this.past.push(edits); return true;
   }
   clear() { this.past = []; this.future = []; }
@@ -30,7 +28,7 @@ export class NoteHistory {
 export function parseNotes(text: string): (string | null)[][] | null {
   if (!text.trim()) return null;
   const lines = text.replace(/\r/g, '').trim().split('\n');
-  if (lines.length > 32) return null;
+  if (lines.length > 256) return null;
   const rows = lines.map(line => line.split('\t').map(value => value.trim()));
   if (rows.some(row => row.length > 4 || row.some(value => !['', '---', '···'].includes(value) && !/^[A-G][#-][0-8]$/i.test(value)))) return null;
   return rows.map(row => row.map(value => ['', '---', '···'].includes(value) ? null : value.toUpperCase()));

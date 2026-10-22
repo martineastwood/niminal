@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::opcode::{Opcode, Port, ProcessCtx, blocks};
+use crate::opcode::{MAX_INPUTS, Opcode, Port, ProcessCtx, blocks};
 use crate::{Array, wrapped_index};
 
 /// Scalar math functions, usable inside kernels and as the [`Func`] opcode.
@@ -380,6 +380,9 @@ pub struct Custom {
     carried: bool,
     /// Samples in the block being processed, for opcodes that run once per block.
     block_frames: usize,
+    /// Which opcodes take a sample directly, and how many results each has.
+    one_sample: Vec<bool>,
+    native_outputs_n: Vec<usize>,
     /// This copy's own built-in opcodes, with their state.
     natives: Vec<Box<dyn Opcode>>,
     native_inputs: Vec<Vec<f32>>,
@@ -412,6 +415,12 @@ impl Custom {
             buffers: kernel.buffers.clone(),
             regs: vec![0.0; kernel.registers],
             natives: kernel.natives.iter().map(|n| n.op.box_clone()).collect(),
+            one_sample: kernel
+                .natives
+                .iter()
+                .map(|n| n.op.has_process_one() && n.op.outputs() == 1 && n.inputs.len() <= MAX_INPUTS)
+                .collect(),
+            native_outputs_n: kernel.natives.iter().map(|n| n.op.outputs()).collect(),
             kernel,
             sample_rate: 48_000.0,
             started: false,
@@ -444,13 +453,30 @@ impl Custom {
         input: &impl Fn(usize, usize) -> f32,
         i: usize,
     ) {
+        // most kernels have no reset scope, and then no instruction needs checking for one
+        if self.kernel.resets.is_empty() {
+            self.exec::<false>(code, section, ctx, input, i);
+        } else {
+            self.exec::<true>(code, section, ctx, input, i);
+        }
+    }
+
+    fn exec<const RESETS: bool>(
+        &mut self,
+        code: &[Instr],
+        section: Section,
+        ctx: &ProcessCtx,
+        input: &impl Fn(usize, usize) -> f32,
+        i: usize,
+    ) {
         for instr in code {
-            if let Instr::Reset {
-                scope,
-                trigger,
-                previous,
-                guard,
-            } = *instr
+            if RESETS
+                && let Instr::Reset {
+                    scope,
+                    trigger,
+                    previous,
+                    guard,
+                } = *instr
             {
                 if guard.is_none_or(|g| self.regs[g] != 0.0) {
                     let positive = self.regs[trigger] > 0.0;
@@ -506,11 +532,39 @@ impl Custom {
                     }
                     let call = &k.natives[index];
                     // a native run once per block (a control scope) sees its inputs held through it
-                    let held = if section == Section::Block {
-                        self.block_frames
-                    } else {
-                        1
-                    };
+                    if section != Section::Block {
+                        let op = &mut self.natives[index];
+                        if self.one_sample[index] {
+                            let mut x = [0.0f32; MAX_INPUTS];
+                            for (value, input) in x.iter_mut().zip(&call.inputs) {
+                                *value = match *input {
+                                    NativeInput::Reg(r) => regs[r] as f32,
+                                    NativeInput::Const(c) => c as f32,
+                                };
+                            }
+                            regs[dst] = f64::from(op.process_one(ctx, &x[..call.inputs.len()]));
+                            continue;
+                        }
+                        for (value, input) in self.native_inputs.iter_mut().zip(&call.inputs) {
+                            value[0] = match *input {
+                                NativeInput::Reg(r) => regs[r] as f32,
+                                NativeInput::Const(c) => c as f32,
+                            };
+                        }
+                        let outputs = self.native_outputs_n[index];
+                        op.process_slots(
+                            ctx,
+                            &self.native_inputs,
+                            &self.native_indices[..call.inputs.len()],
+                            &mut self.native_outputs[..outputs],
+                            1,
+                        );
+                        for (k, output) in self.native_outputs.iter().take(outputs).enumerate() {
+                            regs[dst + k] = f64::from(output[0]);
+                        }
+                        continue;
+                    }
+                    let held = self.block_frames;
                     for (value, input) in self.native_inputs.iter_mut().zip(&call.inputs) {
                         let x = match *input {
                             NativeInput::Reg(r) => regs[r] as f32,
@@ -519,13 +573,12 @@ impl Custom {
                         value[..held].fill(x);
                     }
                     let op = &mut self.natives[index];
-                    let frames = held;
                     op.process_slots(
                         ctx,
                         &self.native_inputs,
                         &self.native_indices[..call.inputs.len()],
                         &mut self.native_outputs[..op.outputs()],
-                        frames,
+                        held,
                     );
                     for (k, output) in self.native_outputs.iter().take(op.outputs()).enumerate() {
                         regs[dst + k] = f64::from(output[0]);
