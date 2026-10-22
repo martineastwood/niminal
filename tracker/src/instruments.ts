@@ -36,7 +36,12 @@ export function duplicateInstrument(project: Project, source: Definition): Defin
   return definition;
 }
 
-export function instrumentUsers(project: Project, id: string) { return project.tracks.filter(t => t.instrument === id).map(t => t.name); }
+/** Who plays an instrument: the tracks it is assigned to, and tracks whose instrument columns pick it. */
+export function instrumentUsers(project: Project, id: string) {
+  const names = new Set(project.tracks.filter(t => t.instrument === id).map(t => t.name));
+  project.tracks.forEach((track, index) => { if (project.patterns.some(p => p.notes[index].some(column => column.inst.includes(id)))) names.add(track.name); });
+  return [...names];
+}
 
 /** Removes an instrument nobody plays. Returns why not when it cannot. */
 export function removeInstrument(project: Project, id: string): string | null {

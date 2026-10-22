@@ -14,14 +14,14 @@ it('reuses pattern references and duplicates variations without copying song-wid
   const original = view.pattern;
   view.insert('reuse');
   expect(project.sequence).toEqual([original.id, original.id]);
-  view.pattern.notes[0][1] = 'F#4';
-  expect(project.patterns[0].notes[0][1]).toBe('F#4');
+  view.pattern.notes[0][0].notes[1] = 'F#4';
+  expect(project.patterns[0].notes[0][0].notes[1]).toBe('F#4');
   view.insert('variation');
   const variation = view.pattern;
   expect(variation.id).not.toBe(original.id);
   expect(variation.notes).toEqual(original.notes);
-  variation.notes[0][1] = 'G-4';
-  expect(original.notes[0][1]).toBe('F#4');
+  variation.notes[0][0].notes[1] = 'G-4';
+  expect(original.notes[0][0].notes[1]).toBe('F#4');
   expect(project.tracks).toHaveLength(4);
   expect(readProject(JSON.stringify(project))).toEqual(project);
 });
@@ -44,10 +44,10 @@ it('reorders and removes sequence entries while keeping patterns available for r
 
 it('retains notes when shortening a pattern and rejects missing sequence references', () => {
   const project = newProject(), pattern = project.patterns[0];
-  pattern.notes[0][31] = 'B-4';
+  pattern.notes[0][0].notes[31] = 'B-4';
   resizePattern(pattern, 8); expect(pattern.rows).toBe(8);
-  resizePattern(pattern, 64); expect(pattern.notes[0][31]).toBe('B-4');
-  expect(pattern.notes.every(track => track.length === 64)).toBe(true);
+  resizePattern(pattern, 64); expect(pattern.notes[0][0].notes[31]).toBe('B-4');
+  expect(pattern.notes.every(track => track.every(column => column.notes.length === 64 && column.vol.length === 64))).toBe(true);
   expect(readProject(JSON.stringify(project))).toEqual(project);
   project.sequence.push('missing');
   expect(() => readProject(JSON.stringify(project))).toThrow();

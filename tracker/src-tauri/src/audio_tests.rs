@@ -1,5 +1,5 @@
 use super::*;
-use crate::pattern::{Device, FxLane, Pattern, Track};
+use crate::pattern::{Device, FxLane, NoteColumn, Pattern, Track};
 use niminal_lang::Layout;
 use niminal_server::{EngineServer, Session};
 use niminal_ws::{Server, ServerConfig};
@@ -21,10 +21,18 @@ fn test_song(note: Option<&str>) -> Song {
             id: "p0".into(),
             name: "First".into(),
             rows: 32,
-            notes: (0..4).map(|_| vec![note.map(str::to_string); 32]).collect(),
+            notes: (0..4)
+                .map(|_| {
+                    vec![NoteColumn {
+                        notes: vec![note.map(str::to_string); 32],
+                        ..NoteColumn::default()
+                    }]
+                })
+                .collect(),
             fx: (0..4).map(|_| vec![FxLane::empty(32)]).collect(),
         }],
         sequence: vec!["p0".into()],
+        instrument_values: Default::default(),
     }
 }
 
@@ -254,7 +262,9 @@ fn the_editor_finds_samples_beside_documents_in_the_project_folder() {
     let original = base.join("level.wav");
     write_wav(&original, 100, 1000);
     let file = crate::files::import_sample(&dir, &original).unwrap();
-    let source = format!("smp_a = sample(\"{file}\").root(c4)\ninstr level(freq: hz) {{ smp_a(freq: freq) }}");
+    let source = format!(
+        "smp_a = sample(\"{file}\").root(c4)\ninstr level(freq: hz) {{ smp_a(freq: freq) }}"
+    );
     let diagnostics = |uri: &str| {
         let mut server = niminal_lsp::Server::new();
         let replies = server.handle(&json!({"method":"textDocument/didOpen", "params": {
@@ -262,9 +272,144 @@ fn the_editor_finds_samples_beside_documents_in_the_project_folder() {
         }}));
         replies[0]["params"]["diagnostics"].clone()
     };
-    assert_eq!(diagnostics(&format!("file://{}/level.nml", dir.display())), json!([]));
+    assert_eq!(
+        diagnostics(&format!("file://{}/level.nml", dir.display())),
+        json!([])
+    );
     assert_ne!(diagnostics("file:///niminal-tracker/level.nml"), json!([]));
     let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_held_note_sounds_until_its_off_and_a_chord_adds_up() {
+    let engine = Arc::new(Mutex::new(EngineServer::new(
+        Session::new(48000.0, Layout::Mono).without_limiter(),
+    )));
+    let server = Server::start(
+        engine.clone(),
+        ServerConfig {
+            port: 0,
+            ..ServerConfig::default()
+        },
+    )
+    .unwrap();
+    let mut worker = Worker::default();
+    worker
+        .command(Command::Connect {
+            port: server.port(),
+            token: None,
+        })
+        .unwrap();
+    worker
+        .command(Command::Apply {
+            id: "tone".into(),
+            source: "instr flat(freq: hz) { 0.1 }".into(),
+            kind: Kind::Instr,
+            dir: None,
+        })
+        .unwrap();
+    // 125 bpm, 4 rows a beat: a row is 5760 samples. Hold two rows, then silence.
+    let mut song = test_song(None);
+    let held = &mut song.patterns[0].notes[0][0];
+    held.notes[0] = Some("C-4".into());
+    held.notes[2] = Some("OFF".into());
+    let mut second = NoteColumn::blank(32);
+    second.notes[0] = Some("E-4".into());
+    second.notes[2] = Some("OFF".into());
+    song.patterns[0].notes[0].push(second);
+    worker
+        .command(Command::Play {
+            song,
+            mode: Mode::Song,
+            pattern_id: "p0".into(),
+            start_position: 0,
+        })
+        .unwrap();
+    let audio = engine.lock().unwrap().session_mut().process(48000);
+    let level = |range: std::ops::Range<usize>| {
+        audio[0][range.clone()].iter().map(|s| s.abs()).sum::<f32>() / range.len() as f32
+    };
+    let start = audio[0].iter().position(|s| s.abs() > 0.01).expect("sound");
+    let sounding = level(start + 500..start + 10000);
+    let after = level(start + 13000..start + 20000);
+    assert!(
+        (sounding - 0.2).abs() < 0.02,
+        "two notes of 0.1 add up: {sounding}"
+    );
+    assert!(after < 0.001, "silent after the OFF: {after}");
+    worker.command(Command::Disconnect).unwrap();
+    drop(worker);
+    server.stop();
+}
+
+#[test]
+fn instrument_parameters_are_exposed_and_reach_the_notes_that_play() {
+    let engine = Arc::new(Mutex::new(EngineServer::new(
+        Session::new(48000.0, Layout::Mono).without_limiter(),
+    )));
+    let server = Server::start(
+        engine.clone(),
+        ServerConfig {
+            port: 0,
+            ..ServerConfig::default()
+        },
+    )
+    .unwrap();
+    let mut worker = Worker::default();
+    worker
+        .command(Command::Connect {
+            port: server.port(),
+            token: None,
+        })
+        .unwrap();
+    worker
+        .command(Command::Apply {
+            id: "tone".into(),
+            source: "instr level(freq: hz, amp: 0..1 = 1, mode: (a | b) = a) { 0.2 * amp }".into(),
+            kind: Kind::Instr,
+            dir: None,
+        })
+        .unwrap();
+    let parameters = &worker.status.instrument_parameters["tone"];
+    assert_eq!(
+        parameters
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<_>>(),
+        ["amp"],
+        "pitch and choices are not controls"
+    );
+    let play = |worker: &mut Worker, amp: Option<f64>| {
+        let mut song = test_song(None);
+        song.patterns[0].notes[0][0].notes[0] = Some("C-4".into());
+        if let Some(amp) = amp {
+            song.instrument_values
+                .insert("tone".into(), [("amp".to_string(), amp)].into());
+        }
+        worker
+            .command(Command::Play {
+                song,
+                mode: Mode::Pattern,
+                pattern_id: "p0".into(),
+                start_position: 0,
+            })
+            .unwrap();
+        let audio = engine.lock().unwrap().session_mut().process(24000);
+        worker.command(Command::Stop).unwrap();
+        let start = audio[0].iter().position(|s| s.abs() > 0.01).expect("sound");
+        audio[0][start + 500..start + 4000]
+            .iter()
+            .map(|s| s.abs())
+            .sum::<f32>()
+            / 3500.0
+    };
+    let full = play(&mut worker, None);
+    let half = play(&mut worker, Some(0.5));
+    assert!((full - 0.2).abs() < 0.01, "{full}");
+    assert!((half / full - 0.5).abs() < 0.02, "full {full}, half {half}");
+    worker.command(Command::Disconnect).unwrap();
+    drop(worker);
+    server.stop();
 }
 
 #[test]
@@ -296,7 +441,9 @@ fn imported_samples_play_from_the_project_folder() {
         })
         .unwrap();
     // Without the project folder the relative path cannot be found.
-    let source = format!("smp_a = sample(\"{file}\").root(c4)\ninstr level(freq: hz) {{ smp_a(freq: freq) }}");
+    let source = format!(
+        "smp_a = sample(\"{file}\").root(c4)\ninstr level(freq: hz) {{ smp_a(freq: freq) }}"
+    );
     assert!(
         worker
             .command(Command::Apply {
@@ -464,14 +611,16 @@ fn song_playback_completes_and_leaves_the_final_release_audible() {
     song.tracks[0].instrument = None;
     song.tracks.resize(16, Track::default());
     song.tracks[15].instrument = Some("tone".into());
-    song.patterns[0].notes.resize(16, vec![None; 32]);
+    song.patterns[0]
+        .notes
+        .resize(16, vec![NoteColumn::blank(32)]);
     song.patterns[0].fx.resize(16, vec![FxLane::empty(32)]);
-    song.patterns[0].notes[15][0] = Some("C-4".into());
+    song.patterns[0].notes[15][0].notes[0] = Some("C-4".into());
     song.patterns[0].rows = 1;
     let mut variation = song.patterns[0].clone();
     variation.id = "p1".into();
     variation.rows = 2;
-    variation.notes[15][0] = Some("D#4".into());
+    variation.notes[15][0].notes[0] = Some("D#4".into());
     song.patterns.push(variation);
     song.sequence = vec!["p0".into(), "p1".into(), "p0".into()];
     worker
@@ -811,7 +960,7 @@ fn graphical_envelopes_render_native_linear_ramps_at_fractional_rows() {
     let mut song = test_song(None);
     song.bpm = 20.0;
     song.rows_per_beat = 1;
-    song.patterns[0].notes[0][0] = Some("C-4".into());
+    song.patterns[0].notes[0][0].notes[0] = Some("C-4".into());
     song.tracks[0].fx = vec![Device {
         id: "d0".into(),
         definition: "gain".into(),

@@ -115,7 +115,10 @@ pub fn events(
     for index in 0..tracks.len().max(previous.len()) {
         let old = previous.get(index);
         let old_chain: Vec<&Device> = old.map(|t| t.active().collect()).unwrap_or_default();
-        let chain: Vec<&Device> = tracks.get(index).map(|t| t.active().collect()).unwrap_or_default();
+        let chain: Vec<&Device> = tracks
+            .get(index)
+            .map(|t| t.active().collect())
+            .unwrap_or_default();
         for device in &old_chain {
             if !chain.iter().any(|d| d.id == device.id) {
                 topology.push(json!({"op":"free_node", "id":fx_node(index, &device.id)}));
@@ -133,7 +136,11 @@ pub fn events(
                     _ => {}
                 }
             }
-            if !chain.iter().map(|d| &d.id).eq(old_chain.iter().map(|d| &d.id)) {
+            if !chain
+                .iter()
+                .map(|d| &d.id)
+                .eq(old_chain.iter().map(|d| &d.id))
+            {
                 // Links are named by position, so reordering or removing a device re-points them in place.
                 let mut from = format!("track_{index}");
                 for (position, device) in chain.iter().enumerate() {

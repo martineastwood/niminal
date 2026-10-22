@@ -120,12 +120,98 @@ impl FxLane {
     }
 }
 
+pub const MAX_NOTE_COLUMNS: usize = 8;
+
+/// One note column of a track. Every sub-column holds a cell per row; the optional ones
+/// may be left empty, which reads as blank everywhere.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct NoteColumn {
+    /// A note such as `C-4`, or `OFF` to end the note that is sounding.
+    pub notes: Vec<Option<String>>,
+    /// The instrument to play instead of the track's, by definition id.
+    #[serde(default)]
+    pub inst: Vec<Option<String>>,
+    /// Level from 0 (silent) to 128 (full).
+    #[serde(default)]
+    pub vol: Vec<Option<String>>,
+    /// Position from 0 (left) through 64 (centre) to 128 (right).
+    #[serde(default)]
+    pub pan: Vec<Option<String>>,
+    /// How late the note starts, in 256ths of a row.
+    #[serde(default)]
+    pub delay: Vec<Option<String>>,
+}
+
+#[cfg(test)]
+impl NoteColumn {
+    pub fn blank(rows: usize) -> Self {
+        Self {
+            notes: vec![None; rows],
+            ..Self::default()
+        }
+    }
+}
+
+impl NoteColumn {
+    fn validate(&self, rows: usize) -> Result<(), String> {
+        let sized =
+            |len: usize, optional: bool| len <= 256 && (len >= rows || optional && len == 0);
+        if !sized(self.notes.len(), false)
+            || !sized(self.inst.len(), true)
+            || !sized(self.vol.len(), true)
+            || !sized(self.pan.len(), true)
+            || !sized(self.delay.len(), true)
+        {
+            return Err("Every note sub-column needs a cell for each row".into());
+        }
+        for note in self.notes.iter().flatten() {
+            if note != "OFF" {
+                pitch(note)?;
+            }
+        }
+        let within = |values: &[Option<String>], max: u32| {
+            values
+                .iter()
+                .flatten()
+                .all(|v| v.parse::<u32>().is_ok_and(|n| n <= max))
+        };
+        if !within(&self.vol, 128) || !within(&self.pan, 128) || !within(&self.delay, 255) {
+            return Err("Volume and pan run 0–128 and delay 0–255".into());
+        }
+        Ok(())
+    }
+    fn text(values: &[Option<String>], row: usize) -> Option<&str> {
+        values.get(row).and_then(|v| v.as_deref())
+    }
+    pub fn note(&self, row: usize) -> Option<&str> {
+        Self::text(&self.notes, row)
+    }
+    pub fn instrument(&self, row: usize) -> Option<&str> {
+        Self::text(&self.inst, row)
+    }
+    pub fn volume(&self, row: usize) -> Option<u32> {
+        Self::text(&self.vol, row).and_then(|v| v.parse().ok())
+    }
+    pub fn panning(&self, row: usize) -> Option<u32> {
+        Self::text(&self.pan, row).and_then(|v| v.parse().ok())
+    }
+    /// The delay as a fraction of a row, from 0 up to just under 1.
+    pub fn delayed(&self, row: usize) -> f64 {
+        f64::from(
+            Self::text(&self.delay, row)
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(0),
+        ) / 256.0
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Pattern {
     pub id: String,
     pub name: String,
     pub rows: usize,
-    pub notes: Vec<Vec<Option<String>>>,
+    /// Note columns, by track.
+    pub notes: Vec<Vec<NoteColumn>>,
     pub fx: Vec<Vec<FxLane>>,
 }
 
@@ -136,6 +222,9 @@ pub struct Song {
     pub tracks: Vec<Track>,
     pub patterns: Vec<Pattern>,
     pub sequence: Vec<String>,
+    /// Each instrument's parameter values, by definition id; notes start with these.
+    #[serde(default)]
+    pub instrument_values: BTreeMap<String, BTreeMap<String, f64>>,
 }
 
 impl Song {
@@ -153,12 +242,20 @@ impl Song {
                     || t.fx.iter().enumerate().any(|(i, device)| {
                         device.id.is_empty()
                             || device.id.len() > 40
-                            || !device.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                            || !device
+                                .id
+                                .chars()
+                                .all(|c| c.is_ascii_alphanumeric() || c == '_')
                             || t.fx[..i].iter().any(|other| other.id == device.id)
                             || device.values.values().any(|value| !value.is_finite())
                             || device.modulations.values().any(|lfo| !lfo.valid())
                     })
             })
+            || self
+                .instrument_values
+                .values()
+                .flatten()
+                .any(|(_, value)| !value.is_finite())
             || self.patterns.is_empty()
             || self.patterns.len() > 128
             || self.sequence.is_empty()
@@ -175,11 +272,14 @@ impl Song {
                 || pattern
                     .notes
                     .iter()
-                    .any(|notes| notes.len() < pattern.rows || notes.len() > 256)
+                    .any(|columns| columns.is_empty() || columns.len() > MAX_NOTE_COLUMNS)
             {
                 return Err(
-                    "Patterns need unique IDs, 1–256 rows and one note column per track".into(),
+                    "Patterns need unique IDs, 1–256 rows and 1–8 note columns per track".into(),
                 );
+            }
+            for column in pattern.notes.iter().flatten() {
+                column.validate(pattern.rows)?;
             }
             if pattern.fx.len() != self.tracks.len()
                 || pattern.fx.iter().any(|track| {
@@ -211,9 +311,6 @@ impl Song {
                     return Err("Parameter lanes need finite numeric values".into());
                 }
             }
-            for note in pattern.notes.iter().flatten().flatten() {
-                pitch(note)?;
-            }
         }
         if self.sequence.iter().any(|id| !ids.contains(id)) {
             return Err("Sequence references a missing pattern".into());
@@ -239,6 +336,19 @@ impl Song {
     }
 }
 
+/// No note is shorter than this many rows, so back-to-back notes with delays still sound.
+const MIN_HOLD: f64 = 0.01;
+
+/// A note's volume cell (0–128, 128 being full level) as decibels.
+pub fn volume_db(volume: u32) -> f64 {
+    20.0 * (f64::from(volume.min(128)) / 128.0).max(1e-6).log10()
+}
+
+/// A note's pan cell (0–128, 64 being centre) as degrees; 30° is a hard pan in stereo.
+pub fn pan_degrees(pan: u32) -> f64 {
+    (f64::from(pan.min(128)) - 64.0) / 64.0 * 30.0
+}
+
 pub fn pitch(note: &str) -> Result<String, String> {
     let bytes = note.as_bytes();
     if bytes.len() != 3
@@ -262,6 +372,9 @@ pub struct Playback {
     pub origin: u64,
     pub next_row: u64,
     pub parameters: crate::commands::EffectParameters,
+    pub instrument_parameters: crate::commands::EffectParameters,
+    /// Each track's instrument parameter lanes, as of the last row played.
+    lane_state: Vec<BTreeMap<String, f64>>,
     pub song: Song,
     pub mode: Mode,
     pub pattern_id: String,
@@ -292,6 +405,8 @@ impl Playback {
             origin,
             next_row: 0,
             parameters: BTreeMap::new(),
+            instrument_parameters: BTreeMap::new(),
+            lane_state: Vec::new(),
             song,
             mode,
             pattern_id,
@@ -360,6 +475,25 @@ impl Playback {
             && self.position(sample, sample_rate).is_none()
     }
 
+    /// How many rows a note started on row `index` (itself `delay` rows late) is held: until
+    /// the column next has a note or an OFF, or until the song or pattern runs out.
+    fn hold_rows(&self, index: u64, track: usize, column: usize, delay: f64) -> f64 {
+        const LOOKAHEAD: u64 = 16384;
+        for ahead in 1..=LOOKAHEAD {
+            let Some(position) = self.location(index + ahead) else {
+                // The song ends here.
+                return (ahead as f64 - delay).max(MIN_HOLD);
+            };
+            let Some(next) = position.pattern.notes[track].get(column) else {
+                continue;
+            };
+            if next.note(position.row).is_some() {
+                return (ahead as f64 + next.delayed(position.row) - delay).max(MIN_HOLD);
+            }
+        }
+        (LOOKAHEAD as f64).max(MIN_HOLD)
+    }
+
     // Derive timestamps from one origin, including across pattern boundaries.
     pub fn events_until(
         &mut self,
@@ -370,6 +504,9 @@ impl Playback {
     ) -> Result<(Vec<Value>, u64), String> {
         let mut events = Vec::new();
         let mut skipped = 0;
+        // Held apart from `self` so rows can be read while it is updated.
+        let mut state = std::mem::take(&mut self.lane_state);
+        state.resize_with(self.song.tracks.len(), BTreeMap::new);
         while self.row_at(self.next_row, sample_rate) < horizon {
             let at = self.row_at(self.next_row, sample_rate);
             let Some(position) = self.location(self.next_row) else {
@@ -383,6 +520,30 @@ impl Playback {
             for (index, track) in self.song.tracks.iter().enumerate() {
                 let mut edits = Vec::new();
                 for lane in &position.pattern.fx[index] {
+                    if let Some(crate::commands::FxTarget::Instrument { parameter }) = &lane.target
+                    {
+                        // Remembered until changed, and given to each note as it starts.
+                        let info = track
+                            .instrument
+                            .as_ref()
+                            .and_then(|id| self.instrument_parameters.get(id))
+                            .and_then(|all| all.iter().find(|p| p.name == *parameter));
+                        let value = match &lane.envelope {
+                            Some(envelope) if envelope.enabled => envelope.value(
+                                position.row as f64,
+                                info.is_some_and(|p| p.unit.as_deref() == Some("db")),
+                            ),
+                            _ => lane
+                                .values
+                                .get(position.row)
+                                .and_then(|v| v.as_deref())
+                                .and_then(|v| v.parse().ok()),
+                        };
+                        if let Some(value) = value {
+                            state[index].insert(parameter.clone(), value);
+                        }
+                        continue;
+                    }
                     if lane
                         .target
                         .as_ref()
@@ -409,7 +570,8 @@ impl Playback {
                             crate::commands::FxTarget::Effect { .. } => target
                                 .parameter(track, &self.parameters)
                                 .is_some_and(|p| p.unit.as_deref() == Some("db")),
-                            crate::commands::FxTarget::Pan => false,
+                            crate::commands::FxTarget::Pan
+                            | crate::commands::FxTarget::Instrument { .. } => false,
                         };
                         for pair in breaks.windows(2) {
                             let Some(value) = envelope.value(pair[0], db) else {
@@ -476,19 +638,53 @@ impl Playback {
                         json!({"op":"routing", "at":at, "tag":"tracker-pattern", "edits":edits}),
                     );
                 }
-                if let (Some(id), Some(note)) = (
-                    &track.instrument,
-                    &position.pattern.notes[index][position.row],
-                ) {
+                for (column_index, column) in position.pattern.notes[index].iter().enumerate() {
+                    let Some(note) = column.note(position.row) else {
+                        continue;
+                    };
+                    if note == "OFF" {
+                        // It ends the note before it; that note was timed to stop here.
+                        continue;
+                    }
+                    // A note with no instrument to play it is silent, not an error.
+                    let Some(id) = column
+                        .instrument(position.row)
+                        .or(track.instrument.as_deref())
+                    else {
+                        continue;
+                    };
                     let target = targets.get(id).ok_or_else(|| {
                         format!("Apply the instrument assigned to {} first", track.name)
                     })?;
-                    events.push(json!({"op":"note", "at":at, "target":target, "to":format!("track_{index}"), "tag":"tracker-pattern",
-                        "dur":format!("{}sec", 60.0 / self.song.bpm / f64::from(self.song.rows_per_beat) * 0.8), "args":{"freq":pitch(note)?}}));
+                    let row_seconds = 60.0 / self.song.bpm / f64::from(self.song.rows_per_beat);
+                    let delay = column.delayed(position.row);
+                    let hold = self.hold_rows(self.next_row, index, column_index, delay);
+                    let mut args = json!({"freq":pitch(note)?});
+                    if let Some(volume) = column.volume(position.row) {
+                        args["gain"] = json!(format!("{:.3}db", volume_db(volume)));
+                    }
+                    if let Some(pan) = column.panning(position.row) {
+                        args["pan"] = json!(format!("{:.3}deg", pan_degrees(pan)));
+                    }
+                    for parameter in self.instrument_parameters.get(id).into_iter().flatten() {
+                        let value = state[index].get(&parameter.name).or_else(|| {
+                            self.song
+                                .instrument_values
+                                .get(id)
+                                .and_then(|values| values.get(&parameter.name))
+                        });
+                        if let Some(value) = value {
+                            args[&parameter.name] =
+                                parameter.argument(value.clamp(parameter.min, parameter.max));
+                        }
+                    }
+                    events.push(json!({"op":"note", "at":at + (delay * self.song.row_samples(sample_rate)).round() as u64, "target":target, "to":format!("track_{index}"), "tag":"tracker-pattern",
+                        "dur":format!("{:.6}sec", hold * row_seconds), "args":args}));
                 }
             }
             self.next_row += 1;
         }
+        self.lane_state = state;
         Ok((events, skipped))
     }
 }
@@ -513,11 +709,19 @@ mod tests {
                     id: id.into(),
                     name: id.into(),
                     rows,
-                    notes: (0..4).map(|_| vec![Some(note.into()); rows]).collect(),
+                    notes: (0..4)
+                        .map(|_| {
+                            vec![NoteColumn {
+                                notes: vec![Some(note.into()); rows],
+                                ..NoteColumn::default()
+                            }]
+                        })
+                        .collect(),
                     fx: (0..4).map(|_| vec![FxLane::empty(rows)]).collect(),
                 })
                 .collect(),
             sequence: vec!["a".into(), "b".into(), "a".into()],
+            instrument_values: Default::default(),
         }
     }
     #[test]
@@ -546,6 +750,166 @@ mod tests {
         );
         assert!(play.finished(play.row_at(7, 48000.0) + 1, 48000.0));
     }
+    /// A one-track pattern of `rows` rows with the given cells, played from row 0 at 120 bpm, 4 rows a beat.
+    fn played(rows: usize, columns: Vec<NoteColumn>, mode: Mode) -> Vec<Value> {
+        let mut song = song();
+        song.bpm = 120.0;
+        song.tracks.truncate(1);
+        song.patterns = vec![Pattern {
+            id: "a".into(),
+            name: "a".into(),
+            rows,
+            notes: vec![columns],
+            fx: vec![vec![FxLane::empty(rows)]],
+        }];
+        song.sequence = vec!["a".into()];
+        let mut play = Playback::new(0, song, mode, "a".into(), 0).unwrap();
+        let targets = BTreeMap::from([
+            ("tone".into(), "voice".into()),
+            ("alt".into(), "other".into()),
+        ]);
+        let horizon = play.row_at(rows as u64, 48000.0);
+        play.events_until(0, horizon, 48000.0, &targets).unwrap().0
+    }
+    fn column(rows: usize, cells: &[(usize, &str)]) -> NoteColumn {
+        let mut column = NoteColumn::blank(rows);
+        for (row, note) in cells {
+            column.notes[*row] = Some((*note).into());
+        }
+        column
+    }
+    fn duration(event: &Value) -> f64 {
+        event["dur"]
+            .as_str()
+            .unwrap()
+            .trim_end_matches("sec")
+            .parse()
+            .unwrap()
+    }
+
+    #[test]
+    fn notes_are_held_until_the_next_note_or_off() {
+        // 120 bpm at 4 rows a beat is an eighth of a second a row.
+        let events = played(
+            8,
+            vec![column(8, &[(0, "C-4"), (3, "D-4"), (4, "OFF"), (6, "E-4")])],
+            Mode::Song,
+        );
+        let held: Vec<_> = events.iter().map(duration).collect();
+        assert_eq!(events.len(), 3, "OFF starts nothing");
+        assert!((held[0] - 3.0 * 0.125).abs() < 1e-5, "{held:?}");
+        assert!((held[1] - 0.125).abs() < 1e-5, "OFF ends D-4: {held:?}");
+        assert!(
+            (held[2] - 2.0 * 0.125).abs() < 1e-5,
+            "until the song ends: {held:?}"
+        );
+        // Looping a pattern holds a lone note for the whole pattern.
+        let looped = played(8, vec![column(8, &[(2, "C-4")])], Mode::Pattern);
+        assert!((duration(&looped[0]) - 8.0 * 0.125).abs() < 1e-5);
+    }
+
+    #[test]
+    fn delay_volume_pan_and_instrument_shape_each_note() {
+        let mut first = column(4, &[(0, "C-4"), (2, "G-4")]);
+        first.delay = vec![Some("128".into()), None, None, None];
+        first.vol = vec![Some("64".into()), None, Some("0".into()), None];
+        first.pan = vec![Some("0".into()), None, Some("128".into()), None];
+        first.inst = vec![None, None, Some("alt".into()), None];
+        let events = played(4, vec![first], Mode::Song);
+        let row = 6000;
+        assert_eq!(events[0]["at"], row / 2, "half a row late");
+        assert_eq!(events[0]["target"], "voice");
+        assert_eq!(events[1]["target"], "other");
+        assert_eq!(events[0]["args"]["gain"], "-6.021db");
+        assert_eq!(events[1]["args"]["gain"], "-120.000db");
+        assert_eq!(events[0]["args"]["pan"], "-30.000deg");
+        assert_eq!(events[1]["args"]["pan"], "30.000deg");
+        // The first note ends when the second begins, which is on time.
+        assert!((duration(&events[0]) - (2.0 - 0.5) * 0.125).abs() < 1e-5);
+        assert!(events[1]["args"].get("freq").is_some());
+    }
+
+    #[test]
+    fn columns_play_together_and_hold_independently() {
+        let events = played(
+            4,
+            vec![
+                column(4, &[(0, "C-4"), (2, "OFF")]),
+                column(4, &[(0, "E-4"), (1, "G-4")]),
+            ],
+            Mode::Song,
+        );
+        assert_eq!(events.len(), 3);
+        let at_zero: Vec<_> = events.iter().filter(|e| e["at"] == 0).collect();
+        assert_eq!(at_zero.len(), 2, "a chord starts together");
+        let long = at_zero.iter().find(|e| e["args"]["freq"] == "c4").unwrap();
+        let short = at_zero.iter().find(|e| e["args"]["freq"] == "e4").unwrap();
+        assert!((duration(long) - 2.0 * 0.125).abs() < 1e-5);
+        assert!((duration(short) - 0.125).abs() < 1e-5);
+    }
+
+    #[test]
+    fn instrument_parameters_start_each_note_from_the_base_value_then_the_lane() {
+        let mut song = song();
+        song.bpm = 120.0;
+        song.tracks.truncate(1);
+        let mut lane = FxLane::empty(4);
+        lane.target = Some(crate::commands::FxTarget::Instrument {
+            parameter: "cutoff".into(),
+        });
+        lane.values[2] = Some("500".into());
+        song.patterns = vec![Pattern {
+            id: "a".into(),
+            name: "a".into(),
+            rows: 4,
+            notes: vec![vec![column(4, &[(0, "C-4"), (2, "D-4"), (3, "E-4")])]],
+            fx: vec![vec![lane]],
+        }];
+        song.sequence = vec!["a".into()];
+        song.instrument_values = BTreeMap::from([(
+            "tone".into(),
+            BTreeMap::from([("cutoff".into(), 2000.0), ("ignored".into(), 1.0)]),
+        )]);
+        let mut play = Playback::new(0, song, Mode::Song, "a".into(), 0).unwrap();
+        play.instrument_parameters = BTreeMap::from([(
+            "tone".into(),
+            vec![crate::commands::Parameter {
+                name: "cutoff".into(),
+                min: 20.0,
+                max: 20000.0,
+                default: 2400.0,
+                unit: Some("hz".into()),
+            }],
+        )]);
+        let targets = BTreeMap::from([("tone".into(), "voice".into())]);
+        let (events, _) = play
+            .events_until(0, play.row_at(4, 48000.0), 48000.0, &targets)
+            .unwrap();
+        let cutoffs: Vec<_> = events
+            .iter()
+            .map(|e| e["args"]["cutoff"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(cutoffs, ["2000hz", "500hz", "500hz"]);
+        assert!(events.iter().all(|e| e["args"].get("ignored").is_none()));
+    }
+
+    #[test]
+    fn note_columns_are_validated() {
+        let mut song = song();
+        song.patterns[0].notes[0][0].vol = vec![Some("129".into()), None];
+        assert!(song.validate().is_err());
+        song.patterns[0].notes[0][0].vol.clear();
+        song.patterns[0].notes[0][0].delay = vec![Some("256".into()), None];
+        assert!(song.validate().is_err());
+        song.patterns[0].notes[0][0].delay.clear();
+        song.patterns[0].notes[0][0].notes[0] = Some("OFF".into());
+        song.validate().unwrap();
+        song.patterns[0].notes[0] = vec![NoteColumn::blank(2); 9];
+        assert!(song.validate().is_err());
+        song.patterns[0].notes[0].clear();
+        assert!(song.validate().is_err());
+    }
+
     #[test]
     fn pattern_loops_independently_and_song_can_start_at_a_selected_entry() {
         let mut play = Playback::new(0, song(), Mode::Pattern, "b".into(), 0).unwrap();

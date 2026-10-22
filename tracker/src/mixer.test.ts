@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it, vi } from 'vitest';
-import { renderMixer, type FxActions } from './mixer';
+import { renderMixer, renderInstrument, type FxActions } from './mixer';
 import { newProject } from './project';
 import { addDevice, moveDevice, removeDevice } from './effects';
 
@@ -64,4 +64,19 @@ it('shows each device as a card whose buttons act on the chain, with only the se
   parent.querySelector<HTMLButtonElement>('[aria-label="Remove Low pass"]')!.click(); expect(fx.remove).toHaveBeenCalledWith(b.device.id);
   expect(parent.querySelector<HTMLButtonElement>('[aria-label="Move effect earlier"]')!.disabled).toBe(true);
   const add = parent.querySelector<HTMLSelectElement>('[aria-label="Add effect"]')!; add.value = 'notch'; add.dispatchEvent(new Event('change')); expect(fx.add).toHaveBeenCalledWith('notch');
+});
+
+it('shows an instrument\'s parameters as sliders that set its values, and records them to a lane only for the track that plays it', () => {
+  const project = newProject(), parent = document.createElement('div'), edited = vi.fn(), write = vi.fn(); document.body.append(parent);
+  const tone = project.definitions[0];
+  const parameters = { tone: [{ name: 'cutoff', min: 200, max: 8000, default: 2000, unit: 'hz' }] };
+  renderInstrument(parent, project, tone, {}, edited, write, 0); expect(parent.textContent).toContain('Apply to expose parameters');
+  renderInstrument(parent, project, tone, parameters, edited, write, 0);
+  const value = parent.querySelector<HTMLInputElement>('[aria-label="cutoff value"]')!;
+  expect(value.value).toBe('2000'); value.value = '500'; value.dispatchEvent(new Event('change'));
+  expect(tone.values).toEqual({ cutoff: 500 }); expect(edited).toHaveBeenCalledOnce();
+  parent.querySelector<HTMLButtonElement>('[aria-label="Write cutoff to pattern"]')!.click();
+  expect(write).toHaveBeenCalledWith({ kind: 'instrument', parameter: 'cutoff' }, 500);
+  renderInstrument(parent, project, tone, parameters, edited, write, 1);
+  expect(parent.querySelector<HTMLButtonElement>('[aria-label="Write cutoff to pattern"]')!.disabled).toBe(true);
 });

@@ -199,3 +199,16 @@ footer input { height: 16px; font-size: 10px; }
 #audio-status { color: #9fb0bf; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
 #status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .definition small { margin-left: auto; padding-left: 6px; color: var(--dim); font-size: 9px; }
+
+/* Note sub-columns and extra note columns */
+.sub { flex: 0 0 26px; text-align: center; font-size: 11px; color: #3d434b; border-left: 1px solid #1d2024; }
+.sub.filled { color: #9fc4e8; }
+.note.col-start, .sub.col-start { border-left: 1px solid #2c3036; }
+.note.off { color: #d98a8a; }
+.track-columns > .col-label { flex: 0 0 44px; }
+.track-columns > .sub-label { flex: 0 0 26px; font-size: 8px; }
+.track-columns > .col-start { border-left: 1px solid var(--line); }
+.column-choices { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 190px; }
+.column-choices > span { flex: 1; }
+.column-choices > label { flex: 0 0 45%; color: var(--text); }
+.column-choices button { height: 18px; min-width: 20px; padding: 0 4px; }

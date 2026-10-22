@@ -1,10 +1,31 @@
 import { laneParameter, targetKey, formatValue, parseValue, envelopeValue } from './automation';
-import { keyboardNote, emptyFxLane, type FxTarget, type EffectParameters, type Project, type Pattern, type Track } from './project';
+import { keyboardNote, emptyFxLane, blankColumn, subColumns, maxNoteColumns, type FxTarget, type EffectParameters, type Project, type Pattern, type Track, type SubColumn } from './project';
 import { NoteHistory, parseNotes, type NoteEdit } from './history';
 
-const ROW_WIDTH = 30, NOTE_WIDTH = 44, LANE_WIDTH = 100;
+const ROW_WIDTH = 30, NOTE_WIDTH = 44, SUB_WIDTH = 26, LANE_WIDTH = 100;
 
-interface Lane { track: number; fx: number | null; values: (string | null)[] }
+/** A column of cells. Note-family lanes have `fx` null; parameter lanes have a `kind` of null. */
+type Kind = 'note' | SubColumn;
+interface Lane { track: number; kind: Kind | null; col: number; fx: number | null; values: (string | null)[] }
+const subLabel: Record<SubColumn, string> = { inst: 'Ins', vol: 'Vol', pan: 'Pan', delay: 'Dly' };
+const subTitle: Record<SubColumn, string> = { inst: 'Instrument for this note (instrument number)', vol: 'Volume, 00 to 80 (hex)', pan: 'Panning, 00 left, 40 centre, 80 right (hex)', delay: 'Delay in 256ths of a row, 00 to FF (hex)' };
+const hex = (n: number) => n.toString(16).toUpperCase().padStart(2, '0');
+const subMax: Record<SubColumn, number> = { inst: 254, vol: 128, pan: 128, delay: 255 };
+
+/** What a sub-column cell reads as, for display and the clipboard. */
+export function subText(kind: SubColumn, value: string | null, project: Project): string {
+  if (value === null) return '';
+  if (kind === 'inst') { const index = project.definitions.filter(d => d.kind === 'instr').findIndex(d => d.id === value); return index < 0 ? '??' : hex(index); }
+  return hex(Number(value));
+}
+/** The stored value for typed or pasted hex text, or null when it names nothing. */
+export function subValue(kind: SubColumn, text: string, project: Project): string | null {
+  if (!/^[0-9a-f]{1,2}$/i.test(text)) return null;
+  const n = parseInt(text, 16);
+  if (n > subMax[kind]) return null;
+  if (kind === 'inst') return project.definitions.filter(d => d.kind === 'instr')[n]?.id ?? null;
+  return String(n);
+}
 
 export class PatternGrid {
   private row = 0;
@@ -21,6 +42,8 @@ export class PatternGrid {
   private frame = document.createElement('div');
   /** Record mode: typed keys enter notes and values. Otherwise they only preview the instrument. */
   recording = false;
+  /** The first digit of a two-digit hex entry, until the second arrives or the cursor moves. */
+  private hex: { row: number; column: number; digit: number } | null = null;
   modeChanged: (recording: boolean) => void = () => {};
   private dragging = false;
   private dragged = false;
@@ -77,11 +100,11 @@ export class PatternGrid {
         if (lanes[column].fx !== null && this.pattern().fx[lanes[column].track][lanes[column].fx!].envelope?.enabled) { this.feedback('Disable Use envelope before pasting row values into this lane.'); return; }
         let value = raw;
         if (value !== null) {
-          const lane = lanes[column], info = lane.fx === null ? null : this.info(lane);
-          if (lane.fx !== null) value = info ? parseValue(value, info) : null;
-          if (lane.fx === null ? !/^[A-G][#-][0-8]$/.test(value ?? '') : value === null) {
-            this.feedback('Paste needs values in the destination lane’s units and range.'); return;
-          }
+          const lane = lanes[column];
+          if (lane.fx !== null) { const info = this.info(lane); value = info ? parseValue(value, info) : null; }
+          else if (lane.kind === 'note') value = /^([A-G][#-][0-8]|OFF)$/.test(value) ? value : null;
+          else value = subValue(lane.kind!, value, this.project());
+          if (value === null) { this.feedback('Paste needs values in the destination lane’s units and range.'); return; }
         }
         edits.push({ row, track: column, before: lanes[column].values[row], after: value });
       }
@@ -90,16 +113,20 @@ export class PatternGrid {
   }
 
   private get lanes(): Lane[] {
-    return this.project().tracks.flatMap((_, track) => [
-      { track, fx: null, values: this.pattern().notes[track] },
-      ...this.pattern().fx[track].map((lane, fx) => ({ track, fx, values: lane.values })),
+    const pattern = this.pattern();
+    return this.project().tracks.flatMap((t, track): Lane[] => [
+      ...pattern.notes[track].flatMap((column, col): Lane[] => [
+        { track, kind: 'note', col, fx: null, values: column.notes },
+        ...subColumns.filter(kind => t.show?.[kind]).map((kind): Lane => ({ track, kind, col, fx: null, values: column[kind] })),
+      ]),
+      ...pattern.fx[track].map((lane, fx): Lane => ({ track, kind: null, col: 0, fx, values: lane.values })),
     ]);
   }
   private get values() { return this.lanes.map(lane => lane.values); }
   get activeTrack() { return this.lanes[this.column]?.track ?? 0; }
   private get history() {
     const pattern = this.pattern(), id = pattern.id;
-    const signature = JSON.stringify(pattern.fx.map(track => track.map(lane => lane.target)));
+    const signature = JSON.stringify([pattern.fx.map(track => track.map(lane => lane.target)), pattern.notes.map(columns => columns.length), this.project().tracks.map(t => t.show)]);
     if (this.targetSignatures.get(id) !== signature) this.histories.delete(id);
     this.targetSignatures.set(id, signature);
     if (!this.histories.has(id)) this.histories.set(id, new NoteHistory());
@@ -117,7 +144,16 @@ export class PatternGrid {
     if (render) this.render();
     else { this.paintSelection(); for (const header of this.parent.querySelectorAll<HTMLElement>('.track-header')) header.classList.toggle('selected-track', Number(header.dataset.track) === index); }
   }
-  private id(row: number, lane: Lane) { return lane.fx === null ? `cell-${row}-${lane.track}` : `fx-${row}-${lane.track}-${lane.fx}`; }
+  private id(row: number, lane: Lane) {
+    if (lane.fx !== null) return `fx-${row}-${lane.track}-${lane.fx}`;
+    return lane.kind === 'note' && lane.col === 0 ? `cell-${row}-${lane.track}` : `cell-${row}-${lane.track}-${lane.col}-${lane.kind}`;
+  }
+  private text(lane: Lane, value: string | null) { return lane.kind === 'note' || lane.kind === null ? value ?? '' : subText(lane.kind, value, this.project()); }
+  /** The width of a track: its note columns with their sub-columns, then its parameter lanes. */
+  private trackWidth(track: number) {
+    const subs = subColumns.filter(kind => this.project().tracks[track].show?.[kind]).length;
+    return Math.max(150, this.pattern().notes[track].length * (NOTE_WIDTH + subs * SUB_WIDTH) + 2 + this.pattern().fx[track].length * LANE_WIDTH);
+  }
   private selected(row: number, column: number) {
     return row >= Math.min(this.row, this.anchor.row) && row <= Math.max(this.row, this.anchor.row) && column >= Math.min(this.column, this.anchor.column) && column <= Math.max(this.column, this.anchor.column);
   }
@@ -136,7 +172,7 @@ export class PatternGrid {
     this.column = Math.min(this.column, lanes.length - 1); this.anchor.column = Math.min(this.anchor.column, lanes.length - 1);
     this.row = Math.min(this.row, pattern.rows - 1); this.anchor.row = Math.min(this.anchor.row, pattern.rows - 1);
     this.parent.replaceChildren();
-    this.parent.style.setProperty('--track-columns', `${ROW_WIDTH}px ${pattern.fx.map(columns => `${Math.max(150, NOTE_WIDTH + 2 + columns.length * LANE_WIDTH)}px`).join(' ')}`);
+    this.parent.style.setProperty('--track-columns', `${ROW_WIDTH}px ${project.tracks.map((_, track) => `${this.trackWidth(track)}px`).join(' ')}`);
     const header = document.createElement('div'); header.className = 'grid-row grid-header'; header.setAttribute('role', 'row');
     const label = document.createElement('span'); label.setAttribute('role', 'columnheader'); header.append(label);
     for (const [index, track] of project.tracks.entries()) {
@@ -164,19 +200,26 @@ export class PatternGrid {
         button.onclick = () => { const same = this.activeTrack === index; this.selectTrack(index); this.openDevice(index, device, same); }; tools.append(button);
       }
       const mute = document.createElement('button'); mute.textContent = 'M'; mute.title = `Mute ${track.name}`; mute.setAttribute('aria-label', mute.title); mute.setAttribute('aria-pressed', String(track.muted));
-      mute.onclick = () => { track.muted = !track.muted; this.edited(); this.render(); }; tools.append(mute); heading.append(name, tools);
+      mute.onclick = () => { track.muted = !track.muted; this.edited(); this.render(); }; tools.append(mute);
+      const more = document.createElement('button'); more.textContent = '⋯'; more.title = `${track.name} note columns`; more.setAttribute('aria-label', `${track.name} columns`);
+      more.className = 'track-more'; more.onclick = () => { this.selectTrack(index, false); this.pickColumns(index, more); }; tools.append(more); heading.append(name, tools);
       const select = document.createElement('select'); select.setAttribute('aria-label', `${track.name} instrument`); select.add(new Option('No instrument', ''));
       for (const definition of project.definitions.filter(d => d.kind === 'instr')) select.add(new Option(definition.name, definition.id));
       select.value = track.instrument ?? ''; select.onchange = () => { track.instrument = select.value || null; this.assigned(track.instrument); this.edited(); };
       const columns = document.createElement('div'); columns.className = 'track-columns';
-      const note = document.createElement('span'); note.textContent = 'Note'; columns.append(note);
+      for (const lane of lanes.filter(lane => lane.track === index && lane.fx === null)) {
+        const label = document.createElement('span'); label.textContent = lane.kind === 'note' ? 'Note' : subLabel[lane.kind!];
+        label.className = lane.kind === 'note' ? 'col-label' : 'col-label sub-label'; if (lane.kind === 'note' && lane.col > 0) label.classList.add('col-start');
+        if (lane.kind !== 'note') label.title = subTitle[lane.kind!]; columns.append(label);
+      }
       for (const [column, lane] of pattern.fx[index].entries()) {
         const picker = document.createElement('select'); picker.className = 'lane-target'; picker.setAttribute('aria-label', `${track.name} parameter lane ${column + 1}`);
         picker.add(new Option('—', ''));
         const choices: FxTarget[] = [{ kind: 'volume' }, { kind: 'pan' }];
+        for (const p of (track.instrument && this.parameters()[track.instrument]) || []) choices.push({ kind: 'instrument', parameter: p.name });
         for (const device of track.fx) for (const p of this.parameters()[device.definition] ?? []) choices.push({ kind: 'effect', device: device.id, parameter: p.name });
         for (const target of choices) picker.add(new Option(laneParameter(target, index, project, this.parameters())!.label, targetKey(target)));
-        if (lane.target && !choices.some(t => targetKey(t) === targetKey(lane.target))) picker.add(new Option(`Missing/unapplied FX parameter: ${lane.target.kind === 'effect' ? lane.target.parameter : 'parameter'}`, targetKey(lane.target)));
+        if (lane.target && !choices.some(t => targetKey(t) === targetKey(lane.target))) picker.add(new Option(`Missing/unapplied parameter: ${lane.target.kind === 'effect' || lane.target.kind === 'instrument' ? lane.target.parameter : 'parameter'}`, targetKey(lane.target)));
         picker.value = targetKey(lane.target); picker.title = laneParameter(lane.target, index, project, this.parameters())?.label ?? 'Connect and Apply effects to expose more parameters';
         picker.onchange = () => {
           if (lane.values.some(value => value !== null) || lane.envelope?.points.length) { picker.value = targetKey(lane.target); this.feedback('Clear this lane’s values before choosing a different parameter.'); return; }
@@ -193,7 +236,7 @@ export class PatternGrid {
         const button = document.createElement('button'); button.textContent = text; button.title = `${delta > 0 ? 'Add' : 'Hide'} ${track.name} parameter lane`; button.setAttribute('aria-label', button.title);
         button.disabled = delta < 0 ? pattern.fx[index].length === 1 : pattern.fx[index].length === 4;
         button.onclick = () => {
-          if (delta > 0) pattern.fx[index].push({ target: null, values: Array(Math.max(...pattern.notes.map(notes => notes.length))).fill(null) });
+          if (delta > 0) pattern.fx[index].push({ target: null, values: Array(Math.max(...pattern.notes.flat().map(column => column.notes.length))).fill(null) });
           else if ((pattern.fx[index].at(-1)!.values.some(value => value !== null) || pattern.fx[index].at(-1)!.envelope?.points.length)) { this.feedback('Clear the last parameter lane before hiding it.'); return; }
           else pattern.fx[index].pop();
           this.resetHistory(); this.selectTrack(index); this.edited();
@@ -213,8 +256,9 @@ export class PatternGrid {
         const group = document.createElement('div'); group.className = 'track-cells';
         for (const lane of lanes.filter(lane => lane.track === track)) {
           const c = column++, value = lane.values[row], cell = document.createElement('div'); cell.setAttribute('role', 'gridcell');
-          cell.className = `${lane.fx === null ? 'note' : 'fx-command'} ${value ? 'filled' : ''}`; cell.dataset.noteRow = String(row); cell.dataset.column = String(c);
-          cell.id = this.id(row, lane); cell.textContent = value === null ? (lane.fx === null ? '···' : '·') : lane.fx === null ? value : formatValue(value, this.info(lane));
+          cell.className = `${lane.fx !== null ? 'fx-command' : lane.kind === 'note' ? 'note' : 'sub'} ${value ? 'filled' : ''}`; cell.dataset.noteRow = String(row); cell.dataset.column = String(c);
+          if (lane.kind === 'note' && lane.col > 0) cell.classList.add('col-start'); if (value === 'OFF') cell.classList.add('off');
+          cell.id = this.id(row, lane); cell.textContent = value === null ? (lane.fx !== null ? '·' : lane.kind === 'note' ? '···' : '··') : lane.fx === null ? this.text(lane, value) : formatValue(value, this.info(lane));
           if (lane.fx !== null && pattern.fx[track][lane.fx].envelope?.enabled) { const envelope = pattern.fx[track][lane.fx].envelope!; const v = envelopeValue(envelope, row, this.info(lane)?.unit === 'db'); cell.textContent = v === null ? '·' : formatValue(v, this.info(lane)); cell.classList.add('envelope-cell'); }
           if (lane.fx !== null) { cell.title = `${this.info(lane)?.label ?? 'Choose a parameter above'} · Click to edit; drag ⋮ vertically to adjust. Blank holds the previous value.`; if (value !== null && this.info(lane) && !pattern.fx[track][lane.fx].envelope?.enabled) { const handle = document.createElement('span'); handle.className = 'value-drag'; handle.textContent = '⋮'; handle.title = 'Drag vertically to adjust'; handle.onpointerdown = event => this.dragValue(event, cell, lane, row, c); cell.append(handle); } }
           cell.onclick = event => {
@@ -269,22 +313,66 @@ export class PatternGrid {
     this.playhead.hidden = y < header || y > this.parent.clientHeight;
     this.playhead.style.top = `${y}px`;
   }
-  private pickColour(track: Track, anchor: HTMLElement) {
+  /** A small panel under `anchor` that closes on a click elsewhere or Escape. */
+  private popup(anchor: HTMLElement, className: string) {
     document.querySelector('.colour-popover')?.remove();
-    const popover = document.createElement('div'); popover.className = 'colour-popover';
+    const element = document.createElement('div'); element.className = `colour-popover ${className}`;
+    const outside = (event: Event) => { if (!element.contains(event.target as Node)) close(); };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); close(); } };
+    const close = () => { element.remove(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', escape, true); };
+    const box = anchor.getBoundingClientRect(); element.style.left = `${Math.min(box.left, window.innerWidth - 200)}px`; element.style.top = `${box.bottom + 2}px`;
+    document.body.append(element); document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', escape, true);
+    return { element, close };
+  }
+  private pickColour(track: Track, anchor: HTMLElement) {
+    const { element, close } = this.popup(anchor, 'colour-choices');
     const choose = (colour: string | undefined) => { close(); if (track.colour === colour) return; if (colour) track.colour = colour; else delete track.colour; this.edited(); this.render(); };
     for (const colour of trackPalette) {
       const swatch = document.createElement('button'); swatch.className = 'swatch'; swatch.style.background = colour; swatch.title = colour; swatch.setAttribute('aria-label', `Colour ${colour}`);
-      swatch.onclick = () => choose(colour); popover.append(swatch);
+      swatch.onclick = () => choose(colour); element.append(swatch);
     }
     const custom = document.createElement('input'); custom.type = 'color'; custom.title = 'Custom colour'; custom.setAttribute('aria-label', 'Custom colour'); custom.value = track.colour ?? '#808080';
-    custom.onchange = () => choose(custom.value); popover.append(custom);
-    const reset = document.createElement('button'); reset.className = 'swatch-reset'; reset.textContent = 'Default'; reset.onclick = () => choose(undefined); popover.append(reset);
-    const box = anchor.getBoundingClientRect(); popover.style.left = `${box.left}px`; popover.style.top = `${box.bottom + 2}px`;
-    const outside = (event: Event) => { if (!popover.contains(event.target as Node)) close(); };
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); close(); } };
-    const close = () => { popover.remove(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', escape, true); };
-    document.body.append(popover); document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', escape, true);
+    custom.onchange = () => choose(custom.value); element.append(custom);
+    const reset = document.createElement('button'); reset.className = 'swatch-reset'; reset.textContent = 'Default'; reset.onclick = () => choose(undefined); element.append(reset);
+  }
+  /** Note columns (shared by every pattern) and which sub-columns the track shows. */
+  private pickColumns(index: number, anchor: HTMLElement) {
+    const { element, close } = this.popup(anchor, 'column-choices');
+    const project = this.project(), track = project.tracks[index];
+    const changed = () => {
+      this.resetHistory(); this.edited(); this.render(); close();
+      const again = this.parent.querySelector<HTMLElement>(`.track-header[data-track="${index}"] .track-more`); if (again) this.pickColumns(index, again);
+    };
+    const count = this.pattern().notes[index].length;
+    const heading = document.createElement('span'); heading.textContent = 'Note columns';
+    const fewer = document.createElement('button'); fewer.textContent = '−'; fewer.setAttribute('aria-label', 'Fewer note columns'); fewer.disabled = count <= 1;
+    fewer.onclick = () => {
+      if (project.patterns.some(p => { const last = p.notes[index].at(-1)!; return [last.notes, last.inst, last.vol, last.pan, last.delay].some(cells => cells.some(v => v !== null)); })) { this.feedback('Clear the last note column in every pattern before removing it.'); return; }
+      for (const p of project.patterns) p.notes[index].pop();
+      changed();
+    };
+    const amount = document.createElement('strong'); amount.textContent = String(count);
+    const more = document.createElement('button'); more.textContent = '+'; more.setAttribute('aria-label', 'More note columns'); more.disabled = count >= maxNoteColumns;
+    more.onclick = () => { for (const p of project.patterns) p.notes[index].push(blankColumn(Math.max(p.rows, p.notes[index][0].notes.length))); changed(); };
+    element.append(heading, fewer, amount, more);
+    for (const kind of subColumns) {
+      const label = document.createElement('label'); label.title = subTitle[kind];
+      const box = document.createElement('input'); box.type = 'checkbox'; box.checked = !!track.show?.[kind]; box.setAttribute('aria-label', `Show ${subLabel[kind]} column`);
+      box.onchange = () => { track.show = { ...track.show, [kind]: box.checked }; changed(); };
+      label.append(box, { inst: 'Instrument', vol: 'Volume', pan: 'Panning', delay: 'Delay' }[kind]); element.append(label);
+    }
+  }
+  private enterHex(event: KeyboardEvent, lane: Lane) {
+    if (!/^[0-9a-f]$/i.test(event.key) || event.metaKey || event.ctrlKey) return;
+    event.preventDefault();
+    if (!this.recording) return;
+    const kind = lane.kind as SubColumn, digit = parseInt(event.key, 16);
+    const second = !!this.hex && this.hex.row === this.row && this.hex.column === this.column;
+    const stored = subValue(kind, hex(second ? this.hex!.digit * 16 + digit : digit), this.project());
+    if (stored === null) { this.hex = null; this.feedback(kind === 'inst' ? 'No instrument has that number.' : `Values run from 00 to ${hex(subMax[kind])}.`); return; }
+    this.apply([{ row: this.row, track: this.column, before: lane.values[this.row], after: stored }]);
+    if (second) { this.hex = null; this.advance(); } else this.hex = { row: this.row, column: this.column, digit };
+    this.render();
   }
   setRecording(on: boolean) { this.recording = on; this.modeChanged(on); }
   /** Corner brackets mark the selected track, from its header to the bottom of the grid. */
@@ -313,7 +401,7 @@ export class PatternGrid {
       for (let c = Math.min(this.column, this.anchor.column); c <= Math.max(this.column, this.anchor.column); c++) {
         const lane = lanes[c], envelope = lane.fx === null ? undefined : this.pattern().fx[lane.track][lane.fx].envelope;
         const value = envelope?.enabled ? envelopeValue(envelope, row, this.info(lane)?.unit === 'db') : lane.values[row];
-        values.push(value === null ? '---' : lane.fx === null ? String(value) : formatValue(value, this.info(lane)));
+        values.push(value === null ? '---' : lane.fx === null ? this.text(lane, String(value)) : formatValue(value, this.info(lane), true));
       }
       rows.push(values.join('\t'));
     }
@@ -359,7 +447,7 @@ export class PatternGrid {
     const columns = this.pattern().fx[track]; let fx = columns.findIndex(lane => targetKey(lane.target) === targetKey(target));
     if (fx < 0) {
       fx = columns.findIndex(lane => lane.values.every(value => value === null) && lane.target === null);
-      if (fx < 0 && columns.length < 4) { fx = columns.length; columns.push(emptyFxLane(this.pattern().notes[track].length)); }
+      if (fx < 0 && columns.length < 4) { fx = columns.length; columns.push(emptyFxLane(this.pattern().notes[track][0].notes.length)); }
       if (fx < 0) { this.feedback('Add or clear a parameter lane before recording this control (maximum four per track).'); return; }
       columns[fx].target = { ...target }; this.resetHistory();
     }
@@ -376,6 +464,7 @@ export class PatternGrid {
     }
     if (event.altKey) return;
     const lanes = this.lanes, lane = lanes[this.column];
+    if (!(lane.kind !== null && lane.kind !== 'note' && /^[0-9a-f]$/i.test(event.key))) this.hex = null;
     switch (event.key) {
       case ' ': event.preventDefault(); this.togglePlay(); return;
       case 'Escape': event.preventDefault(); this.setRecording(!this.recording); return;
@@ -390,9 +479,13 @@ export class PatternGrid {
           if (!this.recording) return;
           if (event.key === 'Enter' || event.key.length === 1 && /[0-9+.-]/.test(event.key)) { event.preventDefault(); this.editValue(this.row, this.column, event.key === 'Enter' ? undefined : event.key); } return;
         }
-        const note = keyboardNote(event.key, this.octave()); if (!note) return;
-        const instrument = this.project().tracks[lane.track].instrument; if (instrument) this.audition(instrument, note, lane.track);
+        if (lane.kind !== 'note') { this.enterHex(event, lane); return; }
+        const off = event.key === '1' || event.key === '`';
+        const note = off ? 'OFF' : keyboardNote(event.key, this.octave()); if (!note) return;
         event.preventDefault();
+        const track = this.project().tracks[lane.track];
+        const instrument = this.pattern().notes[lane.track][lane.col].inst[this.row] ?? track.instrument;
+        if (!off && instrument) this.audition(instrument, note, lane.track);
         if (!this.recording) return;
         this.apply([{ row: this.row, track: this.column, before: lane.values[this.row], after: note }]);
         this.advance(); this.render(); return;

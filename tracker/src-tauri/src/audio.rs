@@ -30,6 +30,7 @@ pub struct Status {
     pub instruments: BTreeMap<String, String>,
     pub effects: BTreeMap<String, String>,
     pub effect_parameters: crate::commands::EffectParameters,
+    pub instrument_parameters: crate::commands::EffectParameters,
 }
 
 #[derive(Deserialize)]
@@ -307,8 +308,15 @@ impl Worker {
                 self.status.instruments = instruments;
                 self.status.effects = effects;
                 self.status.effect_parameters = parameters;
+                self.status.instrument_parameters = self
+                    .sounds
+                    .iter()
+                    .filter(|(_, sound)| sound.fx_source.is_none())
+                    .map(|(id, sound)| (id.clone(), sound.parameters.clone()))
+                    .collect();
                 if let Some(playback) = &mut self.playback {
                     playback.parameters = self.status.effect_parameters.clone();
+                    playback.instrument_parameters = self.status.instrument_parameters.clone();
                 }
             }
             Command::Play {
@@ -326,6 +334,7 @@ impl Worker {
                     &self.status.effect_parameters,
                 ))?;
                 playback.parameters = self.status.effect_parameters.clone();
+                playback.instrument_parameters = self.status.instrument_parameters.clone();
                 playback.origin = self.clock()? + (self.status.sample_rate * 0.15).round() as u64;
                 self.send_events(crate::modulation::reset(
                     &playback.song.tracks,
@@ -353,6 +362,7 @@ impl Worker {
                 if let Some(playback) = &mut self.playback {
                     playback.song = song;
                     playback.parameters = self.status.effect_parameters.clone();
+                    playback.instrument_parameters = self.status.instrument_parameters.clone();
                 }
             }
             Command::Audition {
@@ -387,14 +397,31 @@ impl Worker {
                     track.name
                 ));
             }
-            if track
-                .fx
-                .iter()
-                .any(|device| !self.status.effect_parameters.contains_key(&device.definition))
-            {
-                return Err(format!("Apply the effects assigned to {} first", track.name));
+            if track.fx.iter().any(|device| {
+                !self
+                    .status
+                    .effect_parameters
+                    .contains_key(&device.definition)
+            }) {
+                return Err(format!(
+                    "Apply the effects assigned to {} first",
+                    track.name
+                ));
             }
             for pattern in &song.patterns {
+                for column in &pattern.notes[index] {
+                    if let Some(id) = column
+                        .inst
+                        .iter()
+                        .flatten()
+                        .find(|id| !self.status.instruments.contains_key(*id))
+                    {
+                        return Err(format!(
+                            "Apply the instrument {id} played on {} first",
+                            track.name
+                        ));
+                    }
+                }
                 for lane in &pattern.fx[index] {
                     if lane.target.as_ref().is_some_and(|target| {
                         !target.available(track, &self.status.effect_parameters)

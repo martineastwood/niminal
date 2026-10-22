@@ -1,11 +1,11 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { EditorView } from '@codemirror/view';
 import { editorState, connectLanguageServer } from './editor';
-import { newProject, emptyFxLane, type Device, readProject, storageKey, resizePattern, removeTrack, restoreTrack, type Definition, type Song, type DeletedTrack } from './project';
+import { newProject, emptyFxLane, blankColumn, type Device, readProject, storageKey, resizePattern, removeTrack, restoreTrack, type Definition, type Song, type DeletedTrack } from './project';
 import { Arrangement } from './arrangement';
 import { PatternGrid } from './grid';
 import { EnvelopeEditor } from './envelope-editor';
-import { renderMixer } from './mixer';
+import { renderMixer, renderInstrument } from './mixer';
 import { addDevice, removeDevice, moveDevice } from './effects';
 import { addInstrument, duplicateInstrument, instrumentUsers, removeInstrument } from './instruments';
 import { audioCommand, audioStatus, observeAudio } from './audio';
@@ -97,8 +97,8 @@ function selectDefinition(definition: Definition, reveal = true) {
   element<HTMLInputElement>('definition-name').value = definition.name;
   element('definition-kind').textContent = definition.kind === 'instr' ? 'INSTRUMENT' : 'TRACK FX';
   fxMode = definition.kind === 'fx';
-  element('mixer').hidden = !fxMode; element('code').hidden = false;
-  renderDefinitions(); renderApplyStatus();
+  element('mixer').hidden = false; element('code').hidden = false;
+  renderDefinitions(); renderApplyStatus(); mixerView();
 }
 function renderDefinitions() {
   const list = element('definitions');
@@ -113,7 +113,12 @@ function renderDefinitions() {
     list.append(button);
   }
 }
-function song(): Song { return { bpm: project.bpm, rows_per_beat: project.rows_per_beat, tracks: project.tracks, patterns: project.patterns, sequence: project.sequence }; }
+/** Effect and instrument parameters share one table: definition ids are unique across both. */
+function allParameters() { return { ...audioStatus.instrument_parameters, ...audioStatus.effect_parameters }; }
+function song(): Song {
+  const instrument_values = Object.fromEntries(project.definitions.filter(d => d.kind === 'instr' && d.values).map(d => [d.id, d.values!]));
+  return { bpm: project.bpm, rows_per_beat: project.rows_per_beat, tracks: project.tracks, patterns: project.patterns, sequence: project.sequence, instrument_values };
+}
 async function action(work: () => Promise<unknown>) {
   audioError = null;
   try { await work(); }
@@ -134,9 +139,16 @@ async function ensureSound(id: string) {
   const ready = definition.kind === 'instr' ? audioStatus.instruments[id] : audioStatus.effects[id];
   if (!ready) await applyDefinition(definition);
 }
+/** Every instrument the song can play: each track's own, and any chosen in an instrument column. */
+function usedInstruments() {
+  const ids = new Set<string>();
+  for (const track of project.tracks) if (track.instrument) ids.add(track.instrument);
+  for (const pattern of project.patterns) for (const column of pattern.notes.flat()) for (const id of column.inst) if (id) ids.add(id);
+  return ids;
+}
 async function ensureAssignments() {
+  for (const id of usedInstruments()) await ensureSound(id);
   for (const track of project.tracks) {
-    if (track.instrument) await ensureSound(track.instrument);
     for (const device of track.fx) await ensureSound(device.definition);
   }
 }
@@ -149,8 +161,9 @@ function shownEffect() { return fxMode && !element('code').hidden ? selected.id 
 function mixerView() {
   if (fxMode && !element('code-panel').hidden && shownEffect() !== (currentDevice()?.definition ?? null)) { showFx(); return; }
   envelopeEditor?.select(deviceTrack);
+  if (!fxMode) { renderInstrument(element('mixer'), project, selected, allParameters(), editedPattern, (target, value) => grid.writeParameter(deviceTrack, target, value), deviceTrack); return; }
   const device = currentDevice();
-  renderMixer(element('mixer'), project, deviceTrack, () => { editedPattern(); grid.render(); }, audioStatus.effect_parameters, (target, value) => grid.writeParameter(deviceTrack, target, value), {
+  renderMixer(element('mixer'), project, deviceTrack, () => { editedPattern(); grid.render(); }, allParameters(), (target, value) => grid.writeParameter(deviceTrack, target, value), {
     selected: device?.id ?? null,
     select: id => { chosenDevice.set(deviceTrack, id); showFx(); editor.focus(); },
     add: preset => {
@@ -184,8 +197,8 @@ async function togglePlay(mode: 'pattern' | 'song' = 'pattern') {
   const revision = ++transportRevision;
   starting = true;
   try {
+    for (const id of usedInstruments()) await ensureSound(id);
     for (const track of project.tracks) {
-      if (track.instrument) await ensureSound(track.instrument);
       for (const device of track.fx) await ensureSound(device.definition);
       if (revision !== transportRevision) return;
     }
@@ -229,10 +242,10 @@ const grid = new PatternGrid(element('grid'), () => project, () => arrangement.p
       }
       else { newInstrument(); project.tracks[track].instrument = selected.id; grid.render(); editedPattern(); }
     }
-  }, () => Number(element<HTMLInputElement>('entry-step').value), () => audioStatus.effect_parameters, status, (track, lane) => {
+  }, () => Number(element<HTMLInputElement>('entry-step').value), () => allParameters(), status, (track, lane) => {
     grid.selectTrack(track); showPanel('automation', true); envelopeEditor?.select(track, lane);
   });
-envelopeEditor = new EnvelopeEditor(element('automation'), () => project, () => arrangement.pattern, () => audioStatus.effect_parameters,
+envelopeEditor = new EnvelopeEditor(element('automation'), () => project, () => arrangement.pattern, () => allParameters(),
   () => { editedPattern(); grid.render(); });
 grid.modeChanged = on => { element('grid-wrap').classList.toggle('recording', on); element('record').setAttribute('aria-pressed', String(on)); };
 element('record').onclick = () => { grid.setRecording(!grid.recording); element('grid').focus(); };
@@ -418,7 +431,7 @@ element('move-down').onclick = () => { if (!audioStatus.playing) arrangement.mov
 element('add-track').onclick = () => {
   if (audioStatus.playing || project.tracks.length >= 16) return;
   project.tracks.push({ name: `Track ${project.tracks.length + 1}`, instrument: null, fx: [], pan: 0, muted: false, volume_db: 0 });
-  for (const pattern of project.patterns) { pattern.notes.push(Array(pattern.notes[0].length).fill(null)); pattern.fx.push([emptyFxLane(pattern.notes[0].length)]); }
+  for (const pattern of project.patterns) { const rows = pattern.notes[0][0].notes.length; pattern.notes.push([blankColumn(rows)]); pattern.fx.push([emptyFxLane(rows)]); }
   grid.selectTrack(project.tracks.length - 1); editedPattern();
 };
 element('delete-track').onclick = () => { void action(async () => {

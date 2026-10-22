@@ -9,6 +9,41 @@ pub enum Kind {
     Fx,
 }
 
+/// A control as the tracker shows it: bounds, default and unit as a person would read them.
+fn parameter(
+    name: &str,
+    unit: niminal_lang::Unit,
+    range: Option<(f64, f64)>,
+    initial: f64,
+) -> Parameter {
+    let default = if unit == niminal_lang::Unit::Db {
+        20.0 * initial.max(0.000001).log10()
+    } else {
+        initial
+    };
+    let (min, max) = range.unwrap_or(match unit {
+        niminal_lang::Unit::Hz => (20.0, 20000.0),
+        niminal_lang::Unit::Db => (-60.0, 6.0),
+        niminal_lang::Unit::Time => (0.0, 10.0),
+        niminal_lang::Unit::Angle => (-180.0, 180.0),
+        niminal_lang::Unit::Semitones => (-48.0, 48.0),
+        _ => (0.0, 1.0),
+    });
+    // Without declared bounds, make room for a default outside the usual range.
+    let (min, max) = if range.is_some() {
+        (min, max)
+    } else {
+        (min.min(default), max.max(default))
+    };
+    Parameter {
+        name: name.to_string(),
+        min,
+        max,
+        default,
+        unit: unit.suffix().map(str::to_string),
+    }
+}
+
 #[derive(Clone)]
 pub struct Sound {
     pub engine_source: String,
@@ -62,31 +97,32 @@ impl Sound {
                 else {
                     continue;
                 };
-                let (min, max) = control.range.unwrap_or(match control.unit {
-                    niminal_lang::Unit::Hz => (20.0, 20000.0),
-                    niminal_lang::Unit::Db => (-60.0, 6.0),
-                    niminal_lang::Unit::Time => (0.0, 10.0),
-                    niminal_lang::Unit::Angle => (-180.0, 180.0),
-                    niminal_lang::Unit::Semitones => (-48.0, 48.0),
-                    _ => (0.0, 1.0),
-                });
-                let default = if control.unit == niminal_lang::Unit::Db {
-                    20.0 * f64::from(control.initial).max(0.000001).log10()
-                } else {
-                    f64::from(control.initial)
-                };
-                let (min, max) = if control.range.is_some() {
-                    (min, max)
-                } else {
-                    (min.min(default), max.max(default))
-                };
-                parameters.push(Parameter {
-                    name: param.name.clone(),
-                    min,
-                    max,
-                    default,
-                    unit: control.unit.suffix().map(str::to_string),
-                });
+                parameters.push(parameter(
+                    &param.name,
+                    control.unit,
+                    control.range,
+                    f64::from(control.initial),
+                ));
+            }
+        }
+        if kind == Kind::Instr
+            // The compiler can't always load an instrument on its own (a sampler needs its
+            // folder), and the engine reports real errors on Apply, so no controls will do.
+            && let Ok(program) = niminal_lang::compile(&source)
+            && let Some(instrument) = program.instruments.iter().find(|i| i.name == definition.name)
+        {
+            for param in &instrument.params {
+                // Pitch, level and position come from the note itself.
+                if matches!(param.name.as_str(), "freq" | "gain" | "pan") || parameters.len() == 15
+                {
+                    continue;
+                }
+                parameters.push(parameter(
+                    &param.name,
+                    param.unit,
+                    param.range,
+                    f64::from(param.default.unwrap_or(0.0)),
+                ));
             }
         }
         let mut engine_source = source.clone();

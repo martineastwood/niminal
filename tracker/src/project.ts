@@ -1,31 +1,42 @@
 import tone from './presets/tone.nml?raw';
 
-export interface Definition { id: string; name: string; kind: 'instr' | 'fx'; source: string }
+/** `values` are an instrument's parameter settings: notes start with them, unless a lane has changed them. */
+export interface Definition { id: string; name: string; kind: 'instr' | 'fx'; source: string; values?: Record<string, number> }
 export interface Lfo { enabled: boolean; shape: 'sine' | 'triangle' | 'saw' | 'square'; period: number; min: number; max: number }
 /** One effect in a track's chain. Its `id` is stable across reordering; lanes refer to it. */
 export interface Device { id: string; definition: string; bypass: boolean; values: Record<string, number>; modulations: Record<string, Lfo> }
 export const maxDevices = 8;
-export interface Track { colour?: string; name: string; instrument: string | null; fx: Device[]; muted: boolean; volume_db: number; pan: number }
+export interface Track { colour?: string; show?: Partial<Record<SubColumn, boolean>>; name: string; instrument: string | null; fx: Device[]; muted: boolean; volume_db: number; pan: number }
 export interface Parameter { name: string; min: number; max: number; default: number; unit: string | null }
 export type EffectParameters = Record<string, Parameter[]>;
-export type FxTarget = { kind: 'volume' } | { kind: 'pan' } | { kind: 'effect'; device: string; parameter: string };
+export type FxTarget = { kind: 'volume' } | { kind: 'pan' } | { kind: 'effect'; device: string; parameter: string } | { kind: 'instrument'; parameter: string };
 export interface EnvelopePoint { row: number; value: number }
 export interface Envelope { enabled: boolean; mode: 'hold' | 'linear'; points: EnvelopePoint[] }
 export interface FxLane { target: FxTarget | null; values: (string | null)[]; envelope?: Envelope }
 export const emptyFxLane = (rows: number): FxLane => ({ target: { kind: 'volume' }, values: Array(rows).fill(null) });
-export interface Pattern { id: string; name: string; rows: number; notes: (string | null)[][]; fx: FxLane[][] }
-export interface Song { bpm: number; rows_per_beat: number; tracks: Track[]; patterns: Pattern[]; sequence: string[] }
-export interface Project extends Song { version: 7; id: string; definitions: Definition[] }
-export const storageKey = 'niminal-tracker-project-v7';
+/**
+ * One note column: parallel cells for each row. `notes` hold `C-4` or `OFF`; `inst` an instrument's
+ * definition id; `vol` and `pan` a number from 0 to 128 (as text); `delay` from 0 to 255 256ths of a row.
+ */
+export interface NoteColumn { notes: (string | null)[]; inst: (string | null)[]; vol: (string | null)[]; pan: (string | null)[]; delay: (string | null)[] }
+export type SubColumn = 'inst' | 'vol' | 'pan' | 'delay';
+export const subColumns: SubColumn[] = ['inst', 'vol', 'pan', 'delay'];
+export const maxNoteColumns = 8;
+export const blankColumn = (rows: number): NoteColumn => ({ notes: Array(rows).fill(null), inst: Array(rows).fill(null), vol: Array(rows).fill(null), pan: Array(rows).fill(null), delay: Array(rows).fill(null) });
+export const cloneColumn = (column: NoteColumn): NoteColumn => ({ notes: [...column.notes], inst: [...column.inst], vol: [...column.vol], pan: [...column.pan], delay: [...column.delay] });
+export interface Pattern { id: string; name: string; rows: number; notes: NoteColumn[][]; fx: FxLane[][] }
+export interface Song { bpm: number; rows_per_beat: number; tracks: Track[]; patterns: Pattern[]; sequence: string[]; instrument_values?: Record<string, Record<string, number>> }
+export interface Project extends Song { version: 8; id: string; definitions: Definition[] }
+export const storageKey = 'niminal-tracker-project-v8';
 
 export function newProject(): Project {
   return {
-    version: 7, id: crypto.randomUUID(), bpm: 125, rows_per_beat: 4,
+    version: 8, id: crypto.randomUUID(), bpm: 125, rows_per_beat: 4,
     definitions: [
       { id: 'tone', name: 'Warm saw', kind: 'instr', source: tone },
     ],
     tracks: ['Lead', 'Bass', 'Drums', 'Texture'].map((name, track) => ({ name, instrument: track === 0 ? 'tone' : null, fx: [], pan: 0, muted: false, volume_db: 0 })),
-    patterns: [{ fx: Array.from({ length: 4 }, () => [emptyFxLane(32)]), id: 'pattern_00', name: 'First idea', rows: 32, notes: Array.from({ length: 4 }, (_, track) => Array.from({ length: 32 }, (_, row) => track === 0 && row % 4 === 0 ? ['C-4', 'D#4', 'G-4', 'A#4'][Math.floor(row / 4) % 4] : null)) }],
+    patterns: [{ fx: Array.from({ length: 4 }, () => [emptyFxLane(32)]), id: 'pattern_00', name: 'First idea', rows: 32, notes: Array.from({ length: 4 }, (_, track) => [{ ...blankColumn(32), notes: Array.from({ length: 32 }, (_, row) => track === 0 && row % 4 === 0 ? ['C-4', 'D#4', 'G-4', 'A#4'][Math.floor(row / 4) % 4] : null) }]) }],
     sequence: ['pattern_00'],
   };
 }
@@ -36,7 +47,7 @@ export function makePattern(project: Project, source?: Pattern): Pattern {
     name: source ? `${source.name} variation` : `Pattern ${project.patterns.length.toString().padStart(2, '0')}`,
     rows: source?.rows ?? 32,
     fx: source ? source.fx.map(track => track.map(column => ({ target: column.target && { ...column.target }, values: [...column.values], ...(column.envelope ? { envelope: structuredClone(column.envelope) } : {}) }))) : Array.from({ length: project.tracks.length }, () => [emptyFxLane(32)]),
-    notes: source ? source.notes.map(track => [...track]) : Array.from({ length: project.tracks.length }, () => Array(32).fill(null)),
+    notes: source ? source.notes.map(track => track.map(cloneColumn)) : Array.from({ length: project.tracks.length }, (_, track) => Array.from({ length: project.patterns[0]?.notes[track]?.length ?? 1 }, () => blankColumn(32))),
   };
   project.patterns.push(pattern);
   return pattern;
@@ -45,13 +56,14 @@ export function makePattern(project: Project, source?: Pattern): Pattern {
 export function resizePattern(pattern: Pattern, rows: number) {
   pattern.rows = Math.min(256, Math.max(1, Math.trunc(rows) || 1));
   // Retain notes beyond a shortened pattern so increasing its length restores them.
-  for (const column of [...pattern.notes, ...pattern.fx.flat().map(lane => lane.values)]) while (column.length < pattern.rows) column.push(null);
+  const cells = [...pattern.notes.flat().flatMap(c => [c.notes, c.inst, c.vol, c.pan, c.delay]), ...pattern.fx.flat().map(lane => lane.values)];
+  for (const column of cells) while (column.length < pattern.rows) column.push(null);
 }
 
 export function readProject(raw: string): Project {
   const value = JSON.parse(raw);
-  if (value?.version !== 7 || typeof value.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value.id) || !Array.isArray(value.definitions) || value.definitions.length === 0 ||
-      !value.definitions.every((d: Definition) => d && typeof d.id === 'string' && /^[a-zA-Z_][\w-]*$/.test(d.id) && typeof d.name === 'string' && typeof d.source === 'string' && ['instr', 'fx'].includes(d.kind)) ||
+  if (value?.version !== 8 || typeof value.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value.id) || !Array.isArray(value.definitions) || value.definitions.length === 0 ||
+      !value.definitions.every((d: Definition) => d && typeof d.id === 'string' && /^[a-zA-Z_][\w-]*$/.test(d.id) && typeof d.name === 'string' && typeof d.source === 'string' && ['instr', 'fx'].includes(d.kind) && (d.values === undefined || !!d.values && typeof d.values === 'object' && Object.values(d.values).every(Number.isFinite))) ||
       new Set(value.definitions.map((d: Definition) => d.id)).size !== value.definitions.length ||
       !Number.isFinite(value.bpm) || value.bpm < 20 || value.bpm > 300 ||
       !Number.isInteger(value.rows_per_beat) || value.rows_per_beat < 1 || value.rows_per_beat > 16 ||
@@ -64,12 +76,12 @@ export function readProject(raw: string): Project {
       !Array.isArray(value.patterns) || value.patterns.length < 1 || value.patterns.length > 128 ||
       !value.patterns.every((p: Pattern) => p && typeof p.id === 'string' && /^[a-zA-Z_][\w-]*$/.test(p.id) && typeof p.name === 'string' &&
         Number.isInteger(p.rows) && p.rows >= 1 && p.rows <= 256 && Array.isArray(p.notes) && p.notes.length === value.tracks.length &&
-        p.notes.every(track => Array.isArray(track) && track.length >= p.rows && track.length <= 256 && track.every(n => n === null || typeof n === 'string' && /^[A-G][#-][0-8]$/.test(n))) &&
+        p.notes.every(track => Array.isArray(track) && track.length >= 1 && track.length <= maxNoteColumns && track.every(column => validColumn(column, p.rows, value.definitions))) &&
         Array.isArray(p.fx) && p.fx.length === value.tracks.length && p.fx.every(track => Array.isArray(track) && track.length >= 1 && track.length <= 4 && track.every(column => column && validEnvelope(column.envelope) && validTarget(column.target) && Array.isArray(column.values) && column.values.length >= p.rows && column.values.length <= 256 && column.values.every(v => v === null || typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) && (column.target !== null || column.values.every(v => v === null) && !column.envelope?.points.length)))) ||
       new Set(value.patterns.map((p: Pattern) => p.id)).size !== value.patterns.length ||
       !Array.isArray(value.sequence) || value.sequence.length < 1 || value.sequence.length > 1024 ||
       !value.sequence.every((id: unknown) => value.patterns.some((p: Pattern) => p.id === id))) {
-    throw new Error('Not a supported niminal tracker project (expected version 7)');
+    throw new Error('Not a supported niminal tracker project (expected version 8)');
   }
   return value;
 }
@@ -82,7 +94,7 @@ export function keyboardNote(key: string, octave: number): string | null {
   return ['C-', 'C#', 'D-', 'D#', 'E-', 'F-', 'F#', 'G-', 'G#', 'A-', 'A#', 'B-'][semitone] + octave;
 }
 
-export interface DeletedTrack { index: number; track: Track; notes: Map<string, (string | null)[]>; fx: Map<string, FxLane[]> }
+export interface DeletedTrack { index: number; track: Track; notes: Map<string, NoteColumn[]>; fx: Map<string, FxLane[]> }
 
 export function removeTrack(project: Project, index: number): DeletedTrack | null {
   if (project.tracks.length <= 1 || index < 0 || index >= project.tracks.length) return null;
@@ -93,8 +105,8 @@ export function restoreTrack(project: Project, deleted: DeletedTrack): boolean {
   if (project.tracks.length >= 16) return false;
   project.tracks.splice(deleted.index, 0, deleted.track);
   for (const pattern of project.patterns) {
-    const restored = [...(deleted.notes.get(pattern.id) ?? [])];
-    while (restored.length < pattern.rows) restored.push(null);
+    const restored = (deleted.notes.get(pattern.id) ?? [blankColumn(pattern.rows)]).map(cloneColumn);
+    for (const column of restored) for (const cells of [column.notes, column.inst, column.vol, column.pan, column.delay]) while (cells.length < pattern.rows) cells.push(null);
     pattern.notes.splice(deleted.index, 0, restored);
     const fx = (deleted.fx.get(pattern.id) ?? [emptyFxLane(pattern.rows)]).map(column => ({ target: column.target && { ...column.target }, values: [...column.values], ...(column.envelope ? { envelope: structuredClone(column.envelope) } : {}) }));
     for (const column of fx) while (column.values.length < pattern.rows) column.values.push(null);
@@ -104,7 +116,15 @@ export function restoreTrack(project: Project, deleted: DeletedTrack): boolean {
 }
 
 export function validTarget(target: FxTarget | null): boolean {
-  return target === null || !!target && (target.kind === 'volume' || target.kind === 'pan' || target.kind === 'effect' && validDeviceId(target.device) && typeof target.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(target.parameter));
+  return target === null || !!target && (target.kind === 'volume' || target.kind === 'pan' || target.kind === 'effect' && validDeviceId(target.device) && typeof target.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(target.parameter) || target.kind === 'instrument' && typeof target.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(target.parameter));
+}
+const integerWithin = (max: number) => (v: unknown) => v === null || typeof v === 'string' && /^\d{1,3}$/.test(v) && Number(v) <= max;
+function validColumn(column: NoteColumn, rows: number, definitions: Definition[]) {
+  const sized = (cells: unknown, optional: boolean): cells is (string | null)[] => Array.isArray(cells) && cells.length <= 256 && (cells.length >= rows || optional && cells.length === 0);
+  return !!column && sized(column.notes, false) && sized(column.inst, true) && sized(column.vol, true) && sized(column.pan, true) && sized(column.delay, true) &&
+    column.notes.every(n => n === null || typeof n === 'string' && (n === 'OFF' || /^[A-G][#-][0-8]$/.test(n))) &&
+    column.inst.every(id => id === null || typeof id === 'string' && definitions.some(d => d.id === id && d.kind === 'instr')) &&
+    column.vol.every(integerWithin(128)) && column.pan.every(integerWithin(128)) && column.delay.every(integerWithin(255));
 }
 export const validDeviceId = (id: unknown) => typeof id === 'string' && /^[a-zA-Z0-9_]{1,40}$/.test(id);
 function validEnvelope(envelope: Envelope | undefined) {

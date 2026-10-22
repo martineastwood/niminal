@@ -24,6 +24,13 @@ it('duplicates an instrument with fresh names inside its code, including sample 
   expect(tone.source).toMatch(new RegExp(`^instr ${tone.id}\\(`, 'm'));
 });
 
+it('counts an instrument chosen in an instrument column as played, so it cannot be deleted', () => {
+  const project = newProject(), extra = addInstrument(project);
+  project.patterns[0].notes[2][0].inst[3] = extra.id;
+  expect(instrumentUsers(project, extra.id)).toEqual(['Drums']);
+  expect(removeInstrument(project, extra.id)).toContain('Drums');
+});
+
 it('only removes an instrument that no track plays, and keeps one instrument', () => {
   const project = newProject(), extra = addInstrument(project);
   expect(instrumentUsers(project, 'tone')).toEqual(['Lead']);

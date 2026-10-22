@@ -6,6 +6,11 @@ export function laneParameter(target: FxTarget | null, track: number, project: P
   if (!target) return null;
   if (target.kind === 'volume') return { label: 'Track volume', name: 'volume', min: -60, max: 6, default: 0, unit: 'db' };
   if (target.kind === 'pan') return { label: 'Track pan', name: 'pan', min: -1, max: 1, default: 0, unit: '%' };
+  if (target.kind === 'instrument') {
+    const id = project.tracks[track].instrument, parameter = parameters[id ?? '']?.find(p => p.name === target.parameter);
+    if (!id || !parameter) return null;
+    return { ...parameter, label: `${project.definitions.find(d => d.id === id)?.name ?? 'Instrument'} → ${parameter.name}` };
+  }
   const device = project.tracks[track].fx.find(d => d.id === target.device);
   const parameter = parameters[device?.definition ?? '']?.find(p => p.name === target.parameter);
   if (!device || !parameter) return null;
@@ -13,13 +18,15 @@ export function laneParameter(target: FxTarget | null, track: number, project: P
   return { ...parameter, label: `${name} → ${parameter.name}${device.bypass ? ' (bypassed)' : ''}` };
 }
 function percent(p: Parameter) { return p.unit === '%' || !p.unit && p.min === 0 && p.max === 1; }
-export function formatValue(value: string | number, p: Parameter | null): string {
-  const n = Number(value), compact = (n: number) => String(Number(n.toPrecision(6)));
-  if (!p) return compact(n);
-  if (percent(p)) return `${compact(n * 100)}%`;
-  if (p.unit === 'hz') return n >= 1000 ? `${compact(n / 1000)} kHz` : `${compact(n)} Hz`;
-  if (p.unit === 'sec') return `${compact(n * 1000)} ms`;
-  return `${compact(n)}${p.unit ? ' ' + p.unit : ''}`;
+/** Rounds for display; the stored value keeps its precision. `exact` keeps six significant figures, for the clipboard. */
+export function formatValue(value: string | number, p: Parameter | null, exact = false): string {
+  const n = Number(value);
+  const round = (x: number, places: number) => String(exact ? Number(x.toPrecision(6)) : Number(x.toFixed(places)));
+  if (!p) return round(n, 2);
+  if (percent(p)) return `${round(n * 100, 0)}%`;
+  if (p.unit === 'hz') return n >= 1000 ? `${round(n / 1000, 2)} kHz` : `${round(n, 0)} Hz`;
+  if (p.unit === 'sec') return n >= 0.1 || exact ? `${round(n * 1000, 0)} ms` : `${round(n * 1000, 1)} ms`;
+  return `${round(n, p.unit === 'db' ? 1 : 2)}${p.unit ? ' ' + p.unit : ''}`;
 }
 export function parseValue(text: string, p: Parameter): string | null {
   const match = text.trim().match(/^([-+]?\d*\.?\d+(?:e[-+]?\d+)?)\s*(khz|hz|ms|sec|s|db|%|st|deg)?$/i);

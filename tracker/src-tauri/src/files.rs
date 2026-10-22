@@ -38,7 +38,13 @@ pub fn import_sample(dir: &Path, source: &Path) -> Result<String, String> {
         .and_then(|s| s.to_str())
         .unwrap_or("sample")
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let samples = dir.join("samples");
     fs::create_dir_all(&samples).map_err(|e| e.to_string())?;
@@ -72,7 +78,8 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("niminal-tracker-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("niminal-tracker-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -84,8 +91,14 @@ mod tests {
         let dir = project_dir(&base, "abc-123").unwrap();
         let original = base.join("Kick Drum!.WAV");
         fs::write(&original, b"RIFF").unwrap();
-        assert_eq!(import_sample(&dir, &original).unwrap(), "samples/Kick_Drum_.wav");
-        assert_eq!(import_sample(&dir, &original).unwrap(), "samples/Kick_Drum_-2.wav");
+        assert_eq!(
+            import_sample(&dir, &original).unwrap(),
+            "samples/Kick_Drum_.wav"
+        );
+        assert_eq!(
+            import_sample(&dir, &original).unwrap(),
+            "samples/Kick_Drum_-2.wav"
+        );
         assert!(dir.join("samples/Kick_Drum_.wav").exists());
         assert!(import_sample(&dir, &base.join("notes.txt")).is_err());
         assert!(project_dir(&base, "../escape").is_err());

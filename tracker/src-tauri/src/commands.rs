@@ -39,7 +39,14 @@ pub fn fx_node(track: usize, device: &str) -> String {
 pub enum FxTarget {
     Volume,
     Pan,
-    Effect { device: String, parameter: String },
+    Effect {
+        device: String,
+        parameter: String,
+    },
+    /// A parameter of the track's instrument, applied to each note as it starts.
+    Instrument {
+        parameter: String,
+    },
 }
 
 impl FxTarget {
@@ -124,6 +131,10 @@ pub fn edit(
                 json!({"op":"set", "id":format!("track_{index}"), "args":{"balance":value}, "glide":0.0}),
             )
         }
+        FxTarget::Instrument { .. } => Err(format!(
+            "{}: instrument parameters apply to notes, not to the mixer",
+            track.name
+        )),
         FxTarget::Effect { device, parameter } => {
             target
                 .device(track)

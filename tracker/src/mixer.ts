@@ -1,7 +1,31 @@
 import { builtInEffects } from './effects';
-import type { EffectParameters, Device, Lfo, Parameter, Project, FxTarget } from './project';
+import type { EffectParameters, Definition, Device, Lfo, Parameter, Project, FxTarget } from './project';
 import { maxDevices } from './project';
 import { trackColour } from './grid';
+
+/** An instrument's parameters as sliders. Notes start with these values; lanes change them from a row on. */
+export function renderInstrument(parent: HTMLElement, project: Project, definition: Definition, parameters: EffectParameters, edited: () => void, write: (target: FxTarget, value: number) => void, activeTrack: number) {
+  parent.replaceChildren();
+  const card = document.createElement('section'); card.className = 'device-card instrument-card';
+  const heading = document.createElement('div'); heading.className = 'device-heading';
+  const label = document.createElement('span'); label.className = 'section-title'; label.textContent = 'INSTRUMENT';
+  const name = document.createElement('strong'); name.textContent = definition.name; heading.append(label, name); card.append(heading);
+  const params = parameters[definition.id];
+  const note = (text: string) => { const hint = document.createElement('p'); hint.className = 'device-note'; hint.textContent = text; card.append(hint); };
+  if (!params) note('Apply to expose parameters');
+  else if (!params.length) note('No parameters');
+  else for (const parameter of params) {
+    const row = slider(parameter.name, definition.values?.[parameter.name] ?? parameter.default, parameter.min, parameter.max, parameter.unit ?? '', value => { (definition.values ??= {})[parameter.name] = value; edited(); }, () => {
+      const value = definition.values?.[parameter.name] ?? parameter.default;
+      write({ kind: 'instrument', parameter: parameter.name }, Math.min(parameter.max, Math.max(parameter.min, value)));
+    });
+    row.querySelector('input')!.setAttribute('aria-label', `${definition.name} ${parameter.name}`);
+    const record = row.querySelector<HTMLButtonElement>('button')!, plays = project.tracks[activeTrack].instrument === definition.id;
+    record.disabled = !plays; if (!plays) record.title = `${project.tracks[activeTrack].name} does not play this instrument`;
+    card.append(row);
+  }
+  parent.append(card);
+}
 
 /** What the FX view can do to a track's chain; the owner keeps the editor and engine in step. */
 export interface FxActions {
