@@ -10,16 +10,16 @@ import './style.css';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
-  <header><div class="brand">niminal <span>tracker</span></div><span class="badge">ALPHA</span><div class="project-actions"><button id="toggle-mixer" aria-expanded="false">Mixer</button><button id="toggle-code" aria-expanded="false">Code editor</button><button id="focus-pattern">Focus pattern</button><button id="import">Open project</button><button id="export">Save project</button></div></header>
+  <header><div class="brand">niminal <span>tracker</span></div><span class="badge">ALPHA</span><div class="project-actions"><button id="toggle-mixer" aria-expanded="false">Track effects</button><button id="toggle-code" aria-expanded="false">Code editor</button><button id="focus-pattern">Focus pattern</button><button id="import">Open project</button><button id="export">Save project</button></div></header>
   <main>
     <aside><div class="section-title">SEQUENCE</div><div id="sequence"></div><div class="sequence-actions"><button id="new-pattern" data-structure>+ Blank</button><button id="variation" data-structure>Duplicate as variation</button><button id="reuse" data-structure>Reuse pattern</button><button id="move-up" data-structure>↑ Move</button><button id="move-down" data-structure>↓ Move</button><button id="remove-step" data-structure>Remove step</button></div><p class="aside-help">Reuse shares edits.<br>A variation is an independent copy.</p><details id="sound-library"><summary>SOUND LIBRARY</summary><div id="definitions"></div><div class="add-buttons"><button id="new-instrument">+ Instrument</button><button id="new-effect">+ Effect</button></div><p class="aside-help">Select a sound to edit its code.<br>Project copies are saved locally.</p></details></aside>
     <section class="workspace">
       <div class="engine-toolbar"><label>Engine port <input id="engine-port" type="number" min="1" max="65535" value="7401"></label><input id="engine-token" type="password" placeholder="Token (optional)" aria-label="Engine token"><button id="connect">Connect</button><span id="audio-status">Start niminal server, then connect</span></div>
       <div class="transport-toolbar"><button id="play">Loop pattern</button><button id="play-song" title="Play from the selected sequence step to the end">Play song</button><button id="stop">Stop</button><label><input id="follow" type="checkbox" checked> Follow playback</label><span id="play-position" class="muted"></span><label>BPM <input id="bpm" type="number" min="20" max="300" step="1"></label><label>Rows/beat <input id="rows-per-beat" type="number" min="1" max="16"></label></div>
-      <div class="pattern-toolbar"><div><strong id="pattern-number">Pattern 00</strong><select id="pattern-picker" aria-label="Pattern to edit"></select><input id="pattern-name" aria-label="Pattern name"><span id="pattern-uses" class="muted"></span></div><label>Rows <input id="pattern-rows" type="number" min="1" max="256" data-structure></label><label>Octave <input id="octave" type="number" min="0" max="8" value="4"></label><button id="undo">Undo notes</button><button id="redo">Redo</button></div>
+      <div class="pattern-toolbar"><div><strong id="pattern-number">Pattern 00</strong><select id="pattern-picker" aria-label="Pattern to edit"></select><input id="pattern-name" aria-label="Pattern name"><span id="pattern-uses" class="muted"></span></div><label>Rows <input id="pattern-rows" type="number" min="1" max="256" data-structure></label><label>Octave <input id="octave" type="number" min="0" max="8" value="4"></label><button id="undo">Undo notes</button><button id="redo">Redo</button><button id="add-track" data-structure>+ Track</button></div>
       <div id="grid" tabindex="0" role="grid" aria-label="Pattern editor"></div>
       <div class="grid-help">Z S X D C V G B H N J M: notes · Arrows: move · Delete: clear · Shift+arrows: select · Cmd/Ctrl+C/V: copy/paste · Cmd/Ctrl+Z: undo · Space: play/stop · F6: switch editor</div>
-      <section id="mixer-panel" hidden><div class="panel-heading">TRACK MIXER<button id="close-mixer">Minimise</button></div><div id="mixer" aria-label="Track mixer"></div></section>
+      <section id="mixer-panel" hidden><div class="panel-heading">TRACK DEVICES<button id="close-mixer">Minimise</button></div><div id="mixer" aria-label="Track mixer"></div></section>
       <section class="instrument-editor" id="code-panel" hidden><div class="editor-toolbar"><div><span id="definition-kind" class="badge"></span><input id="definition-name" aria-label="Definition name"></div><div><span id="apply-status" class="muted"></span><button id="apply">Apply</button><button id="audition">Audition</button><button id="expand">Expand editor</button><button id="close-code">Minimise</button></div></div><div id="code"></div><div class="editor-help">Hover for documentation or errors · Ctrl+Space: completion · Shift+Alt+F: format</div></section>
     </section>
   </main><footer><span id="status">Starting editor…</span><span id="save-status">Local autosave</span></footer>`;
@@ -41,6 +41,7 @@ let updateTimer: number | undefined;
 let transportRevision = 0;
 let starting = false;
 let audioError: string | null = null;
+let deviceTrack = 0;
 let connectionPending: 'connect' | 'disconnect' | null = null;
 
 function save() {
@@ -98,7 +99,7 @@ async function ensureAssignments() {
   }
 }
 function mixerView() {
-  renderMixer(element('mixer'), project, editedPattern, id => {
+  renderMixer(element('mixer'), project, deviceTrack, track => grid.selectTrack(track), () => { editedPattern(); grid.render(); }, id => {
     const definition = project.definitions.find(d => d.id === id);
     if (definition) selectDefinition(definition);
   });
@@ -139,10 +140,19 @@ const arrangement = new Arrangement(element('sequence'), () => project, manual =
   if (manual) element<HTMLInputElement>('follow').checked = false;
   grid.render(); patternControls();
 }, editedPattern);
-const grid = new PatternGrid(element('grid'), () => project, () => arrangement.pattern, () => Number(element<HTMLInputElement>('octave').value), editedPattern,
+const grid = new PatternGrid(element('grid'), () => project, () => arrangement.pattern, () => Number(element<HTMLInputElement>('octave').value), () => { editedPattern(); mixerView(); },
   id => { if (id) { const definition = project.definitions.find(d => d.id === id); if (definition) selectDefinition(definition); } },
   (id, note, track) => { if (audioStatus.connected && !audioStatus.playing) void action(() => audition(id, note, track)); },
-  () => { void action(() => togglePlay()); });
+  () => { void action(() => togglePlay()); },
+  track => { if (deviceTrack !== track) { deviceTrack = track; mixerView(); } },
+  (track, device) => {
+    if (device === 'effects') { showPanel('mixer', true); mixerView(); }
+    else {
+      const definition = project.definitions.find(d => d.id === project.tracks[track].instrument);
+      if (definition) { selectDefinition(definition); editor.focus(); }
+      else { addDefinition('instr'); project.tracks[track].instrument = selected.id; grid.render(); editedPattern(); }
+    }
+  });
 element('undo').onclick = () => { grid.undo(); element('grid').focus(); };
 element('redo').onclick = () => { grid.redo(); element('grid').focus(); };
 function renderApplyStatus() {
@@ -225,10 +235,10 @@ async function loadProject(raw: string) {
   if (audioStatus.connected) await audioCommand({ op: 'disconnect' });
   appliedSources.clear();
   editor.destroy(); states.clear();
-  project = loaded; selected = project.definitions[0];
+  project = loaded; deviceTrack = 0; selected = project.definitions[0];
   const definition = selected;
   editor = new EditorView({ state: editorState(`file:///niminal-tracker/${definition.id}.nml`, definition.source, source => { definition.source = source; save(); renderApplyStatus(); }), parent: element('code') });
-  selectDefinition(selected, false); arrangement.reset(); grid.resetHistory(); grid.render(); mixerView(); patternControls(); timingInputs(); save();
+  selectDefinition(selected, false); arrangement.reset(); grid.resetHistory(); grid.selectTrack(0); mixerView(); patternControls(); timingInputs(); save();
 }
 element('export').onclick = async () => {
   const source = JSON.stringify(project, null, 2);
@@ -296,6 +306,12 @@ for (const [id, operation] of [['new-pattern', 'new'], ['variation', 'variation'
 }
 element('move-up').onclick = () => { if (!audioStatus.playing) arrangement.move(-1); };
 element('move-down').onclick = () => { if (!audioStatus.playing) arrangement.move(1); };
+element('add-track').onclick = () => {
+  if (audioStatus.playing || project.tracks.length >= 16) return;
+  project.tracks.push({ name: `Track ${project.tracks.length + 1}`, instrument: null, effect: null, muted: false, volume_db: 0 });
+  for (const pattern of project.patterns) pattern.notes.push(Array(pattern.notes[0].length).fill(null));
+  grid.selectTrack(project.tracks.length - 1); editedPattern();
+};
 element('remove-step').onclick = () => { if (!audioStatus.playing) arrangement.remove(); };
 selectDefinition(selected, false); arrangement.reset(); grid.render(); mixerView(); patternControls(); timingInputs();
 const audioTimer = observeAudio(state => {
@@ -305,7 +321,7 @@ const audioTimer = observeAudio(state => {
   element<HTMLButtonElement>('play').disabled = !state.connected || state.playing;
   element<HTMLButtonElement>('stop').disabled = !state.connected;
   element<HTMLButtonElement>('play-song').disabled = !state.connected || state.playing;
-  for (const input of document.querySelectorAll<HTMLInputElement | HTMLButtonElement>('[data-structure]')) input.disabled = state.playing;
+  for (const input of document.querySelectorAll<HTMLInputElement | HTMLButtonElement>('[data-structure]')) input.disabled = state.playing || input.id === 'add-track' && project.tracks.length >= 16;
   arrangement.paint(state.sequence_position, state.playing);
   if (state.playing && element<HTMLInputElement>('follow').checked && state.pattern_id && (arrangement.pattern.id !== state.pattern_id || state.sequence_position !== null && arrangement.position !== state.sequence_position)) {
     if (state.sequence_position !== null) arrangement.select(state.sequence_position, false);

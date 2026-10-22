@@ -241,11 +241,17 @@ fn song_playback_completes_and_leaves_the_final_release_audible() {
         })
         .unwrap();
     let mut song = test_song(Some("C-4"));
+    // Exercise the last supported track: its mixer route must exist too.
+    song.tracks[0].instrument = None;
+    song.tracks.resize(16, Track::default());
+    song.tracks[15].instrument = Some("tone".into());
+    song.patterns[0].notes.resize(16, vec![None; 32]);
+    song.patterns[0].notes[15][0] = Some("C-4".into());
     song.patterns[0].rows = 1;
     let mut variation = song.patterns[0].clone();
     variation.id = "p1".into();
     variation.rows = 2;
-    variation.notes[0][0] = Some("D#4".into());
+    variation.notes[15][0] = Some("D#4".into());
     song.patterns.push(variation);
     song.sequence = vec!["p0".into(), "p1".into(), "p0".into()];
     worker

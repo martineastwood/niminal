@@ -300,7 +300,7 @@ impl Worker {
                 note,
                 track,
             } => {
-                if track >= 4 {
+                if track >= 16 {
                     return Err("Invalid audition track".into());
                 }
                 let target = self

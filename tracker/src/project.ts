@@ -26,7 +26,7 @@ export function makePattern(project: Project, source?: Pattern): Pattern {
     id: `pattern_${crypto.randomUUID().replaceAll('-', '_')}`,
     name: source ? `${source.name} variation` : `Pattern ${project.patterns.length.toString().padStart(2, '0')}`,
     rows: source?.rows ?? 32,
-    notes: source ? source.notes.map(track => [...track]) : Array.from({ length: 4 }, () => Array(32).fill(null)),
+    notes: source ? source.notes.map(track => [...track]) : Array.from({ length: project.tracks.length }, () => Array(32).fill(null)),
   };
   project.patterns.push(pattern);
   return pattern;
@@ -45,14 +45,14 @@ export function readProject(raw: string): Project {
       new Set(value.definitions.map((d: Definition) => d.id)).size !== value.definitions.length ||
       !Number.isFinite(value.bpm) || value.bpm < 20 || value.bpm > 300 ||
       !Number.isInteger(value.rows_per_beat) || value.rows_per_beat < 1 || value.rows_per_beat > 16 ||
-      !Array.isArray(value.tracks) || value.tracks.length !== 4 ||
+      !Array.isArray(value.tracks) || (value.tracks.length < 1 || value.tracks.length > 16) ||
       !value.tracks.every((t: Track) => t && typeof t.name === 'string' &&
         (t.instrument === null || value.definitions.some((d: Definition) => d.id === t.instrument && d.kind === 'instr')) &&
         (t.effect === null || value.definitions.some((d: Definition) => d.id === t.effect && d.kind === 'fx')) &&
         typeof t.muted === 'boolean' && Number.isFinite(t.volume_db) && t.volume_db >= -60 && t.volume_db <= 6) ||
       !Array.isArray(value.patterns) || value.patterns.length < 1 || value.patterns.length > 128 ||
       !value.patterns.every((p: Pattern) => p && typeof p.id === 'string' && /^[a-zA-Z_][\w-]*$/.test(p.id) && typeof p.name === 'string' &&
-        Number.isInteger(p.rows) && p.rows >= 1 && p.rows <= 256 && Array.isArray(p.notes) && p.notes.length === 4 &&
+        Number.isInteger(p.rows) && p.rows >= 1 && p.rows <= 256 && Array.isArray(p.notes) && p.notes.length === value.tracks.length &&
         p.notes.every(track => Array.isArray(track) && track.length >= p.rows && track.length <= 256 && track.every(n => n === null || typeof n === 'string' && /^[A-G][#-][0-8]$/.test(n)))) ||
       new Set(value.patterns.map((p: Pattern) => p.id)).size !== value.patterns.length ||
       !Array.isArray(value.sequence) || value.sequence.length < 1 || value.sequence.length > 1024 ||

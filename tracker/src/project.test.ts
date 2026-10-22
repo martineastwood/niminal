@@ -27,3 +27,16 @@ it('rejects invalid assignments and tempo before a project reaches playback', ()
   project.bpm = 0;
   expect(() => readProject(JSON.stringify(project))).toThrow();
 });
+
+it('accepts more tracks only when every pattern has matching note columns', () => {
+  const project = newProject();
+  project.tracks.push({ ...project.tracks[0], name: 'Extra' });
+  expect(() => readProject(JSON.stringify(project))).toThrow();
+  project.patterns[0].notes.push(Array(32).fill(null));
+  expect(readProject(JSON.stringify(project)).tracks).toHaveLength(5);
+  while (project.tracks.length < 17) {
+    project.tracks.push({ ...project.tracks[0] });
+    project.patterns[0].notes.push(Array(32).fill(null));
+  }
+  expect(() => readProject(JSON.stringify(project))).toThrow();
+});

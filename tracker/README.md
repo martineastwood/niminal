@@ -23,7 +23,7 @@ No separately installed `nimlive` is needed. The Rust backend embeds the same ni
 
 ## Compose and edit
 
-The pattern grid is the main workspace. **Mixer** and **Code editor** toggle independent panels; both start minimised. **Focus pattern** hides both panels and closes the sound library. Selecting a sound or pressing F6 opens its code editor. Each panel also has a **Minimise** button.
+The pattern grid is the main workspace. **Track effects** and **Code editor** toggle independent panels; both start minimised. **Focus pattern** hides both panels and closes the sound library. Selecting a sound or pressing F6 opens its code editor. Each panel also has a **Minimise** button.
 
 The left-hand sequence controls song order:
 
@@ -36,12 +36,12 @@ The left-hand sequence controls song order:
 - **Follow playback** moves the editor to the sounding pattern at each sequence boundary. Selecting a pattern manually turns follow off so you can edit another section while listening. The sounding sequence entry remains highlighted.
 - Instruments, effects, volume and mute are song-wide track settings. Patterns contain only note events. Stop playback before changing sequence structure, pattern lengths or tempo; note edits remain live.
 
-- Choose an instrument in each track header. Enter notes using **Z S X D C V G B H N J M**, move with arrows, and clear with Delete/Backspace. Octave is adjustable. Entered notes audition while stopped and connected.
+- Tracks have compact, colour-coded headers. Click a track name to select it, **{}** to open its instrument code (or create an instrument for an empty slot), **FX** to reveal its bottom device strip, and **M** to mute. **+ Track** adds a song-wide track while stopped, up to 16; scroll horizontally to reach tracks outside the viewport. The row-number gutter stays visible. Choose an instrument in each track header. Enter notes using **Z S X D C V G B H N J M**, move with arrows, and clear with Delete/Backspace. Octave is adjustable. Entered notes audition while stopped and connected.
 - **Space** plays/stops when the grid is focused. **F6** switches between grid and code. Code editing keeps its normal shortcuts; Space in code does not affect playback.
 - **Shift+arrows** or Shift+click selects a rectangular block. **Cmd/Ctrl+A** selects all notes. Use normal copy/cut/paste shortcuts to exchange tab-separated note blocks. Paste clips to the pattern's bounds. Delete clears the selection.
 - **Cmd/Ctrl+Z** and **Cmd/Ctrl+Shift+Z** undo/redo grid edits. The toolbar buttons do the same. CodeMirror has its own per-definition undo history.
 - Set tempo and rows per beat while stopped. Patterns can have different lengths; song playback transitions at their row boundaries. Edits to notes/assignments take effect beyond the scheduler's existing 200 ms lookahead.
-- Each track has volume, mute, and one effect slot in the mixer. Choose an effect, then **Edit FX** to open its code. Effects have separate DSP instances for each track, even when they share a definition.
+- Each track has volume, mute, and one effect slot in the horizontally scrolling bottom device strip. It follows the selected pattern track; its track picker can also switch tracks. Choose an effect, then **Edit effect code** to open its code. Effects have separate DSP instances for each track, even when they share a definition.
 - Select a sound in the sidebar or add an instrument/effect. Hover for compiler documentation, Ctrl+Space for completion, and Shift+Alt+F to format. Change `saw` to `sawz` to try error diagnostics.
 - Click **Apply** to compile code into the engine. Rejected edits leave the last applied source sounding. Apply updates every track using an effect with a short crossfade. **Audition** on an effect plays an assigned track's instrument through it; on an instrument it uses the grid's current track.
 - An instrument slot currently needs one instrument with a `freq: hz` parameter. An effect slot needs one `fx name { … }`, using `it` for incoming audio. Helper functions/constants may accompany either. Top-level sound names must be unique across slots.

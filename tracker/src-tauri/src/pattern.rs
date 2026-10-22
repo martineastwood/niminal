@@ -33,7 +33,7 @@ impl Song {
         if !self.bpm.is_finite()
             || !(20.0..=300.0).contains(&self.bpm)
             || !(1..=16).contains(&self.rows_per_beat)
-            || self.tracks.len() != 4
+            || !(1..=16).contains(&self.tracks.len())
             || self
                 .tracks
                 .iter()
@@ -50,13 +50,15 @@ impl Song {
             if pattern.id.is_empty()
                 || !ids.insert(&pattern.id)
                 || !(1..=256).contains(&pattern.rows)
-                || pattern.notes.len() != 4
+                || pattern.notes.len() != self.tracks.len()
                 || pattern
                     .notes
                     .iter()
                     .any(|notes| notes.len() < pattern.rows || notes.len() > 256)
             {
-                return Err("Patterns need unique IDs, 1–256 rows and four note columns".into());
+                return Err(
+                    "Patterns need unique IDs, 1–256 rows and one note column per track".into(),
+                );
             }
             for note in pattern.notes.iter().flatten().flatten() {
                 pitch(note)?;
@@ -73,7 +75,8 @@ impl Song {
     }
 
     pub fn same_timeline(&self, other: &Self) -> bool {
-        self.bpm == other.bpm
+        self.tracks.len() == other.tracks.len()
+            && self.bpm == other.bpm
             && self.rows_per_beat == other.rows_per_beat
             && self.sequence == other.sequence
             && self.patterns.iter().all(|p| {

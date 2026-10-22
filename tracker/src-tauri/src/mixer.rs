@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 pub fn setup() -> Vec<Value> {
     let mut edits = vec![json!({"op":"fx", "name":"__tracker_bypass", "source":"() { out = it }"})];
-    for track in 0..4 {
+    for track in 0..16 {
         edits.push(json!({"op":"node", "id":format!("track_{track}"), "fx":"__tracker_bypass"}));
         edits.push(json!({"op":"connect", "id":format!("out_{track}"), "from":{"kind":"node", "id":format!("track_{track}")}, "to":{"kind":"master"}}));
     }

@@ -89,3 +89,25 @@ it('keeps note undo history independent for each pattern and supports longer pat
   expect(second.notes[0][63]).toBe('D-4');
   pattern = second; grid.render(); grid.undo(); expect(second.notes[0][63]).toBeNull();
 });
+
+it('opens track devices without entering notes and navigates beyond the starter tracks', () => {
+  const parent = document.createElement('div'); document.body.append(parent);
+  const project = newProject(), selected = vi.fn(), open = vi.fn();
+  for (let i = 4; i < 8; i++) {
+    project.tracks.push({ name: `Track ${i + 1}`, instrument: 'tone', effect: null, volume_db: 0, muted: false });
+    project.patterns[0].notes.push(Array(32).fill(null));
+  }
+  const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, vi.fn(), vi.fn(), vi.fn(), vi.fn(), selected, open);
+  grid.render();
+  parent.querySelector<HTMLButtonElement>('[aria-label="Show Track 8 effects"]')!.click();
+  expect(parent.querySelector('#cell-0-7')?.getAttribute('aria-selected')).toBe('true');
+  expect(grid.activeTrack).toBe(7); expect(open).toHaveBeenCalledWith(7, 'effects');
+  parent.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', bubbles: true, cancelable: true }));
+  expect(project.patterns[0].notes[7][0]).toBe('C-4');
+  parent.querySelector<HTMLButtonElement>('[aria-label="Mute Track 8"]')!.click();
+  expect(project.tracks[7].muted).toBe(true);
+  parent.querySelector<HTMLButtonElement>('[aria-label="Edit Track 8 instrument"]')!.click();
+  expect(open).toHaveBeenLastCalledWith(7, 'instrument');
+  parent.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+  expect(grid.activeTrack).toBe(0); expect(selected).toHaveBeenLastCalledWith(0);
+});
