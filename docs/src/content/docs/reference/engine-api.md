@@ -177,7 +177,7 @@ instr tone(freq: hz) {
 
 `.report("name", rate: 30hz, on: trigger)` passes through its input and emits scalar or array values (up to 64 elements). With `on`, every positive edge is retained, including repeated values. Each tap has a 256-event ring; overflow is counted in `dropped`. `report` notifications carry `name`, `source`, `token` (for notes), absolute `sample`, `values` and cumulative `dropped`. Audio threads only publish to bounded storage. Existing `.osc_out` remains available for external OSC destinations.
 
-`scopes.create {id, endpoint, frames?, rate?}` watches master, a node or an accessible bus. Defaults are 1024 frames at 20 updates/second; limits are 4096 frames, 30 updates/second and eight scopes per connection. Subscribe to `scopes` for `scope` notifications containing `id`, `sample`, `channels` and interleaved `values`. Remove with `scopes.remove {id}`. Windows are sampled from the current rendered audio and can overlap or skip; use capture for continuous audio.
+`scopes.create {id, endpoint, frames?, rate?}` watches master, a node or an accessible bus. Defaults are 1024 frames at 20 updates/second; limits are 4096 frames, 30 updates/second and 32 scopes per connection. Subscribe to `scopes` for `scope` notifications containing `id`, `sample`, `channels` and interleaved `values`. Remove with `scopes.remove {id}`. Windows are sampled from the current rendered audio and can overlap or skip; use capture for continuous audio.
 
 Every accepted note returns a server `token` in the `events.send` result’s `notes` list, paired with its input `event` index. Subscribe to `voices` for `voice` notifications: `state` (`started`, `released`, `ended`, `dropped`), actual renderer `sample`, `token`, optional client `id`, `target`, `reason` and connection-local `sequence`. Reasons distinguish normal completion, choke, panic, invalid DSP, graph removal and capacity drops. `status.active_voices` supplies the current snapshot and sequence for resynchronization. A notification describes actual playback rather than acceptance into the queue.
 
@@ -223,7 +223,7 @@ Both return a job `id`. Use `jobs.status {id}`, `jobs.cancel {id}` or subscribe 
 | Values in one `report` | 64 |
 | Scopes | 8, each up to 4096 frames and 30 updates/second |
 
-The scopes are the biggest steady stream a client can ask for: eight scopes at the limit are `8 × 4096 × 30` frames per second of every channel of the endpoint, far more than the notification queue below holds, so a client that asks for that gets coalesced updates (`transport_dropped` counts them). Ask for the window and rate you will draw.
+The scopes are the biggest steady stream a client can ask for: 32 scopes at the limit are `32 × 4096 × 30` frames per second of every channel of the endpoint, far more than the notification queue below holds, so a client that asks for that gets coalesced updates (`transport_dropped` counts them). Ask for the window and rate you will draw.
 
 ### Transport limits
 

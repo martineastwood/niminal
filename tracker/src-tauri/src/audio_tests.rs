@@ -32,6 +32,7 @@ fn test_song(note: Option<&str>) -> Song {
             fx: (0..4).map(|_| vec![FxLane::empty(32)]).collect(),
         }],
         sequence: vec!["p0".into()],
+        master: Track::default(),
         instrument_values: Default::default(),
     }
 }
@@ -278,6 +279,172 @@ fn the_editor_finds_samples_beside_documents_in_the_project_folder() {
     );
     assert_ne!(diagnostics("file:///niminal-tracker/level.nml"), json!([]));
     let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn each_channel_and_the_master_have_a_scope() {
+    let engine = Arc::new(Mutex::new(EngineServer::new(
+        Session::new(48000.0, Layout::Mono).without_limiter(),
+    )));
+    let server = Server::start(
+        engine.clone(),
+        ServerConfig {
+            port: 0,
+            ..ServerConfig::default()
+        },
+    )
+    .unwrap();
+    let mut worker = Worker::default();
+    worker
+        .command(Command::Connect {
+            port: server.port(),
+            token: None,
+        })
+        .unwrap();
+    worker
+        .command(Command::Apply {
+            id: "tone".into(),
+            source: "instr flat(freq: hz) { 0.25 }".into(),
+            kind: Kind::Instr,
+            dir: None,
+        })
+        .unwrap();
+    worker
+        .command(Command::Audition {
+            instrument: "tone".into(),
+            note: "C-4".into(),
+            track: 0,
+        })
+        .unwrap();
+    // The engine renders in blocks; scopes reach the client as it renders and the client asks.
+    let peak = |worker: &mut Worker, id: &str| {
+        for _ in 0..40 {
+            engine.lock().unwrap().session_mut().process(512);
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            worker.pump().unwrap();
+            if let Some(frames) = worker
+                .scopes
+                .get(id)
+                .filter(|f| f.iter().any(|v| v.abs() > 0.01))
+            {
+                return frames.iter().fold(0.0_f32, |p, v| p.max(v.abs()));
+            }
+        }
+        0.0
+    };
+    assert!(
+        (peak(&mut worker, "s_0") - 0.25).abs() < 0.01,
+        "the track's own signal"
+    );
+    assert!(
+        (peak(&mut worker, "s_m") - 0.25).abs() < 0.01,
+        "and the master's"
+    );
+    assert_eq!(
+        worker.scopes["s_1"]
+            .iter()
+            .fold(0.0_f32, |p, v| p.max(v.abs())),
+        0.0,
+        "other tracks are quiet"
+    );
+    assert_eq!(worker.scopes["s_0"].len(), SCOPE_FRAMES);
+    worker.command(Command::Disconnect).unwrap();
+    drop(worker);
+    server.stop();
+}
+
+#[test]
+fn the_master_has_its_own_level_and_effects_and_solo_silences_other_tracks() {
+    let engine = Arc::new(Mutex::new(EngineServer::new(
+        Session::new(48000.0, Layout::Mono).without_limiter(),
+    )));
+    let server = Server::start(
+        engine.clone(),
+        ServerConfig {
+            port: 0,
+            ..ServerConfig::default()
+        },
+    )
+    .unwrap();
+    let mut worker = Worker::default();
+    worker
+        .command(Command::Connect {
+            port: server.port(),
+            token: None,
+        })
+        .unwrap();
+    for (id, source, kind) in [
+        ("tone", "instr flat(freq: hz) { 0.1 }", Kind::Instr),
+        ("half", "fx half { out = in * 0.5 }", Kind::Fx),
+    ] {
+        worker
+            .command(Command::Apply {
+                id: id.into(),
+                source: source.into(),
+                kind,
+                dir: None,
+            })
+            .unwrap();
+    }
+    let level = |worker: &mut Worker, track: usize| {
+        worker
+            .command(Command::Audition {
+                instrument: "tone".into(),
+                note: "C-4".into(),
+                track,
+            })
+            .unwrap();
+        let audio = engine.lock().unwrap().session_mut().process(16000);
+        audio[0][2048..4096].iter().map(|s| s.abs()).sum::<f32>() / 2048.0
+    };
+    let mut song = test_song(None);
+    let dry = level(&mut worker, 0);
+    assert!(
+        dry > 0.09,
+        "tracks reach the output through the master: {dry}"
+    );
+
+    song.master.volume_db = -6.0;
+    worker
+        .command(Command::Update { song: song.clone() })
+        .unwrap();
+    assert!((level(&mut worker, 0) / dry - 10.0_f32.powf(-6.0 / 20.0)).abs() < 0.001);
+
+    song.master.volume_db = 0.0;
+    song.master.fx = vec![Device {
+        id: "m1".into(),
+        definition: "half".into(),
+        ..Device::default()
+    }];
+    worker
+        .command(Command::Update { song: song.clone() })
+        .unwrap();
+    assert!(
+        (level(&mut worker, 0) / dry - 0.5).abs() < 0.001,
+        "the master chain processes every track"
+    );
+    assert!((level(&mut worker, 1) / dry - 0.5).abs() < 0.001);
+    song.master.fx[0].bypass = true;
+    worker
+        .command(Command::Update { song: song.clone() })
+        .unwrap();
+    assert!((level(&mut worker, 1) / dry - 1.0).abs() < 0.001);
+
+    // Soloing one track silences the others; a muted track stays silent even when soloed elsewhere.
+    song.tracks[1].solo = true;
+    worker
+        .command(Command::Update { song: song.clone() })
+        .unwrap();
+    assert_eq!(level(&mut worker, 0), 0.0);
+    assert!(level(&mut worker, 1) > 0.09);
+    song.tracks[1].solo = false;
+    worker
+        .command(Command::Update { song: song.clone() })
+        .unwrap();
+    assert!(level(&mut worker, 0) > 0.09);
+    worker.command(Command::Disconnect).unwrap();
+    drop(worker);
+    server.stop();
 }
 
 #[test]

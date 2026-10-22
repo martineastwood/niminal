@@ -1,3 +1,9 @@
+//! The engine graph behind the mixer. Every track, and the master, is a *strip*:
+//!
+//! `track_<s>` (level and pan) → its effect devices → `tap_<s>` → `out_<s>` (mute) → next stage
+//!
+//! Tracks feed `track_m`, the master's strip, which feeds the engine's master output. The tap is a
+//! pass-through so each channel's finished signal has one steady place for a scope to listen.
 use crate::{
     commands::{EffectParameters, fx_node},
     pattern::{Device, Track},
@@ -5,16 +11,43 @@ use crate::{
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
+/// The label of the master strip; tracks are labelled by number.
+pub const MASTER: &str = "m";
+
 pub fn setup() -> Vec<Value> {
     let mut edits = vec![
         json!({"op":"fx", "name":"__tracker_mix", "source":"(level: num = 1, balance: -1..1 = 0) { out = in * [1 - balance.clamp(0..1), 1 + balance.clamp(-1..0)] * level }"}),
+        json!({"op":"fx", "name":"__tracker_tap", "source":"() { out = in }"}),
     ];
     edits.extend(crate::modulation::declarations());
-    for track in 0..16 {
-        edits.push(json!({"op":"node", "id":format!("track_{track}"), "fx":"__tracker_mix"}));
-        edits.push(json!({"op":"connect", "id":format!("out_{track}"), "from":{"kind":"node", "id":format!("track_{track}")}, "to":{"kind":"master"}}));
+    let labels = (0..16).map(|t| t.to_string()).chain([MASTER.to_string()]);
+    for label in labels {
+        edits.push(json!({"op":"node", "id":format!("track_{label}"), "fx":"__tracker_mix"}));
+        edits.push(json!({"op":"node", "id":format!("tap_{label}"), "fx":"__tracker_tap"}));
+        edits.push(json!({"op":"connect", "id":format!("tapin_{label}"), "from":{"kind":"node", "id":format!("track_{label}")}, "to":{"kind":"node", "id":format!("tap_{label}")}}));
+        let to = if label == MASTER {
+            json!({"kind":"master"})
+        } else {
+            json!({"kind":"node", "id":format!("track_{MASTER}")})
+        };
+        edits.push(json!({"op":"connect", "id":format!("out_{label}"), "from":{"kind":"node", "id":format!("tap_{label}")}, "to":to}));
     }
     edits
+}
+
+/// The strips of a song, in order: its tracks, then the master.
+pub fn strips<'a>(tracks: &'a [Track], master: &'a Track) -> Vec<(String, &'a Track)> {
+    tracks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (i.to_string(), t))
+        .chain([(MASTER.to_string(), master)])
+        .collect()
+}
+
+/// Whether a track makes no sound: muted, or another track is soloed. The master only has a level.
+fn silent(tracks: &[Track], index: usize) -> bool {
+    tracks[index].muted || tracks.iter().any(|t| t.solo) && !tracks[index].solo
 }
 
 fn arguments(device: &Device, parameters: &EffectParameters) -> BTreeMap<String, Value> {
@@ -39,7 +72,7 @@ fn arguments(device: &Device, parameters: &EffectParameters) -> BTreeMap<String,
 }
 
 fn replacement(
-    index: usize,
+    slot: &str,
     device: &Device,
     effects: &BTreeMap<String, String>,
     parameters: &EffectParameters,
@@ -48,55 +81,59 @@ fn replacement(
         .get(&device.definition)
         .ok_or("Apply the effect assigned to this track first")?;
     Ok(
-        json!({"op":"replace", "id":fx_node(index, &device.id), "fx":fx, "args":arguments(device, parameters), "fade":0.02}),
+        json!({"op":"replace", "id":fx_node(slot, &device.id), "fx":fx, "args":arguments(device, parameters), "fade":0.02}),
     )
 }
 
 pub fn replacements(
     tracks: &[Track],
+    master: &Track,
     effects: &BTreeMap<String, String>,
     parameters: &EffectParameters,
 ) -> Result<Vec<Value>, String> {
     let mut edits = Vec::new();
-    for (index, track) in tracks.iter().enumerate() {
-        for device in track.active() {
-            edits.push(replacement(index, device, effects, parameters)?);
+    for (label, strip) in strips(tracks, master) {
+        for device in strip.active() {
+            edits.push(replacement(&label, device, effects, parameters)?);
         }
     }
     Ok(edits)
 }
 
-fn base(index: usize, track: &Track) -> Value {
-    json!({"op":"set", "id":format!("track_{index}"), "args":{"level":10.0_f64.powf(track.volume_db / 20.0), "balance":track.pan}, "glide":0.01})
+fn base(label: &str, strip: &Track) -> Value {
+    json!({"op":"set", "id":format!("track_{label}"), "args":{"level":10.0_f64.powf(strip.volume_db / 20.0), "balance":strip.pan}, "glide":0.01})
 }
 
-fn output(index: usize, track: &Track) -> Value {
-    json!({"op":"gain", "id":format!("out_{index}"), "value":if track.muted {0.0} else {1.0}, "glide":0.01})
+fn output(label: &str, silent: bool) -> Value {
+    json!({"op":"gain", "id":format!("out_{label}"), "value":if silent {0.0} else {1.0}, "glide":0.01})
 }
 
-pub fn reset(tracks: &[Track], parameters: &EffectParameters) -> Vec<Value> {
+pub fn reset(tracks: &[Track], master: &Track, parameters: &EffectParameters) -> Vec<Value> {
     let mut edits = Vec::new();
-    for (index, track) in tracks.iter().enumerate() {
-        edits.extend([base(index, track), output(index, track)]);
-        for device in track.active() {
+    for (index, (label, strip)) in strips(tracks, master).into_iter().enumerate() {
+        edits.push(base(&label, strip));
+        if label != MASTER {
+            edits.push(output(&label, silent(tracks, index)));
+        }
+        for device in strip.active() {
             let args = arguments(device, parameters);
             if !args.is_empty() {
                 edits.push(
-                    json!({"op":"set", "id":fx_node(index, &device.id), "args":args, "glide":0.01}),
+                    json!({"op":"set", "id":fx_node(&label, &device.id), "args":args, "glide":0.01}),
                 );
             }
         }
     }
-    if edits.is_empty() {
-        vec![]
-    } else {
-        vec![json!({"op":"routing", "at":"now", "edits":edits})]
-    }
+    vec![json!({"op":"routing", "at":"now", "edits":edits})]
 }
 
+/// What changing the mixer from `previous` to `tracks` and `master` takes.
+#[allow(clippy::too_many_arguments)]
 pub fn events(
     tracks: &[Track],
+    master: &Track,
     previous: &[Track],
+    previous_master: &Track,
     effects: &BTreeMap<String, String>,
     parameters: &EffectParameters,
     bpm: f64,
@@ -105,59 +142,86 @@ pub fn events(
 ) -> Result<Vec<Value>, String> {
     let (mut topology, modulators) = crate::modulation::edits(
         tracks,
+        master,
         previous,
+        previous_master,
         parameters,
         bpm,
         rows_per_beat,
         timing_changed,
     );
     let mut controls = Vec::new();
-    for index in 0..tracks.len().max(previous.len()) {
-        let old = previous.get(index);
-        let old_chain: Vec<&Device> = old.map(|t| t.active().collect()).unwrap_or_default();
-        let chain: Vec<&Device> = tracks
-            .get(index)
-            .map(|t| t.active().collect())
+    let new = strips(tracks, master);
+    let old = strips(previous, previous_master);
+    // Tracks may be added or removed; the master is always last in both lists.
+    let count = tracks.len().max(previous.len());
+    for index in 0..=count {
+        let is_master = index == count;
+        let label = if is_master {
+            MASTER.to_string()
+        } else {
+            index.to_string()
+        };
+        let current = if is_master {
+            new.last()
+        } else {
+            new.get(index).filter(|_| index < tracks.len())
+        };
+        let before = if is_master {
+            old.last()
+        } else {
+            old.get(index).filter(|_| index < previous.len())
+        };
+        let old_chain: Vec<&Device> = before
+            .map(|(_, t)| t.active().collect())
+            .unwrap_or_default();
+        let chain: Vec<&Device> = current
+            .map(|(_, t)| t.active().collect())
             .unwrap_or_default();
         for device in &old_chain {
             if !chain.iter().any(|d| d.id == device.id) {
-                topology.push(json!({"op":"free_node", "id":fx_node(index, &device.id)}));
+                topology.push(json!({"op":"free_node", "id":fx_node(&label, &device.id)}));
             }
         }
-        if let Some(track) = tracks.get(index) {
-            for device in &chain {
-                match old_chain.iter().find(|d| d.id == device.id) {
-                    None => {
-                        let fx = effects.get(&device.definition).ok_or_else(|| format!("Apply the effect assigned to {} first", track.name))?;
-                        topology.push(json!({"op":"node", "id":fx_node(index, &device.id), "fx":fx, "args":arguments(device, parameters)}));
-                    }
-                    Some(old) if old.definition != device.definition => topology.push(replacement(index, device, effects, parameters)?),
-                    Some(old) if old.values != device.values => controls.push(json!({"op":"set", "id":fx_node(index, &device.id), "args":arguments(device, parameters), "glide":0.01})),
-                    _ => {}
+        let Some((_, strip)) = current else {
+            // A removed track goes quiet; its nodes stay for when it comes back.
+            topology.push(json!({"op":"gain", "id":format!("out_{label}"), "value":0.0}));
+            continue;
+        };
+        for device in &chain {
+            match old_chain.iter().find(|d| d.id == device.id) {
+                None => {
+                    let fx = effects.get(&device.definition).ok_or_else(|| format!("Apply the effect assigned to {} first", strip.name))?;
+                    topology.push(json!({"op":"node", "id":fx_node(&label, &device.id), "fx":fx, "args":arguments(device, parameters)}));
                 }
+                Some(old) if old.definition != device.definition => topology.push(replacement(&label, device, effects, parameters)?),
+                Some(old) if old.values != device.values => controls.push(json!({"op":"set", "id":fx_node(&label, &device.id), "args":arguments(device, parameters), "glide":0.01})),
+                _ => {}
             }
-            if !chain
-                .iter()
-                .map(|d| &d.id)
-                .eq(old_chain.iter().map(|d| &d.id))
-            {
-                // Links are named by position, so reordering or removing a device re-points them in place.
-                let mut from = format!("track_{index}");
-                for (position, device) in chain.iter().enumerate() {
-                    let to = fx_node(index, &device.id);
-                    topology.push(json!({"op":"connect", "id":format!("link_{index}_{position}"), "from":{"kind":"node", "id":from}, "to":{"kind":"node", "id":to}}));
-                    from = to;
-                }
-                topology.push(json!({"op":"connect", "id":format!("out_{index}"), "from":{"kind":"node", "id":from}, "to":{"kind":"master"}, "gain":if track.muted {0.0} else {1.0}}));
+        }
+        if !chain
+            .iter()
+            .map(|d| &d.id)
+            .eq(old_chain.iter().map(|d| &d.id))
+        {
+            // Links are named by position, so reordering or removing a device re-points them in place.
+            let mut from = format!("track_{label}");
+            for (position, device) in chain.iter().enumerate() {
+                let to = fx_node(&label, &device.id);
+                topology.push(json!({"op":"connect", "id":format!("link_{label}_{position}"), "from":{"kind":"node", "id":from}, "to":{"kind":"node", "id":to}}));
+                from = to;
             }
-            if old.is_none_or(|old| old.volume_db != track.volume_db || old.pan != track.pan) {
-                controls.push(base(index, track));
+            topology.push(json!({"op":"connect", "id":format!("tapin_{label}"), "from":{"kind":"node", "id":from}, "to":{"kind":"node", "id":format!("tap_{label}")}}));
+        }
+        let was = before.map(|(_, t)| *t);
+        if was.is_none_or(|o| o.volume_db != strip.volume_db || o.pan != strip.pan) {
+            controls.push(base(&label, strip));
+        }
+        if !is_master {
+            let now = silent(tracks, index);
+            if before.is_none() || index >= previous.len() || silent(previous, index) != now {
+                controls.push(output(&label, now));
             }
-            if old.is_none_or(|old| old.muted != track.muted) {
-                controls.push(output(index, track));
-            }
-        } else {
-            topology.push(json!({"op":"connect", "id":format!("out_{index}"), "from":{"kind":"node", "id":format!("track_{index}")}, "to":{"kind":"master"}, "gain":0.0}));
         }
     }
     topology.extend(modulators);

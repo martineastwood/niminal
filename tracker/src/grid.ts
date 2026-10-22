@@ -8,23 +8,35 @@ const ROW_WIDTH = 30, NOTE_WIDTH = 44, SUB_WIDTH = 26, LANE_WIDTH = 100;
 type Kind = 'note' | SubColumn;
 interface Lane { track: number; kind: Kind | null; col: number; fx: number | null; values: (string | null)[] }
 const subLabel: Record<SubColumn, string> = { inst: 'Ins', vol: 'Vol', pan: 'Pan', delay: 'Dly' };
-const subTitle: Record<SubColumn, string> = { inst: 'Instrument for this note (instrument number)', vol: 'Volume, 00 to 80 (hex)', pan: 'Panning, 00 left, 40 centre, 80 right (hex)', delay: 'Delay in 256ths of a row, 00 to FF (hex)' };
-const hex = (n: number) => n.toString(16).toUpperCase().padStart(2, '0');
-const subMax: Record<SubColumn, number> = { inst: 254, vol: 128, pan: 128, delay: 255 };
+const subTitle: Record<SubColumn, string> = {
+  inst: 'Instrument for this note: its number in the sidebar list',
+  vol: 'Volume for this note, 0 to 100',
+  pan: 'Panning for this note, -50 (left) to +50 (right), C for centre',
+  delay: 'Delay: how far into the row the note starts, as a percent, 0 to 99',
+};
+const subRange: Record<SubColumn, string> = { inst: 'an instrument number', vol: '0 to 100', pan: '-50 to 50, or C', delay: '0 to 99' };
 
+// Cells store the engine's whole numbers (volume and pan 0 to 128, delay 0 to 255); these show them as people count.
 /** What a sub-column cell reads as, for display and the clipboard. */
 export function subText(kind: SubColumn, value: string | null, project: Project): string {
   if (value === null) return '';
-  if (kind === 'inst') { const index = project.definitions.filter(d => d.kind === 'instr').findIndex(d => d.id === value); return index < 0 ? '??' : hex(index); }
-  return hex(Number(value));
+  const n = Number(value);
+  if (kind === 'inst') { const index = project.definitions.filter(d => d.kind === 'instr').findIndex(d => d.id === value); return index < 0 ? '??' : String(index).padStart(2, '0'); }
+  if (kind === 'vol') return String(Math.round(n * 100 / 128));
+  if (kind === 'delay') return String(Math.min(99, Math.round(n * 100 / 256)));
+  const pan = Math.round((n - 64) * 50 / 64);
+  return pan === 0 ? 'C' : pan > 0 ? `+${pan}` : String(pan);
 }
-/** The stored value for typed or pasted hex text, or null when it names nothing. */
+/** The stored value for typed or pasted text, or null when it names nothing. */
 export function subValue(kind: SubColumn, text: string, project: Project): string | null {
-  if (!/^[0-9a-f]{1,2}$/i.test(text)) return null;
-  const n = parseInt(text, 16);
-  if (n > subMax[kind]) return null;
-  if (kind === 'inst') return project.definitions.filter(d => d.kind === 'instr')[n]?.id ?? null;
-  return String(n);
+  const t = text.trim().replace(/%$/, '');
+  if (kind === 'pan' && /^c$/i.test(t)) return '64';
+  if (!/^[+-]?\d{1,3}$/.test(t)) return null;
+  const n = Number(t);
+  if (kind === 'inst') return n >= 0 && /^\d+$/.test(t) ? project.definitions.filter(d => d.kind === 'instr')[n]?.id ?? null : null;
+  if (kind === 'vol') return n >= 0 && n <= 100 && /^\d+$/.test(t) ? String(Math.round(n * 1.28)) : null;
+  if (kind === 'delay') return n >= 0 && n <= 99 && /^\d+$/.test(t) ? String(Math.round(n * 2.56)) : null;
+  return n >= -50 && n <= 50 ? String(Math.round(64 + n * 64 / 50)) : null;
 }
 
 export class PatternGrid {
@@ -42,8 +54,6 @@ export class PatternGrid {
   private frame = document.createElement('div');
   /** Record mode: typed keys enter notes and values. Otherwise they only preview the instrument. */
   recording = false;
-  /** The first digit of a two-digit hex entry, until the second arrives or the cursor moves. */
-  private hex: { row: number; column: number; digit: number } | null = null;
   modeChanged: (recording: boolean) => void = () => {};
   private dragging = false;
   private dragged = false;
@@ -265,7 +275,7 @@ export class PatternGrid {
             if (this.dragged) { this.dragged = false; return; }
             if (!event.shiftKey) this.anchor = { row, column: c };
             this.row = row; this.column = c; this.trackSelected(track); this.render(); this.parent.focus();
-            if (lane.fx !== null && !event.shiftKey && this.recording) this.editValue(row, c);
+            if (!event.shiftKey && this.recording) { if (lane.fx !== null) this.editValue(row, c); else if (lane.kind !== 'note') this.editSub(row, c); }
           }; group.append(cell);
         }
         line.append(group);
@@ -362,17 +372,25 @@ export class PatternGrid {
       label.append(box, { inst: 'Instrument', vol: 'Volume', pan: 'Panning', delay: 'Delay' }[kind]); element.append(label);
     }
   }
-  private enterHex(event: KeyboardEvent, lane: Lane) {
-    if (!/^[0-9a-f]$/i.test(event.key) || event.metaKey || event.ctrlKey) return;
-    event.preventDefault();
-    if (!this.recording) return;
-    const kind = lane.kind as SubColumn, digit = parseInt(event.key, 16);
-    const second = !!this.hex && this.hex.row === this.row && this.hex.column === this.column;
-    const stored = subValue(kind, hex(second ? this.hex!.digit * 16 + digit : digit), this.project());
-    if (stored === null) { this.hex = null; this.feedback(kind === 'inst' ? 'No instrument has that number.' : `Values run from 00 to ${hex(subMax[kind])}.`); return; }
-    this.apply([{ row: this.row, track: this.column, before: lane.values[this.row], after: stored }]);
-    if (second) { this.hex = null; this.advance(); } else this.hex = { row: this.row, column: this.column, digit };
-    this.render();
+  /** Edits a sub-column cell in place, like a parameter lane: type a number, Enter to save and move down. */
+  private editSub(row: number, column: number, initial?: string) {
+    const lane = this.lanes[column], kind = lane.kind as SubColumn, cell = this.parent.querySelector<HTMLElement>(`#${this.id(row, lane)}`);
+    if (!cell) return;
+    const input = document.createElement('input'); input.className = 'lane-value'; input.setAttribute('aria-label', `${subLabel[kind]} row ${row}`);
+    input.value = initial ?? this.text(lane, lane.values[row]); const originalText = input.value;
+    cell.replaceChildren(input); input.focus(); if (initial === undefined) input.select();
+    let finished = false;
+    const finish = (commit: boolean, advance: boolean) => {
+      if (finished) return;
+      const blank = input.value.trim() === '';
+      const value = initial === undefined && input.value === originalText ? lane.values[row] : blank ? null : subValue(kind, input.value, this.project());
+      if (commit && !blank && value === null) { this.feedback(kind === 'inst' ? 'No instrument has that number.' : `Enter ${subRange[kind]}.`); if (advance) { input.focus(); return; } commit = false; }
+      finished = true;
+      if (commit) this.apply([{ row, track: column, before: lane.values[row], after: value }]);
+      if (advance && commit) this.advance(); this.render(); if (advance) this.parent.focus();
+    };
+    input.onkeydown = event => { event.stopPropagation(); if (event.key === 'Enter' || event.key === 'Escape' || event.key === 'Tab') { event.preventDefault(); finish(event.key !== 'Escape', true); } };
+    input.onblur = () => finish(true, false);
   }
   setRecording(on: boolean) { this.recording = on; this.modeChanged(on); }
   /** Corner brackets mark the selected track, from its header to the bottom of the grid. */
@@ -464,7 +482,6 @@ export class PatternGrid {
     }
     if (event.altKey) return;
     const lanes = this.lanes, lane = lanes[this.column];
-    if (!(lane.kind !== null && lane.kind !== 'note' && /^[0-9a-f]$/i.test(event.key))) this.hex = null;
     switch (event.key) {
       case ' ': event.preventDefault(); this.togglePlay(); return;
       case 'Escape': event.preventDefault(); this.setRecording(!this.recording); return;
@@ -479,7 +496,10 @@ export class PatternGrid {
           if (!this.recording) return;
           if (event.key === 'Enter' || event.key.length === 1 && /[0-9+.-]/.test(event.key)) { event.preventDefault(); this.editValue(this.row, this.column, event.key === 'Enter' ? undefined : event.key); } return;
         }
-        if (lane.kind !== 'note') { this.enterHex(event, lane); return; }
+        if (lane.kind !== 'note') {
+          if (!this.recording || event.metaKey || event.ctrlKey || !(event.key === 'Enter' || /^[0-9+-]$/.test(event.key) || lane.kind === 'pan' && /^c$/i.test(event.key))) return;
+          event.preventDefault(); this.editSub(this.row, this.column, event.key === 'Enter' ? undefined : event.key); return;
+        }
         const off = event.key === '1' || event.key === '`';
         const note = off ? 'OFF' : keyboardNote(event.key, this.octave()); if (!note) return;
         event.preventDefault();

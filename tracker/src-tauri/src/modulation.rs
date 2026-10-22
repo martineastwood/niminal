@@ -14,7 +14,8 @@ pub fn declarations() -> Vec<Value> {
 }
 
 struct Target<'a> {
-    track: usize,
+    /// The strip it belongs to: a track number, or the master's label.
+    track: &'a str,
     device: &'a str,
     parameter: &'a Parameter,
     lfo: &'a Lfo,
@@ -41,11 +42,11 @@ impl Target<'_> {
 }
 
 fn targets<'a>(
-    tracks: &'a [Track],
+    labels: &'a [(String, &'a Track)],
     parameters: &'a EffectParameters,
 ) -> BTreeMap<String, Target<'a>> {
     let mut targets = BTreeMap::new();
-    for (track, t) in tracks.iter().enumerate() {
+    for (track, t) in labels {
         for device in t.active() {
             for (name, lfo) in &device.modulations {
                 if !lfo.enabled {
@@ -70,16 +71,21 @@ fn targets<'a>(
     targets
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn edits(
     tracks: &[Track],
+    master: &Track,
     previous: &[Track],
+    previous_master: &Track,
     parameters: &EffectParameters,
     bpm: f64,
     rows_per_beat: u32,
     timing_changed: bool,
 ) -> (Vec<Value>, Vec<Value>) {
-    let old = targets(previous, parameters);
-    let next = targets(tracks, parameters);
+    let before = crate::mixer::strips(previous, previous_master);
+    let after = crate::mixer::strips(tracks, master);
+    let old = targets(&before, parameters);
+    let next = targets(&after, parameters);
     let mut remove = Vec::new();
     let mut add = Vec::new();
     for (id, target) in &old {
@@ -109,8 +115,14 @@ pub fn edits(
 }
 
 /// A native, sample-timed reset. Oscillator phase and signal generation stay in niminal.
-pub fn reset(tracks: &[Track], parameters: &EffectParameters, at: u64) -> Vec<Value> {
-    let edits: Vec<_> = targets(tracks, parameters)
+pub fn reset(
+    tracks: &[Track],
+    master: &Track,
+    parameters: &EffectParameters,
+    at: u64,
+) -> Vec<Value> {
+    let strips = crate::mixer::strips(tracks, master);
+    let edits: Vec<_> = targets(&strips, parameters)
         .values()
         .flat_map(|target| {
             [

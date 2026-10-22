@@ -367,7 +367,7 @@ impl EngineReply {
                 "channels": channels,
                 "topics": ENGINE_TOPICS,
                 "capabilities": ["private_definitions", "routing", "transactions", "voices", "reports", "scopes", "multichannel_buffers", "late_buffer_binding", "fx_modulation", "file_transfer", "offline_render", "capture", "file_players", "audio_management"],
-                "limits": { "buffer_write_samples": 65536, "message_bytes": 4194304, "buffer_bytes":268435456,"file_chunk_bytes":262144,"report_values":64,"scope_frames":4096,"scopes_per_client":8 },
+                "limits": { "buffer_write_samples": 65536, "message_bytes": 4194304, "buffer_bytes":268435456,"file_chunk_bytes":262144,"report_values":64,"scope_frames":4096,"scopes_per_client":crate::scopes::MAX_SCOPES },
             }),
             EngineReply::Subscribed(topics) => json!({ "topics": topics }),
             EngineReply::Sent { sent, horizon } => json!({

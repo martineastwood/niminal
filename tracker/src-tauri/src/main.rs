@@ -129,7 +129,8 @@ fn main() {
             open_project,
             save_project,
             audio::audio_command,
-            audio::audio_status
+            audio::audio_status,
+            audio::audio_scopes
         ])
         .run(tauri::generate_context!())
         .expect("could not run niminal tracker");

@@ -7,6 +7,9 @@ use std::{
     sync::{Arc, atomic::Ordering},
 };
 
+/// Scopes one client may have open at once: a mixer wants one per channel.
+pub(crate) const MAX_SCOPES: usize = 32;
+
 struct Scope {
     meter: Arc<Meter>,
     endpoint: Endpoint,
@@ -35,9 +38,9 @@ impl Scopes {
             return Err("scope frames are 1–4096 and rate is 0.5–30 updates/second".into());
         }
         if !self.entries.contains_key(&(client, id.clone()))
-            && self.entries.keys().filter(|(c, _)| *c == client).count() >= 8
+            && self.entries.keys().filter(|(c, _)| *c == client).count() >= MAX_SCOPES
         {
-            return Err("at most eight scopes per client".into());
+            return Err(format!("at most {MAX_SCOPES} scopes per client"));
         }
         let meter = session.endpoint_meter(client, &endpoint)?;
         meter.waveform().enabled.store(true, Ordering::Relaxed);

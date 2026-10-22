@@ -11,6 +11,9 @@ pub struct Track {
     pub fx: Vec<Device>,
     pub pan: f64,
     pub muted: bool,
+    /// While any track is soloed, only soloed tracks sound.
+    #[serde(default)]
+    pub solo: bool,
     pub volume_db: f64,
 }
 
@@ -29,6 +32,26 @@ pub struct Device {
 }
 
 impl Track {
+    /// Settings out of range, or a malformed effect chain.
+    pub fn invalid(&self) -> bool {
+        !self.volume_db.is_finite()
+            || !(-60.0..=6.0).contains(&self.volume_db)
+            || !self.pan.is_finite()
+            || !(-1.0..=1.0).contains(&self.pan)
+            || self.fx.len() > MAX_DEVICES
+            || self.fx.iter().enumerate().any(|(i, device)| {
+                device.id.is_empty()
+                    || device.id.len() > 40
+                    || !device
+                        .id
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    || self.fx[..i].iter().any(|other| other.id == device.id)
+                    || device.values.values().any(|value| !value.is_finite())
+                    || device.modulations.values().any(|lfo| !lfo.valid())
+            })
+    }
+
     pub fn device(&self, id: &str) -> Option<&Device> {
         self.fx.iter().find(|device| device.id == id)
     }
@@ -220,6 +243,9 @@ pub struct Song {
     pub bpm: f64,
     pub rows_per_beat: u32,
     pub tracks: Vec<Track>,
+    /// The final stage every track feeds: a level, a pan and an effect chain.
+    #[serde(default)]
+    pub master: Track,
     pub patterns: Vec<Pattern>,
     pub sequence: Vec<String>,
     /// Each instrument's parameter values, by definition id; notes start with these.
@@ -233,24 +259,8 @@ impl Song {
             || !(20.0..=300.0).contains(&self.bpm)
             || !(1..=16).contains(&self.rows_per_beat)
             || !(1..=16).contains(&self.tracks.len())
-            || self.tracks.iter().any(|t| {
-                !t.volume_db.is_finite()
-                    || !(-60.0..=6.0).contains(&t.volume_db)
-                    || !t.pan.is_finite()
-                    || !(-1.0..=1.0).contains(&t.pan)
-                    || t.fx.len() > MAX_DEVICES
-                    || t.fx.iter().enumerate().any(|(i, device)| {
-                        device.id.is_empty()
-                            || device.id.len() > 40
-                            || !device
-                                .id
-                                .chars()
-                                .all(|c| c.is_ascii_alphanumeric() || c == '_')
-                            || t.fx[..i].iter().any(|other| other.id == device.id)
-                            || device.values.values().any(|value| !value.is_finite())
-                            || device.modulations.values().any(|lfo| !lfo.valid())
-                    })
-            })
+            || self.tracks.iter().any(Track::invalid)
+            || self.master.invalid()
             || self
                 .instrument_values
                 .values()
@@ -721,6 +731,7 @@ mod tests {
                 })
                 .collect(),
             sequence: vec!["a".into(), "b".into(), "a".into()],
+            master: Track::default(),
             instrument_values: Default::default(),
         }
     }

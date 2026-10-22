@@ -30,8 +30,8 @@ impl Parameter {
 }
 
 /// The engine node that runs one device of a track's chain.
-pub fn fx_node(track: usize, device: &str) -> String {
-    format!("fx_{track}_{device}")
+pub fn fx_node(slot: impl std::fmt::Display, device: &str) -> String {
+    format!("fx_{slot}_{device}")
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, Serialize)]

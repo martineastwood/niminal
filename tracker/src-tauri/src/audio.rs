@@ -68,9 +68,16 @@ pub enum Command {
 
 type Request = (Command, mpsc::Sender<Result<Status, String>>);
 
+/// Each channel's recent waveform, by scope id: `s_<track>` and `s_m` for the master.
+pub type Scopes = BTreeMap<String, Vec<f32>>;
+/// Frames per scope, and how often the engine sends them.
+const SCOPE_FRAMES: usize = 128;
+const SCOPE_RATE: f64 = 20.0;
+
 pub struct Audio {
     sender: mpsc::Sender<Request>,
     status: Arc<Mutex<Status>>,
+    scopes: Arc<Mutex<Scopes>>,
 }
 
 impl Audio {
@@ -78,10 +85,13 @@ impl Audio {
         let (sender, receiver) = mpsc::channel::<Request>();
         let status = Arc::new(Mutex::new(Status::default()));
         let shared = status.clone();
+        let scopes = Arc::new(Mutex::new(Scopes::new()));
+        let published = scopes.clone();
         thread::Builder::new()
             .name("tracker-playback".into())
             .spawn(move || {
                 let mut worker = Worker::default();
+                let mut last_scopes = std::time::Instant::now();
                 loop {
                     match receiver.recv_timeout(Duration::from_millis(25)) {
                         Ok((command, reply)) => {
@@ -103,11 +113,32 @@ impl Audio {
                         }
                         *shared.lock().unwrap_or_else(|e| e.into_inner()) = worker.status.clone();
                     }
+                    if worker.client.is_some() && last_scopes.elapsed() >= Duration::from_millis(30)
+                    {
+                        last_scopes = std::time::Instant::now();
+                        if worker.pump().is_ok() {
+                            *published.lock().unwrap_or_else(|e| e.into_inner()) =
+                                worker.scopes.clone();
+                        }
+                    } else if worker.client.is_none() {
+                        published.lock().unwrap_or_else(|e| e.into_inner()).clear();
+                    }
                 }
                 let _ = worker.stop();
             })
             .expect("could not start tracker playback worker");
-        Self { sender, status }
+        Self {
+            sender,
+            status,
+            scopes,
+        }
+    }
+
+    pub fn scopes(&self) -> Scopes {
+        self.scopes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn status(&self) -> Status {
@@ -124,6 +155,8 @@ struct Worker {
     status: Status,
     sounds: BTreeMap<String, Sound>,
     mixer: Vec<Track>,
+    mixer_master: Track,
+    scopes: Scopes,
     playback: Option<Playback>,
     mixer_timing: (f64, u32),
     dir: Option<String>,
@@ -157,6 +190,7 @@ impl Worker {
                 self.playback = None;
                 self.sounds.clear();
                 self.mixer.clear();
+                self.mixer_master = Track::default();
                 self.status = Status {
                     error: Some(error.clone()),
                     ..Status::default()
@@ -172,6 +206,37 @@ impl Worker {
         }
         let reply = self.call("events.send", json!({"events": events}))?;
         self.status.late_events += reply["late"].as_u64().unwrap_or(0);
+        Ok(())
+    }
+
+    /// Collects the scope frames the engine has sent. Notifications only arrive during a call, so ask
+    /// for the clock to give them a chance.
+    fn pump(&mut self) -> Result<(), String> {
+        self.clock()?;
+        let Some(client) = self.client.as_mut() else {
+            return Ok(());
+        };
+        for note in client.take_notifications() {
+            if note["method"] != "scope" {
+                continue;
+            }
+            let params = &note["params"];
+            let (Some(id), Some(values)) = (params["id"].as_str(), params["values"].as_array())
+            else {
+                continue;
+            };
+            // Channels are interleaved; one line per scope is enough, so average them.
+            let channels = params["channels"].as_u64().unwrap_or(1).max(1) as usize;
+            let frames = values
+                .chunks(channels)
+                .map(|frame| {
+                    let mean =
+                        frame.iter().filter_map(Value::as_f64).sum::<f64>() / channels as f64;
+                    (mean * 1000.0).round() as f32 / 1000.0
+                })
+                .collect();
+            self.scopes.insert(id.to_string(), frames);
+        }
         Ok(())
     }
 
@@ -195,7 +260,11 @@ impl Worker {
                 json!({"tag":"tracker-pattern", "from":"now"}),
             )?;
             self.call("panic", json!({}))?;
-            self.send_events(mixer::reset(&self.mixer, &self.status.effect_parameters))?;
+            self.send_events(mixer::reset(
+                &self.mixer,
+                &self.mixer_master,
+                &self.status.effect_parameters,
+            ))?;
         }
         Ok(())
     }
@@ -208,6 +277,7 @@ impl Worker {
                 self.client = None;
                 self.sounds.clear();
                 self.mixer.clear();
+                self.mixer_master = Track::default();
                 self.status = Status::default();
                 let (client, hello) =
                     Client::connect_as(port, token.as_deref(), "niminal-tracker")?;
@@ -219,6 +289,17 @@ impl Worker {
                 self.send_events(vec![
                     json!({"op":"routing", "at":"now", "edits":mixer::setup()}),
                 ])?;
+                self.scopes.clear();
+                self.call("subscribe", json!({"topics":["scopes"]}))?;
+                for label in (0..16)
+                    .map(|t| t.to_string())
+                    .chain([mixer::MASTER.to_string()])
+                {
+                    self.call(
+                        "scopes.create",
+                        json!({"id":format!("s_{label}"), "endpoint":{"kind":"node", "id":format!("tap_{label}")}, "frames":SCOPE_FRAMES, "rate":SCOPE_RATE}),
+                    )?;
+                }
                 self.status.connected = true;
             }
             Command::Disconnect => {
@@ -226,6 +307,7 @@ impl Worker {
                 self.client = None;
                 self.sounds.clear();
                 self.mixer.clear();
+                self.mixer_master = Track::default();
                 self.status = Status::default();
                 result?;
             }
@@ -278,17 +360,26 @@ impl Worker {
                     .collect();
                 let (remove_modulators, _) = crate::modulation::edits(
                     &[],
+                    &Track::default(),
                     &self.mixer,
+                    &self.mixer_master,
                     &self.status.effect_parameters,
                     self.mixer_timing.0,
                     self.mixer_timing.1,
                     false,
                 );
                 edits.extend(remove_modulators);
-                edits.extend(mixer::replacements(&self.mixer, &effects, &parameters)?);
+                edits.extend(mixer::replacements(
+                    &self.mixer,
+                    &self.mixer_master,
+                    &effects,
+                    &parameters,
+                )?);
                 let (_, modulators) = crate::modulation::edits(
                     &self.mixer,
+                    &self.mixer_master,
                     &[],
+                    &Track::default(),
                     &parameters,
                     self.mixer_timing.0,
                     self.mixer_timing.1,
@@ -331,6 +422,7 @@ impl Worker {
                 self.set_mixer(&playback.song)?;
                 self.send_events(mixer::reset(
                     &playback.song.tracks,
+                    &playback.song.master,
                     &self.status.effect_parameters,
                 ))?;
                 playback.parameters = self.status.effect_parameters.clone();
@@ -338,6 +430,7 @@ impl Worker {
                 playback.origin = self.clock()? + (self.status.sample_rate * 0.15).round() as u64;
                 self.send_events(crate::modulation::reset(
                     &playback.song.tracks,
+                    &playback.song.master,
                     &self.status.effect_parameters,
                     playback.origin,
                 ))?;
@@ -388,6 +481,14 @@ impl Worker {
 
     fn check_assignments(&self, song: &Song) -> Result<(), String> {
         song.validate()?;
+        if song.master.fx.iter().any(|device| {
+            !self
+                .status
+                .effect_parameters
+                .contains_key(&device.definition)
+        }) {
+            return Err("Apply the master's effects first".into());
+        }
         for (index, track) in song.tracks.iter().enumerate() {
             if let Some(id) = &track.instrument
                 && !self.status.instruments.contains_key(id)
@@ -460,7 +561,9 @@ impl Worker {
     fn set_mixer(&mut self, song: &Song) -> Result<(), String> {
         let events = mixer::events(
             &song.tracks,
+            &song.master,
             &self.mixer,
+            &self.mixer_master,
             &self.status.effects,
             &self.status.effect_parameters,
             song.bpm,
@@ -469,6 +572,7 @@ impl Worker {
         )?;
         self.send_events(events)?;
         self.mixer = song.tracks.clone();
+        self.mixer_master = song.master.clone();
         self.mixer_timing = (song.bpm, song.rows_per_beat);
         Ok(())
     }
@@ -517,6 +621,11 @@ pub async fn audio_command(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn audio_scopes(audio: tauri::State<'_, Audio>) -> Scopes {
+    audio.scopes()
 }
 
 #[tauri::command]

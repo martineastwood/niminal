@@ -254,20 +254,28 @@ it('lets a track pick its colour from the strip above its header', () => {
   expect(project.tracks[1].colour).toBeUndefined();
 });
 
-it('enters OFF and two-digit hex values in the sub-columns, and refuses values out of range', () => {
+it('enters OFF, and plain numbers in the sub-columns, shown as people count them', () => {
   const { parent, project, grid, key, click } = setup();
   project.tracks[0].show = { inst: true, vol: true, pan: true, delay: true }; grid.render();
   const column = project.patterns[0].notes[0][0], cell = (row: number, kind: string) => parent.querySelector<HTMLElement>(`#cell-${row}-0-0-${kind}`)!;
+  const type = (row: number, kind: string, text: string) => {
+    cell(row, kind).click(); const input = parent.querySelector<HTMLInputElement>('.lane-value')!; input.value = text;
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  };
   click(1, 0); key('1'); expect(column.notes[1]).toBe('OFF'); expect(parent.querySelector('#cell-1-0')!.textContent).toBe('OFF');
-  cell(0, 'vol').click(); key('4'); key('0');
-  expect(column.vol[0]).toBe('64'); expect(cell(0, 'vol').textContent).toBe('40');
-  key('8'); key('0'); expect(column.vol[1]).toBe('128');
-  cell(2, 'pan').click(); key('f'); key('f'); expect(column.pan[2]).toBe('15'); // the first digit stays; 0xFF is out of range
-  cell(3, 'delay').click(); key('f'); key('f'); expect(column.delay[3]).toBe('255');
-  cell(4, 'inst').click(); key('0'); key('0'); expect(column.inst[4]).toBe(project.definitions.filter(d => d.kind === 'instr')[0].id);
-  cell(5, 'inst').click(); key('7'); key('f'); expect(column.inst[5]).toBeNull();
-  grid.undo(); expect(column.inst[4]).toBeNull();
-  cell(3, 'delay').click(); expect(clipboard(parent, 'copy')).toBe('FF');
+  type(0, 'vol', '50'); expect(column.vol[0]).toBe('64'); expect(cell(0, 'vol').textContent).toBe('50');
+  type(1, 'vol', '100'); expect(column.vol[1]).toBe('128'); type(2, 'vol', '101'); expect(column.vol[2]).toBeNull();
+  type(2, 'pan', '-50'); expect(column.pan[2]).toBe('0'); expect(cell(2, 'pan').textContent).toBe('-50');
+  type(3, 'pan', '+25'); expect(column.pan[3]).toBe('96'); expect(cell(3, 'pan').textContent).toBe('+25');
+  type(4, 'pan', 'c'); expect(column.pan[4]).toBe('64'); expect(cell(4, 'pan').textContent).toBe('C'); type(5, 'pan', '51'); expect(column.pan[5]).toBeNull();
+  type(5, 'delay', '50'); expect(column.delay[5]).toBe('128'); expect(cell(5, 'delay').textContent).toBe('50'); type(6, 'delay', '100'); expect(column.delay[6]).toBeNull();
+  type(7, 'inst', '0'); expect(column.inst[7]).toBe(project.definitions.filter(d => d.kind === 'instr')[0].id); expect(cell(7, 'inst').textContent).toBe('00');
+  type(8, 'inst', '7'); expect(column.inst[8]).toBeNull();
+  // Typing a digit on a selected cell starts the same editor.
+  cell(9, 'vol').click(); parent.querySelector<HTMLInputElement>('.lane-value')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  key('7'); const input = parent.querySelector<HTMLInputElement>('.lane-value')!; expect(input.value).toBe('7');
+  input.value = '75'; input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); expect(column.vol[9]).toBe('96');
+  grid.undo(); expect(column.vol[9]).toBeNull();
 });
 
 it('adds note columns to every pattern and shows or hides sub-columns from the track menu', () => {
@@ -288,15 +296,18 @@ it('adds note columns to every pattern and shows or hides sub-columns from the t
   expect(project.patterns.map(p => p.notes[0].length)).toEqual([1, 1]);
 });
 
-it('copies and pastes sub-column cells as hex, and rejects text that is not hex', () => {
+it('copies and pastes sub-column cells as the numbers shown, and rejects text out of range', () => {
   const { parent, project, grid, key } = setup();
-  project.tracks[0].show = { vol: true }; grid.render();
+  project.tracks[0].show = { vol: true, pan: true }; grid.render();
   const column = project.patterns[0].notes[0][0];
   parent.querySelector<HTMLElement>('#cell-0-0-0-vol')!.click();
-  clipboard(parent, 'paste', '20'); expect(column.vol[0]).toBe('32');
-  clipboard(parent, 'paste', '90'); expect(column.vol[0]).toBe('32');
-  clipboard(parent, 'paste', 'OFF'); expect(column.vol[0]).toBe('32');
-  key('z', { metaKey: true }); expect(column.vol[0]).toBeNull();
+  clipboard(parent, 'paste', '50'); expect(column.vol[0]).toBe('64');
+  clipboard(parent, 'paste', '101'); expect(column.vol[0]).toBe('64');
+  clipboard(parent, 'paste', 'OFF'); expect(column.vol[0]).toBe('64');
+  expect(clipboard(parent, 'copy')).toBe('50');
+  parent.querySelector<HTMLElement>('#cell-0-0-0-pan')!.click(); clipboard(parent, 'paste', 'C'); expect(column.pan[0]).toBe('64');
+  clipboard(parent, 'paste', '-25'); expect(column.pan[0]).toBe('32'); expect(clipboard(parent, 'copy')).toBe('-25');
+  key('z', { metaKey: true }); key('z', { metaKey: true }); expect(column.pan[0]).toBeNull();
 });
 
 it('records a parameter into a new lane that spans every row', () => {

@@ -2,7 +2,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { renderMixer, renderInstrument, type FxActions } from './mixer';
 import { newProject } from './project';
-import { addDevice, moveDevice, removeDevice } from './effects';
+import { addDevice, duplicateEffect, effectUsers, moveDevice, newEffect, removeDevice, removeEffect } from './effects';
 
 vi.stubGlobal('Option', function (text: string, value: string) {
   const option = document.createElement('option'); option.textContent = text; option.value = value; return option;
@@ -26,8 +26,8 @@ it('builds a chain from presets, each device with its own copy of the code', () 
   expect(moveDevice(project, 0, b.device.id, -1)).toBe(false);
   const lane = project.patterns[0].fx[0][0]; lane.target = { kind: 'effect', device: a.device.id, parameter: 'mix' };
   const kept = project.patterns[0].fx[0][0];
-  expect(removeDevice(project, 0, a.device.id)!.id).toBe(a.definition.id);
-  expect(project.definitions.some(d => d.id === a.definition.id)).toBe(false);
+  expect(removeDevice(project, 0, a.device.id)!.id).toBe(a.device.id);
+  expect(project.definitions.some(d => d.id === a.definition.id)).toBe(true); // the effect stays in the library
   expect(kept.target).toBeNull();
   for (let i = 0; i < 10; i++) addDevice(project, 2, 'notch');
   expect(project.tracks[2].fx).toHaveLength(8);
@@ -79,4 +79,22 @@ it('shows an instrument\'s parameters as sliders that set its values, and record
   expect(write).toHaveBeenCalledWith({ kind: 'instrument', parameter: 'cutoff' }, 500);
   renderInstrument(parent, project, tone, parameters, edited, write, 1);
   expect(parent.querySelector<HTMLButtonElement>('[aria-label="Write cutoff to pattern"]')!.disabled).toBe(true);
+});
+
+it('keeps effects in a library that devices on any track, or the master, can reuse', () => {
+  const project = newProject();
+  const delay = newEffect(project, 'delay')!, again = newEffect(project, 'delay')!;
+  expect([delay.name, again.name]).toEqual(['Stereo delay', 'Stereo delay 2']);
+  const onLead = addDevice(project, 0, `fx:${delay.id}`)!, onBass = addDevice(project, 1, `fx:${delay.id}`)!, onMaster = addDevice(project, -1, `fx:${delay.id}`)!;
+  expect(new Set([onLead.definition.id, onBass.definition.id, onMaster.definition.id])).toEqual(new Set([delay.id]));
+  expect(new Set([onLead.device.id, onBass.device.id, onMaster.device.id]).size).toBe(3);
+  expect(project.master.fx).toHaveLength(1);
+  expect(effectUsers(project, delay.id)).toEqual(['Master', 'Lead', 'Bass']);
+  expect(removeEffect(project, delay.id)).toContain('Used by Master, Lead, Bass');
+  removeDevice(project, -1, onMaster.device.id); removeDevice(project, 0, onLead.device.id); removeDevice(project, 1, onBass.device.id);
+  expect(removeEffect(project, delay.id)).toBeNull(); expect(project.definitions.some(d => d.id === delay.id)).toBe(false);
+  expect(addDevice(project, 0, 'fx:missing')).toBeNull();
+  const copy = duplicateEffect(project, again);
+  expect(copy.name).toBe('Stereo delay 2 copy'); expect(copy.source).toContain(`fx ${copy.id}`); expect(copy.source).not.toContain(again.id);
+  expect(project.definitions.indexOf(copy)).toBe(project.definitions.indexOf(again) + 1);
 });

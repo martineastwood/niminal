@@ -112,3 +112,14 @@ it('gives a new blank pattern as many note columns per track as the song already
   const fresh = makePattern(project);
   expect(fresh.notes.map(columns => columns.length)).toEqual([1, 2, 1, 1]); expect(fresh.notes[1][1].vol).toHaveLength(32);
 });
+
+it('keeps a master strip and solo flags, and rejects a master with an instrument or a bad solo flag', () => {
+  const project = newProject();
+  project.master.volume_db = -3; project.master.fx = [{ id: 'd1', definition: 'soften', bypass: false, values: {}, modulations: {} }];
+  project.definitions.push({ id: 'soften', name: 'Filter', kind: 'fx', source: 'fx soften() { out = in }' });
+  project.tracks[2].solo = true;
+  expect(readProject(JSON.stringify(project))).toEqual(project);
+  const bad = (change: (p: typeof project) => void) => { const copy = structuredClone(project); change(copy); expect(() => readProject(JSON.stringify(copy))).toThrow(); };
+  bad(p => { p.master.instrument = 'tone'; }); bad(p => { p.master.volume_db = 20; }); bad(p => { (p.tracks[0] as { solo: unknown }).solo = 'yes'; });
+  bad(p => { p.master.fx[0].definition = 'missing'; }); bad(p => { delete (p as { master?: unknown }).master; });
+});
