@@ -6,11 +6,11 @@ export function laneParameter(target: FxTarget | null, track: number, project: P
   if (!target) return null;
   if (target.kind === 'volume') return { label: 'Track volume', name: 'volume', min: -60, max: 6, default: 0, unit: 'db' };
   if (target.kind === 'pan') return { label: 'Track pan', name: 'pan', min: -1, max: 1, default: 0, unit: '%' };
-  const slot = project.tracks[track].fx;
-  const parameter = parameters[slot?.definition ?? '']?.find(p => p.name === target.parameter);
-  if (!slot || !parameter) return null;
-  const name = project.definitions.find(d => d.id === slot.definition)?.name ?? 'Effect';
-  return { ...parameter, label: `${name} → ${parameter.name}` };
+  const device = project.tracks[track].fx.find(d => d.id === target.device);
+  const parameter = parameters[device?.definition ?? '']?.find(p => p.name === target.parameter);
+  if (!device || !parameter) return null;
+  const name = project.definitions.find(d => d.id === device.definition)?.name ?? 'Effect';
+  return { ...parameter, label: `${name} → ${parameter.name}${device.bypass ? ' (bypassed)' : ''}` };
 }
 function percent(p: Parameter) { return p.unit === '%' || !p.unit && p.min === 0 && p.max === 1; }
 export function formatValue(value: string | number, p: Parameter | null): string {

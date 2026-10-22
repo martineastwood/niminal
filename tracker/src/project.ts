@@ -2,27 +2,29 @@ import tone from './presets/tone.nml?raw';
 
 export interface Definition { id: string; name: string; kind: 'instr' | 'fx'; source: string }
 export interface Lfo { enabled: boolean; shape: 'sine' | 'triangle' | 'saw' | 'square'; period: number; min: number; max: number }
-export interface TrackFx { definition: string; values: Record<string, number>; modulations: Record<string, Lfo> }
-export interface Track { colour?: string; name: string; instrument: string | null; fx: TrackFx | null; muted: boolean; volume_db: number; pan: number }
+/** One effect in a track's chain. Its `id` is stable across reordering; lanes refer to it. */
+export interface Device { id: string; definition: string; bypass: boolean; values: Record<string, number>; modulations: Record<string, Lfo> }
+export const maxDevices = 8;
+export interface Track { colour?: string; name: string; instrument: string | null; fx: Device[]; muted: boolean; volume_db: number; pan: number }
 export interface Parameter { name: string; min: number; max: number; default: number; unit: string | null }
 export type EffectParameters = Record<string, Parameter[]>;
-export type FxTarget = { kind: 'volume' } | { kind: 'pan' } | { kind: 'effect'; parameter: string };
+export type FxTarget = { kind: 'volume' } | { kind: 'pan' } | { kind: 'effect'; device: string; parameter: string };
 export interface EnvelopePoint { row: number; value: number }
 export interface Envelope { enabled: boolean; mode: 'hold' | 'linear'; points: EnvelopePoint[] }
 export interface FxLane { target: FxTarget | null; values: (string | null)[]; envelope?: Envelope }
 export const emptyFxLane = (rows: number): FxLane => ({ target: { kind: 'volume' }, values: Array(rows).fill(null) });
 export interface Pattern { id: string; name: string; rows: number; notes: (string | null)[][]; fx: FxLane[][] }
 export interface Song { bpm: number; rows_per_beat: number; tracks: Track[]; patterns: Pattern[]; sequence: string[] }
-export interface Project extends Song { version: 6; definitions: Definition[] }
-export const storageKey = 'niminal-tracker-project-v6';
+export interface Project extends Song { version: 7; id: string; definitions: Definition[] }
+export const storageKey = 'niminal-tracker-project-v7';
 
 export function newProject(): Project {
   return {
-    version: 6, bpm: 125, rows_per_beat: 4,
+    version: 7, id: crypto.randomUUID(), bpm: 125, rows_per_beat: 4,
     definitions: [
       { id: 'tone', name: 'Warm saw', kind: 'instr', source: tone },
     ],
-    tracks: ['Lead', 'Bass', 'Drums', 'Texture'].map((name, track) => ({ name, instrument: track === 0 ? 'tone' : null, fx: null, pan: 0, muted: false, volume_db: 0 })),
+    tracks: ['Lead', 'Bass', 'Drums', 'Texture'].map((name, track) => ({ name, instrument: track === 0 ? 'tone' : null, fx: [], pan: 0, muted: false, volume_db: 0 })),
     patterns: [{ fx: Array.from({ length: 4 }, () => [emptyFxLane(32)]), id: 'pattern_00', name: 'First idea', rows: 32, notes: Array.from({ length: 4 }, (_, track) => Array.from({ length: 32 }, (_, row) => track === 0 && row % 4 === 0 ? ['C-4', 'D#4', 'G-4', 'A#4'][Math.floor(row / 4) % 4] : null)) }],
     sequence: ['pattern_00'],
   };
@@ -48,7 +50,7 @@ export function resizePattern(pattern: Pattern, rows: number) {
 
 export function readProject(raw: string): Project {
   const value = JSON.parse(raw);
-  if (value?.version !== 6 || !Array.isArray(value.definitions) || value.definitions.length === 0 ||
+  if (value?.version !== 7 || typeof value.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value.id) || !Array.isArray(value.definitions) || value.definitions.length === 0 ||
       !value.definitions.every((d: Definition) => d && typeof d.id === 'string' && /^[a-zA-Z_][\w-]*$/.test(d.id) && typeof d.name === 'string' && typeof d.source === 'string' && ['instr', 'fx'].includes(d.kind)) ||
       new Set(value.definitions.map((d: Definition) => d.id)).size !== value.definitions.length ||
       !Number.isFinite(value.bpm) || value.bpm < 20 || value.bpm > 300 ||
@@ -56,7 +58,7 @@ export function readProject(raw: string): Project {
       !Array.isArray(value.tracks) || (value.tracks.length < 1 || value.tracks.length > 16) ||
       !value.tracks.every((t: Track) => t && typeof t.name === 'string' && (t.colour === undefined || /^#[0-9a-f]{6}$/i.test(t.colour)) &&
         (t.instrument === null || value.definitions.some((d: Definition) => d.id === t.instrument && d.kind === 'instr')) &&
-        (t.fx === null || !!t.fx && value.definitions.some((d: Definition) => d.id === t.fx!.definition && d.kind === 'fx') && t.fx.values && Object.values(t.fx.values).every(Number.isFinite) && t.fx.modulations && Object.values(t.fx.modulations).every(validLfo)) &&
+        Array.isArray(t.fx) && t.fx.length <= maxDevices && t.fx.every((d, i) => !!d && validDeviceId(d.id) && t.fx.findIndex(other => other.id === d.id) === i && typeof d.bypass === 'boolean' && value.definitions.some((def: Definition) => def.id === d.definition && def.kind === 'fx') && !!d.values && Object.values(d.values).every(Number.isFinite) && !!d.modulations && Object.values(d.modulations).every(validLfo)) &&
         Number.isFinite(t.pan) && t.pan >= -1 && t.pan <= 1 &&
         typeof t.muted === 'boolean' && Number.isFinite(t.volume_db) && t.volume_db >= -60 && t.volume_db <= 6) ||
       !Array.isArray(value.patterns) || value.patterns.length < 1 || value.patterns.length > 128 ||
@@ -67,7 +69,7 @@ export function readProject(raw: string): Project {
       new Set(value.patterns.map((p: Pattern) => p.id)).size !== value.patterns.length ||
       !Array.isArray(value.sequence) || value.sequence.length < 1 || value.sequence.length > 1024 ||
       !value.sequence.every((id: unknown) => value.patterns.some((p: Pattern) => p.id === id))) {
-    throw new Error('Not a supported niminal tracker project (expected version 6)');
+    throw new Error('Not a supported niminal tracker project (expected version 7)');
   }
   return value;
 }
@@ -102,8 +104,9 @@ export function restoreTrack(project: Project, deleted: DeletedTrack): boolean {
 }
 
 export function validTarget(target: FxTarget | null): boolean {
-  return target === null || !!target && (target.kind === 'volume' || target.kind === 'pan' || target.kind === 'effect' && typeof target.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(target.parameter));
+  return target === null || !!target && (target.kind === 'volume' || target.kind === 'pan' || target.kind === 'effect' && validDeviceId(target.device) && typeof target.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(target.parameter));
 }
+export const validDeviceId = (id: unknown) => typeof id === 'string' && /^[a-zA-Z0-9_]{1,40}$/.test(id);
 function validEnvelope(envelope: Envelope | undefined) {
   return envelope === undefined || !!envelope && typeof envelope.enabled === 'boolean' && ['hold', 'linear'].includes(envelope.mode) && Array.isArray(envelope.points) && envelope.points.length <= 4097 && envelope.points.every((p, i) => p && Number.isFinite(p.row) && p.row >= 0 && p.row <= 256 && Number.isFinite(p.value) && (i === 0 || p.row > envelope.points[i - 1].row));
 }

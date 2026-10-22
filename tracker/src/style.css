@@ -159,6 +159,14 @@ aside.names-hidden { width: 84px; }
 .device-heading select { flex: 1; min-width: 0; }
 .device-heading button { min-width: 20px; padding: 0 5px; }
 .device-note { margin: 4px 0; color: var(--dim); }
+.device { margin-bottom: 3px; border: 1px solid var(--line); border-left: 3px solid #3a3f46; background: #1f2226; }
+.device.selected { border-left-color: var(--accent); background: #24282d; }
+.device.bypassed .device-name { opacity: .5; text-decoration: line-through; }
+.device-head { display: flex; align-items: center; gap: 2px; padding: 2px; }
+.device-head button { height: 18px; min-width: 20px; padding: 0 4px; }
+.device-head .device-name { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; background: transparent; border-color: transparent; }
+.device.selected .device-name { color: var(--accent-text); }
+.device .parameter-row, .device .lfo-controls, .device .device-note { margin-left: 4px; margin-right: 4px; }
 .parameter-row { display: grid; grid-template-columns: 62px minmax(40px, 1fr) 70px 18px 18px; gap: 3px; align-items: center; height: 20px; }
 .parameter-row > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .parameter-row > input[type=range] { width: 100%; min-width: 0; }
@@ -190,3 +198,4 @@ footer input { height: 16px; font-size: 10px; }
 #engine-token { width: 70px; text-align: left; }
 #audio-status { color: #9fb0bf; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
 #status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.definition small { margin-left: auto; padding-left: 6px; color: var(--dim); font-size: 9px; }

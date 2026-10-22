@@ -6,18 +6,39 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct Track {
     pub name: String,
     pub instrument: Option<String>,
-    pub fx: Option<TrackFx>,
+    /// The track's effect chain, in signal order.
+    #[serde(default)]
+    pub fx: Vec<Device>,
     pub pan: f64,
     pub muted: bool,
     pub volume_db: f64,
 }
 
+/// One effect in a track's chain. The `id` is stable across reordering, so lanes and
+/// modulation can refer to the device and the engine node keeps its name.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct TrackFx {
+pub struct Device {
+    pub id: String,
     pub definition: String,
+    #[serde(default)]
+    pub bypass: bool,
+    #[serde(default)]
     pub values: BTreeMap<String, f64>,
+    #[serde(default)]
     pub modulations: BTreeMap<String, Lfo>,
 }
+
+impl Track {
+    pub fn device(&self, id: &str) -> Option<&Device> {
+        self.fx.iter().find(|device| device.id == id)
+    }
+    /// The devices that process audio: bypassed ones are left out of the engine graph.
+    pub fn active(&self) -> impl Iterator<Item = &Device> {
+        self.fx.iter().filter(|device| !device.bypass)
+    }
+}
+
+pub const MAX_DEVICES: usize = 8;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Lfo {
@@ -128,9 +149,14 @@ impl Song {
                     || !(-60.0..=6.0).contains(&t.volume_db)
                     || !t.pan.is_finite()
                     || !(-1.0..=1.0).contains(&t.pan)
-                    || t.fx.iter().any(|slot| {
-                        slot.values.values().any(|value| !value.is_finite())
-                            || slot.modulations.values().any(|lfo| !lfo.valid())
+                    || t.fx.len() > MAX_DEVICES
+                    || t.fx.iter().enumerate().any(|(i, device)| {
+                        device.id.is_empty()
+                            || device.id.len() > 40
+                            || !device.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                            || t.fx[..i].iter().any(|other| other.id == device.id)
+                            || device.values.values().any(|value| !value.is_finite())
+                            || device.modulations.values().any(|lfo| !lfo.valid())
                     })
             })
             || self.patterns.is_empty()
@@ -201,11 +227,6 @@ impl Song {
 
     pub fn same_timeline(&self, other: &Self) -> bool {
         self.tracks.len() == other.tracks.len()
-            && self.tracks.iter().zip(&other.tracks).all(|(a, b)| {
-                a.fx.iter()
-                    .map(|slot| &slot.definition)
-                    .eq(b.fx.iter().map(|slot| &slot.definition))
-            })
             && self.bpm == other.bpm
             && self.rows_per_beat == other.rows_per_beat
             && self.sequence == other.sequence
@@ -385,13 +406,10 @@ impl Playback {
                         breaks.push(end);
                         let db = match target {
                             crate::commands::FxTarget::Volume => true,
-                            crate::commands::FxTarget::Effect { parameter } => track
-                                .fx
-                                .as_ref()
-                                .and_then(|slot| self.parameters.get(&slot.definition))
-                                .and_then(|params| params.iter().find(|p| p.name == *parameter))
+                            crate::commands::FxTarget::Effect { .. } => target
+                                .parameter(track, &self.parameters)
                                 .is_some_and(|p| p.unit.as_deref() == Some("db")),
-                            _ => false,
+                            crate::commands::FxTarget::Pan => false,
                         };
                         for pair in breaks.windows(2) {
                             let Some(value) = envelope.value(pair[0], db) else {
@@ -403,18 +421,8 @@ impl Playback {
                             let end_at = at
                                 + ((pair[1] - start) * self.song.row_samples(sample_rate)).round()
                                     as u64;
-                            let mut point_edits = Vec::new();
-                            if let crate::commands::FxTarget::Effect { parameter } = target
-                                && track
-                                    .fx
-                                    .as_ref()
-                                    .unwrap()
-                                    .modulations
-                                    .get(parameter)
-                                    .is_some_and(|lfo| lfo.enabled)
-                            {
-                                point_edits.push(json!({"op":"map", "id":format!("fx_{index}"), "param":parameter, "source":null}));
-                            }
+                            let mut point_edits: Vec<_> =
+                                target.unmap(index, track).into_iter().collect();
                             point_edits.push(crate::commands::edit(
                                 target,
                                 &value.to_string(),
@@ -460,16 +468,7 @@ impl Playback {
                     };
                     let edit =
                         crate::commands::edit(target, value, index, track, &self.parameters)?;
-                    if let crate::commands::FxTarget::Effect { parameter } = target {
-                        let slot = &track.fx.as_ref().unwrap();
-                        if slot
-                            .modulations
-                            .get(parameter)
-                            .is_some_and(|lfo| lfo.enabled)
-                        {
-                            edits.push(json!({"op":"map", "id":format!("fx_{index}"), "param":parameter, "source":null}));
-                        }
-                    }
+                    edits.extend(target.unmap(index, track));
                     edits.push(edit);
                 }
                 if !edits.is_empty() {

@@ -1,5 +1,5 @@
 use super::*;
-use crate::pattern::{FxLane, Pattern, Track, TrackFx};
+use crate::pattern::{Device, FxLane, Pattern, Track};
 use niminal_lang::Layout;
 use niminal_server::{EngineServer, Session};
 use niminal_ws::{Server, ServerConfig};
@@ -53,12 +53,14 @@ fn real_engine_plays_last_good_source_and_stop_cancels_the_loop() {
             id: "tone".into(),
             source: TONE.into(),
             kind: Kind::Instr,
+            dir: None,
         })
         .unwrap();
     let rejected = worker.command(Command::Apply {
         id: "tone".into(),
         source: TONE.replace("saw", "sawz"),
         kind: Kind::Instr,
+        dir: None,
     });
     assert!(rejected.is_err());
     assert_eq!(worker.sounds["tone"].engine_source, TONE);
@@ -96,6 +98,7 @@ fn real_engine_plays_last_good_source_and_stop_cancels_the_loop() {
             id: "second".into(),
             source: TONE.replace("tone(", "other("),
             kind: Kind::Instr,
+            dir: None,
         })
         .unwrap();
     worker
@@ -142,6 +145,7 @@ fn track_effects_gain_and_mute_change_rendered_audio_and_reject_bad_fx_edits() {
             id: "half".into(),
             source: "fn half_level(x) { x * 0.5 }\nfx half { out = half_level(in) }".into(),
             kind: Kind::Fx,
+            dir: None,
         })
         .unwrap();
     worker
@@ -149,6 +153,7 @@ fn track_effects_gain_and_mute_change_rendered_audio_and_reject_bad_fx_edits() {
             id: "tone".into(),
             source: "instr flat(freq: hz) { 0.1 }".into(),
             kind: Kind::Instr,
+            dir: None,
         })
         .unwrap();
     let mut song = test_song(None);
@@ -165,10 +170,11 @@ fn track_effects_gain_and_mute_change_rendered_audio_and_reject_bad_fx_edits() {
     };
     let dry = render_note(&mut worker);
     assert!(dry > 0.09);
-    song.tracks[0].fx = Some(TrackFx {
+    song.tracks[0].fx = vec![Device {
+        id: "d0".into(),
         definition: "half".into(),
-        ..TrackFx::default()
-    });
+        ..Device::default()
+    }];
     worker
         .command(Command::Update { song: song.clone() })
         .unwrap();
@@ -179,7 +185,8 @@ fn track_effects_gain_and_mute_change_rendered_audio_and_reject_bad_fx_edits() {
             .command(Command::Apply {
                 id: "half".into(),
                 source: "fx half { out = in.no_such_op }".into(),
-                kind: Kind::Fx
+                kind: Kind::Fx,
+                dir: None,
             })
             .is_err()
     );
@@ -190,6 +197,7 @@ fn track_effects_gain_and_mute_change_rendered_audio_and_reject_bad_fx_edits() {
             id: "half".into(),
             source: "fx half { out = in * 0.25 }".into(),
             kind: Kind::Fx,
+            dir: None,
         })
         .unwrap();
     assert!((render_note(&mut worker) / dry - 0.25).abs() < 0.001);
@@ -204,7 +212,7 @@ fn track_effects_gain_and_mute_change_rendered_audio_and_reject_bad_fx_edits() {
         .unwrap();
     assert_eq!(render_note(&mut worker), 0.0);
     song.tracks[0].muted = false;
-    song.tracks[0].fx = None;
+    song.tracks[0].fx.clear();
     song.tracks[0].volume_db = 0.0;
     worker.command(Command::Update { song }).unwrap();
     let bypassed = render_note(&mut worker);
@@ -212,6 +220,212 @@ fn track_effects_gain_and_mute_change_rendered_audio_and_reject_bad_fx_edits() {
         (bypassed / dry - 1.0).abs() < 0.001,
         "dry={dry}, bypassed={bypassed}"
     );
+    worker.command(Command::Disconnect).unwrap();
+    drop(worker);
+    server.stop();
+}
+
+/// A constant-level mono WAV, so any playback of it is easy to hear in the render.
+fn write_wav(path: &std::path::Path, frames: u32, level: i16) {
+    let data = frames * 2;
+    let mut bytes = Vec::new();
+    bytes.extend(b"RIFF");
+    bytes.extend((36 + data).to_le_bytes());
+    bytes.extend(b"WAVEfmt ");
+    bytes.extend(16u32.to_le_bytes());
+    bytes.extend([1, 0, 1, 0]);
+    bytes.extend(48000u32.to_le_bytes());
+    bytes.extend((48000u32 * 2).to_le_bytes());
+    bytes.extend([2, 0, 16, 0]);
+    bytes.extend(b"data");
+    bytes.extend(data.to_le_bytes());
+    for _ in 0..frames {
+        bytes.extend(level.to_le_bytes());
+    }
+    std::fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn the_editor_finds_samples_beside_documents_in_the_project_folder() {
+    let base = std::env::temp_dir().join(format!("niminal-tracker-lsp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let dir = crate::files::project_dir(&base, "song").unwrap();
+    let original = base.join("level.wav");
+    write_wav(&original, 100, 1000);
+    let file = crate::files::import_sample(&dir, &original).unwrap();
+    let source = format!("smp_a = sample(\"{file}\").root(c4)\ninstr level(freq: hz) {{ smp_a(freq: freq) }}");
+    let diagnostics = |uri: &str| {
+        let mut server = niminal_lsp::Server::new();
+        let replies = server.handle(&json!({"method":"textDocument/didOpen", "params": {
+            "textDocument": {"uri":uri, "text":source, "languageId":"niminal", "version":1}
+        }}));
+        replies[0]["params"]["diagnostics"].clone()
+    };
+    assert_eq!(diagnostics(&format!("file://{}/level.nml", dir.display())), json!([]));
+    assert_ne!(diagnostics("file:///niminal-tracker/level.nml"), json!([]));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn imported_samples_play_from_the_project_folder() {
+    let base = std::env::temp_dir().join(format!("niminal-tracker-sample-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let dir = crate::files::project_dir(&base, "song").unwrap();
+    let original = base.join("level.wav");
+    write_wav(&original, 24000, 16384);
+    let file = crate::files::import_sample(&dir, &original).unwrap();
+
+    let engine = Arc::new(Mutex::new(EngineServer::new(
+        Session::new(48000.0, Layout::Mono).without_limiter(),
+    )));
+    let server = Server::start(
+        engine.clone(),
+        ServerConfig {
+            port: 0,
+            ..ServerConfig::default()
+        },
+    )
+    .unwrap();
+    let mut worker = Worker::default();
+    worker
+        .command(Command::Connect {
+            port: server.port(),
+            token: None,
+        })
+        .unwrap();
+    // Without the project folder the relative path cannot be found.
+    let source = format!("smp_a = sample(\"{file}\").root(c4)\ninstr level(freq: hz) {{ smp_a(freq: freq) }}");
+    assert!(
+        worker
+            .command(Command::Apply {
+                id: "level".into(),
+                source: source.clone(),
+                kind: Kind::Instr,
+                dir: None,
+            })
+            .is_err()
+    );
+    worker
+        .command(Command::Apply {
+            id: "level".into(),
+            source,
+            kind: Kind::Instr,
+            dir: Some(dir.to_string_lossy().into_owned()),
+        })
+        .unwrap();
+    worker
+        .command(Command::Audition {
+            instrument: "level".into(),
+            note: "C-4".into(),
+            track: 0,
+        })
+        .unwrap();
+    let audio = engine.lock().unwrap().session_mut().process(8000);
+    let level = audio[0][2000..6000].iter().map(|s| s.abs()).sum::<f32>() / 4000.0;
+    assert!(level > 0.2, "the sample sounds: {level}");
+    worker.command(Command::Disconnect).unwrap();
+    drop(worker);
+    server.stop();
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn device_chain_runs_in_order_and_can_be_edited_while_playing() {
+    let engine = Arc::new(Mutex::new(EngineServer::new(
+        Session::new(48000.0, Layout::Mono).without_limiter(),
+    )));
+    let server = Server::start(
+        engine.clone(),
+        ServerConfig {
+            port: 0,
+            ..ServerConfig::default()
+        },
+    )
+    .unwrap();
+    let mut worker = Worker::default();
+    worker
+        .command(Command::Connect {
+            port: server.port(),
+            token: None,
+        })
+        .unwrap();
+    for (id, source, kind) in [
+        ("tone", "instr flat(freq: hz) { 0.1 }", Kind::Instr),
+        ("half", "fx half { out = in * 0.5 }", Kind::Fx),
+        ("clip", "fx clip { out = in.clamp(-0.05..0.05) }", Kind::Fx),
+    ] {
+        worker
+            .command(Command::Apply {
+                id: id.into(),
+                source: source.into(),
+                kind,
+                dir: None,
+            })
+            .unwrap();
+    }
+    let device = |id: &str, definition: &str| Device {
+        id: id.into(),
+        definition: definition.into(),
+        ..Device::default()
+    };
+    let render_note = |worker: &mut Worker| {
+        worker
+            .command(Command::Audition {
+                instrument: "tone".into(),
+                note: "C-4".into(),
+                track: 0,
+            })
+            .unwrap();
+        let audio = engine.lock().unwrap().session_mut().process(16000);
+        audio[0][2048..4096].iter().map(|s| s.abs()).sum::<f32>() / 2048.0
+    };
+    let mut song = test_song(None);
+    let dry = render_note(&mut worker);
+    assert!(dry > 0.09);
+    let update = |worker: &mut Worker, song: &Song| {
+        worker
+            .command(Command::Update { song: song.clone() })
+            .unwrap();
+    };
+    // Halve then clip leaves 0.05; clip then halve leaves 0.025, so order is audible.
+    song.tracks[0].fx = vec![device("a", "half"), device("b", "clip")];
+    update(&mut worker, &song);
+    assert!((render_note(&mut worker) / dry - 0.5).abs() < 0.001);
+    song.tracks[0].fx.reverse();
+    update(&mut worker, &song);
+    assert!((render_note(&mut worker) / dry - 0.25).abs() < 0.001);
+    // A bypassed device drops out of the chain; clearing the bypass restores it.
+    song.tracks[0].fx[0].bypass = true;
+    update(&mut worker, &song);
+    assert!((render_note(&mut worker) / dry - 0.5).abs() < 0.001);
+    song.tracks[0].fx[0].bypass = false;
+    update(&mut worker, &song);
+    assert!((render_note(&mut worker) / dry - 0.25).abs() < 0.001);
+    song.tracks[0].fx.remove(0);
+    update(&mut worker, &song);
+    assert!((render_note(&mut worker) / dry - 0.5).abs() < 0.001);
+    song.tracks[0].fx.clear();
+    update(&mut worker, &song);
+    assert!((render_note(&mut worker) / dry - 1.0).abs() < 0.001);
+
+    // Adding and removing devices is allowed while the song plays.
+    let mut playing = test_song(Some("C-4"));
+    worker
+        .command(Command::Play {
+            song: playing.clone(),
+            mode: Mode::Pattern,
+            pattern_id: "p0".into(),
+            start_position: 0,
+        })
+        .unwrap();
+    assert!(worker.status.playing);
+    playing.tracks[0].fx = vec![device("a", "half")];
+    update(&mut worker, &playing);
+    playing.tracks[0].fx.clear();
+    update(&mut worker, &playing);
+    assert!(worker.status.playing);
     worker.command(Command::Disconnect).unwrap();
     drop(worker);
     server.stop();
@@ -242,6 +456,7 @@ fn song_playback_completes_and_leaves_the_final_release_audible() {
             id: "tone".into(),
             source: format!("\u{a0}\u{a0}{TONE}"),
             kind: Kind::Instr,
+            dir: None,
         })
         .unwrap();
     let mut song = test_song(Some("C-4"));
@@ -328,6 +543,7 @@ fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
             id: "tone".into(),
             source: "instr constant(freq: hz) { [0.25, 0.25].to_layout(stereo) }".into(),
             kind: Kind::Instr,
+            dir: None,
         })
         .unwrap();
     worker
@@ -335,15 +551,17 @@ fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
             id: "level".into(),
             source: "fx level(amount: 0..1 = 1) { out = in * amount }".into(),
             kind: Kind::Fx,
+            dir: None,
         })
         .unwrap();
     assert_eq!(worker.status.effect_parameters["level"][0].name, "amount");
     let mut song = test_song(Some("C-4"));
-    song.tracks[0].fx = Some(TrackFx {
+    song.tracks[0].fx = vec![Device {
+        id: "d0".into(),
         definition: "level".into(),
         values: BTreeMap::from([("amount".into(), 0.5)]),
-        ..TrackFx::default()
-    });
+        ..Device::default()
+    }];
     worker
         .command(Command::Update { song: song.clone() })
         .unwrap();
@@ -363,8 +581,9 @@ fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
         "one native gain processor: {peak}"
     );
 
-    song.tracks[0].fx.as_mut().unwrap().values.clear();
+    song.tracks[0].fx[0].values.clear();
     song.patterns[0].fx[0][0].target = Some(crate::commands::FxTarget::Effect {
+        device: "d0".into(),
         parameter: "amount".into(),
     });
     song.patterns[0].fx[0][0].values[0] = Some("0".into());
@@ -397,7 +616,7 @@ fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
     );
     worker.command(Command::Stop).unwrap();
     song.patterns[0].fx[0][0].values.fill(None);
-    song.tracks[0].fx.as_mut().unwrap().modulations.insert(
+    song.tracks[0].fx[0].modulations.insert(
         "amount".into(),
         Lfo {
             enabled: true,
@@ -440,6 +659,7 @@ fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
             id: "level".into(),
             source: "fx level() { shaped = in * 0.5\n out = shaped * 0.5 }".into(),
             kind: Kind::Fx,
+            dir: None,
         })
         .unwrap();
     let retained = worker.playback.as_ref().unwrap().song.clone();
@@ -508,6 +728,7 @@ fn library_effects_expose_controls_and_render_on_mono_and_stereo_engines() {
                 id: "tone".into(),
                 source: TONE.into(),
                 kind: Kind::Instr,
+                dir: None,
             })
             .unwrap();
         for (index, source) in sources.iter().enumerate() {
@@ -517,15 +738,17 @@ fn library_effects_expose_controls_and_render_on_mono_and_stereo_engines() {
                     id: id.clone(),
                     source: (*source).into(),
                     kind: Kind::Fx,
+                    dir: None,
                 })
                 .unwrap();
             assert!(worker.sounds[&id].parameters.len() >= 3);
             engine.lock().unwrap().session_mut().process(2048);
             let mut song = test_song(None);
-            song.tracks[0].fx = Some(TrackFx {
+            song.tracks[0].fx = vec![Device {
+                id: "d0".into(),
                 definition: id,
-                ..TrackFx::default()
-            });
+                ..Device::default()
+            }];
             worker.command(Command::Update { song }).unwrap();
             worker
                 .command(Command::Audition {
@@ -574,6 +797,7 @@ fn graphical_envelopes_render_native_linear_ramps_at_fractional_rows() {
             id: "tone".into(),
             source: "instr constant(freq: hz) { [0.25, 0.25].to_layout(stereo) }".into(),
             kind: Kind::Instr,
+            dir: None,
         })
         .unwrap();
     worker
@@ -581,18 +805,21 @@ fn graphical_envelopes_render_native_linear_ramps_at_fractional_rows() {
             id: "gain".into(),
             source: "fx gain(amount: 0..1 = 1) { out = in * amount }".into(),
             kind: Kind::Fx,
+            dir: None,
         })
         .unwrap();
     let mut song = test_song(None);
     song.bpm = 20.0;
     song.rows_per_beat = 1;
     song.patterns[0].notes[0][0] = Some("C-4".into());
-    song.tracks[0].fx = Some(TrackFx {
+    song.tracks[0].fx = vec![Device {
+        id: "d0".into(),
         definition: "gain".into(),
-        ..Default::default()
-    });
+        ..Device::default()
+    }];
     let lane = &mut song.patterns[0].fx[0][0];
     lane.target = Some(FxTarget::Effect {
+        device: "d0".into(),
         parameter: "amount".into(),
     });
     lane.values[0] = Some("1".into()); // Envelope takes priority over row values.

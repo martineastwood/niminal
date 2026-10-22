@@ -1,4 +1,4 @@
-use crate::pattern::Track;
+use crate::pattern::{Device, Track};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -29,24 +29,62 @@ impl Parameter {
     }
 }
 
-#[derive(Clone, Debug, serde::Deserialize, Serialize)]
+/// The engine node that runs one device of a track's chain.
+pub fn fx_node(track: usize, device: &str) -> String {
+    format!("fx_{track}_{device}")
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum FxTarget {
     Volume,
     Pan,
-    Effect { parameter: String },
+    Effect { device: String, parameter: String },
 }
 
 impl FxTarget {
+    pub fn device<'a>(&self, track: &'a Track) -> Option<&'a Device> {
+        match self {
+            Self::Effect { device, .. } => track.device(device),
+            _ => None,
+        }
+    }
+
+    pub fn parameter<'a>(
+        &self,
+        track: &Track,
+        parameters: &'a EffectParameters,
+    ) -> Option<&'a Parameter> {
+        let Self::Effect { parameter, .. } = self else {
+            return None;
+        };
+        parameters
+            .get(&self.device(track)?.definition)?
+            .iter()
+            .find(|p| p.name == *parameter)
+    }
+
+    /// Whether the lane can drive anything right now: a bypassed device has no engine node.
     pub fn available(&self, track: &Track, parameters: &EffectParameters) -> bool {
         match self {
-            Self::Effect { parameter } => track
-                .fx
-                .as_ref()
-                .and_then(|fx| parameters.get(&fx.definition))
-                .is_some_and(|params| params.iter().any(|p| p.name == *parameter)),
+            Self::Effect { .. } => {
+                self.device(track).is_some_and(|device| !device.bypass)
+                    && self.parameter(track, parameters).is_some()
+            }
             _ => true,
         }
+    }
+
+    /// Detaches the parameter's LFO so a written value takes effect.
+    pub fn unmap(&self, index: usize, track: &Track) -> Option<Value> {
+        let Self::Effect { device, parameter } = self else {
+            return None;
+        };
+        self.device(track)?
+            .modulations
+            .get(parameter)
+            .filter(|lfo| lfo.enabled)
+            .map(|_| json!({"op":"map", "id":fx_node(index, device), "param":parameter, "source":null}))
     }
 }
 
@@ -86,23 +124,19 @@ pub fn edit(
                 json!({"op":"set", "id":format!("track_{index}"), "args":{"balance":value}, "glide":0.0}),
             )
         }
-        FxTarget::Effect { parameter } => {
-            let slot = track
-                .fx
-                .as_ref()
+        FxTarget::Effect { device, parameter } => {
+            target
+                .device(track)
                 .ok_or_else(|| format!("{}: lane addresses a missing effect", track.name))?;
-            let info = parameters
-                .get(&slot.definition)
-                .and_then(|params| params.iter().find(|p| p.name == *parameter))
-                .ok_or_else(|| {
-                    format!(
-                        "{}: lane addresses missing parameter {parameter}",
-                        track.name
-                    )
-                })?;
+            let info = target.parameter(track, parameters).ok_or_else(|| {
+                format!(
+                    "{}: lane addresses missing parameter {parameter}",
+                    track.name
+                )
+            })?;
             bounded(info.min, info.max)?;
             Ok(
-                json!({"op":"set", "id":format!("fx_{index}"), "args":{parameter:info.argument(value)}, "glide":0.0}),
+                json!({"op":"set", "id":fx_node(index, device), "args":{parameter:info.argument(value)}, "glide":0.0}),
             )
         }
     }
@@ -124,10 +158,11 @@ mod tests {
         );
         assert!(edit(&FxTarget::Pan, "2", 0, &track, &BTreeMap::new()).is_err());
         assert!(edit(&FxTarget::Volume, "NaN", 0, &track, &BTreeMap::new()).is_err());
-        track.fx = Some(crate::pattern::TrackFx {
+        track.fx = vec![crate::pattern::Device {
+            id: "d0".into(),
             definition: "filter".into(),
             ..Default::default()
-        });
+        }];
         let parameters = [(
             "filter".into(),
             vec![Parameter {
@@ -140,6 +175,7 @@ mod tests {
         )]
         .into();
         let target = FxTarget::Effect {
+            device: "d0".into(),
             parameter: "cutoff".into(),
         };
         assert_eq!(

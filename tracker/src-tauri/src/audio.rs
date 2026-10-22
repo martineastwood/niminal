@@ -44,6 +44,9 @@ pub enum Command {
         id: String,
         source: String,
         kind: Kind,
+        /// Where `sample("...")` paths in the source are resolved; kept for later applies.
+        #[serde(default)]
+        dir: Option<String>,
     },
     Play {
         song: Song,
@@ -122,6 +125,7 @@ struct Worker {
     mixer: Vec<Track>,
     playback: Option<Playback>,
     mixer_timing: (f64, u32),
+    dir: Option<String>,
 }
 
 impl Worker {
@@ -224,7 +228,12 @@ impl Worker {
                 self.status = Status::default();
                 result?;
             }
-            Command::Apply { id, source, kind } => {
+            Command::Apply {
+                id,
+                source,
+                kind,
+                dir,
+            } => {
                 let sound = Sound::parse(kind, source)?;
                 if self
                     .sounds
@@ -285,9 +294,15 @@ impl Worker {
                     true,
                 );
                 edits.extend(modulators);
-                self.send_events(vec![
-                    json!({"op":"transaction", "at":"now", "source":source, "edits":edits}),
-                ])?;
+                if dir.is_some() {
+                    self.dir = dir;
+                }
+                let mut transaction =
+                    json!({"op":"transaction", "at":"now", "source":source, "edits":edits});
+                if let Some(dir) = &self.dir {
+                    transaction["dir"] = json!(dir);
+                }
+                self.send_events(vec![transaction])?;
                 self.sounds = sounds;
                 self.status.instruments = instruments;
                 self.status.effects = effects;
@@ -372,10 +387,12 @@ impl Worker {
                     track.name
                 ));
             }
-            if let Some(slot) = &track.fx
-                && !self.status.effect_parameters.contains_key(&slot.definition)
+            if track
+                .fx
+                .iter()
+                .any(|device| !self.status.effect_parameters.contains_key(&device.definition))
             {
-                return Err(format!("Apply the effect assigned to {} first", track.name));
+                return Err(format!("Apply the effects assigned to {} first", track.name));
             }
             for pattern in &song.patterns {
                 for lane in &pattern.fx[index] {

@@ -14,8 +14,8 @@ it('reads real units, preserves precision, and rejects wrong units and out-of-ra
 it('addresses track FX by name and retains missing targets for repair', () => {
   const project = newProject();
   project.definitions.push({ id: 'filter', kind: 'fx', name: 'Filter', source: '' });
-  project.tracks[0].fx = { definition: 'filter', values: {}, modulations: {} };
-  const target = { kind: 'effect' as const, parameter: 'cutoff' };
+  project.tracks[0].fx = [{ id: 'd1', definition: 'filter', bypass: false, values: {}, modulations: {} }];
+  const target = { kind: 'effect' as const, device: 'd1', parameter: 'cutoff' };
   const parameters = { filter: [{ name: 'cutoff', min: 20, max: 20000, default: 2400, unit: 'hz' }] };
   expect(laneParameter(target, 0, project, parameters)?.name).toBe('cutoff');
   expect(laneParameter(target, 0, project, { filter: [] })).toBeNull();

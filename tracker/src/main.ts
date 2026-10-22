@@ -1,12 +1,13 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { EditorView } from '@codemirror/view';
 import { editorState, connectLanguageServer } from './editor';
-import { newProject, emptyFxLane, readProject, storageKey, resizePattern, removeTrack, restoreTrack, type Definition, type Song, type DeletedTrack } from './project';
+import { newProject, emptyFxLane, type Device, readProject, storageKey, resizePattern, removeTrack, restoreTrack, type Definition, type Song, type DeletedTrack } from './project';
 import { Arrangement } from './arrangement';
 import { PatternGrid } from './grid';
 import { EnvelopeEditor } from './envelope-editor';
 import { renderMixer } from './mixer';
-import { setTrackFxPreset } from './effects';
+import { addDevice, removeDevice, moveDevice } from './effects';
+import { addInstrument, duplicateInstrument, instrumentUsers, removeInstrument } from './instruments';
 import { audioCommand, audioStatus, observeAudio } from './audio';
 import './style.css';
 
@@ -24,7 +25,7 @@ app.innerHTML = `
     <aside id="sequencer">
       <div class="side-heading"><span class="section-title">SEQUENCE</span><span class="side-tools"><button id="new-pattern" data-structure title="New blank pattern" aria-label="New blank pattern">+</button><button id="variation" data-structure title="Duplicate as variation" aria-label="Duplicate as variation">⧉</button><button id="reuse" data-structure title="Reuse pattern" aria-label="Reuse pattern">↳</button><button id="move-up" data-structure title="Move sequence step up" aria-label="Move sequence step up">↑</button><button id="move-down" data-structure title="Move sequence step down" aria-label="Move sequence step down">↓</button><button id="remove-step" data-structure title="Remove sequence step" aria-label="Remove sequence step">−</button><button id="sequence-names" aria-label="Toggle pattern names" title="Show / hide pattern names" aria-expanded="true">◂</button></span></div>
       <div id="sequence"></div>
-      <div id="sound-library"><div class="side-heading"><span class="section-title">INSTRUMENTS</span><span class="side-tools"><button id="new-instrument" title="New instrument" aria-label="New instrument">+</button></span></div><div id="definitions"></div></div>
+      <div id="sound-library"><div class="side-heading"><span class="section-title">INSTRUMENTS</span><span class="side-tools"><button id="new-instrument" title="New synth" aria-label="New instrument">+</button><button id="import-sample" title="New sampler from WAV files" aria-label="Import sample">♪</button><button id="duplicate-instrument" title="Duplicate instrument" aria-label="Duplicate instrument">⧉</button><button id="delete-instrument" title="Delete instrument" aria-label="Delete instrument">−</button></span></div><div id="definitions"></div></div>
     </aside>
     <section class="workspace">
       <div id="grid-wrap"><div id="grid" tabindex="0" role="grid" aria-label="Pattern editor"></div></div>
@@ -56,6 +57,26 @@ let transportRevision = 0;
 let starting = false;
 let audioError: string | null = null;
 let deviceTrack = 0;
+/** Where the engine finds this project's samples; resolved before the first apply. */
+let projectDir: string | null = null;
+let projectDirReady: Promise<void> = Promise.resolve();
+/** Documents live in the project folder, so the language server finds `sample(\"samples/...\")` beside them. */
+function documentUri(id: string) {
+  return projectDir ? `file://${projectDir.split('/').map(encodeURIComponent).join('/')}/${id}.nml` : `file:///niminal-tracker/${id}.nml`;
+}
+function documentState(definition: Definition) {
+  return editorState(documentUri(definition.id), definition.source, source => { definition.source = source; save(); renderApplyStatus(); });
+}
+function refreshProjectDir() {
+  projectDirReady = isTauri() ? invoke<string>('project_dir', { id: project.id }).then(dir => {
+    projectDir = dir;
+    // Documents opened before the folder was known have the wrong address; reopen them.
+    states.clear(); if (editor) editor.setState(documentState(selected));
+  }, error => status(`Project folder unavailable: ${error}`)) : Promise.resolve();
+}
+/** The dock's code tab shows the selected track's effect chain rather than an instrument. */
+let fxMode = false;
+const chosenDevice = new Map<number, string>();
 let deletedTrack: DeletedTrack | null = null;
 let wasPlaying = false;
 let envelopeEditor: EnvelopeEditor | undefined;
@@ -70,12 +91,13 @@ function selectDefinition(definition: Definition, reveal = true) {
   if (editor) states.set(selected.id, editor.state);
   selected = definition;
   if (reveal) showPanel('code', true);
-  const state = states.get(definition.id) ?? editorState(`file:///niminal-tracker/${definition.id}.nml`, definition.source, source => { definition.source = source; save(); renderApplyStatus(); });
+  const state = states.get(definition.id) ?? documentState(definition);
   if (editor) editor.setState(state);
   else editor = new EditorView({ state, parent: element('code') });
   element<HTMLInputElement>('definition-name').value = definition.name;
   element('definition-kind').textContent = definition.kind === 'instr' ? 'INSTRUMENT' : 'TRACK FX';
-  element('mixer').hidden = definition.kind !== 'fx';
+  fxMode = definition.kind === 'fx';
+  element('mixer').hidden = !fxMode; element('code').hidden = false;
   renderDefinitions(); renderApplyStatus();
 }
 function renderDefinitions() {
@@ -84,7 +106,9 @@ function renderDefinitions() {
   for (const [index, definition] of project.definitions.filter(d => d.kind === 'instr').entries()) {
     const button = document.createElement('button');
     button.className = `definition ${definition.id === selected.id ? 'selected' : ''}`;
+    const users = instrumentUsers(project, definition.id).length;
     button.textContent = `${String(index).padStart(2, '0')}  ${definition.name}`;
+    if (users) { const count = document.createElement('small'); count.textContent = `×${users}`; button.append(count); }
     button.onclick = () => { selectDefinition(definition); editor.focus(); };
     list.append(button);
   }
@@ -98,7 +122,8 @@ async function action(work: () => Promise<unknown>) {
 }
 async function applyDefinition(definition: Definition) {
   const source = definition.source;
-  await audioCommand({ op: 'apply', id: definition.id, source, kind: definition.kind });
+  await projectDirReady;
+  await audioCommand({ op: 'apply', id: definition.id, source, kind: definition.kind, dir: projectDir });
   appliedSources.set(definition.id, source);
   grid.render(); mixerView();
   renderApplyStatus();
@@ -112,32 +137,44 @@ async function ensureSound(id: string) {
 async function ensureAssignments() {
   for (const track of project.tracks) {
     if (track.instrument) await ensureSound(track.instrument);
-    if (track.fx) await ensureSound(track.fx.definition);
+    for (const device of track.fx) await ensureSound(device.definition);
   }
 }
+function currentDevice(): Device | undefined {
+  const chain = project.tracks[deviceTrack].fx;
+  return chain.find(d => d.id === chosenDevice.get(deviceTrack)) ?? chain[0];
+}
+/** The effect definition the code editor is showing, or null when the track has no effects. */
+function shownEffect() { return fxMode && !element('code').hidden ? selected.id : null; }
 function mixerView() {
-  if (selected.kind === 'fx' && !element('code-panel').hidden && project.tracks[deviceTrack].fx?.definition !== selected.id) {
-    openTrackFx(); return;
-  }
+  if (fxMode && !element('code-panel').hidden && shownEffect() !== (currentDevice()?.definition ?? null)) { showFx(); return; }
   envelopeEditor?.select(deviceTrack);
-  renderMixer(element('mixer'), project, deviceTrack, () => { editedPattern(); grid.render(); }, audioStatus.effect_parameters, (target, value) => grid.writeParameter(deviceTrack, target, value), preset => {
-    const definition = setTrackFxPreset(project, deviceTrack, preset);
-    states.delete(definition.id);
-    // Discard the old editor state before loading the replacement source.
-    if (selected.id === definition.id) {
-      const state = editorState(`file:///niminal-tracker/${definition.id}.nml`, definition.source, source => { definition.source = source; save(); renderApplyStatus(); });
-      editor.setState(state);
-    }
-    selectDefinition(definition); editedPattern(); mixerView();
-    if (audioStatus.connected) void action(() => applyDefinition(definition));
+  const device = currentDevice();
+  renderMixer(element('mixer'), project, deviceTrack, () => { editedPattern(); grid.render(); }, audioStatus.effect_parameters, (target, value) => grid.writeParameter(deviceTrack, target, value), {
+    selected: device?.id ?? null,
+    select: id => { chosenDevice.set(deviceTrack, id); showFx(); editor.focus(); },
+    add: preset => {
+      const added = addDevice(project, deviceTrack, preset); if (!added) return;
+      chosenDevice.set(deviceTrack, added.device.id); showFx(); editor.focus(); editedPattern(); grid.render();
+      if (audioStatus.connected) void action(() => applyDefinition(added.definition));
+    },
+    remove: id => {
+      const removed = removeDevice(project, deviceTrack, id); if (removed) states.delete(removed.id);
+      chosenDevice.delete(deviceTrack); showFx(); editedPattern(); grid.render();
+    },
+    move: (id, delta) => { if (moveDevice(project, deviceTrack, id, delta)) { editedPattern(); grid.render(); mixerView(); } },
+    changed: () => { editedPattern(); grid.render(); mixerView(); },
   });
 }
-function openTrackFx() {
-  const track = project.tracks[deviceTrack];
-  const definition = track.fx ? project.definitions.find(d => d.id === track.fx!.definition)! : setTrackFxPreset(project, deviceTrack);
-  selectDefinition(definition); editor.focus();
-  editedPattern(); mixerView();
+/** Show the selected track's chain: the controls beside the code of its selected effect. */
+function showFx() {
+  const device = currentDevice();
+  const definition = device && project.definitions.find(d => d.id === device.definition);
+  if (definition) selectDefinition(definition);
+  else { fxMode = true; showPanel('code', true); element('mixer').hidden = false; element('code').hidden = true; element('code-tools').hidden = true; }
+  mixerView();
 }
+function openTrackFx() { showFx(); if (!element('code').hidden) editor.focus(); }
 async function stopPlayback() {
   transportRevision++; starting = false;
   await audioCommand({ op: 'stop' });
@@ -149,7 +186,7 @@ async function togglePlay(mode: 'pattern' | 'song' = 'pattern') {
   try {
     for (const track of project.tracks) {
       if (track.instrument) await ensureSound(track.instrument);
-      if (track.fx) await ensureSound(track.fx.definition);
+      for (const device of track.fx) await ensureSound(device.definition);
       if (revision !== transportRevision) return;
     }
     await audioCommand({ op: 'play', song: song(), mode, pattern_id: arrangement.pattern.id, start_position: arrangement.position });
@@ -178,10 +215,10 @@ const grid = new PatternGrid(element('grid'), () => project, () => arrangement.p
   id => { if (id) { const definition = project.definitions.find(d => d.id === id); if (definition) selectDefinition(definition); } },
   (id, note, track) => { if (audioStatus.connected && !audioStatus.playing) void action(() => audition(id, note, track)); },
   () => { void action(() => togglePlay()); },
-  track => { if (deviceTrack !== track) { const editingFx = selected.kind === 'fx' && !element('code-panel').hidden; deviceTrack = track; if (editingFx) openTrackFx(); else mixerView(); } },
+  track => { if (deviceTrack !== track) { const editingFx = fxMode && !element('code-panel').hidden; deviceTrack = track; if (editingFx) showFx(); else mixerView(); } },
   (track, device, sameTrack) => {
     if (device === 'effects') {
-      if (sameTrack && selected.id === project.tracks[track].fx?.definition && !element('code-panel').hidden) { showPanel('code', false); element('grid').focus(); }
+      if (sameTrack && fxMode && !element('code-panel').hidden) { showPanel('code', false); element('grid').focus(); }
       else openTrackFx();
     }
     else {
@@ -190,7 +227,7 @@ const grid = new PatternGrid(element('grid'), () => project, () => arrangement.p
         if (sameTrack && selected.id === definition.id && !element('code-panel').hidden) { showPanel('code', false); element('grid').focus(); }
         else { selectDefinition(definition); editor.focus(); }
       }
-      else { addDefinition('instr'); project.tracks[track].instrument = selected.id; grid.render(); editedPattern(); }
+      else { newInstrument(); project.tracks[track].instrument = selected.id; grid.render(); editedPattern(); }
     }
   }, () => Number(element<HTMLInputElement>('entry-step').value), () => audioStatus.effect_parameters, status, (track, lane) => {
     grid.selectTrack(track); showPanel('automation', true); envelopeEditor?.select(track, lane);
@@ -256,14 +293,32 @@ element<HTMLInputElement>('octave').onchange = event => {
   input.value = String(Math.min(8, Math.max(0, Math.trunc(Number(input.value) || 0))));
 };
 element<HTMLInputElement>('definition-name').oninput = event => { selected.name = (event.target as HTMLInputElement).value; renderDefinitions(); grid.render(); mixerView(); save(); };
-function addDefinition(kind: 'instr' | 'fx') {
-  const id = `${kind}_${crypto.randomUUID().replaceAll('-', '_')}`;
-  const name = `${kind === 'instr' ? 'voice' : 'effect'}${project.definitions.length + 1}`;
-  const definition: Definition = { id, kind, name, source: kind === 'instr' ? `/// Describe your instrument here.\ninstr ${name}(freq: hz) {\n  osc(sine, freq) * env[0.15 | 200ms 0]\n}\n` : `/// Describe your effect here.\nfx ${name}(cutoff: hz = 2400hz) {\n  out = in.lpf(cutoff: cutoff)\n}\n` };
-  project.definitions.push(definition); selectDefinition(definition); editor.focus(); grid.render(); mixerView(); save();
+function newInstrument(sample?: string) {
+  const definition = addInstrument(project, sample);
+  selectDefinition(definition); editor.focus(); grid.render(); mixerView(); save();
   return definition;
 }
-element('new-instrument').onclick = () => addDefinition('instr');
+element('new-instrument').onclick = () => newInstrument();
+element('import-sample').onclick = async () => {
+  if (!isTauri()) { status('Importing samples needs the desktop app'); return; }
+  try {
+    const files = await invoke<string[]>('import_samples', { id: project.id });
+    for (const file of files) newInstrument(file);
+    if (files.length) status(`Added ${files.length} sampler${files.length > 1 ? 's' : ''}`);
+  } catch (error) { status(`Could not import samples: ${error}`); }
+};
+element('duplicate-instrument').onclick = () => {
+  if (selected.kind !== 'instr') { status('Select an instrument to duplicate'); return; }
+  const copy = duplicateInstrument(project, selected);
+  selectDefinition(copy); editor.focus(); save();
+};
+element('delete-instrument').onclick = () => {
+  if (selected.kind !== 'instr') { status('Select an instrument to delete'); return; }
+  const removed = selected, problem = removeInstrument(project, removed.id);
+  if (problem) { status(problem); return; }
+  states.delete(removed.id);
+  selectDefinition(project.definitions.find(d => d.kind === 'instr')!, false); grid.render(); save();
+};
 element('expand').onclick = () => {
   showPanel('code', true);
   const expanded = element('app').classList.toggle('editor-expanded');
@@ -279,16 +334,16 @@ async function loadProject(raw: string) {
   appliedSources.clear();
   editor.destroy(); states.clear();
   envelopeEditor?.reset();
-  project = loaded; deletedTrack = null; deviceTrack = 0; selected = project.definitions[0];
+  project = loaded; deletedTrack = null; deviceTrack = 0; chosenDevice.clear(); fxMode = false; refreshProjectDir(); selected = project.definitions[0];
   const definition = selected;
-  editor = new EditorView({ state: editorState(`file:///niminal-tracker/${definition.id}.nml`, definition.source, source => { definition.source = source; save(); renderApplyStatus(); }), parent: element('code') });
+  editor = new EditorView({ state: documentState(definition), parent: element('code') });
   selectDefinition(selected, false); arrangement.reset(); grid.resetHistory(); grid.selectTrack(0); mixerView(); patternControls(); timingInputs(); save();
 }
 element('export').onclick = async () => {
   const source = JSON.stringify(project, null, 2);
   try {
     if (isTauri()) {
-      if (await invoke<boolean>('save_project', { source })) element('save-status').textContent = 'Project file saved';
+      if (await invoke<boolean>('save_project', { source, id: project.id })) element('save-status').textContent = 'Project saved';
     } else {
       const url = URL.createObjectURL(new Blob([source], { type: 'application/json' }));
       const link = document.createElement('a'); link.href = url; link.download = 'untitled.nimtracker.json'; link.click();
@@ -362,7 +417,7 @@ element('move-up').onclick = () => { if (!audioStatus.playing) arrangement.move(
 element('move-down').onclick = () => { if (!audioStatus.playing) arrangement.move(1); };
 element('add-track').onclick = () => {
   if (audioStatus.playing || project.tracks.length >= 16) return;
-  project.tracks.push({ name: `Track ${project.tracks.length + 1}`, instrument: null, fx: null, pan: 0, muted: false, volume_db: 0 });
+  project.tracks.push({ name: `Track ${project.tracks.length + 1}`, instrument: null, fx: [], pan: 0, muted: false, volume_db: 0 });
   for (const pattern of project.patterns) { pattern.notes.push(Array(pattern.notes[0].length).fill(null)); pattern.fx.push([emptyFxLane(pattern.notes[0].length)]); }
   grid.selectTrack(project.tracks.length - 1); editedPattern();
 };
@@ -382,6 +437,7 @@ element('restore-track').onclick = () => {
   deletedTrack = null; grid.resetHistory(); grid.selectTrack(index); mixerView(); editedPattern();
 };
 element('remove-step').onclick = () => { if (!audioStatus.playing) arrangement.remove(); };
+refreshProjectDir();
 selectDefinition(selected, false); arrangement.reset(); grid.render(); mixerView(); patternControls(); timingInputs();
 const audioTimer = observeAudio(state => {
   if (state.playing !== wasPlaying) { wasPlaying = state.playing; mixerView(); }

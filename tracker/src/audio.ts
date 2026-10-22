@@ -9,7 +9,7 @@ export interface AudioStatus {
 type Command =
   | { op: 'connect'; port: number; token: string | null }
   | { op: 'disconnect' | 'stop' }
-  | { op: 'apply'; id: string; source: string; kind: 'instr' | 'fx' }
+  | { op: 'apply'; id: string; source: string; kind: 'instr' | 'fx'; dir: string | null }
   | { op: 'play'; song: Song; mode: 'pattern' | 'song'; pattern_id: string; start_position: number }
   | { op: 'update'; song: Song }
   | { op: 'audition'; instrument: string; note: string; track: number };

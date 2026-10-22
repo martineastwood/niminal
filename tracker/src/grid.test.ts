@@ -96,7 +96,7 @@ it('opens track devices without entering notes and navigates beyond the starter 
   const parent = document.createElement('div'); document.body.append(parent);
   const project = newProject(), selected = vi.fn(), open = vi.fn();
   for (let i = 4; i < 8; i++) {
-    project.tracks.push({ name: `Track ${i + 1}`, instrument: 'tone', fx: null, pan: 0, volume_db: 0, muted: false });
+    project.tracks.push({ name: `Track ${i + 1}`, instrument: 'tone', fx: [], pan: 0, volume_db: 0, muted: false });
     project.patterns[0].notes.push(Array(32).fill(null)); project.patterns[0].fx.push([emptyFxLane(32)]);
   }
   const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, vi.fn(), vi.fn(), vi.fn(), vi.fn(), selected, open);

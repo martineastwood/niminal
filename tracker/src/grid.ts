@@ -174,7 +174,7 @@ export class PatternGrid {
         const picker = document.createElement('select'); picker.className = 'lane-target'; picker.setAttribute('aria-label', `${track.name} parameter lane ${column + 1}`);
         picker.add(new Option('—', ''));
         const choices: FxTarget[] = [{ kind: 'volume' }, { kind: 'pan' }];
-        if (track.fx) for (const p of this.parameters()[track.fx.definition] ?? []) choices.push({ kind: 'effect', parameter: p.name });
+        for (const device of track.fx) for (const p of this.parameters()[device.definition] ?? []) choices.push({ kind: 'effect', device: device.id, parameter: p.name });
         for (const target of choices) picker.add(new Option(laneParameter(target, index, project, this.parameters())!.label, targetKey(target)));
         if (lane.target && !choices.some(t => targetKey(t) === targetKey(lane.target))) picker.add(new Option(`Missing/unapplied FX parameter: ${lane.target.kind === 'effect' ? lane.target.parameter : 'parameter'}`, targetKey(lane.target)));
         picker.value = targetKey(lane.target); picker.title = laneParameter(lane.target, index, project, this.parameters())?.label ?? 'Connect and Apply effects to expose more parameters';
@@ -242,8 +242,9 @@ export class PatternGrid {
    * waiting for each status poll.
    */
   paint(row: number | null, phase: number | null = null, atMs = Date.now()) {
-    this.playing = row;
-    if (row === null) { this.playhead.hidden = true; this.shown = -1; if (this.pad) this.setPad(0); return; }
+    const was = this.playing; this.playing = row;
+    if (row === null) { this.playhead.hidden = true; this.shown = -1; if (this.pad) this.setPad(0); if (was !== null) this.placeFrame(); return; }
+    if (was === null) this.placeFrame();
     this.origin = atMs - (row + (phase ?? 0)) * this.rowMs();
     this.animation ||= requestAnimationFrame(this.follow);
   }
@@ -294,7 +295,8 @@ export class PatternGrid {
     const left = Math.max(cell.left - box.left, ROW_WIDTH), right = Math.min(cell.right - box.left, this.parent.clientWidth);
     this.frame.hidden = right - left < 12;
     const end = this.parent.querySelector<HTMLElement>(`[data-row="${this.pattern().rows - 1}"]`)?.getBoundingClientRect().bottom;
-    const bottom = Math.min(this.parent.clientHeight, end === undefined ? this.parent.clientHeight : end - box.top);
+    // While playing the pattern scrolls past, so the bottom corners stay at the foot of the view.
+    const bottom = this.playing !== null || end === undefined ? this.parent.clientHeight : Math.min(this.parent.clientHeight, end - box.top);
     this.frame.style.cssText = `left:${left}px;width:${right - left}px;top:0;height:${Math.max(0, bottom)}px;--c:${trackColour(this.project().tracks[this.activeTrack], this.activeTrack)};--side:${header.offsetHeight}px`;
   }
   private setPad(pad: number) { this.pad = pad; for (const spacer of this.parent.querySelectorAll<HTMLElement>('.grid-pad')) spacer.style.height = `${pad}px`; }

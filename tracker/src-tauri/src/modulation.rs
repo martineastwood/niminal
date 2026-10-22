@@ -1,7 +1,7 @@
 //! Configure niminal-native oscillator nodes, modulation buses and parameter maps.
 //! No DSP or modulation signal generation runs in the tracker.
 use crate::{
-    commands::{EffectParameters, Parameter},
+    commands::{EffectParameters, Parameter, fx_node},
     pattern::{Lfo, Track},
 };
 use serde_json::{Value, json};
@@ -15,13 +15,14 @@ pub fn declarations() -> Vec<Value> {
 
 struct Target<'a> {
     track: usize,
+    device: &'a str,
     parameter: &'a Parameter,
     lfo: &'a Lfo,
     definition: &'a str,
 }
 impl Target<'_> {
     fn source(&self) -> String {
-        format!("mod_{}_{}", self.track, self.parameter.name)
+        format!("mod_{}_{}_{}", self.track, self.device, self.parameter.name)
     }
     fn node(&self, bpm: f64, rows_per_beat: u32) -> Value {
         let hz = bpm * f64::from(rows_per_beat) / (60.0 * self.lfo.period);
@@ -34,7 +35,7 @@ impl Target<'_> {
         let max = self.parameter.engine_value(
             self.parameter.min + self.lfo.max * (self.parameter.max - self.parameter.min),
         );
-        json!({"op":"map", "id":format!("fx_{}", self.track), "param":self.parameter.name,
+        json!({"op":"map", "id":fx_node(self.track, self.device), "param":self.parameter.name,
             "source":if enabled {json!({"kind":"bus", "id":self.source()})} else {Value::Null}, "scale":max-min, "offset":min})
     }
 }
@@ -45,20 +46,21 @@ fn targets<'a>(
 ) -> BTreeMap<String, Target<'a>> {
     let mut targets = BTreeMap::new();
     for (track, t) in tracks.iter().enumerate() {
-        if let Some(slot) = &t.fx {
-            for (name, lfo) in &slot.modulations {
+        for device in t.active() {
+            for (name, lfo) in &device.modulations {
                 if !lfo.enabled {
                     continue;
                 }
                 if let Some(parameter) = parameters
-                    .get(&slot.definition)
+                    .get(&device.definition)
                     .and_then(|params| params.iter().find(|p| p.name == *name))
                 {
                     let target = Target {
                         track,
+                        device: &device.id,
                         parameter,
                         lfo,
-                        definition: &slot.definition,
+                        definition: &device.definition,
                     };
                     targets.insert(target.source(), target);
                 }
