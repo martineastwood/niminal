@@ -227,6 +227,13 @@ macro_rules! op_enum {
                     Op::Dynamic(v) => v.latency(),
                 }
             }
+            fn per_sample(&self) -> bool {
+                match self {
+                    $( Op::$IV(v) => v.per_sample(), )*
+                    $( Op::$BV(v) => v.per_sample(), )*
+                    Op::Dynamic(v) => v.per_sample(),
+                }
+            }
             fn kernel_stats(&self) -> Option<crate::opcode::KernelStats> {
                 match self {
                     $( Op::$IV(v) => v.kernel_stats(), )*
@@ -263,6 +270,7 @@ op_enum! {
         Min(ops::Min),
         Max(ops::Max),
         Pow(ops::Pow),
+        Atan2(ops::Atan2),
         Compare(ops::Compare),
         Select(ops::Select),
         Fold(ops::Fold),
@@ -323,8 +331,6 @@ op_enum! {
         Formant(ops::Formant),
         Resonator(ops::Resonator),
         Convolve(ops::Convolve),
-        Fft(ops::Fft),
-        Ifft(ops::Ifft),
         SpectralFreeze(ops::SpectralFreeze),
         SpectralDelay(ops::SpectralDelay),
     }

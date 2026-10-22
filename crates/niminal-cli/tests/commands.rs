@@ -152,6 +152,47 @@ fn a_recorded_session_replays_to_audio() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// Invariant 1: a log renders to identical bytes. The session uses seeded noise and overlapping voices, so
+/// anything that read the clock, a thread or an address would show up as a differing file.
+#[test]
+fn replaying_a_log_twice_gives_identical_bytes() {
+    let dir = std::env::temp_dir().join(format!("niminal-determinism-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = dir.join("set.log");
+    {
+        let d = Server::start(&["--log", log.to_str().unwrap()]);
+        let mut c = Client::connect(d.port, None).unwrap();
+        let start = c.call("clock", json!({})).unwrap()["sample"]
+            .as_u64()
+            .unwrap()
+            + 4800;
+        let mut events = vec![json!({"op": "define", "at": "now", "source":
+            "instr hat(freq: hz) { (noise() * env[1 | 20ms 0] + osc(saw, freq) * 0.2) * env[1 | 400ms 0] }"})];
+        for i in 0..24u64 {
+            events.push(
+                json!({"op": "note", "target": "hat", "at": start + i * 3000, "dur": "200ms",
+                "args": {"freq": format!("{}hz", 110 + (i % 5) * 30)}}),
+            );
+        }
+        c.call("events.send", json!({ "events": events })).unwrap();
+        std::thread::sleep(Duration::from_millis(700));
+    }
+    let render = |name: &str| {
+        let wav = dir.join(name);
+        let out = niminal()
+            .args(["replay", log.to_str().unwrap(), "--out"])
+            .arg(&wav)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", stderr(&out));
+        std::fs::read(wav).unwrap()
+    };
+    let (a, b) = (render("a.wav"), render("b.wav"));
+    assert!(a.len() > 44 + 4800 * 8, "the replay is silent or empty");
+    assert!(a == b, "two replays of one log differ");
+    std::fs::remove_dir_all(dir).ok();
+}
+
 #[test]
 fn the_server_refuses_what_it_cannot_do() {
     let out = niminal()

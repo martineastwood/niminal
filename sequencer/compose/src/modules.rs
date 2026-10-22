@@ -1,211 +1,44 @@
-//! `use rig` pulls another file's definitions into this one. The files are
-//! joined into one source text before it is parsed: each module once, after
-//! the file that uses it, so spans in the file itself stay where they were.
+//! `use rig` pulls another file's definitions into this one. The walk over the files is
+//! [`niminal_lang::expand_with_rules`], shared with the engine; what is here is what the sequencer's
+//! language adds to it: its own kinds of definition to rename, and its own lexer.
 //!
 //! Names are kept apart by renaming. `use rig as r` renames what `rig` defines
 //! to `r::name`, and a module's `_private` names to `rig::_name`, which no
 //! other file may write.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::ide::{SymbolKind, symbols};
 use crate::lexer::{Tok, lex};
-use niminal_lang::{Diagnostic, Expanded, Module, Span};
+use niminal_lang::{Diagnostic, Expanded, ModuleRules, Span};
 
 /// Resolve the `use` lines of `source`, which lives in `dir`. A module is
 /// found next to the file that uses it, then in `lib` under `dir`, then among
 /// the installed packages (`$NIMINAL_PACKAGES`, or `~/.niminal/packages`).
 pub fn expand(source: &str, dir: &Path) -> Result<Expanded, Diagnostic> {
-    expand_with(source, dir, packages_dir())
+    niminal_lang::expand_with_rules(source, dir, niminal_lang::packages_dir(), &ComposeRules)
 }
 
-fn packages_dir() -> Option<PathBuf> {
-    std::env::var_os("NIMINAL_PACKAGES")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".niminal").join("packages"))
-        })
-}
+struct ComposeRules;
 
-fn expand_with(
-    source: &str,
-    dir: &Path,
-    packages: Option<PathBuf>,
-) -> Result<Expanded, Diagnostic> {
-    let mut walk = Walk {
-        root_dir: dir,
-        packages,
-        stack: Vec::new(),
-        done: Vec::new(),
-    };
-    let mut text = walk.visit(source, dir, None)?;
-    let root_len = text.len();
-    let mut modules = Vec::new();
-    for done in walk.done {
-        let body = rename(&done.source, &done.name, done.alias.as_deref());
-        text.push('\n');
-        let start = text.len();
-        text.push_str(&body);
-        modules.push(Module {
-            path: done.path,
-            label: format!("{}.nml", done.name),
-            alias: done.alias,
-            source: done.source,
-            start,
-            end: text.len(),
-            used_at: done.used_at,
-        });
-    }
-    Ok(Expanded {
-        text,
-        root_len,
-        modules,
-    })
-}
-
-struct Done {
-    path: PathBuf,
-    name: String,
-    alias: Option<String>,
-    used_at: Span,
-    source: String,
-}
-
-struct Walk<'a> {
-    root_dir: &'a Path,
-    packages: Option<PathBuf>,
-    /// The modules being read, to catch a module that uses itself.
-    stack: Vec<PathBuf>,
-    /// Each module read, dependencies before the modules that use them.
-    done: Vec<Done>,
-}
-
-impl Walk<'_> {
-    /// Read the `use` lines of one file and return its text with them blanked.
-    /// `root_use` is the line in the top file that led here.
-    fn visit(
-        &mut self,
-        source: &str,
-        dir: &Path,
-        root_use: Option<Span>,
-    ) -> Result<String, Diagnostic> {
-        let mut out = String::with_capacity(source.len());
-        let mut offset = 0;
-        for line in source.split_inclusive('\n') {
-            let span = Span::new(offset, offset + line.trim_end().len());
-            offset += line.len();
-            let Some(rest) = line.strip_prefix("use ") else {
-                out.push_str(line);
-                continue;
-            };
-            out.extend(line.chars().map(|c| if c == '\n' { c } else { ' ' }));
-            let used_at = root_use.unwrap_or(span);
-            let (name, alias) = parse_use(rest, span)?;
-            let path = self.find(name, dir).ok_or_else(|| {
-                Diagnostic::new(format!("no module `{name}`"), used_at).with_help(format!(
-                    "looked for {name}.nml next to the file, in lib/ and in the installed packages"
-                ))
-            })?;
-            if self.stack.contains(&path) {
-                return Err(Diagnostic::new(
-                    format!("`{name}` uses itself, directly or through another module"),
-                    used_at,
-                ));
-            }
-            if let Some(earlier) = self.done.iter().find(|d| d.path == path) {
-                if earlier.alias.as_deref() != alias {
-                    return Err(Diagnostic::new(
-                        format!("`{name}` is used twice with different names"),
-                        used_at,
-                    )
-                    .with_help("use a module once, or always with the same `as` name"));
-                }
-                continue;
-            }
-            let module_source = std::fs::read_to_string(&path).map_err(|e| {
-                Diagnostic::new(format!("can't read {}: {e}", path.display()), used_at)
-            })?;
-            self.stack.push(path.clone());
-            let body = self.visit(&module_source, path.parent().unwrap_or(dir), Some(used_at))?;
-            self.stack.pop();
-            self.done.push(Done {
-                path,
-                name: name.replace('/', "_"),
-                alias: alias.map(str::to_string),
-                used_at,
-                source: body,
-            });
-        }
-        check_private(&out, root_use)?;
-        Ok(out)
+impl ModuleRules for ComposeRules {
+    fn rename(&self, source: &str, module: &str, alias: Option<&str>) -> String {
+        rename(source, module, alias)
     }
 
-    fn find(&self, name: &str, dir: &Path) -> Option<PathBuf> {
-        let file = format!("{name}.nml");
-        [
-            Some(dir.join(&file)),
-            Some(self.root_dir.join("lib").join(&file)),
-            self.packages.as_ref().map(|p| p.join(&file)),
-        ]
-        .into_iter()
-        .flatten()
-        .find_map(|p| p.canonicalize().ok())
+    fn check_private(&self, source: &str, at: Option<Span>) -> Result<(), Diagnostic> {
+        let Ok(tokens) = lex(source) else {
+            return Ok(());
+        };
+        let words: Vec<Option<(String, Span)>> = tokens
+            .into_iter()
+            .map(|t| match t.tok {
+                Tok::Ident(name) => Some((name, t.span)),
+                _ => None,
+            })
+            .collect();
+        niminal_lang::check_private_words(&words, at)
     }
-}
-
-/// `rig`, `score/verse`, or either followed by `as name`.
-fn parse_use(rest: &str, span: Span) -> Result<(&str, Option<&str>), Diagnostic> {
-    let words: Vec<&str> = rest.split_whitespace().collect();
-    let (name, alias) = match words.as_slice() {
-        [name] => (*name, None),
-        [name, "as", alias] => (*name, Some(*alias)),
-        _ => {
-            return Err(Diagnostic::new(
-                format!("`use {}` isn't a module name", rest.trim()),
-                span,
-            )
-            .with_help("write `use rig`, `use score/verse` or `use rig as r`"));
-        }
-    };
-    if name.is_empty()
-        || !name
-            .chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '/'))
-    {
-        return Err(Diagnostic::new(
-            format!("`{name}` isn't a module name"),
-            span,
-        ));
-    }
-    if let Some(alias) = alias
-        && (alias.starts_with(|c: char| c.is_ascii_digit())
-            || !alias.chars().all(|c| c.is_alphanumeric() || c == '_'))
-    {
-        return Err(Diagnostic::new(
-            format!("`{alias}` isn't a name for a module"),
-            span,
-        ));
-    }
-    Ok((name, alias))
-}
-
-/// Nobody may write `rig::_name`: it is the private `_name` of `rig`.
-fn check_private(source: &str, at: Option<Span>) -> Result<(), Diagnostic> {
-    let Ok(tokens) = lex(source) else {
-        return Ok(());
-    };
-    for t in tokens {
-        let Tok::Ident(name) = t.tok else { continue };
-        if let Some((module, private)) = name.split_once("::")
-            && private.starts_with('_')
-        {
-            return Err(Diagnostic::new(
-                format!("`{private}` is private to `{module}`"),
-                at.unwrap_or(t.span),
-            ));
-        }
-    }
-    Ok(())
 }
 
 /// Rename what a module defines so it cannot meet other files' names: public
@@ -246,6 +79,8 @@ fn rename(source: &str, module: &str, alias: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     fn project(files: &[(&str, &str)]) -> PathBuf {
@@ -265,7 +100,7 @@ mod tests {
     }
 
     fn expand_here(source: &str, dir: &Path) -> Result<Expanded, Diagnostic> {
-        expand_with(source, dir, None)
+        niminal_lang::expand_with_rules(source, dir, None, &ComposeRules)
     }
 
     #[test]
@@ -291,7 +126,13 @@ mod tests {
     fn modules_are_found_in_lib_subfolders_and_packages() {
         let dir = project(&[("lib/rig.nml", "RIG\n"), ("score/verse.nml", "VERSE\n")]);
         let packages = project(&[("acme.nml", "ACME\n")]);
-        let e = expand_with("use rig\nuse score/verse\nuse acme\n", &dir, Some(packages)).unwrap();
+        let e = niminal_lang::expand_with_rules(
+            "use rig\nuse score/verse\nuse acme\n",
+            &dir,
+            Some(packages),
+            &ComposeRules,
+        )
+        .unwrap();
         assert!(e.text.contains("RIG") && e.text.contains("VERSE") && e.text.contains("ACME"));
     }
 

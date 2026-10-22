@@ -1,0 +1,4 @@
+/// Remove low frequencies. Resonance shapes the filter around cutoff.
+fx library_highpass(cutoff: 20hz..20000hz = 200hz, resonance: 0..0.95 = 0.2, mix: 0..1 = 1) {
+  out = it * (1 - mix) + it.hpf(cutoff: cutoff, res: resonance) * mix
+}

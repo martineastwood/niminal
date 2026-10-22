@@ -1,7 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
+mod commands;
 mod mixer;
+mod modulation;
 mod pattern;
 mod sound;
 
@@ -87,6 +89,12 @@ mod tests {
         for source in [
             include_str!("../../src/presets/tone.nml"),
             include_str!("../../src/presets/soften.nml"),
+            include_str!("../../src/presets/delay.nml"),
+            include_str!("../../src/presets/chorus.nml"),
+            include_str!("../../src/presets/lowpass.nml"),
+            include_str!("../../src/presets/highpass.nml"),
+            include_str!("../../src/presets/bandpass.nml"),
+            include_str!("../../src/presets/notch.nml"),
         ] {
             let replies = server.handle(&json!({"method":"textDocument/didOpen", "params": {
                 "textDocument": {"uri":uri, "text":source, "languageId":"niminal", "version":1}

@@ -61,6 +61,9 @@ pub enum RoutingEdit {
     Fx {
         name: String,
         source: String,
+        /// Explicit native output layout; input collections still use the master layout.
+        #[serde(default)]
+        output_channels: Option<usize>,
     },
     /// Use a compiled fx or collection as a template, removing its implicit instance.
     Import {
@@ -103,6 +106,10 @@ pub enum RoutingEdit {
         args: BTreeMap<String, Value>,
         #[serde(default)]
         fade: f64,
+    },
+    /// Reset persistent fx memory (for example oscillator phase), retaining voices and parameter values.
+    Reset {
+        id: String,
     },
     /// Move an existing connection's gain without changing its topology.
     Gain {
@@ -187,6 +194,7 @@ struct Bus {
 struct Node {
     meter: Arc<niminal_engine::Meter>,
     generation: u64,
+    reset_state: bool,
     fade: f64,
     fade_until: u64,
     fx: Option<(String, Fx)>,
@@ -441,6 +449,7 @@ impl Routing {
                     let node = Node {
                         meter: previous.map(|n| n.meter.clone()).unwrap_or_default(),
                         generation: previous.map_or(1, |n| n.generation + 1),
+                        reset_state: false,
                         fade: 0.,
                         fade_until: 0,
                         fx: Some(("file_player".into(), fx)),
@@ -470,7 +479,7 @@ impl Routing {
                 RoutingEdit::Map { .. }
                 | RoutingEdit::Array { .. }
                 | RoutingEdit::BindBuffer { .. } => {}
-                RoutingEdit::Fx { name, source } => {
+                RoutingEdit::Fx { name, source, output_channels } => {
                     valid(name)?;
                     let internal = format!("__routing_template_{client}_{name}");
                     let declaration = format!("fx {internal}{source}");
@@ -480,6 +489,10 @@ impl Routing {
                     }
                     let text = format!("{}\n{declaration}", definitions.source);
                     let mut options = options.clone();
+                    if let Some(channels) = output_channels {
+                        if !(1..=16).contains(channels) { return Err("fx output_channels must be from 1 to 16".into()); }
+                        options.node_outputs.insert(internal.clone(), Layout::from_count(*channels));
+                    }
                     options.buffers = definitions.buffers.iter().cloned().collect();
                     options.namespaces = definitions.namespaces.clone();
                     options.namespace_samples = definitions.namespace_samples.clone();
@@ -648,6 +661,7 @@ impl Routing {
                                 .map(|n| n.meter.clone())
                                 .unwrap_or_default(),
                             generation: patch.nodes.get(id).map_or(1, |n| n.generation + 1),
+                            reset_state: false,
                             fade: 0.0,
                             fade_until: 0,
                             fx: fx.clone().zip(template),
@@ -679,6 +693,12 @@ impl Routing {
                             delayed: *delayed,
                         },
                     );
+                }
+                RoutingEdit::Reset { id } => {
+                    let node = patch.nodes.get_mut(id).ok_or_else(|| format!("no node `{id}`"))?;
+                    node.generation += 1;
+                    node.fade = 0.0;
+                    node.reset_state = true;
                 }
                 RoutingEdit::Replace { id, fx, args, fade } => {
                     smoothing(*fade)?;
@@ -750,6 +770,7 @@ impl Routing {
                     node.args.extend(args.clone());
                     node.fx = Some((fx.clone(), template));
                     node.generation += 1;
+                    node.reset_state = false;
                     node.fade = *fade;
                     node.fade_until =
                         at.saturating_add((*fade * f64::from(sample_rate)).round() as u64);
@@ -1040,6 +1061,7 @@ impl Routing {
                 render_node.instrument = None;
                 render_node.def.meter = Some(node.meter.clone());
                 render_node.def.transition = (node.generation, node.fade);
+                render_node.def.reset_state = node.reset_state;
                 render_node.accepts_notes = false;
                 if render_node.def.chain.is_none() {
                     let mut graph = GraphBuilder::new();

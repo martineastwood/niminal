@@ -17,7 +17,7 @@ This page describes the live client's **JSON-RPC 2.0** protocol over **WebSocket
 4. Subscribe to topics if you want push updates (optional).
 5. Send requests with an **`id`**; the server replies with the same **`id`**. Requests **without** an `id` are notifications and get **no reply** (used for `panic`).
 
-All connected clients share **one session**. Disconnecting a client does not stop playback. A program that wants to send timed events rather than code should talk to the [engine](/reference/engine-api/) instead, or as well.
+Clients share a **chair**: the performance (clips, scenes, mute and solo, what is playing, pending changes) belongs to the chair, not to a connection, and disconnecting a client does not stop playback. A client sits in `main` unless its `hello` names another chair, so by default all clients share one session. Other chairs are seated on demand (up to eight), each over an engine connection of its own, so its definitions, buffers and note ids are private too. See [Chairs](#chairs). A program that wants to send timed events rather than code should talk to the [engine](/reference/engine-api/) instead, or as well.
 
 Limits: up to **16** clients; maximum message size **4 MiB** (large `eval` sources).
 
@@ -33,7 +33,8 @@ Limits: up to **16** clients; maximum message size **4 MiB** (large `eval` sourc
   "params": {
     "protocol": 5,
     "client": "my-app",
-    "token": "optional-if-server-requires-it"
+    "token": "optional-if-server-requires-it",
+    "chair": "optional-name-of-a-chair"
   }
 }
 ```
@@ -45,11 +46,20 @@ Limits: up to **16** clients; maximum message size **4 MiB** (large `eval` sourc
   "protocol": 5,
   "sample_rate": 48000,
   "channels": 2,
-  "topics": ["landed", "pending", "transport", "meters", "notices", "learned"]
+  "topics": ["landed", "pending", "transport", "meters", "notices", "learned"],
+  "chair": "main"
 }
 ```
 
 **`protocol`** must be **`4`** (`PROTOCOL_VERSION` in the server). A mismatch returns error code **-32000**.
+
+## Chairs
+
+A chair is one player's seat in a shared room: a full sequencer with clips, scenes, mute, solo, quantized changes and a connection to the engine of its own. Name one in `hello` with `chair` and it is created if it is new; clients that name the same chair share it, as clients of one session always did. Everything a client does (`eval`, `launch`, `mute`, `status`, `cancel`, `hush`, `panic`) and every notification it receives is about its own chair. `hush` and `panic` silence only that chair, so a mistake on one chair does not stop the others.
+
+- **Tempo.** A new chair starts at the tempo and meter that `main` has when the chair is created, and keeps its own from there. Bars of chairs at the same tempo and meter line up, because they count from the same sample. Chairs do not follow each other's later changes: the engine has no tempo, so one chair is the tempo authority by agreement, and the others evaluate the same `tempo` line when it changes.
+- **Controls.** The keyboard, MIDI and OSC controls of `nimlive live` play in `main`.
+- **Limits.** Up to eight chairs. A server that was not started with chairs (the in-process one used by `nimlive render`) has only `main` and refuses another name.
 
 ## Subscriptions
 

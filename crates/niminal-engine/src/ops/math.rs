@@ -134,6 +134,10 @@ binary_op!(
     /// `a` raised to `b`
     Pow, "pow", "a", "b", Port::required("b"), |a, b| a.powf(b)
 );
+binary_op!(
+    /// The angle of the point (`b`, `a`), in radians
+    Atan2, "atan2", "a", "b", Port::required("b"), |a, b| a.atan2(b)
+);
 
 /// `x.init`: the value `x` had when the note started, held for the whole note.
 #[derive(Clone, Default)]

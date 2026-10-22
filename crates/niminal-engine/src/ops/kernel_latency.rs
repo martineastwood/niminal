@@ -15,6 +15,7 @@ impl Kernel {
                 | Instr::Copy { dst, .. }
                 | Instr::Call { dst, .. }
                 | Instr::Native { dst, .. }
+                | Instr::Frame { dst, .. }
                 | Instr::Read { dst, .. }
                 | Instr::ReadAt { dst, .. } => Some(dst),
                 _ => None,
@@ -25,6 +26,7 @@ impl Kernel {
                 Instr::Neg { a, .. } | Instr::Copy { src: a, .. } | Instr::Call { a, .. } => {
                     vec![a]
                 }
+                Instr::Frame { input, .. } => vec![input],
                 Instr::Native { index, .. } => self.natives[index]
                     .inputs
                     .iter()
@@ -128,6 +130,10 @@ impl Kernel {
                         self.values.push(values);
                     }
                     (Some(*dst), 1, 0)
+                }
+                Instr::Frame { dst, input, scope } => {
+                    remap(input);
+                    (Some(*dst), 1, self.frames[*scope].size)
                 }
                 Instr::Input { dst, .. } | Instr::LoadState { dst, .. } => (Some(*dst), 1, 0),
                 _ => (None, 0, 0),

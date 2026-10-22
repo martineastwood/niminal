@@ -11,22 +11,23 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use niminal_engine::ops::{
-    Add, ArrayRead, BlockHold, BufferRead, BufferRecord, BufferWrite, Cmp, Compare, Context, Curve,
-    Custom, Delay1, Div, Env, EnvField, Fn1, Func, Hold, Interp, KitSampler, LoopMode, Max, Min,
-    Mul, NoteStart, NoteTime, PanChannel, Pow, ReadContext, Released, Rem, SampleRate, Sampler,
-    Segment, Select, Sub, TableRead, Waveshape,
+    Add, ArrayRead, Atan2, BlockHold, BufferRead, BufferRecord, BufferWrite, Cmp, Compare, Context,
+    Curve, Custom, Delay1, Div, Env, EnvField, Fn1, Func, Hold, Interp, KitSampler, LoopMode, Max,
+    Min, Mul, NoteStart, NoteTime, PanChannel, Pow, ReadContext, Released, Rem, SampleRate,
+    Sampler, Segment, Select, Sub, TableRead,
 };
 use niminal_engine::{Array, Buffer, ChainInput, Edge, Graph, GraphBuilder, Route, Src, Table};
 use niminal_score::{Tempo, Value};
 
 use crate::ast::*;
+use crate::call::{self, ArgVal};
 use crate::diag::{Diagnostic, Span, closest};
 use crate::funcs::{self, Kind as PKind, Param as PParam};
 use crate::kernel::{
     Body, KArg, KernelResult, cmp_op, edge_of, ends_with_value, interp_of, lambda_of, range_numbers,
 };
 use crate::layout::{Layout, conversion};
-use crate::opcodes::{self, Build, BuildArgs, Kind, Registry};
+use crate::opcodes::{self, Build, Kind, Registry};
 use crate::program::MidiTarget;
 use crate::program::{ControlDef, Instrument, Param};
 use crate::unit::Unit;
@@ -215,6 +216,7 @@ pub(crate) struct Names {
     pub bus_layouts: Vec<Layout>,
     /// The layout of the master, and so of every voice and node.
     pub master: Layout,
+    pub node_outputs: HashMap<String, Layout>,
     /// Where `file()` and sample paths are resolved from.
     pub samples: crate::Samples,
     /// Sample instruments' underlying tables, for `.data`.
@@ -237,6 +239,7 @@ impl Default for Names {
             buses: Vec::new(),
             bus_layouts: Vec::new(),
             master: Layout::Mono,
+            node_outputs: HashMap::new(),
             samples: crate::Samples::default(),
             sample_data: HashMap::new(),
             samplers: HashMap::new(),
@@ -424,13 +427,7 @@ pub(crate) enum Datum {
 }
 
 /// A call's evaluated argument.
-#[derive(Clone)]
-enum Val {
-    Wave(opcodes::WaveArg),
-    Layout(Layout),
-    Sig(Sig),
-    Array(Array<Val>),
-}
+type Val = ArgVal<Sig>;
 
 pub(crate) struct Lower<'a> {
     registry: &'a Registry,
@@ -1278,7 +1275,11 @@ pub(crate) fn compile_chain(
     }
     // The chain delivers in its destination's layout.
     let destination = match lower.route {
-        Route::Master => names.master,
+        Route::Master => names
+            .node_outputs
+            .get(&node.name)
+            .copied()
+            .unwrap_or(names.master),
         Route::Bus(b) => names.bus_layouts[b],
     };
     let out = lower.convert(&out, destination, node.span)?;
@@ -3153,43 +3154,6 @@ impl<'a> Lower<'a> {
         }))
     }
 
-    /// `x.waveshape(table)`: map x in -1..1 through a transfer table.
-    fn waveshape(&mut self, name: &Ident, args: &[Arg], _span: Span) -> Res<Datum> {
-        let (x_arg, table_arg) = match args {
-            [x, t] if x.receiver => (x, t),
-            [t, x] if !x.receiver => (x, t),
-            _ => {
-                return Err(
-                    Diagnostic::new("`waveshape` takes a signal and a table", name.span)
-                        .with_help("for example `osc(saw, freq).waveshape(cheby([1, 0.3]))`"),
-                );
-            }
-        };
-        let x_v = self.value(&x_arg.value)?;
-        let x = self.signal_of(x_v, x_arg.value.span)?;
-        let table_v = self.value(&table_arg.value)?;
-        let table = self.as_table(table_v, table_arg.value.span)?;
-        let rate = self.sig_rate(&x);
-        let srcs: Array<Src> = x
-            .srcs
-            .iter()
-            .map(|&s| {
-                let src = self
-                    .g
-                    .add(Waveshape::new(table.clone()), &[("x", s)])
-                    .expect("waveshape ports");
-                self.note_rate(src, rate);
-                src
-            })
-            .collect();
-        Ok(Datum::Sig(Sig {
-            srcs,
-            layout: x.layout,
-            unit: Unit::Num,
-            konst: None,
-        }))
-    }
-
     /// `take.record(sig, loop: true)`: write consecutive samples into a shared buffer.
     fn buffer_record(&mut self, name: &Ident, args: &[Arg], _span: Span) -> Res<Datum> {
         let Some(receiver) = args.first().filter(|a| a.receiver) else {
@@ -4680,7 +4644,6 @@ impl<'a> Lower<'a> {
             | "normalize" | "reverse" | "rotate" | "resample" | "concat" | "integrate" | "mix" => {
                 return self.array_call(name, args, span);
             }
-            "waveshape" => return self.waveshape(name, args, span),
             "record" => return self.buffer_record(name, args, span),
             "data" if args.len() == 1 && args[0].receiver => {
                 return self.sample_data(name, &args[0].value);
@@ -4695,7 +4658,7 @@ impl<'a> Lower<'a> {
                 )
                 .with_help("write `signal.channels` for an array of its channels"));
             }
-            "min" | "max" | "pow" | "mod" => return self.combine(name, args),
+            "min" | "max" | "pow" | "mod" | "atan2" => return self.combine(name, args),
             "clamp" => return self.clamp(name, args),
             "hold" | "smooth" if args.len() == 1 && args[0].receiver => {
                 let value = self.value(&args[0].value)?;
@@ -4806,6 +4769,7 @@ impl<'a> Lower<'a> {
                     "min",
                     "max",
                     "pow",
+                    "atan2",
                     "mod",
                     "clamp",
                     "prev",
@@ -4854,6 +4818,7 @@ impl<'a> Lower<'a> {
             vals.push(Some(match param.kind {
                 Kind::Wave => Val::Wave(self.wave_arg(&arg.value)?),
                 Kind::Layout => Val::Layout(layout_from_expr(&arg.value)?),
+                Kind::Table => Val::Tables(self.table_arg(&arg.value)?),
                 Kind::Signal(_) | Kind::Gain => {
                     let value = self.value(&arg.value)?;
                     self.builtin_value(value, param, &arg.value)?
@@ -4862,6 +4827,25 @@ impl<'a> Lower<'a> {
         }
 
         self.dispatch_arrays(spec, &vals, span)
+    }
+
+    /// One table, or an array of them (one per channel), known while compiling.
+    fn table_arg(&mut self, e: &Expr) -> Res<Vec<Arc<Table>>> {
+        let tables = match self.value(e)? {
+            Datum::Array(items)
+                if !items.is_empty() && items.iter().all(|i| matches!(i, Datum::Table(_))) =>
+            {
+                items
+                    .into_iter()
+                    .map(|item| self.as_table(item, e.span))
+                    .collect::<Res<Vec<_>>>()?
+            }
+            other => vec![self.as_table(other, e.span)?],
+        };
+        if tables.iter().any(|t| t.is_empty()) {
+            return Err(Diagnostic::new("a table can't be empty", e.span));
+        }
+        Ok(tables)
     }
 
     /// A waveform name, or a table of plain numbers known while compiling that holds one cycle.
@@ -4878,37 +4862,11 @@ impl<'a> Lower<'a> {
                 names.join(", ")
             ))
         };
-        let value = match self.value(e) {
+        let tables = match self.table_arg(e) {
             Err(_) if matches!(e.kind, ExprKind::Name(_)) => return Err(not_a_wave()),
-            value => value?,
+            tables => tables?,
         };
-        match value {
-            Datum::Table(table) => {
-                opcodes::WaveArg::from_table(&table).map_err(|m| Diagnostic::new(m, e.span))
-            }
-            Datum::Array(items)
-                if !items.is_empty() && items.iter().all(|i| matches!(i, Datum::Table(_))) =>
-            {
-                let tables: Vec<_> = items
-                    .iter()
-                    .map(|i| match i {
-                        Datum::Table(t) => t.clone(),
-                        _ => unreachable!(),
-                    })
-                    .collect();
-                opcodes::WaveArg::bank(&tables).map_err(|m| Diagnostic::new(m, e.span))
-            }
-            other => {
-                let table = self.as_table(other, e.span).map_err(|d| {
-                    if matches!(e.kind, ExprKind::Name(_)) {
-                        not_a_wave()
-                    } else {
-                        d
-                    }
-                })?;
-                opcodes::WaveArg::from_table(&table).map_err(|m| Diagnostic::new(m, e.span))
-            }
-        }
+        opcodes::WaveArg::from_tables(&tables).map_err(|m| Diagnostic::new(m, e.span))
     }
 
     fn builtin_value(&self, value: Datum, param: &opcodes::ParamSpec, arg: &Expr) -> Res<Val> {
@@ -4931,21 +4889,19 @@ impl<'a> Lower<'a> {
             )),
             Datum::Record(fields) => self.builtin_value(fields[0].1.clone(), param, arg),
             Datum::Sig(sig) => {
-                match param.kind {
-                    Kind::Signal(expected) if sig.unit != expected => {
-                        return Err(self.unit_mismatch(&param.name, expected, sig.unit, arg));
-                    }
-                    Kind::Gain if !matches!(sig.unit, Unit::Db | Unit::Num) => {
+                if let Some(expected) = call::unit_expected(param.kind, sig.unit) {
+                    if param.kind == Kind::Gain {
                         return Err(Diagnostic::new(
                             format!(
-                                "`{}` expects db or a plain factor, found {}",
+                                "`{}` expects {}, found {}",
                                 param.name,
+                                call::expectation(param.kind, expected),
                                 sig.unit.describe()
                             ),
                             arg.span,
                         ));
                     }
-                    _ => {}
+                    return Err(self.unit_mismatch(&param.name, expected, sig.unit, arg));
                 }
                 Ok(Val::Sig(sig))
             }
@@ -5001,31 +4957,12 @@ impl<'a> Lower<'a> {
                 other => other.clone(),
             })
             .collect();
-        let lengths: Vec<_> = vals
+        let rows = call::rows(&vals)
+            .map_err(|m| Diagnostic::new(m, span))?
+            .expect("a call with an array argument has rows");
+        let items = rows
             .iter()
-            .filter_map(|v| match v {
-                Some(Val::Array(items)) => Some(items.len()),
-                _ => None,
-            })
-            .collect();
-        let count = lengths[0];
-        if lengths.iter().any(|&n| n != count) {
-            return Err(Diagnostic::new(
-                "opcode array arguments must have matching shapes",
-                span,
-            ));
-        }
-        let items = (0..count)
-            .map(|i| {
-                let row: Vec<_> = vals
-                    .iter()
-                    .map(|v| match v {
-                        Some(Val::Array(items)) => Some(items[i].clone()),
-                        other => other.clone(),
-                    })
-                    .collect();
-                self.dispatch_arrays(spec, &row, span)
-            })
+            .map(|row| self.dispatch_arrays(spec, row, span))
             .collect::<Res<_>>()?;
         let result = Datum::Array(items);
         match layout {
@@ -5049,40 +4986,30 @@ impl<'a> Lower<'a> {
 
     /// Build an opcode once per channel of its widest argument.
     fn expand(&mut self, spec: &opcodes::OpSpec, vals: &[Option<Val>], span: Span) -> Res<Sig> {
-        let mut build = BuildArgs::default();
         let mut width = 1;
         let mut layout = Layout::Mono;
         for (param, val) in spec.params.iter().zip(vals) {
-            match val {
-                Some(Val::Wave(w)) => build.wave = Some(w.clone()),
-                Some(Val::Layout(_)) | None => {}
-                Some(Val::Array(_)) => unreachable!("array expansion runs before signal expansion"),
-                Some(Val::Sig(sig)) => {
-                    if let Some(k) = sig.konst {
-                        build.consts.insert(param.name.clone(), k);
-                    }
-                    if param.wired && sig.count() > 1 {
-                        if width > 1 && sig.count() != width {
-                            return Err(Diagnostic::new(
-                                format!(
-                                    "`{}`'s arguments have {width} and {} channels, which can't be combined",
-                                    spec.name,
-                                    sig.count()
-                                ),
-                                span,
-                            ));
-                        }
-                        width = sig.count();
-                        layout = sig.layout;
-                    }
+            let Some(Val::Sig(sig)) = val else { continue };
+            if param.wired && sig.count() > 1 {
+                if width > 1 && sig.count() != width {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "`{}`'s arguments have {width} and {} channels, which can't be combined",
+                            spec.name,
+                            sig.count()
+                        ),
+                        span,
+                    ));
                 }
+                width = sig.count();
+                layout = sig.layout;
             }
         }
 
         let mut srcs = Vec::with_capacity(width);
         for channel in 0..width {
-            build.channel = channel;
-            build.salt = (self.g.node_count() + channel) as u32;
+            let salt = (self.g.node_count() + channel) as u32;
+            let build = call::build_args(spec, vals, |s| s.konst, channel, salt);
             let opcode = spec
                 .instantiate(&build)
                 .map_err(|m| Diagnostic::new(m, span))?
@@ -5986,6 +5913,15 @@ impl Lower<'_> {
     fn combine_scalar(&mut self, name: &Ident, a: Sig, b: Sig, b_span: Span) -> Res<Sig> {
         match name.name.as_str() {
             "mod" => self.rem(a, b, b_span),
+            "atan2" => {
+                self.same_unit(&a, &b, "atan2", b_span)?;
+                if let (Some(x), Some(y)) = (a.konst, b.konst) {
+                    return Ok(Sig::constant(Unit::Num, x.atan2(y)));
+                }
+                self.elementwise(&a, &b, Unit::Num, b_span, |g, x, y| {
+                    g.add(Atan2, &[("a", x), ("b", y)]).expect("atan2 ports")
+                })
+            }
             "pow" => {
                 if a.unit != Unit::Num || b.unit != Unit::Num {
                     return Err(Diagnostic::new("`pow` expects plain numbers", b_span));
@@ -6487,11 +6423,7 @@ impl Lower<'_> {
 
     /// `x.hz`, `n.ms`, `(-6db).num`...: give a plain value a unit, or take it away.
     fn unit_method(&mut self, name: &Ident, args: &[Arg]) -> Res<Option<Datum>> {
-        let units = [
-            "num", "hz", "khz", "db", "sec", "ms", "beat", "beats", "bar", "bars", "deg", "st",
-            "ct",
-        ];
-        if !units.contains(&name.name.as_str()) || !(args.len() == 1 && args[0].receiver) {
+        if !funcs::UNIT_WORDS.contains(&name.name.as_str()) || !(args.len() == 1 && args[0].receiver) {
             return Ok(None);
         }
         let value = self.value(&args[0].value)?;

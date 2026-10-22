@@ -37,12 +37,34 @@ impl Server {
         }
     }
 
+    /// One that seats a chair of its own for each name a client asks for.
+    fn with_chairs(session: Session) -> Server {
+        let mut d = Server::new(session);
+        let engine = d.engine.clone();
+        d.server = std::mem::replace(
+            &mut d.server,
+            LiveServer::new(Live::new(
+                Box::new(InProcess::new(engine.clone())),
+                SR,
+                Layout::Mono,
+            )),
+        )
+        .with_chairs(move || {
+            Ok(Live::new(
+                Box::new(InProcess::new(engine.clone())),
+                SR,
+                Layout::Mono,
+            ))
+        });
+        d
+    }
+
     /// Mix `frames` samples, with the sequencer sending the engine what falls in them first.
     fn process(&mut self, frames: usize) -> Vec<Vec<f32>> {
         let end = self.engine.lock().unwrap().session().clock() + frames as u64;
-        self.server.live_mut().advance_to(end);
+        self.server.advance_to(end);
         let out = self.engine.lock().unwrap().session_mut().process(frames);
-        self.server.live_mut().advance();
+        self.server.advance();
         out
     }
 
@@ -726,5 +748,144 @@ fn typed_clip_define_launch_and_edit() {
             .unwrap()
             .iter()
             .any(|n| n.as_str() == Some("riff"))
+    );
+}
+
+fn seated(d: &mut Server, chair: Option<&str>) -> ClientId {
+    let c = d.connect();
+    let mut params = json!({"protocol": PROTOCOL_VERSION, "client": "test"});
+    if let Some(chair) = chair {
+        params["chair"] = json!(chair);
+    }
+    let hello = call(d, c, 1, "hello", params);
+    assert!(hello["error"].is_null(), "{hello}");
+    c
+}
+
+fn clip_state(d: &mut Server, c: ClientId, name: &str) -> Option<(bool, bool)> {
+    let status = call(d, c, 9, "status", json!({}));
+    status["result"]["clips"]
+        .as_array()?
+        .iter()
+        .find(|clip| clip["name"] == name)
+        .map(|clip| {
+            (
+                clip["running"].as_bool().unwrap(),
+                clip["muted"].as_bool().unwrap(),
+            )
+        })
+}
+
+#[test]
+fn a_chair_has_its_own_clips_and_its_own_mute() {
+    let mut d = Server::with_chairs(Session::new(SR, Layout::Mono).without_limiter());
+    let (a, b) = (seated(&mut d, None), seated(&mut d, Some("bass")));
+    // the same name in two chairs is two clips
+    for c in [a, b] {
+        let eval = call(
+            &mut d,
+            c,
+            2,
+            "eval",
+            json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}),
+        );
+        assert!(eval["error"].is_null(), "{eval}");
+    }
+    call(&mut d, a, 3, "launch", json!({"target": "lead"}));
+    d.process(4_800);
+    assert_eq!(clip_state(&mut d, a, "lead"), Some((true, false)));
+    assert_eq!(
+        clip_state(&mut d, b, "lead"),
+        Some((false, false)),
+        "b's lead is not playing"
+    );
+
+    call(&mut d, b, 4, "launch", json!({"target": "lead"}));
+    call(&mut d, a, 5, "mute", json!({"target": "lead"}));
+    d.process(4_800);
+    assert_eq!(clip_state(&mut d, a, "lead"), Some((true, true)));
+    assert_eq!(
+        clip_state(&mut d, b, "lead"),
+        Some((true, false)),
+        "muting a does not mute b"
+    );
+}
+
+#[test]
+fn clients_that_name_one_chair_share_it() {
+    let mut d = Server::with_chairs(Session::new(SR, Layout::Mono).without_limiter());
+    let (b, c) = (seated(&mut d, Some("bass")), seated(&mut d, Some("bass")));
+    call(
+        &mut d,
+        b,
+        2,
+        "eval",
+        json!({"source": SETUP.replace("\\n", "\n"), "quantize": "now"}),
+    );
+    assert!(
+        clip_state(&mut d, c, "lead").is_some(),
+        "c sees what b defined"
+    );
+    let main = seated(&mut d, None);
+    assert!(clip_state(&mut d, main, "lead").is_none(), "main does not");
+}
+
+#[test]
+fn a_new_chair_starts_at_the_tempo_of_main() {
+    let mut d = Server::with_chairs(Session::new(SR, Layout::Mono).without_limiter());
+    let a = seated(&mut d, None);
+    call(
+        &mut d,
+        a,
+        2,
+        "eval",
+        json!({"source": "tempo 90bpm\nmeter 3/4", "quantize": "now"}),
+    );
+    let b = seated(&mut d, Some("bass"));
+    let status = call(&mut d, b, 3, "status", json!({}));
+    assert_eq!(status["result"]["transport"]["bpm"], 90.0);
+}
+
+#[test]
+fn notifications_go_to_the_chair_they_are_about() {
+    let mut d = Server::with_chairs(Session::new(SR, Layout::Mono).without_limiter());
+    let (a, b) = (seated(&mut d, None), seated(&mut d, Some("bass")));
+    for c in [a, b] {
+        call(&mut d, c, 2, "subscribe", json!({"topics": ["landed"]}));
+    }
+    d.notifications();
+    call(
+        &mut d,
+        b,
+        3,
+        "eval",
+        json!({"source": "tempo 100bpm", "quantize": "now"}),
+    );
+    d.process(4_800);
+    let heard = methods(&d.notifications());
+    assert!(heard.contains(&(b, "landed".into())), "{heard:?}");
+    assert!(
+        !heard.iter().any(|(c, _)| *c == a),
+        "a heard of b's change: {heard:?}"
+    );
+}
+
+#[test]
+fn a_chair_needs_a_server_that_seats_them() {
+    let mut d = server();
+    let c = d.connect();
+    let hello = call(
+        &mut d,
+        c,
+        1,
+        "hello",
+        json!({"protocol": PROTOCOL_VERSION, "chair": "bass"}),
+    );
+    assert_eq!(hello["error"]["code"], -32602);
+    assert!(
+        hello["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("one chair")
     );
 }

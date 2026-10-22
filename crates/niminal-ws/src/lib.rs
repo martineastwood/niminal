@@ -42,17 +42,18 @@ impl Outbox {
             _ => None,
         };
         if let Some(key) = &key
-            && let Some((_, old)) = self.queue.iter_mut().find(|(k, _)| k.as_ref() == Some(key)) {
-                if self.bytes - old.len() + text.len() > 4 * 1024 * 1024 {
-                    self.dropped += 1;
-                    return;
-                }
-                self.bytes -= old.len();
-                *old = text;
-                self.bytes += old.len();
+            && let Some((_, old)) = self.queue.iter_mut().find(|(k, _)| k.as_ref() == Some(key))
+        {
+            if self.bytes - old.len() + text.len() > 4 * 1024 * 1024 {
                 self.dropped += 1;
                 return;
             }
+            self.bytes -= old.len();
+            *old = text;
+            self.bytes += old.len();
+            self.dropped += 1;
+            return;
+        }
         if self.bytes + text.len() > 4 * 1024 * 1024 || self.queue.len() >= 256 {
             if key.is_some() {
                 self.dropped += 1;
@@ -264,7 +265,10 @@ impl Server {
                             }
                         }
                     }
-                    let nobody = outboxes.lock().unwrap_or_else(|e| e.into_inner()).is_empty();
+                    let nobody = outboxes
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .is_empty();
                     thread::sleep(Duration::from_millis(if nobody { 250 } else { 50 }));
                 }
             }));
@@ -447,6 +451,20 @@ impl Client {
         token: Option<&str>,
         name: &str,
     ) -> Result<(Client, Value), String> {
+        Client::hello(port, token, json!({ "client": name }))
+    }
+
+    /// Connect to a sequencer and sit in the chair called `chair`.
+    pub fn connect_in_chair(port: u16, token: Option<&str>, chair: &str) -> Result<Client, String> {
+        Ok(Client::hello(
+            port,
+            token,
+            json!({ "client": "niminal-cli", "chair": chair }),
+        )?
+        .0)
+    }
+
+    fn hello(port: u16, token: Option<&str>, mut params: Value) -> Result<(Client, Value), String> {
         let stream = TcpStream::connect(("127.0.0.1", port))
             .map_err(|e| format!("can't reach the server on port {port}: {e}"))?;
         stream
@@ -459,7 +477,7 @@ impl Client {
             next_id: 1,
             notifications: Vec::new(),
         };
-        let mut params = json!({"protocol": niminal_server::PROTOCOL_VERSION, "client": name});
+        params["protocol"] = json!(niminal_server::PROTOCOL_VERSION);
         if let Some(t) = token {
             params["token"] = json!(t);
         }

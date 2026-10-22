@@ -1,0 +1,48 @@
+// Models of struck and plucked things: `use std/physical`.
+
+/// A plucked string (Karplus-Strong). Feed it a short burst of noise or an impulse; the burst
+/// circulates in a delay line of one period that loses a little each time round, so it settles into a
+/// tone at `freq`. `decay` near 1 rings longer. `size` is the longest period, in samples.
+fn string(x, freq: init hz, decay: 0..1 = 0.996, size: const int = 4096) {
+  state buf = zeros(size)
+  state pos = 0
+  len = sample_rate / freq
+  delayed = buf.at(pos - len, interp: linear)
+  y = x + (delayed + prev(delayed)) * 0.5 * decay
+  buf[pos] = y
+  pos = (pos + 1).mod(size)
+  y
+}
+
+/// Resonators in parallel, one for each of `ratios` times `freq`: modal synthesis of bars, bells and
+/// drums. `decay` is the pole radius, so it is the same for every mode (nearer 1 rings longer). The
+/// output is about as loud as the input at a mode's frequency. Keep `freq * ratio` below half the
+/// sample rate.
+fn modal(x, freq: init hz, ratios: [num], decay: 0..1 = 0.9995) {
+  state s1 = zeros(ratios.len)
+  state s2 = zeros(ratios.len)
+  w = 2 * pi * freq / sample_rate * ratios
+  y = x * (2 * (1 - decay) * sin(w)) + 2 * decay * cos(w) * s1 - decay * decay * s2
+  s2 = s1
+  s1 = y
+  y.sum
+}
+
+const drum_modes = [1, 1.593, 2.136, 2.296, 2.653, 2.918, 3.156, 3.501]
+const free_bar_modes = [1, 2.756, 5.404, 8.933, 13.34, 18.64]
+const bell_modes = [0.5, 1, 1.19, 1.56, 2, 2.51, 2.66, 3.01, 4.1]
+
+/// A drum: the first modes of an ideal circular membrane. Strike it with a click or a short burst.
+fn drum(x, freq: init hz, decay: 0..1 = 0.999) {
+  modal(x, freq, drum_modes, decay: decay)
+}
+
+/// A free bar, as in a glockenspiel: the partials are far from harmonic.
+fn free_bar(x, freq: init hz, decay: 0..1 = 0.9997) {
+  modal(x, freq, free_bar_modes, decay: decay)
+}
+
+/// A bell, with a hum tone an octave below the strike note.
+fn bell(x, freq: init hz, decay: 0..1 = 0.9998) {
+  modal(x, freq, bell_modes, decay: decay)
+}

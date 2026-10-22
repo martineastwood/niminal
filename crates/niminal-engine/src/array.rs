@@ -62,5 +62,10 @@ pub fn wrapped_index(index: f64, len: usize) -> usize {
     if !index.is_finite() {
         return 0;
     }
-    index.floor().rem_euclid(len as f64) as usize % len
+    let floor = index.floor();
+    // the usual case, which needs no division
+    if floor >= 0.0 && floor < len as f64 {
+        return floor as usize;
+    }
+    floor.rem_euclid(len as f64) as usize % len
 }

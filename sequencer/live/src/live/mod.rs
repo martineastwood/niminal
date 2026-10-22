@@ -258,6 +258,11 @@ const MAX_NOTICES: usize = 100;
 const NOTICE_REPEAT_SECONDS: u64 = 10;
 
 impl Live {
+    /// The tempo and meter the project has now.
+    pub fn tempo(&self) -> Tempo {
+        self.program.tempo
+    }
+
     /// A sequencer for an engine that outputs `layout` at `sample_rate`.
     pub fn new(link: Box<dyn EngineLink>, sample_rate: f32, layout: Layout) -> Live {
         let program = compile_with("", &options(layout, &Samples::default()))

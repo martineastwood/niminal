@@ -36,6 +36,8 @@ pub struct CompileOptions {
     pub defer_latency: bool,
     /// The output layout when the source has no `config { channels: ... }`.
     pub default_layout: Layout,
+    /// Host-selected output layouts for native routing fx templates. Other nodes keep their declared destination.
+    pub node_outputs: HashMap<String, Layout>,
     /// Where the files named by `sample` and `kit` are found.
     pub samples: Samples,
     /// Existing shared resources to retain when a definition keeps its name, length and rate.
@@ -52,6 +54,7 @@ impl Default for CompileOptions {
             retained_buffer_bytes: HashMap::new(),
             defer_latency: false,
             default_layout: Layout::Mono,
+            node_outputs: HashMap::new(),
             samples: Samples::default(),
             buffers: HashMap::new(),
         }
@@ -427,6 +430,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     // Top-level names first, so locals can be kept from shadowing them.
     let mut names = Names::default();
     names.samples = options.samples.clone();
+    names.node_outputs = options.node_outputs.clone();
     for item in &items {
         let (ident, kind) = match item {
             Item::Control { name, .. } => (name, "control"),
@@ -473,16 +477,8 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     let mut fns: HashMap<String, FnDef> = HashMap::new();
     for item in &items {
         let Item::Fn(def) = item else { continue };
-        if registry.find(&def.name.name).is_some()
-            || matches!(def.name.name.as_str(), "reset_on" | "after")
-        {
-            errors.push(Diagnostic::new(
-                format!(
-                    "`{}` is a built-in function, so it can't be defined again",
-                    def.name.name
-                ),
-                def.name.span,
-            ));
+        if let Some(why) = crate::funcs::reserved_function_name(&def.name.name, &registry) {
+            errors.push(Diagnostic::new(why, def.name.span));
         } else if fns.insert(def.name.name.clone(), def.clone()).is_some() {
             errors.push(Diagnostic::new(
                 format!("`{}` is defined twice", def.name.name),
@@ -723,6 +719,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         def: NodeDef {
             meter: None,
             transition: (0, 0.0),
+            reset_state: false,
             controls: Vec::new(),
             chain: None,
             inputs: Vec::new(),
@@ -941,6 +938,7 @@ fn compile_node(
         def: NodeDef {
             meter: None,
             transition: (0, 0.0),
+            reset_state: false,
             controls: Vec::new(),
             chain: chain.graph,
             inputs: chain.inputs,

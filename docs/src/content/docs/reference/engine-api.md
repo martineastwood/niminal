@@ -45,6 +45,13 @@ An **`id`** is a whole number the client picks, and it belongs to that connectio
 
 **Time ownership.** The engine owns a monotonically increasing sample clock. Each client owns its tempo map, meter, musical origin, looping and quantization. Clients convert their positions to samples and send events ahead of playback. A tempo edit can cancel and replace that client's pending events; another client's events stay at their submitted samples. The engine never retimes accepted events.
 
+**Tempo authority.** The engine has no tempo, so it cannot arbitrate one. When several clients play together, exactly one of them must own the tempo map, and the others follow it by converting the same beats to samples with that client's map (for example from a value it publishes on a shared bus). If two clients each keep their own map, their events are all accepted and they drift apart. A client that changes tempo cancels and replaces only its own pending events.
+
+**Events at the same sample.** Events with the same `at` take effect in this order: resets and panics, then definition swaps, `control` changes and buffer writes, then notes, then everything that changes a sounding note (`off`, `set` and parameter mappings). Within one step the order is the order the events were accepted: the order of a batch, and batches in the order they arrived. Two consequences clients can rely on, and that the replay test suite pins:
+
+- An `off` and a `note` that reuse the same `id` at one sample end the old note and start the new one, when the `off` comes first in the batch. A tracker row can release the previous note and play the next with one `id`.
+- `control` changes at one sample apply in the order they were sent, so the last one sent is the value that holds.
+
 Notes, controls and the rest in a batch are checked against the definitions in force at their own time, so a batch can `define` an instrument and play it. If anything in a batch is wrong, definitions queued earlier in the same batch are taken back.
 
 **Result:** `{ "accepted": 3, "late": 0, "first": 4800, "horizon": 8192 }`. `late` counts events whose time had already passed: they sounded at once. `first` is the earliest sample any event resolved to, and `horizon` is the sample up to which the engine has prepared audio.
@@ -72,10 +79,11 @@ Protocol **5** includes a timed `routing` operation inside `events.send`. Each c
 
 | Routing edit | Fields | Meaning |
 | --- | --- | --- |
-| `fx` | `name`, `source` | Compile a reusable fx definition. Updating or freeing it leaves existing instances on their original graph; creating/updating a node selects the current definition. |
+| `fx` | `name`, `source`, optional `output_channels` | Compile a reusable fx definition. `output_channels` (1–16) selects its native output layout independently of the master; input collections keep the master layout. This supports mono modulation buses and explicit conversion FX. Updating or freeing it leaves existing instances on their original graph; creating/updating a node selects the current definition. |
 | `bus` | `id`, `channels`, optional `shared` | Create an audio bus, private by default. Channel count is 1–16 and remains fixed until freed. |
 | `node` | `id`, optional `fx`, `instrument`, `args` | Create or update an instance, preserving compatible DSP state. `instrument` is an optional default for notes targeting the node directly. |
 | `replace` | `id`, `fx`, optional `args`, `fade` | Replace instance DSP, optionally crossfading; see [live updates](#replacing-an-fx-live). |
+| `reset` | `id` | Reset persistent FX DSP state at this event’s sample, such as oscillator phase or delay memory, retaining held voices, parameters and routing. |
 | `gain` | `id`, `value`, optional `glide` | Move a connection gain using the lightweight control path. |
 | `set` | `id`, `args`, optional `glide` | Change instance parameters. `glide` is seconds, defaults to zero and is at most 60. |
 | `connect` | `id`, `from`, `to`, optional `gain`, `glide`, `delayed` | Create/update a connection. Gain defaults to 1; glide is seconds. A delayed connection arrives exactly one engine block later, allowing feedback. |
@@ -201,6 +209,21 @@ Both return a job `id`. Use `jobs.status {id}`, `jobs.cancel {id}` or subscribe 
 ### Audio devices
 
 `audio.devices` lists input/output devices and supported formats. `audio.status` reports host state and selected settings. `audio.configure {settings,restart:true}` queues an explicit engine restart; settings include `output`, `input`, `sample_rate`, `channels`, optional `buffer_size` (the device callback size in frames, not the DSP block; see `--block-size`) and `no_audio`. Use device IDs from enumeration or `"default"`. Restart resets the sample clock and disconnects all clients; reconnect and resubmit the project. Unsupported formats fail preflight, and device loss remains visible in host status. An embedded engine without an audio host rejects configuration.
+
+### Per-connection limits
+
+`hello` advertises these in `limits`; a request over one is refused, and nothing in it is applied.
+
+| Limit | Value |
+| --- | --- |
+| Message size | 4 MiB |
+| Buffer write per request | 65,536 samples |
+| Buffer size | 256 MiB |
+| File transfer chunk | 256 KiB |
+| Values in one `report` | 64 |
+| Scopes | 8, each up to 4096 frames and 30 updates/second |
+
+The scopes are the biggest steady stream a client can ask for: eight scopes at the limit are `8 × 4096 × 30` frames per second of every channel of the endpoint, far more than the notification queue below holds, so a client that asks for that gets coalesced updates (`transport_dropped` counts them). Ask for the window and rate you will draw.
 
 ### Transport limits
 

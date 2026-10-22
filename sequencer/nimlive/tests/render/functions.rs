@@ -74,7 +74,7 @@ fn functions_can_be_defined_in_any_order_but_not_call_themselves() {
 fn a_statement_if_changes_state_only_when_it_holds() {
     // sample and hold: the output only changes when the trigger crosses 0 going up, so it is a staircase
     let held = raw(
-        "fn hold(x, trig) {\n state h = 0\n if trig > 0 and prev(trig) <= 0 { h = x }\n h\n}\ninstr a() { osc(saw, 3hz).hold(osc(square, 20hz)) * env[1 1sec 1] }\na() for 1beat",
+        "fn latch(x, trig) {\n state h = 0\n if trig > 0 and prev(trig) <= 0 { h = x }\n h\n}\ninstr a() { osc(saw, 3hz).latch(osc(square, 20hz)) * env[1 1sec 1] }\na() for 1beat",
     );
     let changes = held[..(0.5 * SR) as usize]
         .windows(2)
@@ -171,7 +171,7 @@ fn a_state_list_makes_a_plucked_string() {
 
 #[test]
 fn an_fir_filter_reads_a_constant_list_and_writes_its_history() {
-    let fir = "fn fir(x, taps: [num]) {
+    let fir = "fn fir_filter(x, taps: [num]) {
   state hist = zeros(taps.len)
   state pos = 0
   hist[pos] = x
@@ -183,7 +183,7 @@ fn an_fir_filter_reads_a_constant_list_and_writes_its_history() {
 const taps = [0.25, 0.5, 0.25]
 ";
     let filtered = raw(&format!(
-        "{fir}instr a() {{ osc(saw, 300hz).fir(taps) * env[1 1sec 1] }}\na() for 1beat"
+        "{fir}instr a() {{ osc(saw, 300hz).fir_filter(taps) * env[1 1sec 1] }}\na() for 1beat"
     ));
     let by_hand = raw(
         "instr a() { x = osc(saw, 300hz)\n (x * 0.25 + prev(x) * 0.5 + prev(prev(x)) * 0.25) * env[1 1sec 1] }\na() for 1beat",

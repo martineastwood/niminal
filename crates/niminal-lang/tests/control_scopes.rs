@@ -18,7 +18,9 @@ fn render(voice: &mut Voice, blocks: usize) -> Vec<f32> {
 }
 
 fn crossings(x: &[f32]) -> usize {
-    x.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count()
+    x.windows(2)
+        .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
+        .count()
 }
 
 fn error(source: &str) -> String {
@@ -30,19 +32,31 @@ fn error(source: &str) -> String {
 
 #[test]
 fn a_control_scope_holds_one_value_through_each_block() {
-    let out = render(&mut voice("instr a() { control { osc(sine, 100hz) } }", "a"), 40);
+    let out = render(
+        &mut voice("instr a() { control { osc(sine, 100hz) } }", "a"),
+        40,
+    );
     let block = block_size();
     for chunk in out.chunks(block) {
-        assert!(chunk.iter().all(|v| *v == chunk[0]), "stepped within a block");
+        assert!(
+            chunk.iter().all(|v| *v == chunk[0]),
+            "stepped within a block"
+        );
     }
-    assert!(out[block..].iter().any(|v| *v != out[block]), "moves between blocks");
+    assert!(
+        out[block..].iter().any(|v| *v != out[block]),
+        "moves between blocks"
+    );
 }
 
 #[test]
 fn an_oscillator_in_a_control_scope_keeps_its_frequency() {
     // 750 blocks is a second at 48khz and 64 samples a block; a 5hz LFO makes 10 crossings
     let blocks = 48_000 / block_size();
-    let out = render(&mut voice("instr a() { control { osc(sine, 5hz) } }", "a"), blocks);
+    let out = render(
+        &mut voice("instr a() { control { osc(sine, 5hz) } }", "a"),
+        blocks,
+    );
     let held: Vec<f32> = out.iter().step_by(block_size()).copied().collect();
     let n = crossings(&held);
     assert!((9..=11).contains(&n), "{n} crossings");
@@ -97,7 +111,10 @@ fn smooth_with_a_time_is_a_lag() {
 
 #[test]
 fn hold_is_the_stepped_value() {
-    let out = render(&mut voice("instr a() { control { osc(sine, 5hz) }.hold }", "a"), 4);
+    let out = render(
+        &mut voice("instr a() { control { osc(sine, 5hz) }.hold }", "a"),
+        4,
+    );
     assert_eq!(out[0], out[block_size() - 1]);
 }
 
@@ -130,7 +147,10 @@ fn a_control_fn_runs_once_per_block_wherever_it_is_called() {
     let blocks = 48_000 / block_size();
     let out = render(&mut voice(source, "a"), blocks);
     for chunk in out.chunks(block_size()) {
-        assert!(chunk.iter().all(|v| *v == chunk[0]), "stepped within a block");
+        assert!(
+            chunk.iter().all(|v| *v == chunk[0]),
+            "stepped within a block"
+        );
     }
     let held: Vec<f32> = out.iter().step_by(block_size()).copied().collect();
     let n = crossings(&held);
@@ -139,12 +159,12 @@ fn a_control_fn_runs_once_per_block_wherever_it_is_called() {
 
 #[test]
 fn a_control_fn_can_have_state_and_branches() {
-    let source = "control fn late(step: num) {
+    let source = "control fn lagged(step: num) {
         state n = 0
         n = n + step
         if n > 3 { 1 } else { 0 }
     }
-    instr a() { late(1) }";
+    instr a() { lagged(1) }";
     let out = render(&mut voice(source, "a"), 6);
     let per_block: Vec<f32> = out.iter().step_by(block_size()).copied().collect();
     assert_eq!(per_block, [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
@@ -176,7 +196,10 @@ fn the_prelude_has_control_rate_modulators() {
     assert!((9..=11).contains(&crossings(&held)));
     assert!(held.iter().all(|v| v.abs() <= 1.0));
 
-    let out = render(&mut voice("instr a() { lfo(2hz, shape: square) }", "a"), blocks);
+    let out = render(
+        &mut voice("instr a() { lfo(2hz, shape: square) }", "a"),
+        blocks,
+    );
     let flat = out.iter().filter(|v| v.abs() > 0.9).count();
     assert!(flat * 10 > out.len() * 9, "square sits at the extremes");
 
@@ -193,7 +216,10 @@ fn the_prelude_has_control_rate_modulators() {
 
 #[test]
 fn a_file_s_own_definition_replaces_the_prelude() {
-    let out = render(&mut voice("fn lfo(rate: hz) { 7 }\ninstr a() { lfo(5hz) }", "a"), 2);
+    let out = render(
+        &mut voice("fn lfo(rate: hz) { 7 }\ninstr a() { lfo(5hz) }", "a"),
+        2,
+    );
     assert!(out.iter().all(|v| *v == 7.0));
     let out = render(&mut voice("instr lfo() { 3 }\ninstr a() { lfo() }", "a"), 2);
     assert!(out.iter().all(|v| *v == 3.0));
@@ -247,7 +273,10 @@ fn explain_warns_about_what_a_control_step_cannot_do() {
     )
     .unwrap();
     let report = program.explain();
-    assert!(report.contains("above half the control rate (375hz)"), "{report}");
+    assert!(
+        report.contains("above half the control rate (375hz)"),
+        "{report}"
+    );
     assert!(report.contains("shorter than one control step"), "{report}");
 }
 

@@ -21,5 +21,5 @@ pub use live::{
 pub use log::{Expression, LiveInput, LiveLogEntry};
 
 pub use offline::Offline;
-pub use protocol::{CompileTicket, CompiledTicket, LiveServer, Request, TOPICS};
+pub use protocol::{CompileTicket, CompiledTicket, LiveServer, MAIN_CHAIR, Request, TOPICS};
 pub use quantize::QuantizeDefaults;

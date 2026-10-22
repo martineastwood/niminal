@@ -102,3 +102,69 @@ aside { width: 176px; flex-shrink: 0; padding: 9px 6px; background: #292c30; bor
 .editor-expanded .pattern-toolbar, .editor-expanded .transport-toolbar, .editor-expanded #grid, .editor-expanded .grid-help, .editor-expanded #mixer-panel { display: none; }
 .editor-expanded .instrument-editor { height: 100%; resize: none; }
 footer { display: flex; justify-content: space-between; gap: 20px; padding: 4px 9px; background: #34373c; font-size: 9px; color: #aeb5c0; flex-shrink: 0; }
+/* Sequence order stays readable at one compact row per step. */
+.sequence-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; }
+.sequence-heading .section-title { padding: 0 3px; }
+.sequence-heading button { padding: 1px 5px; font-size: 10px; }
+aside { width: 208px; }
+.sequence-entry { display: grid; grid-template-columns: 26px 43px minmax(0, 1fr); align-items: center; gap: 3px; height: 27px; border-left-width: 2px; }
+.sequence-entry > button { padding: 2px; font-size: 10px; text-align: center; }
+.sequence-entry > select { width: 100%; margin: 0; padding: 0; font-size: 10px; color: #efb37b; background: #4c3424; border-color: #785134; }
+.sequence-entry > .sequence-name { text-align: left; padding-left: 4px; }
+.sequence-actions { gap: 3px; }
+.sequence-actions button { min-width: 24px; padding: 3px 5px; font-size: 12px; }
+aside.names-hidden { width: 88px; }
+.names-hidden .sequence-entry { grid-template-columns: 24px 40px; }
+.names-hidden .sequence-name, .names-hidden #sound-library { display: none; }
+#entry-step { width: 48px; }
+#grid { user-select: none; touch-action: none; }
+.sequence-entry > select { appearance: none; text-align: center; padding: 2px; }
+.grid-row { grid-template-columns: var(--track-columns); }
+.grid-header { height: 94px; }
+.track-header { position: relative; }
+.track-columns { display: flex; padding-left: 0; gap: 0; }
+.track-columns > span { flex: 0 0 56px; text-align: center; }
+.track-columns > span:first-child { flex-basis: 68px; }
+.fx-column-tools { position: absolute; right: 5px; bottom: 3px; display: flex; gap: 2px; }
+.fx-column-tools button { padding: 0 3px; font-size: 9px; line-height: 12px; }
+.track-cells { display: flex; border-right: 3px solid #141619; }
+.note { flex: 0 0 68px; border: 0; }
+.fx-command { flex: 0 0 56px; padding: 2px 5px; font-size: 12px; color: #555046; border-left: 1px solid #303034; cursor: text; }
+.fx-command.filled { color: #efb274; }
+.playing-row .track-cells { border-bottom: 1px solid #bd874e; }
+#mixer { max-height: 260px; overflow: auto; align-items: flex-start; }
+.device-card { flex-basis: 310px; }
+.device-heading { justify-content: flex-start; }
+.device-heading strong { margin-right: auto; }
+.device-heading button { padding: 1px 4px; font-size: 10px; }
+.parameter-row { display: grid !important; grid-template-columns: 85px 1fr 55px 22px; gap: 5px !important; align-items: center; font-size: 10px; margin: 7px 0 !important; }
+.parameter-row > input { width: 100% !important; min-width: 0; accent-color: #d3a76f; padding: 0; }
+.parameter-row output { text-align: right; font-size: 9px; }
+.parameter-row button { padding: 1px 3px; }
+.effect-device > button { margin: 5px 4px 0 0; padding: 2px 5px; }
+.lfo-controls { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px; margin-top: 5px; background: #252b32; border-left: 2px solid #82a4be; }
+.lfo-controls small { flex-basis: 100%; color: #aac4d9; }
+.lfo-controls label { font-size: 9px; display: flex; align-items: center; gap: 3px; }
+.lfo-controls input { width: 50px; padding: 2px; }
+.lfo-controls select { font-size: 10px; }
+.add-device { flex-basis: 220px; }
+.add-device select { width: 100%; margin-bottom: 8px; }
+.add-device p { white-space: pre-line; font-size: 10px; line-height: 1.6; color: #adb2bb; }
+
+.track-rename { width: 100%; min-width: 0; font-size: 10px; padding: 1px 3px; }
+.parameter-row { grid-template-columns: 85px minmax(45px, 1fr) 80px 22px; }
+.parameter-numeric { display: flex; align-items: center; gap: 2px; }
+.parameter-numeric .parameter-value { width: 61px; min-width: 0; font-size: 10px; padding: 2px; text-align: right; }
+.parameter-numeric small { font-size: 9px; color: #b7b9bd; }
+.effect-device { flex-basis: 340px; }
+.add-device > button { display: block; margin-top: 7px; }
+
+.track-columns { display: flex; gap: 0; align-items: center; }
+.track-columns > span:first-child { flex: 0 0 68px; }
+.track-columns .lane-target { flex: 0 0 116px; width: 116px; min-width: 0; padding: 2px; font-size: 9px; text-overflow: ellipsis; }
+.fx-command { flex-basis: 116px; position: relative; text-align: right; padding-right: 17px; }
+.lane-value { width: 100%; height: 100%; padding: 0; font: inherit; text-align: right; background: #222a33; border: 0; color: #ffe0ad; }
+.value-drag { position: absolute; right: 3px; top: 0; bottom: 0; cursor: ns-resize; color: #8595a4; user-select: none; }
+
+.track-columns { padding: 5px 0 0; margin-left: -6px; margin-right: -6px; letter-spacing: 0; }
+.track-header .lane-target { width: 116px; font-size: 9px; }

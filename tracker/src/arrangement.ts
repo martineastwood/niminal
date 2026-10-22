@@ -51,14 +51,16 @@ export class Arrangement {
       const number = project.patterns.indexOf(pattern).toString().padStart(2, '0');
       const row = document.createElement('div'); row.className = 'sequence-entry'; row.dataset.position = String(index);
       row.classList.toggle('selected', index === this.position);
-      const button = document.createElement('button'); button.textContent = `${String(index + 1).padStart(2, '0')} · ${pattern.name}`;
+      const button = document.createElement('button'); button.textContent = String(index + 1).padStart(2, '0'); button.setAttribute('aria-label', `Sequence step ${index + 1}: ${pattern.name}`);
       button.title = `Edit pattern ${number}. Used ${project.sequence.filter(ref => ref === id).length} times in the sequence.`;
       button.onclick = () => this.select(index);
       const select = document.createElement('select'); select.setAttribute('aria-label', `Pattern at sequence step ${index + 1}`); select.dataset.structure = '';
-      for (const [i, p] of project.patterns.entries()) select.add(new Option(`${String(i).padStart(2, '0')} · ${p.name}`, p.id));
+      for (const [i, p] of project.patterns.entries()) select.add(new Option(String(i).padStart(2, '0'), p.id));
       select.value = id;
+      const name = document.createElement('button'); name.className = 'sequence-name'; name.textContent = pattern.name; name.title = pattern.name; name.onclick = () => this.select(index);
+      select.title = `Pattern ${number}: ${pattern.name}`;
       select.onchange = () => { project.sequence[index] = select.value; this.select(index); this.edited(); };
-      row.append(button, select); this.parent.append(row);
+      row.append(button, select, name); this.parent.append(row);
     }
   }
 

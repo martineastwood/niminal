@@ -90,7 +90,7 @@ fn comparisons_give_one_or_zero_and_combine_with_and_or_not() {
     }
     // a state can be changed by a decision, as in a peak follower
     let held = raw(
-        "fn hold(x) {\n state m = 0.0\n m = if x > m { x } else { m * 0.999 }\n m\n}\ninstr a() { (osc(sine, 100hz) * env[1 1sec 1]).hold }\na() for 1beat",
+        "fn peak_hold(x) {\n state m = 0.0\n m = if x > m { x } else { m * 0.999 }\n m\n}\ninstr a() { (osc(sine, 100hz) * env[1 1sec 1]).peak_hold }\na() for 1beat",
     );
     let lowest = held[10_000..20_000].iter().fold(f32::MAX, |m, v| m.min(*v));
     assert!(
@@ -282,7 +282,7 @@ fn several_outputs_keep_separate_state_per_channel_and_note() {
 #[test]
 fn an_opcode_can_call_an_opcode_defined_before_it() {
     let nested = raw(
-        "fn smooth(x, c: hz) { x.one_pole(cutoff: c).one_pole(cutoff: c) }\ninstr a() { osc(saw, 2000hz).smooth(c: 300hz) }\na() for 1beat",
+        "fn soften(x, c: hz) { x.one_pole(cutoff: c).one_pole(cutoff: c) }\ninstr a() { osc(saw, 2000hz).soften(c: 300hz) }\na() for 1beat",
     );
     let by_hand = raw(
         "instr a() { osc(saw, 2000hz).one_pole(cutoff: 300hz).one_pole(cutoff: 300hz) }\na() for 1beat",

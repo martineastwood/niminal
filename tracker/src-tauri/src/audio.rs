@@ -26,6 +26,7 @@ pub struct Status {
     pub error: Option<String>,
     pub instruments: BTreeMap<String, String>,
     pub effects: BTreeMap<String, String>,
+    pub effect_parameters: crate::commands::EffectParameters,
 }
 
 #[derive(Deserialize)]
@@ -117,6 +118,7 @@ struct Worker {
     sounds: BTreeMap<String, Sound>,
     mixer: Vec<Track>,
     playback: Option<Playback>,
+    mixer_timing: (f64, u32),
 }
 
 impl Worker {
@@ -184,6 +186,7 @@ impl Worker {
                 json!({"tag":"tracker-pattern", "from":"now"}),
             )?;
             self.call("panic", json!({}))?;
+            self.send_events(mixer::reset(&self.mixer, &self.status.effect_parameters))?;
         }
         Ok(())
     }
@@ -254,13 +257,44 @@ impl Worker {
                             .map(|body| json!({"op":"fx", "name":s.target, "source":body}))
                     })
                     .collect();
-                edits.extend(mixer::replacements(&self.mixer, &effects)?);
+                let parameters: crate::commands::EffectParameters = sounds
+                    .iter()
+                    .filter(|(_, sound)| sound.fx_source.is_some())
+                    .map(|(id, sound)| (id.clone(), sound.parameters.clone()))
+                    .collect();
+                for track in &self.mixer {
+                    for slot in &track.effects {
+                        for name in slot.modulations.keys() {
+                            if !parameters.get(&slot.definition).is_some_and(|params| {
+                                params.iter().any(|parameter| parameter.name == *name)
+                            }) {
+                                return Err(format!(
+                                    "Remove the LFO targeting {name} before removing that effect parameter"
+                                ));
+                            }
+                        }
+                    }
+                }
+                edits.extend(mixer::replacements(&self.mixer, &effects, &parameters)?);
+                let (_, modulators) = crate::modulation::edits(
+                    &self.mixer,
+                    &self.mixer,
+                    &parameters,
+                    self.mixer_timing.0,
+                    self.mixer_timing.1,
+                    true,
+                );
+                edits.extend(modulators);
                 self.send_events(vec![
                     json!({"op":"transaction", "at":"now", "source":source, "edits":edits}),
                 ])?;
                 self.sounds = sounds;
                 self.status.instruments = instruments;
                 self.status.effects = effects;
+                self.status.effect_parameters = parameters;
+                if let Some(playback) = &mut self.playback {
+                    playback.parameters = self.status.effect_parameters.clone();
+                }
             }
             Command::Play {
                 song,
@@ -270,9 +304,19 @@ impl Worker {
             } => {
                 self.check_assignments(&song)?;
                 let mut playback = Playback::new(0, song, mode, pattern_id, start_position)?;
-                self.set_mixer(&playback.song)?;
                 self.stop()?;
+                self.set_mixer(&playback.song)?;
+                self.send_events(mixer::reset(
+                    &playback.song.tracks,
+                    &self.status.effect_parameters,
+                ))?;
+                playback.parameters = self.status.effect_parameters.clone();
                 playback.origin = self.clock()? + (self.status.sample_rate * 0.15).round() as u64;
+                self.send_events(crate::modulation::reset(
+                    &playback.song.tracks,
+                    &self.status.effect_parameters,
+                    playback.origin,
+                ))?;
                 self.status.skipped_rows = 0;
                 self.status.late_events = 0;
                 self.playback = Some(playback);
@@ -293,6 +337,7 @@ impl Worker {
                 self.set_mixer(&song)?;
                 if let Some(playback) = &mut self.playback {
                     playback.song = song;
+                    playback.parameters = self.status.effect_parameters.clone();
                 }
             }
             Command::Audition {
@@ -317,7 +362,8 @@ impl Worker {
     }
 
     fn check_assignments(&self, song: &Song) -> Result<(), String> {
-        for track in &song.tracks {
+        song.validate()?;
+        for (index, track) in song.tracks.iter().enumerate() {
             if let Some(id) = &track.instrument
                 && !self.status.instruments.contains_key(id)
             {
@@ -326,14 +372,49 @@ impl Worker {
                     track.name
                 ));
             }
+            for slot in &track.effects {
+                let parameters = self
+                    .status
+                    .effect_parameters
+                    .get(&slot.definition)
+                    .ok_or_else(|| format!("Apply the effect assigned to {} first", track.name))?;
+                for name in slot.modulations.keys() {
+                    if !parameters.iter().any(|parameter| parameter.name == *name) {
+                        return Err(format!("{}: unknown modulation target {name}", track.name));
+                    }
+                }
+            }
+            for pattern in &song.patterns {
+                for lane in &pattern.fx[index] {
+                    for value in lane.values.iter().flatten() {
+                        let target = lane.target.as_ref().ok_or("Choose a lane parameter")?;
+                        crate::commands::edit(
+                            target,
+                            value,
+                            index,
+                            track,
+                            &self.status.effect_parameters,
+                        )?;
+                    }
+                }
+            }
         }
         Ok(())
     }
 
     fn set_mixer(&mut self, song: &Song) -> Result<(), String> {
-        let events = mixer::events(&song.tracks, &self.mixer, &self.status.effects)?;
+        let events = mixer::events(
+            &song.tracks,
+            &self.mixer,
+            &self.status.effects,
+            &self.status.effect_parameters,
+            song.bpm,
+            song.rows_per_beat,
+            self.mixer_timing != (song.bpm, song.rows_per_beat),
+        )?;
         self.send_events(events)?;
         self.mixer = song.tracks.clone();
+        self.mixer_timing = (song.bpm, song.rows_per_beat);
         Ok(())
     }
 

@@ -65,6 +65,11 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 i += 1;
                 continue;
             }
+            // Non-breaking spaces commonly arrive through editor/clipboard input.
+            0xc2 if bytes.get(i + 1) == Some(&0xa0) => {
+                i += 2;
+                continue;
+            }
             b'\n' => {
                 i += 1;
                 if matches!(brackets.last(), Some(b'(' | b'[')) {
@@ -377,5 +382,22 @@ mod tests {
     fn comments_and_errors() {
         assert_eq!(toks("a // hi\nb").len(), 4);
         assert_eq!(lex("a $").unwrap_err().message, "unexpected character `$`");
+    }
+}
+
+#[cfg(test)]
+mod pasted_whitespace_tests {
+    use super::*;
+
+    #[test]
+    fn non_breaking_spaces_are_whitespace_and_keep_byte_spans() {
+        let tokens = lex("a\u{a0}+\u{a0}b").unwrap();
+        assert_eq!(tokens[1].tok, Tok::Plus);
+        assert_eq!(tokens[1].span, Span::new(3, 4));
+        assert_eq!(tokens[2].span, Span::new(6, 7));
+        assert_eq!(
+            lex("\"a\u{a0}b\"").unwrap()[0].tok,
+            Tok::Str("a\u{a0}b".into())
+        );
     }
 }

@@ -155,7 +155,7 @@ Completion follows the existing envelope rules: the voice waits until release, a
 - **`if`** as a value needs an `else`; each branch is a block ending with its value. As a statement it can change names, state and `out`:
 
 ```nml
-fn hold(x, trig) {
+fn latch(x, trig) {
   state h = 0
   if trig > 0 and prev(trig) <= 0 { h = x }   // sample and hold, on a rising edge
   h
@@ -217,6 +217,62 @@ const taps = [0.25, 0.5, 0.25]
 ```
 
 An oscillator plays a table as one cycle of a wave, band-limited at any pitch: `osc(saw8, freq)`.
+
+## Vector operations
+
+Arrays held in memory (a state array, a table, or the result of one of these operations) are worked on a whole array at a time, so a line costs about the same however long the array is. Operations that involve a state array or one of these results:
+
+- **Arithmetic and math:** `+ - * /`, `min`, `max`, `-x` and the one-argument math functions, entry by entry. A single value is used for every entry, and two arrays need the same length: `y = x * 0.01 + 1.98 * cos(w) * s1 - 0.9801 * s2`.
+- **`buf = expr`** writes every entry of a state array you own, from an array of the same length (or one value for all): `s2 = s1` followed by `s1 = y` is one step of a delay per entry.
+- **`xs.sum`, `xs.min`, `xs.max`** reduce an array to one value. A sum is added in four parts, in a fixed order, so it is the same on every machine (but not bit-for-bit what a left-to-right loop gives).
+- **`a.dot(b)`** is `Σ a[i] * b[i]`, and **`m.matvec(v)`** multiplies a matrix stored row by row (a table or array with `rows × cols` entries) by a vector of `cols` entries, giving `rows` entries.
+- **`buf.fir(taps, pos)`** is `Σ taps[i] * buf[pos - i]` over a state array used as a ring, newest first, wrapping: a filter output without a loop. `taps` is no longer than the ring.
+- **`buf.taps(offsets, pos, interp: linear)`** reads the ring at many offsets back from `pos` (each can be fractional and can change every sample) and gives an array of the values: a multitap delay.
+
+```nml
+/// Eight resonators in parallel: modal synthesis of a bar or a drum.
+const modes = [1, 2.76, 5.4, 8.9, 13.3, 18.6, 24.8, 31.9]
+fn chime(x, freq: init hz) {
+  state s1 = zeros(8)
+  state s2 = zeros(8)
+  w = 2 * pi * freq / sample_rate * modes     // worked out once, at note start
+  y = x * 0.01 + 1.98 * cos(w) * s1 - 0.9801 * s2
+  s2 = s1
+  s1 = y
+  y.sum
+}
+```
+
+`init` on `freq` lets everything that depends only on it be worked out when the note starts. These forms need a function with state; using one makes a function a kernel. These names, like the other built-ins, can't be used for a function you write: see [Reserved words](/reference/reserved-words/).
+
+## Frames and the FFT
+
+`x.frames(size, fn(w) { ... })` runs its function every `size / 2` samples on the last `size` samples of `x`, windowed with a Hann window, as an array `w`. The function returns `size` samples, which are overlapped into the output. If it returns `w`, the output is `x` exactly, `size` samples late. `size` is a power of two from 4 to 65536.
+
+- **`fft(w)`** gives `[re, im]`, the spectrum of an array of `n` samples, each with `n / 2 + 1` entries. **`ifft(re, im)`** is its inverse (also `ifft([re, im])`). `atan2(im, re)` gives a phase and `sqrt(re * re + im * im)` a magnitude. `fft` works anywhere in a function with state; in a frame it runs once per half frame.
+- **State** declared at the top of the function lasts from frame to frame, so a spectrum can be held, smeared or accumulated.
+- **Latency** is `size` samples, declared to the graph, so a path beside the function is delayed to match.
+- **Size is the user's**, not the engine block's, so the sound doesn't depend on `--block-size` and a log replays exactly.
+
+```nml
+/// Keep only the lowest 40 bins: a brick-wall low-pass.
+const keep = (0..<513).map(it < 40)
+fn low(x) {
+  x.frames(1024, fn(w) {
+    s = fft(w)
+    ifft(s[0] * keep, s[1] * keep)
+  })
+}
+```
+
+## Tables as arguments
+
+A table can be an argument: a parameter written `curve: [num]` takes one, and so does an opcode's table parameter. `x.waveshape(table)` maps `x` in -1..1 through a transfer table; `osc(table, freq)` plays one as a wave, and several tables (an array of them) as a bank to morph with `position:`; `x.convolve(ir)` convolves with an impulse response (see below). `waveshape` and `osc` work inside functions with state; `convolve` works on whole blocks, so it goes in a function without state, or outside it.
+
+```nml
+fn shape(x, curve: [num]) { x.waveshape(curve) }
+out = shape(osc(sine, 110hz), cheby([1, 0.3]))
+```
 
 ## Built-ins
 

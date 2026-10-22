@@ -44,10 +44,18 @@ fn start_at(token: Option<&str>, speed: f64, lookahead: f64) -> Running {
         ..ServerConfig::default()
     };
     let engine_server = Server::start(engine.clone(), engine_config).unwrap();
-    let link = WsLink::connect(engine_server.port(), token).unwrap();
-    let live: LiveShared = Arc::new(Mutex::new(LiveServer::new(
-        Live::new(Box::new(link), 48_000.0, Layout::Mono).with_lookahead(lookahead),
-    )));
+    let engine_port = engine_server.port();
+    let seated = token.map(str::to_string);
+    let link = WsLink::connect(engine_port, token).unwrap();
+    let live: LiveShared = Arc::new(Mutex::new(
+        LiveServer::new(
+            Live::new(Box::new(link), 48_000.0, Layout::Mono).with_lookahead(lookahead),
+        )
+        .with_chairs(move || {
+            let link = WsLink::connect(engine_port, seated.as_deref())?;
+            Ok(Live::new(Box::new(link), 48_000.0, Layout::Mono).with_lookahead(lookahead))
+        }),
+    ));
     let config = ServerConfig {
         port: 0,
         token: token.map(str::to_string),
@@ -57,7 +65,7 @@ fn start_at(token: Option<&str>, speed: f64, lookahead: f64) -> Running {
     let ticking = live.clone();
     let ticker = Worker::spawn(move |stop| {
         while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-            lock(&ticking).live_mut().advance();
+            lock(&ticking).advance();
             std::thread::sleep(Duration::from_millis(5));
         }
     });
@@ -337,4 +345,45 @@ fn a_thousand_notes_in_a_batch_cross_the_websocket_quickly() {
     eprintln!("1000 notes accepted in {took:?}");
     assert_eq!(reply["accepted"], 1000);
     assert!(took < Duration::from_millis(250), "{took:?}");
+}
+
+#[test]
+fn a_chair_plays_beside_main_over_an_engine_connection_of_its_own() {
+    let r = start(None);
+    let mut main = connect(&r);
+    let mut bass = Client::connect_in_chair(r.server.port(), None, "bass").unwrap();
+    for c in [&mut main, &mut bass] {
+        c.call("eval", json!({"source": SETUP, "quantize": "now"}))
+            .unwrap();
+    }
+    bass.call(
+        "eval",
+        json!({"source": "lead.__update([c3])", "quantize": "now"}),
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    while bass.call("status", json!({})).unwrap()["transport"]["voices"]
+        .as_u64()
+        .unwrap()
+        == 0
+    {
+        assert!(started.elapsed() < WAIT, "the chair never sounded");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // `voices` counts the engine's, so ask each chair about its own clip
+    let running = |c: &mut Client| {
+        c.call("status", json!({})).unwrap()["clips"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|clip| clip["name"] == "lead")
+            .map(|clip| clip["running"].as_bool().unwrap())
+    };
+    assert_eq!(running(&mut bass), Some(true));
+    assert_eq!(
+        running(&mut main),
+        Some(false),
+        "bass did not start main's lead"
+    );
+    r.server.stop();
 }

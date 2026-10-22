@@ -26,10 +26,18 @@ pub struct IrSpectrum {
 }
 
 impl IrSpectrum {
-    /// Build from an IR buffer (mono, channel 0). The IR is split into
-    /// block-sized partitions, each zero-padded to twice that and transformed.
+    /// Build from an IR buffer (mono, channel 0).
     pub fn from_buffer(buffer: &Buffer) -> Self {
-        let n = buffer.len();
+        Self::from_samples(buffer.len(), |i| buffer.read(i))
+    }
+
+    /// Build from the samples of one channel of an IR.
+    pub fn from_slice(samples: &[f32]) -> Self {
+        Self::from_samples(samples.len(), |i| samples[i])
+    }
+
+    /// The IR is split into block-sized partitions, each zero-padded to twice that and transformed.
+    fn from_samples(n: usize, read: impl Fn(usize) -> f32) -> Self {
         let num_parts = n.div_ceil(part());
         let mut planner = RealFftPlanner::<f32>::new();
         let fwd = planner.plan_fft_forward(fft_len());
@@ -43,7 +51,7 @@ impl IrSpectrum {
             let start = p * part();
             let end = (start + part()).min(n);
             for i in start..end {
-                time[i - start] = buffer.read(i);
+                time[i - start] = read(i);
             }
             fwd.process(&mut time, &mut spectrum).expect("fft forward");
             let mut bins = vec![Complex::new(0.0, 0.0); nbins()];
@@ -71,7 +79,7 @@ impl std::fmt::Debug for IrSpectrum {
 ///
 /// Each `process` call takes one `PART`-sample block, FFTs it, multiplies
 /// against all IR partitions (sliding the input history), sums, and IFFTs.
-/// Latency is exactly one block.
+/// There is no latency beyond the block itself.
 pub struct Convolve {
     ir: Arc<IrSpectrum>,
     fwd: Arc<dyn RealToComplex<f32>>,
@@ -91,6 +99,9 @@ pub struct Convolve {
     time_in: Vec<f32>,
     /// Scratch for forward FFT output.
     spec_scratch: Vec<Complex<f32>>,
+    /// The transforms' own working space, so the audio thread never allocates.
+    scratch_fwd: Vec<Complex<f32>>,
+    scratch_inv: Vec<Complex<f32>>,
     /// Consecutive output samples below tail level.
     quiet_run: usize,
     /// Total IR length in samples, for tail tracking.
@@ -106,8 +117,6 @@ impl Convolve {
         let ir_samples = ir.num_parts() * part();
         Convolve {
             ir,
-            fwd,
-            inv,
             input_spectra: vec![vec![Complex::new(0.0, 0.0); nbins()]; np],
             head: 0,
             prev_tail: vec![0.0; part()],
@@ -115,6 +124,10 @@ impl Convolve {
             time_out: vec![0.0; fft_len()],
             time_in: vec![0.0; fft_len()],
             spec_scratch: vec![Complex::new(0.0, 0.0); nbins()],
+            scratch_fwd: fwd.make_scratch_vec(),
+            scratch_inv: inv.make_scratch_vec(),
+            fwd,
+            inv,
             quiet_run: ir_samples,
             ir_samples,
         }
@@ -169,7 +182,11 @@ impl Opcode for Convolve {
 
         // Forward FFT of the input block.
         self.fwd
-            .process(&mut self.time_in, &mut self.spec_scratch)
+            .process_with_scratch(
+                &mut self.time_in,
+                &mut self.spec_scratch,
+                &mut self.scratch_fwd,
+            )
             .expect("fft forward");
         self.input_spectra[self.head].copy_from_slice(&self.spec_scratch);
 
@@ -186,7 +203,7 @@ impl Opcode for Convolve {
 
         // Inverse FFT.
         self.inv
-            .process(&mut self.accum, &mut self.time_out)
+            .process_with_scratch(&mut self.accum, &mut self.time_out, &mut self.scratch_inv)
             .expect("fft inverse");
 
         // The valid output is the second half (overlap-save).
@@ -211,8 +228,10 @@ impl Opcode for Convolve {
         self.quiet_run < self.ir_samples / part() + 1
     }
 
-    fn latency(&self) -> usize {
-        part()
+    // Overlap-save gives each block's output as soon as the block arrives, so there is no latency.
+
+    fn per_sample(&self) -> bool {
+        false
     }
 }
 

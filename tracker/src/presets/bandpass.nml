@@ -1,0 +1,4 @@
+/// Isolate a band of frequencies. Resonance shapes the filter around cutoff.
+fx library_bandpass(cutoff: 20hz..20000hz = 1200hz, resonance: 0..0.95 = 0.2, mix: 0..1 = 1) {
+  out = it * (1 - mix) + it.bpf(cutoff: cutoff, res: resonance) * mix
+}

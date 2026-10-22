@@ -6,9 +6,53 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct Track {
     pub name: String,
     pub instrument: Option<String>,
-    pub effect: Option<String>,
+    pub effects: Vec<EffectSlot>,
+    pub pan: f64,
     pub muted: bool,
     pub volume_db: f64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct EffectSlot {
+    pub definition: String,
+    pub values: BTreeMap<String, f64>,
+    pub modulations: BTreeMap<String, Lfo>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct Lfo {
+    pub enabled: bool,
+    pub shape: String,
+    pub period: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+impl Lfo {
+    pub fn valid(&self) -> bool {
+        ["sine", "triangle", "saw", "square"].contains(&self.shape.as_str())
+            && self.period.is_finite()
+            && (1.0..=256.0).contains(&self.period)
+            && self.min.is_finite()
+            && self.max.is_finite()
+            && (0.0..=1.0).contains(&self.min)
+            && (self.min..=1.0).contains(&self.max)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FxLane {
+    pub target: Option<crate::commands::FxTarget>,
+    pub values: Vec<Option<String>>,
+}
+impl FxLane {
+    #[cfg(test)]
+    pub fn empty(rows: usize) -> Self {
+        Self {
+            target: Some(crate::commands::FxTarget::Volume),
+            values: vec![None; rows],
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -17,6 +61,7 @@ pub struct Pattern {
     pub name: String,
     pub rows: usize,
     pub notes: Vec<Vec<Option<String>>>,
+    pub fx: Vec<Vec<FxLane>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -34,10 +79,17 @@ impl Song {
             || !(20.0..=300.0).contains(&self.bpm)
             || !(1..=16).contains(&self.rows_per_beat)
             || !(1..=16).contains(&self.tracks.len())
-            || self
-                .tracks
-                .iter()
-                .any(|t| !t.volume_db.is_finite() || !(-60.0..=6.0).contains(&t.volume_db))
+            || self.tracks.iter().any(|t| {
+                !t.volume_db.is_finite()
+                    || !(-60.0..=6.0).contains(&t.volume_db)
+                    || !t.pan.is_finite()
+                    || !(-1.0..=1.0).contains(&t.pan)
+                    || t.effects.len() > 8
+                    || t.effects.iter().any(|slot| {
+                        slot.values.values().any(|value| !value.is_finite())
+                            || slot.modulations.values().any(|lfo| !lfo.valid())
+                    })
+            })
             || self.patterns.is_empty()
             || self.patterns.len() > 128
             || self.sequence.is_empty()
@@ -60,6 +112,30 @@ impl Song {
                     "Patterns need unique IDs, 1–256 rows and one note column per track".into(),
                 );
             }
+            if pattern.fx.len() != self.tracks.len()
+                || pattern.fx.iter().any(|track| {
+                    track.is_empty()
+                        || track.len() > 4
+                        || track.iter().any(|column| {
+                            column.values.len() < pattern.rows || column.values.len() > 256
+                        })
+                })
+            {
+                return Err("Patterns need 1–4 FX columns per track".into());
+            }
+            for lane in pattern.fx.iter().flatten() {
+                if lane.target.is_none() && lane.values.iter().any(Option::is_some) {
+                    return Err("Choose a parameter for every populated lane".into());
+                }
+                if lane
+                    .values
+                    .iter()
+                    .flatten()
+                    .any(|v| !v.parse::<f64>().is_ok_and(|n| n.is_finite()))
+                {
+                    return Err("Parameter lanes need finite numeric values".into());
+                }
+            }
             for note in pattern.notes.iter().flatten().flatten() {
                 pitch(note)?;
             }
@@ -76,6 +152,12 @@ impl Song {
 
     pub fn same_timeline(&self, other: &Self) -> bool {
         self.tracks.len() == other.tracks.len()
+            && self.tracks.iter().zip(&other.tracks).all(|(a, b)| {
+                a.effects
+                    .iter()
+                    .map(|slot| &slot.definition)
+                    .eq(b.effects.iter().map(|slot| &slot.definition))
+            })
             && self.bpm == other.bpm
             && self.rows_per_beat == other.rows_per_beat
             && self.sequence == other.sequence
@@ -110,6 +192,7 @@ pub enum Mode {
 pub struct Playback {
     pub origin: u64,
     pub next_row: u64,
+    pub parameters: crate::commands::EffectParameters,
     pub song: Song,
     pub mode: Mode,
     pub pattern_id: String,
@@ -139,6 +222,7 @@ impl Playback {
         Ok(Self {
             origin,
             next_row: 0,
+            parameters: BTreeMap::new(),
             song,
             mode,
             pattern_id,
@@ -220,6 +304,31 @@ impl Playback {
                 continue;
             }
             for (index, track) in self.song.tracks.iter().enumerate() {
+                let mut edits = Vec::new();
+                for lane in &position.pattern.fx[index] {
+                    let (Some(target), Some(value)) = (&lane.target, &lane.values[position.row])
+                    else {
+                        continue;
+                    };
+                    let edit =
+                        crate::commands::edit(target, value, index, track, &self.parameters)?;
+                    if let crate::commands::FxTarget::Effect { device, parameter } = target {
+                        let slot = &track.effects[*device];
+                        if slot
+                            .modulations
+                            .get(parameter)
+                            .is_some_and(|lfo| lfo.enabled)
+                        {
+                            edits.push(json!({"op":"map", "id":format!("fx_{index}_{device}"), "param":parameter, "source":null}));
+                        }
+                    }
+                    edits.push(edit);
+                }
+                if !edits.is_empty() {
+                    events.push(
+                        json!({"op":"routing", "at":at, "tag":"tracker-pattern", "edits":edits}),
+                    );
+                }
                 if let (Some(id), Some(note)) = (
                     &track.instrument,
                     &position.pattern.notes[index][position.row],
@@ -258,6 +367,7 @@ mod tests {
                     name: id.into(),
                     rows,
                     notes: (0..4).map(|_| vec![Some(note.into()); rows]).collect(),
+                    fx: (0..4).map(|_| vec![FxLane::empty(rows)]).collect(),
                 })
                 .collect(),
             sequence: vec!["a".into(), "b".into(), "a".into()],

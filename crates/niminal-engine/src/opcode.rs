@@ -289,6 +289,12 @@ pub trait Opcode: Send + Sync + std::any::Any {
         0
     }
 
+    /// False for an opcode that needs a whole block at once, which a kernel (calling it a sample at a
+    /// time) cannot use.
+    fn per_sample(&self) -> bool {
+        true
+    }
+
     /// For a compiled kernel, what runs in each section.
     fn kernel_stats(&self) -> Option<KernelStats> {
         None
@@ -421,6 +427,10 @@ impl Opcode for Box<dyn Opcode> {
 
     fn latency(&self) -> usize {
         (**self).latency()
+    }
+
+    fn per_sample(&self) -> bool {
+        (**self).per_sample()
     }
 
     fn kernel_stats(&self) -> Option<KernelStats> {

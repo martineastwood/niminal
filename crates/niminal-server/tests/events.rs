@@ -883,3 +883,47 @@ fn a_kit_sample_in_a_note_crosses_the_wire() {
     let text = serde_json::to_string(&op).unwrap();
     assert_eq!(serde_json::from_str::<Op>(&text).unwrap(), op);
 }
+
+#[test]
+fn an_off_and_a_note_with_the_same_id_at_one_sample_end_the_old_note_and_start_the_new_one() {
+    let mut s = voices();
+    s.send_events(
+        0,
+        vec![
+            held(1, At::Sample(0), 220.0),
+            Op::Off {
+                id: 1,
+                at: At::Sample(24_000),
+                tag: None,
+            },
+            held(1, At::Sample(24_000), 330.0),
+        ],
+    )
+    .unwrap();
+    let out = s.process(48_000).remove(0);
+    // the old note (220hz) ends at the off, and the new one (330hz) is still going at the end
+    assert!(rms(&out[10_000..20_000]) > 0.01);
+    assert!(
+        rms(&out[30_000..47_000]) > 0.003,
+        "the new note keeps sounding: the off belongs to the old one"
+    );
+}
+
+#[test]
+fn controls_at_one_sample_apply_in_the_order_they_were_sent() {
+    let level = |value: f64| Op::Control {
+        name: "level".into(),
+        at: At::Sample(2_400),
+        value,
+        unit: None,
+        glide: Some(Time::Seconds(0.0)),
+        tag: None,
+    };
+    for (first, last) in [(1.0, 0.25), (0.25, 1.0)] {
+        let mut s = session();
+        hold(&mut s);
+        s.send_events(0, vec![level(first), level(last)]).unwrap();
+        let out = s.process(4_800).remove(0);
+        assert!((out[2_500] - last as f32).abs() < 1e-5, "{}", out[2_500]);
+    }
+}

@@ -4,6 +4,7 @@
 
 mod analysis;
 mod ast;
+mod call;
 mod compile;
 mod diag;
 mod dsp;
@@ -39,7 +40,10 @@ pub use ide::{
 pub use layout::Layout;
 pub use lexer::{Tok, Token, lex};
 pub use lower::{GAIN_PARAM, unknown_unit};
-pub use modules::{Expanded, Import, Module, expand};
+pub use modules::{
+    Expanded, Import, Module, ModuleRules, STD_DIR, check_private_words, embedded as embedded_module,
+    expand, expand_with_rules, packages_dir,
+};
 pub use program::{
     ArgError, ControlDef, Instrument, MidiNote, MidiTarget, NodeInfo, NotePlan, OscTap,
     PITCH_PARAM, Param, Program, RateHint, engine_value, resolve_target,

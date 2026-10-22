@@ -1,7 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { EditorView } from '@codemirror/view';
 import { editorState, connectLanguageServer } from './editor';
-import { newProject, readProject, storageKey, resizePattern, type Definition, type Song } from './project';
+import { newProject, emptyFxLane, readProject, storageKey, resizePattern, removeTrack, restoreTrack, type Definition, type Song, type DeletedTrack } from './project';
 import { Arrangement } from './arrangement';
 import { PatternGrid } from './grid';
 import { renderMixer } from './mixer';
@@ -12,11 +12,11 @@ const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <header><div class="brand">niminal <span>tracker</span></div><span class="badge">ALPHA</span><div class="project-actions"><button id="toggle-mixer" aria-expanded="false">Track effects</button><button id="toggle-code" aria-expanded="false">Code editor</button><button id="focus-pattern">Focus pattern</button><button id="import">Open project</button><button id="export">Save project</button></div></header>
   <main>
-    <aside><div class="section-title">SEQUENCE</div><div id="sequence"></div><div class="sequence-actions"><button id="new-pattern" data-structure>+ Blank</button><button id="variation" data-structure>Duplicate as variation</button><button id="reuse" data-structure>Reuse pattern</button><button id="move-up" data-structure>↑ Move</button><button id="move-down" data-structure>↓ Move</button><button id="remove-step" data-structure>Remove step</button></div><p class="aside-help">Reuse shares edits.<br>A variation is an independent copy.</p><details id="sound-library"><summary>SOUND LIBRARY</summary><div id="definitions"></div><div class="add-buttons"><button id="new-instrument">+ Instrument</button><button id="new-effect">+ Effect</button></div><p class="aside-help">Select a sound to edit its code.<br>Project copies are saved locally.</p></details></aside>
+    <aside id="sequencer"><div class="sequence-heading"><span class="section-title">SEQ</span><button id="sequence-names" aria-label="Toggle pattern names" title="Show / hide pattern names" aria-expanded="true">◂</button></div><div id="sequence"></div><div class="sequence-actions"><button id="new-pattern" data-structure title="New blank pattern" aria-label="New blank pattern">+</button><button id="variation" data-structure title="Duplicate as variation" aria-label="Duplicate as variation">⧉</button><button id="reuse" data-structure title="Reuse pattern" aria-label="Reuse pattern">↳</button><button id="move-up" data-structure title="Move sequence step up" aria-label="Move sequence step up">↑</button><button id="move-down" data-structure title="Move sequence step down" aria-label="Move sequence step down">↓</button><button id="remove-step" data-structure title="Remove sequence step" aria-label="Remove sequence step">−</button></div><details id="sound-library"><summary>SOUND LIBRARY</summary><div id="definitions"></div><div class="add-buttons"><button id="new-instrument">+ Instrument</button><button id="new-effect">+ Effect</button></div><p class="aside-help">Select a sound to edit its code.<br>Project copies are saved locally.</p></details></aside>
     <section class="workspace">
       <div class="engine-toolbar"><label>Engine port <input id="engine-port" type="number" min="1" max="65535" value="7401"></label><input id="engine-token" type="password" placeholder="Token (optional)" aria-label="Engine token"><button id="connect">Connect</button><span id="audio-status">Start niminal server, then connect</span></div>
       <div class="transport-toolbar"><button id="play">Loop pattern</button><button id="play-song" title="Play from the selected sequence step to the end">Play song</button><button id="stop">Stop</button><label><input id="follow" type="checkbox" checked> Follow playback</label><span id="play-position" class="muted"></span><label>BPM <input id="bpm" type="number" min="20" max="300" step="1"></label><label>Rows/beat <input id="rows-per-beat" type="number" min="1" max="16"></label></div>
-      <div class="pattern-toolbar"><div><strong id="pattern-number">Pattern 00</strong><select id="pattern-picker" aria-label="Pattern to edit"></select><input id="pattern-name" aria-label="Pattern name"><span id="pattern-uses" class="muted"></span></div><label>Rows <input id="pattern-rows" type="number" min="1" max="256" data-structure></label><label>Octave <input id="octave" type="number" min="0" max="8" value="4"></label><button id="undo">Undo notes</button><button id="redo">Redo</button><button id="add-track" data-structure>+ Track</button></div>
+      <div class="pattern-toolbar"><div><strong id="pattern-number">Pattern 00</strong><select id="pattern-picker" aria-label="Pattern to edit"></select><input id="pattern-name" aria-label="Pattern name"><span id="pattern-uses" class="muted"></span></div><label>Rows <input id="pattern-rows" type="number" min="1" max="256" data-structure></label><label>Octave <input id="octave" type="number" min="0" max="8" value="4"></label><label>Step <input id="entry-step" aria-label="Note entry step" title="Rows to advance after entering a note; 0 stays on this row" type="number" min="0" max="256" value="1"></label><button id="undo">Undo notes</button><button id="redo">Redo</button><button id="add-track" data-structure title="Add track" aria-label="Add track">+ Track</button><button id="delete-track" data-structure title="Delete selected track" aria-label="Delete selected track">− Track</button><button id="restore-track" data-structure title="Restore last deleted track" aria-label="Restore last deleted track">↶</button></div>
       <div id="grid" tabindex="0" role="grid" aria-label="Pattern editor"></div>
       <div class="grid-help">Z S X D C V G B H N J M: notes · Arrows: move · Delete: clear · Shift+arrows: select · Cmd/Ctrl+C/V: copy/paste · Cmd/Ctrl+Z: undo · Space: play/stop · F6: switch editor</div>
       <section id="mixer-panel" hidden><div class="panel-heading">TRACK DEVICES<button id="close-mixer">Minimise</button></div><div id="mixer" aria-label="Track mixer"></div></section>
@@ -42,6 +42,8 @@ let transportRevision = 0;
 let starting = false;
 let audioError: string | null = null;
 let deviceTrack = 0;
+let deletedTrack: DeletedTrack | null = null;
+let wasPlaying = false;
 let connectionPending: 'connect' | 'disconnect' | null = null;
 
 function save() {
@@ -84,6 +86,7 @@ async function applyDefinition(definition: Definition) {
   const source = definition.source;
   await audioCommand({ op: 'apply', id: definition.id, source, kind: definition.kind });
   appliedSources.set(definition.id, source);
+  grid.render(); mixerView();
   renderApplyStatus();
 }
 async function ensureSound(id: string) {
@@ -95,13 +98,17 @@ async function ensureSound(id: string) {
 async function ensureAssignments() {
   for (const track of project.tracks) {
     if (track.instrument) await ensureSound(track.instrument);
-    if (track.effect) await ensureSound(track.effect);
+    for (const slot of track.effects) await ensureSound(slot.definition);
   }
 }
 function mixerView() {
   renderMixer(element('mixer'), project, deviceTrack, track => grid.selectTrack(track), () => { editedPattern(); grid.render(); }, id => {
     const definition = project.definitions.find(d => d.id === id);
     if (definition) selectDefinition(definition);
+  }, audioStatus.effect_parameters, (target, value) => grid.writeParameter(deviceTrack, target, value), audioStatus.playing, () => {
+    const definition = addDefinition('fx');
+    project.tracks[deviceTrack].effects.push({ definition: definition.id, values: {}, modulations: {} });
+    editedPattern(); mixerView();
   });
 }
 async function stopPlayback() {
@@ -115,7 +122,7 @@ async function togglePlay(mode: 'pattern' | 'song' = 'pattern') {
   try {
     for (const track of project.tracks) {
       if (track.instrument) await ensureSound(track.instrument);
-      if (track.effect) await ensureSound(track.effect);
+      for (const slot of track.effects) await ensureSound(slot.definition);
       if (revision !== transportRevision) return;
     }
     await audioCommand({ op: 'play', song: song(), mode, pattern_id: arrangement.pattern.id, start_position: arrangement.position });
@@ -138,28 +145,31 @@ async function audition(id: string, note: string, track: number) {
 }
 const arrangement = new Arrangement(element('sequence'), () => project, manual => {
   if (manual) element<HTMLInputElement>('follow').checked = false;
-  grid.render(); patternControls();
+  grid.render(); deviceTrack = grid.activeTrack; mixerView(); patternControls();
 }, editedPattern);
 const grid = new PatternGrid(element('grid'), () => project, () => arrangement.pattern, () => Number(element<HTMLInputElement>('octave').value), () => { editedPattern(); mixerView(); },
   id => { if (id) { const definition = project.definitions.find(d => d.id === id); if (definition) selectDefinition(definition); } },
   (id, note, track) => { if (audioStatus.connected && !audioStatus.playing) void action(() => audition(id, note, track)); },
   () => { void action(() => togglePlay()); },
   track => { if (deviceTrack !== track) { deviceTrack = track; mixerView(); } },
-  (track, device) => {
-    if (device === 'effects') { showPanel('mixer', true); mixerView(); }
+  (track, device, sameTrack) => {
+    if (device === 'effects') { showPanel('mixer', !sameTrack || element('mixer-panel').hidden); mixerView(); }
     else {
       const definition = project.definitions.find(d => d.id === project.tracks[track].instrument);
-      if (definition) { selectDefinition(definition); editor.focus(); }
+      if (definition) {
+        if (sameTrack && selected.id === definition.id && !element('code-panel').hidden) { showPanel('code', false); element('grid').focus(); }
+        else { selectDefinition(definition); editor.focus(); }
+      }
       else { addDefinition('instr'); project.tracks[track].instrument = selected.id; grid.render(); editedPattern(); }
     }
-  });
+  }, () => Number(element<HTMLInputElement>('entry-step').value), () => audioStatus.effect_parameters, status);
 element('undo').onclick = () => { grid.undo(); element('grid').focus(); };
 element('redo').onclick = () => { grid.redo(); element('grid').focus(); };
 function renderApplyStatus() {
   const effect = selected.kind === 'fx';
   const ready = (effect ? audioStatus.effects[selected.id] : audioStatus.instruments[selected.id]) !== undefined;
   element<HTMLButtonElement>('apply').disabled = !audioStatus.connected;
-  element<HTMLButtonElement>('audition').disabled = !audioStatus.connected || (effect && !project.tracks.some(t => t.effect === selected.id && t.instrument));
+  element<HTMLButtonElement>('audition').disabled = !audioStatus.connected || (effect && !project.tracks.some(t => t.effects.some(slot => slot.definition === selected.id) && t.instrument));
   setText('apply-status', !ready ? 'Not applied' : appliedSources.get(selected.id) === selected.source ? 'Applied' : 'Unapplied edits · playing last applied version');
 }
 function renderConnectButton() {
@@ -190,7 +200,7 @@ element('audition').onclick = () => { const definition = selected; void action(a
   let id = definition.id;
   if (definition.kind === 'fx') {
     await ensureSound(id);
-    if (project.tracks[track].effect !== id || !project.tracks[track].instrument) track = project.tracks.findIndex(t => t.effect === id && t.instrument);
+    if (!project.tracks[track].effects.some(slot => slot.definition === id) || !project.tracks[track].instrument) track = project.tracks.findIndex(t => t.effects.some(slot => slot.definition === id) && t.instrument);
     if (track < 0) throw new Error('Assign this effect and an instrument to a track first');
     id = project.tracks[track].instrument!;
   }
@@ -208,6 +218,14 @@ for (const [id, field, min, max] of [['bpm', 'bpm', 20, 300], ['rows-per-beat', 
     timingInputs(); save();
   };
 }
+element<HTMLInputElement>('entry-step').onchange = event => {
+  const input = event.target as HTMLInputElement; input.value = String(Math.max(0, Math.min(256, Math.trunc(Number(input.value) || 0))));
+};
+element('sequence-names').onclick = () => {
+  const collapsed = element('sequencer').classList.toggle('names-hidden');
+  element('sequence-names').setAttribute('aria-expanded', String(!collapsed));
+  setText('sequence-names', collapsed ? '▸' : '◂');
+};
 element<HTMLInputElement>('octave').onchange = event => {
   const input = event.target as HTMLInputElement;
   input.value = String(Math.min(8, Math.max(0, Math.trunc(Number(input.value) || 0))));
@@ -216,8 +234,9 @@ element<HTMLInputElement>('definition-name').oninput = event => { selected.name 
 function addDefinition(kind: 'instr' | 'fx') {
   const id = `${kind}_${crypto.randomUUID().replaceAll('-', '_')}`;
   const name = `${kind === 'instr' ? 'voice' : 'effect'}${project.definitions.length + 1}`;
-  const definition: Definition = { id, kind, name, source: kind === 'instr' ? `/// Describe your instrument here.\ninstr ${name}(freq: hz) {\n  osc(sine, freq) * env[0.15 | 200ms 0]\n}\n` : `/// Describe your effect here.\nfx ${name} {\n  out = it.lpf(cutoff: 2400hz)\n}\n` };
+  const definition: Definition = { id, kind, name, source: kind === 'instr' ? `/// Describe your instrument here.\ninstr ${name}(freq: hz) {\n  osc(sine, freq) * env[0.15 | 200ms 0]\n}\n` : `/// Describe your effect here.\nfx ${name}(cutoff: hz = 2400hz) {\n  out = it.lpf(cutoff: cutoff)\n}\n` };
   project.definitions.push(definition); selectDefinition(definition); editor.focus(); grid.render(); mixerView(); save();
+  return definition;
 }
 element('new-instrument').onclick = () => addDefinition('instr');
 element('new-effect').onclick = () => addDefinition('fx');
@@ -235,7 +254,7 @@ async function loadProject(raw: string) {
   if (audioStatus.connected) await audioCommand({ op: 'disconnect' });
   appliedSources.clear();
   editor.destroy(); states.clear();
-  project = loaded; deviceTrack = 0; selected = project.definitions[0];
+  project = loaded; deletedTrack = null; deviceTrack = 0; selected = project.definitions[0];
   const definition = selected;
   editor = new EditorView({ state: editorState(`file:///niminal-tracker/${definition.id}.nml`, definition.source, source => { definition.source = source; save(); renderApplyStatus(); }), parent: element('code') });
   selectDefinition(selected, false); arrangement.reset(); grid.resetHistory(); grid.selectTrack(0); mixerView(); patternControls(); timingInputs(); save();
@@ -308,20 +327,37 @@ element('move-up').onclick = () => { if (!audioStatus.playing) arrangement.move(
 element('move-down').onclick = () => { if (!audioStatus.playing) arrangement.move(1); };
 element('add-track').onclick = () => {
   if (audioStatus.playing || project.tracks.length >= 16) return;
-  project.tracks.push({ name: `Track ${project.tracks.length + 1}`, instrument: null, effect: null, muted: false, volume_db: 0 });
-  for (const pattern of project.patterns) pattern.notes.push(Array(pattern.notes[0].length).fill(null));
+  project.tracks.push({ name: `Track ${project.tracks.length + 1}`, instrument: null, effects: [], pan: 0, muted: false, volume_db: 0 });
+  for (const pattern of project.patterns) { pattern.notes.push(Array(pattern.notes[0].length).fill(null)); pattern.fx.push([emptyFxLane(pattern.notes[0].length)]); }
   grid.selectTrack(project.tracks.length - 1); editedPattern();
+};
+element('delete-track').onclick = () => { void action(async () => {
+  if (audioStatus.playing || project.tracks.length <= 1) return;
+  if (audioStatus.connected) await stopPlayback();
+  const index = grid.activeTrack;
+  deletedTrack = removeTrack(project, index);
+  grid.resetHistory(); grid.selectTrack(Math.min(index, project.tracks.length - 1)); mixerView(); editedPattern();
+}); };
+element('restore-track').onclick = () => {
+  if (audioStatus.playing || !deletedTrack || project.tracks.length >= 16) return;
+  const index = deletedTrack.index;
+  if (!restoreTrack(project, deletedTrack)) return;
+  deletedTrack = null; grid.resetHistory(); grid.selectTrack(index); mixerView(); editedPattern();
 };
 element('remove-step').onclick = () => { if (!audioStatus.playing) arrangement.remove(); };
 selectDefinition(selected, false); arrangement.reset(); grid.render(); mixerView(); patternControls(); timingInputs();
 const audioTimer = observeAudio(state => {
+  if (state.playing !== wasPlaying) { wasPlaying = state.playing; mixerView(); }
   // Replacing a button's text node during a mouse press can cancel its click
   // in WebKit. Only change labels when the displayed state actually changes.
   renderConnectButton();
   element<HTMLButtonElement>('play').disabled = !state.connected || state.playing;
   element<HTMLButtonElement>('stop').disabled = !state.connected;
   element<HTMLButtonElement>('play-song').disabled = !state.connected || state.playing;
-  for (const input of document.querySelectorAll<HTMLInputElement | HTMLButtonElement>('[data-structure]')) input.disabled = state.playing || input.id === 'add-track' && project.tracks.length >= 16;
+  for (const input of document.querySelectorAll<HTMLInputElement | HTMLButtonElement>('[data-structure]')) {
+    if (input.closest('#mixer')) continue;
+    input.disabled = state.playing || input.id === 'add-track' && project.tracks.length >= 16 || input.id === 'delete-track' && project.tracks.length <= 1 || input.id === 'restore-track' && (!deletedTrack || project.tracks.length >= 16);
+  }
   arrangement.paint(state.sequence_position, state.playing);
   if (state.playing && element<HTMLInputElement>('follow').checked && state.pattern_id && (arrangement.pattern.id !== state.pattern_id || state.sequence_position !== null && arrangement.position !== state.sequence_position)) {
     if (state.sequence_position !== null) arrangement.select(state.sequence_position, false);

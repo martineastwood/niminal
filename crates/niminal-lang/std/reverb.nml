@@ -1,0 +1,41 @@
+// A reverb written in niminal: `use std/reverb`.
+
+const fdn_lengths = [1031, 1327, 1523, 1871, 2053, 2381, 2713, 3079]
+// the 8 x 8 Hadamard matrix over the square root of 8, which mixes the lines without gaining or losing
+const fdn_mix = [0.35355339059327373, 0.35355339059327373, 0.35355339059327373, 0.35355339059327373, 0.35355339059327373, 0.35355339059327373, 0.35355339059327373, 0.35355339059327373, 0.35355339059327373, -0.35355339059327373, 0.35355339059327373, -0.35355339059327373, 0.35355339059327373, -0.35355339059327373, 0.35355339059327373, -0.35355339059327373, 0.35355339059327373, 0.35355339059327373, -0.35355339059327373, -0.35355339059327373, 0.35355339059327373, 0.35355339059327373, -0.35355339059327373, -0.35355339059327373, 0.35355339059327373, -0.35355339059327373, -0.35355339059327373, 0.35355339059327373, 0.35355339059327373, -0.35355339059327373, -0.35355339059327373, 0.35355339059327373, 0.35355339059327373, 0.35355339059327373, 0.35355339059327373, 0.35355339059327373, -0.35355339059327373, -0.35355339059327373, -0.35355339059327373, -0.35355339059327373, 0.35355339059327373, -0.35355339059327373, 0.35355339059327373, -0.35355339059327373, -0.35355339059327373, 0.35355339059327373, -0.35355339059327373, 0.35355339059327373, 0.35355339059327373, 0.35355339059327373, -0.35355339059327373, -0.35355339059327373, -0.35355339059327373, -0.35355339059327373, 0.35355339059327373, 0.35355339059327373, 0.35355339059327373, -0.35355339059327373, -0.35355339059327373, 0.35355339059327373, -0.35355339059327373, 0.35355339059327373, 0.35355339059327373, -0.35355339059327373]
+const fdn_signs = [1, -1, 1, -1, 1, -1, 1, -1]
+
+/// A feedback delay network of eight lines of mutually prime lengths, mixed by a Hadamard matrix.
+/// `time` is how long the tail takes to fall by 60db, `damp` the cutoff of the low-pass in each line
+/// (highs die first, as in a room), and `size` stretches all the lines. Mono in, mono out: pan two
+/// with different `size`s for a stereo field. It is wet only; mix it with the dry yourself.
+fn fdn(x, time: init sec = 2sec, damp: init hz = 5khz, size: init 0.5..2 = 1) {
+  state l0 = zeros(2062)
+  state l1 = zeros(2654)
+  state l2 = zeros(3046)
+  state l3 = zeros(3742)
+  state l4 = zeros(4106)
+  state l5 = zeros(4762)
+  state l6 = zeros(5426)
+  state l7 = zeros(6158)
+  state pos = 0
+  state lp = zeros(8)
+  lens = fdn_lengths * size
+  // each line loses 60db over `time`, in proportion to its length
+  g = exp(-6.9078 * lens / (time.num * sample_rate.num))
+  a = exp(-2 * pi * damp / sample_rate)
+  out_of_lines = [l0.at(pos - lens[0], interp: linear), l1.at(pos - lens[1], interp: linear), l2.at(pos - lens[2], interp: linear), l3.at(pos - lens[3], interp: linear), l4.at(pos - lens[4], interp: linear), l5.at(pos - lens[5], interp: linear), l6.at(pos - lens[6], interp: linear), l7.at(pos - lens[7], interp: linear)]
+  mixed = fdn_mix.matvec(out_of_lines)
+  lp = lp * a + mixed * (1 - a)
+  fed = lp * g
+  l0[pos] = x * 0.35 + fed[0]
+  l1[pos] = x * 0.35 + fed[1]
+  l2[pos] = x * 0.35 + fed[2]
+  l3[pos] = x * 0.35 + fed[3]
+  l4[pos] = x * 0.35 + fed[4]
+  l5[pos] = x * 0.35 + fed[5]
+  l6[pos] = x * 0.35 + fed[6]
+  l7[pos] = x * 0.35 + fed[7]
+  pos = (pos + 1).mod(1000000)
+  out_of_lines.dot(fdn_signs) * 0.35
+}

@@ -262,6 +262,8 @@ pub struct NodeDef {
     pub meter: Option<Arc<Meter>>,
     /// Replacement generation and crossfade duration in seconds.
     pub transition: (u64, f64),
+    /// Clear persistent DSP state when the replacement generation changes. Voices and controls remain.
+    pub reset_state: bool,
     /// Public instance control keys mapped to keys in the reusable DSP graph.
     pub controls: Vec<(String, String)>,
     /// Processing applied to the summed voices. `None` passes them through.
@@ -1616,7 +1618,9 @@ impl Mixer {
             if let Some(from) = transfer.chain_from {
                 let previous = &mut old.nodes[from];
                 let changed = node.def.transition.0 != previous.def.transition.0;
-                if changed && node.fade.frames > 0 {
+                if changed && node.def.reset_state {
+                    // An explicit host reset keeps this fresh chain instead of transferring DSP memory.
+                } else if changed && node.fade.frames > 0 {
                     // a different DSP: fade it in from the chain that was playing
                     node.fade.previous = previous.chain.take();
                     node.fade.inputs = std::mem::take(&mut previous.def.inputs);

@@ -228,7 +228,7 @@ fn stateful_native_callbacks_freeze_on_untaken_branches() {
 fn named_functions_and_callback_parameters_work_with_map() {
     for state in ["", "state unused = 0\n"] {
         let source = format!(
-            "fn twice(x) {{ x * 2 }}\nfn bank(xs: [num], make: fn) {{ {state}xs.map(make).sum }}\ninstr a() {{ bank([1,2,3], twice) }}"
+            "fn twice(x) {{ x * 2 }}\nfn voices(xs: [num], make: fn) {{ {state}xs.map(make).sum }}\ninstr a() {{ voices([1,2,3], twice) }}"
         );
         assert!(render(&source, 65, 13).iter().all(|v| *v == 12.0));
     }

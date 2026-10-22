@@ -81,10 +81,83 @@ impl Expanded {
 /// found next to the file that uses it, then in `lib` under `dir`, then among
 /// the installed packages (`$NIMINAL_PACKAGES`, or `~/.niminal/packages`).
 pub fn expand(source: &str, dir: &Path) -> Result<Expanded, Diagnostic> {
-    expand_with(source, dir, packages_dir())
+    expand_with_rules(source, dir, packages_dir(), &LangRules)
 }
 
-fn packages_dir() -> Option<PathBuf> {
+/// What differs between the languages that share the module walk: how a module's names are made
+/// unique, and the check that nobody writes another module's private name. The sequencer's language
+/// has more kinds of definition than the engine's, so each gives its own.
+pub trait ModuleRules {
+    /// `source`, a module's text, with the names it defines renamed: public ones to `alias::name` (when
+    /// there is an alias), private ones to `module::_name`.
+    fn rename(&self, source: &str, module: &str, alias: Option<&str>) -> String;
+
+    /// Fail if `source` writes `module::_name` for a private name it doesn't define itself.
+    fn check_private(&self, source: &str, at: Option<Span>) -> Result<(), Diagnostic>;
+}
+
+struct LangRules;
+
+impl ModuleRules for LangRules {
+    fn rename(&self, source: &str, module: &str, alias: Option<&str>) -> String {
+        rename(source, module, alias)
+    }
+
+    fn check_private(&self, source: &str, at: Option<Span>) -> Result<(), Diagnostic> {
+        check_private(source, at)
+    }
+}
+
+/// The keywords that define a name, for the name that follows.
+const DEFINES: [&str; 14] = [
+    "fn",
+    "const",
+    "instr",
+    "fx",
+    "node",
+    "bus",
+    "clip",
+    "ctl",
+    "sample",
+    "kit",
+    "buffer",
+    "scene",
+    "arrangement",
+    "control",
+];
+
+/// Nobody may write `rig::_name`: it is the private `_name` of `rig`. `words` are the identifiers of a
+/// text in order (`None` for anything else). A text that defines `rig::_name` itself is allowed to
+/// use it: that is a text whose modules have been joined in already, as the engine is sent.
+pub fn check_private_words(
+    words: &[Option<(String, Span)>],
+    at: Option<Span>,
+) -> Result<(), Diagnostic> {
+    let defined: Vec<&str> = words
+        .windows(2)
+        .filter_map(|pair| match pair {
+            [Some((keyword, _)), Some((name, _))] if DEFINES.contains(&keyword.as_str()) => {
+                Some(name.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    for (name, span) in words.iter().flatten() {
+        if let Some((module, private)) = name.split_once("::")
+            && private.starts_with('_')
+            && !defined.contains(&name.as_str())
+        {
+            return Err(Diagnostic::new(
+                format!("`{private}` is private to `{module}`"),
+                at.unwrap_or(*span),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The installed packages: `$NIMINAL_PACKAGES`, or `~/.niminal/packages`.
+pub fn packages_dir() -> Option<PathBuf> {
     std::env::var_os("NIMINAL_PACKAGES")
         .map(PathBuf::from)
         .or_else(|| {
@@ -92,12 +165,15 @@ fn packages_dir() -> Option<PathBuf> {
         })
 }
 
-fn expand_with(
+/// [`expand`] for a language with its own `rules`, and packages in a folder of your choosing.
+pub fn expand_with_rules(
     source: &str,
     dir: &Path,
     packages: Option<PathBuf>,
+    rules: &dyn ModuleRules,
 ) -> Result<Expanded, Diagnostic> {
     let mut walk = Walk {
+        rules,
         root_dir: dir,
         packages,
         stack: Vec::new(),
@@ -107,7 +183,7 @@ fn expand_with(
     let root_len = text.len();
     let mut modules = Vec::new();
     for done in walk.done {
-        let body = rename(&done.source, &done.name, done.alias.as_deref());
+        let body = rules.rename(&done.source, &done.name, done.alias.as_deref());
         text.push('\n');
         let start = text.len();
         text.push_str(&body);
@@ -137,6 +213,7 @@ struct Done {
 }
 
 struct Walk<'a> {
+    rules: &'a dyn ModuleRules,
     root_dir: &'a Path,
     packages: Option<PathBuf>,
     /// The modules being read, to catch a module that uses itself.
@@ -168,7 +245,7 @@ impl Walk<'_> {
             let (name, alias) = parse_use(rest, span)?;
             let path = self.find(name, dir).ok_or_else(|| {
                 Diagnostic::new(format!("no module `{name}`"), used_at).with_help(format!(
-                    "looked for {name}.nml next to the file, in lib/ and in the installed packages"
+                    "looked for {name}.nml next to the file, in lib/ and in the installed packages; the library that comes with niminal is `use std/filters`, `std/physical`, `std/delays`, `std/reverb` and `std/spectral`"
                 ))
             })?;
             if self.stack.contains(&path) {
@@ -187,9 +264,12 @@ impl Walk<'_> {
                 }
                 continue;
             }
-            let module_source = std::fs::read_to_string(&path).map_err(|e| {
-                Diagnostic::new(format!("can't read {}: {e}", path.display()), used_at)
-            })?;
+            let module_source = match embedded(name) {
+                Some(source) => source.to_string(),
+                None => std::fs::read_to_string(&path).map_err(|e| {
+                    Diagnostic::new(format!("can't read {}: {e}", path.display()), used_at)
+                })?,
+            };
             self.stack.push(path.clone());
             let body = self.visit(&module_source, path.parent().unwrap_or(dir), Some(used_at))?;
             self.stack.pop();
@@ -201,11 +281,14 @@ impl Walk<'_> {
                 source: body,
             });
         }
-        check_private(&out, root_use)?;
+        self.rules.check_private(&out, root_use)?;
         Ok(out)
     }
 
     fn find(&self, name: &str, dir: &Path) -> Option<PathBuf> {
+        if embedded(name).is_some() {
+            return Some(PathBuf::from(format!("{STD_DIR}/{name}.nml")));
+        }
         let file = format!("{name}.nml");
         [
             Some(dir.join(&file)),
@@ -216,6 +299,25 @@ impl Walk<'_> {
         .flatten()
         .find_map(|p| p.canonicalize().ok())
     }
+}
+
+/// The path the library that comes with niminal is reported under; there is no file.
+pub const STD_DIR: &str = "<std>";
+
+/// The modules that come with niminal: `use std/filters`.
+const STD: [(&str, &str); 5] = [
+    ("std/filters", include_str!("../std/filters.nml")),
+    ("std/physical", include_str!("../std/physical.nml")),
+    ("std/delays", include_str!("../std/delays.nml")),
+    ("std/reverb", include_str!("../std/reverb.nml")),
+    ("std/spectral", include_str!("../std/spectral.nml")),
+];
+
+/// The source of a module that comes with niminal, if `name` is one.
+pub fn embedded(name: &str) -> Option<&'static str> {
+    STD.iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, source)| *source)
 }
 
 /// `rig`, `score/verse`, or either followed by `as name`.
@@ -254,23 +356,18 @@ fn parse_use(rest: &str, span: Span) -> Result<(&str, Option<&str>), Diagnostic>
     Ok((name, alias))
 }
 
-/// Nobody may write `rig::_name`: it is the private `_name` of `rig`.
 fn check_private(source: &str, at: Option<Span>) -> Result<(), Diagnostic> {
     let Ok(tokens) = lex(source) else {
         return Ok(());
     };
-    for t in tokens {
-        let Tok::Ident(name) = t.tok else { continue };
-        if let Some((module, private)) = name.split_once("::")
-            && private.starts_with('_')
-        {
-            return Err(Diagnostic::new(
-                format!("`{private}` is private to `{module}`"),
-                at.unwrap_or(t.span),
-            ));
-        }
-    }
-    Ok(())
+    let words: Vec<Option<(String, Span)>> = tokens
+        .into_iter()
+        .map(|t| match t.tok {
+            Tok::Ident(name) => Some((name, t.span)),
+            _ => None,
+        })
+        .collect();
+    check_private_words(&words, at)
 }
 
 /// Rename what a module defines so it cannot meet other files' names: public
@@ -330,7 +427,7 @@ mod tests {
     }
 
     fn expand_here(source: &str, dir: &Path) -> Result<Expanded, Diagnostic> {
-        expand_with(source, dir, None)
+        expand_with_rules(source, dir, None, &LangRules)
     }
 
     #[test]
@@ -356,7 +453,13 @@ mod tests {
     fn modules_are_found_in_lib_subfolders_and_packages() {
         let dir = project(&[("lib/rig.nml", "RIG\n"), ("score/verse.nml", "VERSE\n")]);
         let packages = project(&[("acme.nml", "ACME\n")]);
-        let e = expand_with("use rig\nuse score/verse\nuse acme\n", &dir, Some(packages)).unwrap();
+        let e = expand_with_rules(
+            "use rig\nuse score/verse\nuse acme\n",
+            &dir,
+            Some(packages),
+            &LangRules,
+        )
+        .unwrap();
         assert!(e.text.contains("RIG") && e.text.contains("VERSE") && e.text.contains("ACME"));
     }
 
@@ -415,6 +518,18 @@ mod tests {
             module.contains("fn shimmer(") && module.contains("rig::_secret"),
             "{module}"
         );
+    }
+
+    #[test]
+    fn joined_text_that_defines_a_private_name_may_use_it() {
+        // what the engine is sent: the modules already joined in, so the text defines `rig::_secret`
+        let joined = "const rig::_secret = 5\nfn rig::twice(x) { x * rig::_secret }\n";
+        assert!(expand_with_rules(joined, Path::new("."), None, &LangRules).is_ok());
+        // writing one that nothing defines is still an error
+        let err = expand_with_rules("x = rig::_secret\n", Path::new("."), None, &LangRules)
+            .err()
+            .unwrap();
+        assert_eq!(err.message, "`_secret` is private to `rig`");
     }
 
     #[test]

@@ -1,4 +1,7 @@
-use std::cell::UnsafeCell;
+//! Spectral effects. Each is one node that analyses its input, changes the spectrum, and resynthesises, so
+//! it owns all of its state and a voice's copy of it is independent.
+
+use std::f32::consts::{PI, TAU};
 use std::sync::Arc;
 
 use realfft::num_complex::Complex;
@@ -6,7 +9,8 @@ use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
 
 use crate::opcode::{Opcode, Port, ProcessCtx, TAIL_LEVEL};
 
-fn valid_fft_size(n: usize) -> bool {
+/// Whether `n` is an FFT size the spectral effects accept.
+pub fn valid_fft_size(n: usize) -> bool {
     n.is_power_of_two() && (crate::block_size() * 2..=8192).contains(&n)
 }
 
@@ -16,334 +20,151 @@ fn bins(n: usize) -> usize {
 
 fn hann_window(n: usize) -> Vec<f32> {
     (0..n)
-        .map(|i| {
-            let t = i as f32 / n as f32;
-            0.5 * (1.0 - (2.0 * std::f32::consts::PI * t).cos())
-        })
+        .map(|i| 0.5 * (1.0 - (TAU * i as f32 / n as f32).cos()))
         .collect()
 }
 
-// ── Shared spectral frame ────────────────────────────────────────────────
-
-/// Spectral data shared between FFT, spectral ops, and IFFT within one
-/// voice. Written by FFT each hop, modified in-place by spectral ops,
-/// read by IFFT.
-///
-/// # Safety
-///
-/// All access happens on the audio thread in topological graph order
-/// (FFT → spectral ops → IFFT), so there are no data races. The wrapper
-/// makes this `Send + Sync` so it can live behind an `Arc` as required
-/// by the `Opcode` trait.
-pub struct SpectralChain {
-    inner: UnsafeCell<SpectralChainInner>,
-}
-
-// SAFETY: accessed only from the audio thread in graph-topological order.
-unsafe impl Send for SpectralChain {}
-unsafe impl Sync for SpectralChain {}
-
-struct SpectralChainInner {
+/// A short-time Fourier transform with a Hann window and 50% overlap, in and out. A Hann window at that
+/// overlap sums to one, so a spectrum left alone comes out as it went in, `size` samples later.
+struct Stft {
     size: usize,
-    mags: Vec<f32>,
-    phases: Vec<f32>,
-    hop_counter: u64,
-}
-
-impl SpectralChain {
-    pub fn new(fft_size: usize) -> Self {
-        let nb = bins(fft_size);
-        SpectralChain {
-            inner: UnsafeCell::new(SpectralChainInner {
-                size: fft_size,
-                mags: vec![0.0; nb],
-                phases: vec![0.0; nb],
-                hop_counter: 0,
-            }),
-        }
-    }
-
-    pub fn fft_size(&self) -> usize {
-        // SAFETY: reading a constant set at construction.
-        unsafe { (*self.inner.get()).size }
-    }
-
-    /// # Safety
-    /// Only call from the audio thread during graph processing.
-    #[allow(clippy::mut_from_ref)]
-    fn get(&self) -> &mut SpectralChainInner {
-        unsafe { &mut *self.inner.get() }
-    }
-}
-
-impl std::fmt::Debug for SpectralChain {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SpectralChain")
-            .field("fft_size", &self.fft_size())
-            .finish()
-    }
-}
-
-// ── FFT ──────────────────────────────────────────────────────────────────
-
-/// Forward STFT with 50% overlap and a Hann window. Collects input into a
-/// ring, transforms each hop, and writes magnitude/phase into a shared
-/// `SpectralChain`. The output passes the input through for graph ordering.
-pub struct Fft {
-    chain: Arc<SpectralChain>,
-    fwd: Arc<dyn RealToComplex<f32>>,
-    fft_size: usize,
     hop: usize,
-    input_buf: Vec<f32>,
-    write_pos: usize,
-    since_hop: usize,
+    fwd: Arc<dyn RealToComplex<f32>>,
+    inv: Arc<dyn ComplexToReal<f32>>,
     window: Vec<f32>,
+    /// The last `size` input samples; `pos` is the next one to be written, which makes it the oldest.
+    input: Vec<f32>,
+    /// Overlapped frames waiting to be played; the slot at `pos` is the next sample out.
+    output: Vec<f32>,
+    pos: usize,
     windowed: Vec<f32>,
     spectrum: Vec<Complex<f32>>,
-}
-
-impl Fft {
-    pub fn new(fft_size: usize, chain: Arc<SpectralChain>) -> Self {
-        assert!(valid_fft_size(fft_size));
-        let hop = fft_size / 2;
-        let mut planner = RealFftPlanner::<f32>::new();
-        let fwd = planner.plan_fft_forward(fft_size);
-        let nb = bins(fft_size);
-        Fft {
-            chain,
-            fwd,
-            fft_size,
-            hop,
-            input_buf: vec![0.0; fft_size],
-            write_pos: 0,
-            since_hop: 0,
-            window: hann_window(fft_size),
-            windowed: vec![0.0; fft_size],
-            spectrum: vec![Complex::new(0.0, 0.0); nb],
-        }
-    }
-
-    fn transform(&mut self) {
-        let n = self.fft_size;
-        for i in 0..n {
-            let idx = (self.write_pos + i) % n;
-            self.windowed[i] = self.input_buf[idx] * self.window[i];
-        }
-        self.fwd
-            .process(&mut self.windowed, &mut self.spectrum)
-            .expect("fft forward");
-
-        let chain = self.chain.get();
-        let scale = 1.0 / n as f32;
-        for (i, c) in self.spectrum.iter().enumerate() {
-            let scaled = c * scale;
-            chain.mags[i] = scaled.norm();
-            chain.phases[i] = scaled.arg();
-        }
-        chain.hop_counter += 1;
-    }
-}
-
-impl Opcode for Fft {
-    fn name(&self) -> &str {
-        "fft"
-    }
-
-    fn ports(&self) -> &[Port] {
-        const PORTS: &[Port] = &[Port::required("x")];
-        PORTS
-    }
-
-    fn box_clone(&self) -> Box<dyn Opcode> {
-        let chain = Arc::new(SpectralChain::new(self.fft_size));
-        Box::new(Fft::new(self.fft_size, chain))
-    }
-
-    fn reset(&mut self) {
-        self.input_buf.fill(0.0);
-        self.write_pos = 0;
-        self.since_hop = 0;
-        let chain = self.chain.get();
-        chain.mags.fill(0.0);
-        chain.phases.fill(0.0);
-        chain.hop_counter = 0;
-    }
-
-    fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-        for (i, &x) in inputs[0].iter().enumerate() {
-            self.input_buf[self.write_pos] = x;
-            self.write_pos = (self.write_pos + 1) % self.fft_size;
-            self.since_hop += 1;
-
-            if self.since_hop >= self.hop {
-                self.transform();
-                self.since_hop = 0;
-            }
-            out[i] = x;
-        }
-    }
-
-    fn has_side_effects(&self) -> bool {
-        true
-    }
-
-    fn latency(&self) -> usize {
-        self.fft_size
-    }
-}
-
-// ── IFFT ─────────────────────────────────────────────────────────────────
-
-/// Inverse STFT. Reads magnitude/phase from a `SpectralChain` and
-/// resynthesises via overlap-add with a Hann window.
-pub struct Ifft {
-    chain: Arc<SpectralChain>,
-    inv: Arc<dyn ComplexToReal<f32>>,
-    fft_size: usize,
-    hop: usize,
-    ola_bufs: [Vec<f32>; 2],
-    ola_active: usize,
-    read_pos: usize,
-    since_hop: usize,
-    last_hop: u64,
-    spectrum: Vec<Complex<f32>>,
-    time_out: Vec<f32>,
+    scratch_fwd: Vec<Complex<f32>>,
+    scratch_inv: Vec<Complex<f32>>,
+    mags: Vec<f32>,
+    phases: Vec<f32>,
     quiet_run: usize,
 }
 
-impl Ifft {
-    pub fn new(fft_size: usize, chain: Arc<SpectralChain>) -> Self {
-        assert!(valid_fft_size(fft_size));
-        let hop = fft_size / 2;
+impl Stft {
+    fn new(size: usize) -> Self {
+        assert!(valid_fft_size(size));
         let mut planner = RealFftPlanner::<f32>::new();
-        let inv = planner.plan_fft_inverse(fft_size);
-        let nb = bins(fft_size);
-        Ifft {
-            chain,
+        let (fwd, inv) = (
+            planner.plan_fft_forward(size),
+            planner.plan_fft_inverse(size),
+        );
+        Stft {
+            size,
+            hop: size / 2,
+            window: hann_window(size),
+            input: vec![0.0; size],
+            output: vec![0.0; size],
+            pos: 0,
+            windowed: vec![0.0; size],
+            spectrum: vec![Complex::new(0.0, 0.0); bins(size)],
+            scratch_fwd: fwd.make_scratch_vec(),
+            scratch_inv: inv.make_scratch_vec(),
+            mags: vec![0.0; bins(size)],
+            phases: vec![0.0; bins(size)],
+            fwd,
             inv,
-            fft_size,
-            hop,
-            ola_bufs: [vec![0.0; fft_size], vec![0.0; fft_size]],
-            ola_active: 0,
-            read_pos: 0,
-            since_hop: 0,
-            last_hop: 0,
-            spectrum: vec![Complex::new(0.0, 0.0); nb],
-            time_out: vec![0.0; fft_size],
             quiet_run: 0,
         }
     }
 
-    fn resynthesize(&mut self) {
-        let chain = self.chain.get();
-        let nb = bins(self.fft_size);
-        for i in 0..nb {
-            self.spectrum[i] = Complex::from_polar(chain.mags[i], chain.phases[i]);
-        }
-        // DC and Nyquist bins must be purely real for the inverse transform.
-        self.spectrum[0].im = 0.0;
-        self.spectrum[nb - 1].im = 0.0;
-        self.inv
-            .process(&mut self.spectrum, &mut self.time_out)
-            .expect("fft inverse");
-
-        // Overlap-add without a synthesis window: the Hann analysis window
-        // with 50% overlap already satisfies COLA (sum = 1).
-        let next = 1 - self.ola_active;
-        self.ola_bufs[next].fill(0.0);
-        for i in 0..self.fft_size {
-            self.ola_bufs[next][i] = self.time_out[i];
-        }
-        self.ola_active = next;
-        self.last_hop = chain.hop_counter;
-    }
-}
-
-impl Opcode for Ifft {
-    fn name(&self) -> &str {
-        "ifft"
-    }
-
-    fn ports(&self) -> &[Port] {
-        const PORTS: &[Port] = &[Port::required("chain")];
-        PORTS
-    }
-
-    fn box_clone(&self) -> Box<dyn Opcode> {
-        let chain = Arc::new(SpectralChain::new(self.fft_size));
-        Box::new(Ifft::new(self.fft_size, chain))
-    }
-
     fn reset(&mut self) {
-        for buf in &mut self.ola_bufs {
-            buf.fill(0.0);
-        }
-        self.ola_active = 0;
-        self.read_pos = 0;
-        self.since_hop = 0;
-        self.last_hop = 0;
+        self.input.fill(0.0);
+        self.output.fill(0.0);
+        self.pos = 0;
         self.quiet_run = 0;
     }
 
-    fn process(&mut self, _ctx: &ProcessCtx, _inputs: &[&[f32]], out: &mut [f32]) {
-        let hop_counter = self.chain.get().hop_counter;
+    /// True until the output has been silent for a whole window, plus `gap` samples that sound may still
+    /// be on its way.
+    fn is_active(&self, gap: usize) -> bool {
+        self.quiet_run < self.size * 2 + gap
+    }
 
-        for o in out.iter_mut() {
-            self.since_hop += 1;
-            if self.since_hop >= self.hop && hop_counter != self.last_hop {
-                self.resynthesize();
-                self.since_hop = 0;
-                self.read_pos = 0;
-            }
-
-            let a = self.ola_bufs[self.ola_active]
-                .get(self.read_pos)
-                .copied()
-                .unwrap_or(0.0);
-            let prev = 1 - self.ola_active;
-            let b = self.ola_bufs[prev]
-                .get(self.read_pos + self.hop)
-                .copied()
-                .unwrap_or(0.0);
-            let sample = a + b;
-            *o = sample;
-            self.quiet_run = if sample.abs() < TAIL_LEVEL {
+    /// Plays `x` through the transform, calling `stage` with each frame's magnitudes and phases.
+    fn run(&mut self, x: &[f32], out: &mut [f32], mut stage: impl FnMut(&mut [f32], &mut [f32])) {
+        for (o, &s) in out.iter_mut().zip(x) {
+            *o = std::mem::take(&mut self.output[self.pos]);
+            self.quiet_run = if o.abs() < TAIL_LEVEL {
                 self.quiet_run.saturating_add(1)
             } else {
                 0
             };
-            self.read_pos += 1;
+            self.input[self.pos] = s;
+            self.pos = (self.pos + 1) % self.size;
+            if self.pos.is_multiple_of(self.hop) {
+                self.frame(&mut stage);
+            }
         }
     }
 
-    fn is_active(&self) -> bool {
-        self.quiet_run < self.fft_size * 2
-    }
+    /// Transforms the last `size` samples, lets `stage` change them, and overlaps the result into the output.
+    fn frame(&mut self, stage: &mut impl FnMut(&mut [f32], &mut [f32])) {
+        let n = self.size;
+        for i in 0..n {
+            self.windowed[i] = self.input[(self.pos + i) % n] * self.window[i];
+        }
+        self.fwd
+            .process_with_scratch(
+                &mut self.windowed,
+                &mut self.spectrum,
+                &mut self.scratch_fwd,
+            )
+            .expect("fft forward");
+        let scale = 1.0 / n as f32;
+        for (i, c) in self.spectrum.iter().enumerate() {
+            let c = c * scale;
+            self.mags[i] = c.norm();
+            self.phases[i] = c.arg();
+        }
 
-    fn latency(&self) -> usize {
-        self.fft_size
+        stage(&mut self.mags, &mut self.phases);
+
+        for (i, c) in self.spectrum.iter_mut().enumerate() {
+            *c = Complex::from_polar(self.mags[i], self.phases[i]);
+        }
+        // the inverse transform wants the DC and Nyquist bins real
+        self.spectrum[0].im = 0.0;
+        self.spectrum[bins(n) - 1].im = 0.0;
+        self.inv
+            .process_with_scratch(
+                &mut self.spectrum,
+                &mut self.windowed,
+                &mut self.scratch_inv,
+            )
+            .expect("fft inverse");
+        for i in 0..n {
+            self.output[(self.pos + i) % n] += self.windowed[i];
+        }
     }
 }
 
 // ── Spectral Freeze ──────────────────────────────────────────────────────
 
-/// Holds the current spectral frame when `freeze` > 0. Magnitudes are
-/// locked while phases keep advancing to avoid clicks.
+/// Holds the spectrum it hears when `freeze` goes above one half, until it goes back.
 pub struct SpectralFreeze {
-    chain: Arc<SpectralChain>,
+    stft: Stft,
     frozen_mags: Vec<f32>,
+    frozen_phases: Vec<f32>,
+    /// How far the held phases have been turned, as the sound they hold would have turned them.
+    turned: Vec<f32>,
     is_frozen: bool,
-    last_hop: u64,
 }
 
 impl SpectralFreeze {
-    pub fn new(fft_size: usize, chain: Arc<SpectralChain>) -> Self {
+    pub fn new(fft_size: usize) -> Self {
         let nb = bins(fft_size);
         SpectralFreeze {
-            chain,
+            stft: Stft::new(fft_size),
             frozen_mags: vec![0.0; nb],
+            frozen_phases: vec![0.0; nb],
+            turned: vec![0.0; nb],
             is_frozen: false,
-            last_hop: 0,
         }
     }
 }
@@ -354,88 +175,92 @@ impl Opcode for SpectralFreeze {
     }
 
     fn ports(&self) -> &[Port] {
-        const PORTS: &[Port] = &[Port::required("chain"), Port::optional("freeze", 0.0)];
+        const PORTS: &[Port] = &[Port::required("x"), Port::optional("freeze", 0.0)];
         PORTS
     }
 
     fn box_clone(&self) -> Box<dyn Opcode> {
-        let fft_size = self.chain.fft_size();
-        let chain = Arc::new(SpectralChain::new(fft_size));
-        Box::new(SpectralFreeze::new(fft_size, chain))
+        Box::new(SpectralFreeze::new(self.stft.size))
     }
 
     fn reset(&mut self) {
-        self.frozen_mags.fill(0.0);
+        self.stft.reset();
         self.is_frozen = false;
-        self.last_hop = 0;
     }
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-        let chain = self.chain.get();
-
-        if chain.hop_counter != self.last_hop {
-            self.last_hop = chain.hop_counter;
-
-            let freeze = inputs[1][0] > 0.5;
-            if freeze && !self.is_frozen {
-                self.frozen_mags.copy_from_slice(&chain.mags);
-                self.is_frozen = true;
-            } else if !freeze {
-                self.is_frozen = false;
+        let freeze = inputs[1][0] > 0.5;
+        let Self {
+            stft,
+            frozen_mags,
+            frozen_phases,
+            turned,
+            is_frozen,
+        } = self;
+        stft.run(inputs[0], out, |mags, phases| {
+            if !freeze {
+                *is_frozen = false;
+                return;
             }
-
-            if self.is_frozen {
-                chain.mags.copy_from_slice(&self.frozen_mags);
+            if !*is_frozen {
+                frozen_mags.copy_from_slice(mags);
+                frozen_phases.copy_from_slice(phases);
+                turned.fill(0.0);
+                *is_frozen = true;
             }
-        }
-
-        out.copy_from_slice(&inputs[0][..out.len()]);
+            // A steady partial in bin k turns by pi * k each hop at half overlap.
+            for (k, ((m, p), t)) in mags
+                .iter_mut()
+                .zip(phases)
+                .zip(turned.iter_mut())
+                .enumerate()
+            {
+                *m = frozen_mags[k];
+                *p = frozen_phases[k] + *t;
+                *t = (*t + PI * k as f32) % TAU;
+            }
+        });
     }
 
-    fn has_side_effects(&self) -> bool {
-        true
+    fn is_active(&self) -> bool {
+        self.stft.is_active(0)
+    }
+
+    fn latency(&self) -> usize {
+        self.stft.size
     }
 }
 
 // ── Spectral Delay ──────────────────────────────────────────────────────
 
-/// Per-bin delay with frequency-dependent delay time. Higher bins can be
-/// delayed more than lower ones via `spread`. Feedback re-injects delayed
-/// spectral energy back into the delay line.
+/// Per-bin delay: `time` seconds, which `spread` makes shorter for the lower bins, and `feedback` of what
+/// comes out goes back in.
 pub struct SpectralDelay {
-    chain: Arc<SpectralChain>,
-    num_bins: usize,
-    hop: usize,
+    stft: Stft,
+    max_time: f32,
     max_hops: usize,
     mag_buf: Vec<f32>,
     phase_buf: Vec<f32>,
     write_pos: usize,
-    last_hop: u64,
     sample_rate: f32,
+    /// The delay time in samples: how long a silence can be before the sound is back.
+    gap: usize,
 }
 
 impl SpectralDelay {
-    pub fn new(
-        fft_size: usize,
-        chain: Arc<SpectralChain>,
-        max_time: f32,
-        sample_rate: f32,
-    ) -> Self {
-        assert!(valid_fft_size(fft_size));
-        let nb = bins(fft_size);
-        let hop = fft_size / 2;
-        let max_hops = ((max_time * sample_rate / hop as f32).ceil() as usize).max(2);
-        SpectralDelay {
-            chain,
-            num_bins: nb,
-            hop,
-            max_hops,
-            mag_buf: vec![0.0; nb * max_hops],
-            phase_buf: vec![0.0; nb * max_hops],
+    pub fn new(fft_size: usize, max_time: f32) -> Self {
+        let mut delay = SpectralDelay {
+            stft: Stft::new(fft_size),
+            max_time,
+            max_hops: 0,
+            mag_buf: Vec::new(),
+            phase_buf: Vec::new(),
             write_pos: 0,
-            last_hop: 0,
-            sample_rate,
-        }
+            sample_rate: 0.0,
+            gap: 0,
+        };
+        delay.prepare(48_000.0);
+        delay
     }
 }
 
@@ -446,7 +271,7 @@ impl Opcode for SpectralDelay {
 
     fn ports(&self) -> &[Port] {
         const PORTS: &[Port] = &[
-            Port::required("chain"),
+            Port::required("x"),
             Port::optional("time", 0.1),
             Port::optional("spread", 0.0),
             Port::optional("feedback", 0.0),
@@ -455,245 +280,160 @@ impl Opcode for SpectralDelay {
     }
 
     fn box_clone(&self) -> Box<dyn Opcode> {
-        let fft_size = self.chain.fft_size();
-        let max_time = self.max_hops as f32 * self.hop as f32 / self.sample_rate;
-        let chain = Arc::new(SpectralChain::new(fft_size));
-        Box::new(SpectralDelay::new(
-            fft_size,
-            chain,
-            max_time,
-            self.sample_rate,
-        ))
+        let mut copy = SpectralDelay::new(self.stft.size, self.max_time);
+        copy.prepare(self.sample_rate);
+        Box::new(copy)
+    }
+
+    fn prepare(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate;
+        let hop = self.stft.hop as f32;
+        self.max_hops = ((self.max_time * sample_rate / hop).ceil() as usize).max(2);
+        let len = bins(self.stft.size) * self.max_hops;
+        self.mag_buf = vec![0.0; len];
+        self.phase_buf = vec![0.0; len];
+        self.write_pos = 0;
     }
 
     fn reset(&mut self) {
+        self.stft.reset();
         self.mag_buf.fill(0.0);
         self.phase_buf.fill(0.0);
         self.write_pos = 0;
-        self.last_hop = 0;
     }
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-        let chain = self.chain.get();
-
-        if chain.hop_counter != self.last_hop {
-            self.last_hop = chain.hop_counter;
-
-            let max_time = self.max_hops as f32 * self.hop as f32 / self.sample_rate;
-            let time = inputs[1][0].clamp(0.0, max_time);
-            let spread = inputs[2][0].clamp(0.0, 1.0);
-            let feedback = inputs[3][0].clamp(0.0, 0.99);
-
-            let time_hops = time * self.sample_rate / self.hop as f32;
-
-            for bin in 0..self.num_bins {
-                let frac = if self.num_bins > 1 {
-                    bin as f32 / (self.num_bins - 1) as f32
-                } else {
-                    1.0
-                };
+        let time = inputs[1][0].clamp(0.0, self.max_time);
+        let spread = inputs[2][0].clamp(0.0, 1.0);
+        let feedback = inputs[3][0].clamp(0.0, 0.99);
+        self.gap = (time * self.sample_rate) as usize;
+        let time_hops = time * self.sample_rate / self.stft.hop as f32;
+        let (max_hops, num_bins) = (self.max_hops, bins(self.stft.size));
+        let Self {
+            stft,
+            mag_buf,
+            phase_buf,
+            write_pos,
+            ..
+        } = self;
+        stft.run(inputs[0], out, |mags, phases| {
+            for bin in 0..num_bins {
+                let frac = bin as f32 / (num_bins - 1) as f32;
                 let delay_frac = 1.0 - spread * (1.0 - frac);
                 let delay_hops = (time_hops * delay_frac)
                     .round()
-                    .clamp(1.0, (self.max_hops - 1) as f32)
-                    as usize;
-
-                let read_pos = (self.write_pos + self.max_hops - delay_hops) % self.max_hops;
-                let ri = bin * self.max_hops + read_pos;
-                let wi = bin * self.max_hops + self.write_pos;
-
-                let delayed_mag = self.mag_buf[ri];
-                let delayed_phase = self.phase_buf[ri];
-
-                self.mag_buf[wi] = chain.mags[bin] + delayed_mag * feedback;
-                self.phase_buf[wi] = chain.phases[bin];
-
-                chain.mags[bin] = delayed_mag;
-                chain.phases[bin] = delayed_phase;
+                    .clamp(1.0, (max_hops - 1) as f32) as usize;
+                let read = bin * max_hops + (*write_pos + max_hops - delay_hops) % max_hops;
+                let write = bin * max_hops + *write_pos;
+                let (delayed_mag, delayed_phase) = (mag_buf[read], phase_buf[read]);
+                mag_buf[write] = mags[bin] + delayed_mag * feedback;
+                phase_buf[write] = phases[bin];
+                mags[bin] = delayed_mag;
+                phases[bin] = delayed_phase;
             }
-
-            self.write_pos = (self.write_pos + 1) % self.max_hops;
-        }
-
-        out.copy_from_slice(&inputs[0][..out.len()]);
+            *write_pos = (*write_pos + 1) % max_hops;
+        });
     }
 
-    fn has_side_effects(&self) -> bool {
-        true
+    fn is_active(&self) -> bool {
+        self.stft.is_active(self.gap)
+    }
+
+    fn latency(&self) -> usize {
+        self.stft.size
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::opcode::ProcessCtx;
 
     const SR: f32 = 48_000.0;
-    const BLOCK: usize = 64;
-    const FFT_SIZE: usize = BLOCK * 2;
+    const SIZE: usize = 256;
 
-    fn make_chain() -> Arc<SpectralChain> {
-        Arc::new(SpectralChain::new(FFT_SIZE))
+    fn sine(len: usize) -> Vec<f32> {
+        (0..len)
+            .map(|i| (TAU * 440.0 * i as f32 / SR).sin())
+            .collect()
+    }
+
+    /// Runs `op` over `input` in blocks, with every control port held at `controls`.
+    fn run(op: &mut dyn Opcode, input: &[f32], controls: &[f32]) -> Vec<f32> {
+        let block = crate::block_size();
+        let ctx = ProcessCtx::new(SR, true);
+        let mut out = Vec::new();
+        for chunk in input.chunks(block) {
+            let control: Vec<Vec<f32>> = controls.iter().map(|c| vec![*c; chunk.len()]).collect();
+            let mut inputs: Vec<&[f32]> = vec![chunk];
+            inputs.extend(control.iter().map(Vec::as_slice));
+            let mut block_out = vec![0.0; chunk.len()];
+            op.process(&ctx, &inputs, &mut block_out);
+            out.extend(block_out);
+        }
+        out
+    }
+
+    fn rms(x: &[f32]) -> f32 {
+        (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt()
     }
 
     #[test]
-    fn fft_ifft_roundtrip_recovers_sine() {
-        let chain = make_chain();
-        let mut fft = Fft::new(FFT_SIZE, chain.clone());
-        let mut ifft = Ifft::new(FFT_SIZE, chain);
-        let ctx = ProcessCtx::new(SR, true);
-
-        // Feed several blocks of a 440hz sine so the STFT fills up.
-        let blocks = FFT_SIZE / BLOCK + 4;
-        let mut all_in = Vec::new();
-        let mut all_out = Vec::new();
-
-        for b in 0..blocks {
-            let input: Vec<f32> = (0..BLOCK)
-                .map(|i| {
-                    let t = (b * BLOCK + i) as f32 / SR;
-                    (2.0 * std::f32::consts::PI * 440.0 * t).sin()
-                })
-                .collect();
-            let mut fft_out = vec![0.0f32; BLOCK];
-            fft.process(&ctx, &[&input], &mut fft_out);
-
-            let mut ifft_out = vec![0.0f32; BLOCK];
-            ifft.process(&ctx, &[&fft_out], &mut ifft_out);
-
-            all_in.extend_from_slice(&input);
-            all_out.extend_from_slice(&ifft_out);
-        }
-
-        // Skip the initial latency (FFT_SIZE samples) and check the rest.
-        let skip = FFT_SIZE;
-        let steady_in = &all_in[..all_in.len() - skip];
-        let steady_out = &all_out[skip..];
-        let len = steady_in.len().min(steady_out.len());
-
-        let max_err: f32 = steady_in[..len]
-            .iter()
-            .zip(&steady_out[..len])
-            .map(|(a, b)| (a - b).abs())
+    fn an_untouched_spectrum_comes_back_unchanged_after_the_latency() {
+        // a delay of nothing but its input at full dry would change it, so run the transform with
+        // a stage that leaves the spectrum alone
+        let mut stft = Stft::new(SIZE);
+        let input = sine(SIZE * 16);
+        let mut out = vec![0.0; input.len()];
+        stft.run(&input, &mut out, |_, _| {});
+        let steady = SIZE * 2..input.len();
+        let worst = steady
+            .map(|i| (out[i] - input[i - SIZE]).abs())
             .fold(0.0, f32::max);
-
-        assert!(
-            max_err < 0.15,
-            "FFT→IFFT roundtrip should approximate the input, max error = {max_err}"
-        );
+        assert!(worst < 1e-4, "{worst}");
     }
 
     #[test]
-    fn freeze_holds_magnitudes() {
-        let chain = make_chain();
-        let mut fft = Fft::new(FFT_SIZE, chain.clone());
-        let mut freeze = SpectralFreeze::new(FFT_SIZE, chain.clone());
-        let ctx = ProcessCtx::new(SR, true);
+    fn freeze_holds_the_sound_after_the_input_stops() {
+        let mut freeze = SpectralFreeze::new(SIZE);
+        let mut input = sine(SIZE * 8);
+        input.extend(vec![0.0; SIZE * 24]);
+        let held = run(&mut freeze, &input, &[1.0]);
+        let tail = &held[held.len() - SIZE * 4..];
+        assert!(rms(tail) > 0.2, "{}", rms(tail));
 
-        // Fill FFT with a sine.
-        for b in 0..4 {
-            let input: Vec<f32> = (0..BLOCK)
-                .map(|i| {
-                    let t = (b * BLOCK + i) as f32 / SR;
-                    (2.0 * std::f32::consts::PI * 440.0 * t).sin()
-                })
-                .collect();
-            let mut fft_out = vec![0.0f32; BLOCK];
-            fft.process(&ctx, &[&input], &mut fft_out);
-
-            let freeze_on = vec![1.0f32; BLOCK];
-            let mut freeze_out = vec![0.0f32; BLOCK];
-            freeze.process(&ctx, &[&fft_out, &freeze_on], &mut freeze_out);
-        }
-
-        // Snapshot the frozen magnitudes.
-        let frozen_mags = freeze.frozen_mags.clone();
-        assert!(freeze.is_frozen);
-
-        // Feed silence — the chain's mags should still be the frozen ones.
-        let silence = vec![0.0f32; BLOCK];
-        let mut fft_out = vec![0.0f32; BLOCK];
-        fft.process(&ctx, &[&silence], &mut fft_out);
-
-        let freeze_on = vec![1.0f32; BLOCK];
-        let mut freeze_out = vec![0.0f32; BLOCK];
-        freeze.process(&ctx, &[&fft_out, &freeze_on], &mut freeze_out);
-
-        let chain_inner = chain.get();
-        assert_eq!(chain_inner.mags, frozen_mags);
+        let mut unfrozen = SpectralFreeze::new(SIZE);
+        let gone = run(&mut unfrozen, &input, &[0.0]);
+        assert!(rms(&gone[gone.len() - SIZE * 4..]) < 1e-3);
     }
 
     #[test]
-    fn spectral_delay_delays_by_one_hop() {
-        let chain = make_chain();
-        let mut delay = SpectralDelay::new(FFT_SIZE, chain.clone(), 1.0, SR);
-        let ctx = ProcessCtx::new(SR, true);
-        let nb = bins(FFT_SIZE);
-
-        let inner = chain.get();
-        for i in 0..nb {
-            inner.mags[i] = (i + 1) as f32;
-            inner.phases[i] = 0.1 * i as f32;
-        }
-        inner.hop_counter = 1;
-
-        let dummy = vec![0.0f32; BLOCK];
-        let time = vec![0.0014f32; BLOCK];
-        let spread = vec![0.0f32; BLOCK];
-        let feedback = vec![0.0f32; BLOCK];
-        let mut out = vec![0.0f32; BLOCK];
-        delay.process(&ctx, &[&dummy, &time, &spread, &feedback], &mut out);
-
-        let inner = chain.get();
-        for i in 0..nb {
-            assert_eq!(
-                inner.mags[i], 0.0,
-                "first hop should output zeros (delay line empty)"
-            );
-        }
-
-        for i in 0..nb {
-            inner.mags[i] = 99.0;
-            inner.phases[i] = 0.0;
-        }
-        inner.hop_counter = 2;
-        delay.process(&ctx, &[&dummy, &time, &spread, &feedback], &mut out);
-
-        let inner = chain.get();
-        for i in 0..nb {
-            assert!(
-                (inner.mags[i] - (i + 1) as f32).abs() < 1e-6,
-                "bin {i}: expected {}, got {}",
-                (i + 1) as f32,
-                inner.mags[i]
-            );
-        }
+    fn delay_moves_the_sound_later_by_the_time() {
+        let mut delay = SpectralDelay::new(SIZE, 1.0);
+        let mut input = sine(SIZE * 4);
+        input.extend(vec![0.0; SIZE * 60]);
+        // 40ms is 1920 samples, 15 hops at 128
+        let out = run(&mut delay, &input, &[0.04, 0.0, 0.0]);
+        let (early, late) = (&out[..SIZE * 8], &out[SIZE * 8..SIZE * 40]);
+        assert!(rms(early) < 0.05, "heard {} before the delay", rms(early));
+        assert!(rms(late) > 0.05, "heard {} after it", rms(late));
     }
 
     #[test]
-    fn spectral_delay_passthrough_audio() {
-        let chain = make_chain();
-        let mut delay = SpectralDelay::new(FFT_SIZE, chain.clone(), 1.0, SR);
-        let ctx = ProcessCtx::new(SR, true);
-
-        let input: Vec<f32> = (0..BLOCK).map(|i| i as f32 * 0.01).collect();
-        let time = vec![0.1f32; BLOCK];
-        let spread = vec![0.0f32; BLOCK];
-        let feedback = vec![0.0f32; BLOCK];
-        let mut out = vec![0.0f32; BLOCK];
-        delay.process(&ctx, &[&input, &time, &spread, &feedback], &mut out);
-        assert_eq!(out, input, "audio should pass through unchanged");
+    fn copies_of_a_voice_do_not_share_state() {
+        let mut a = SpectralFreeze::new(SIZE);
+        let mut b = a.box_clone();
+        let input = sine(SIZE * 8);
+        let first = run(&mut a, &input, &[1.0]);
+        let second = run(b.as_mut(), &input, &[1.0]);
+        assert_eq!(first, second);
     }
 
     #[test]
-    fn fft_passthrough_equals_input() {
-        let chain = make_chain();
-        let mut fft = Fft::new(FFT_SIZE, chain);
-        let ctx = ProcessCtx::new(SR, true);
-
-        let input: Vec<f32> = (0..BLOCK).map(|i| i as f32 * 0.01).collect();
-        let mut out = vec![0.0f32; BLOCK];
-        fft.process(&ctx, &[&input], &mut out);
-        assert_eq!(out, input);
+    fn a_ringing_tail_keeps_the_voice_alive() {
+        let mut delay = SpectralDelay::new(SIZE, 1.0);
+        run(&mut delay, &sine(SIZE * 4), &[0.05, 0.0, 0.0]);
+        assert!(delay.is_active());
+        run(&mut delay, &vec![0.0; SIZE * 400], &[0.05, 0.0, 0.0]);
+        assert!(!delay.is_active());
     }
 }

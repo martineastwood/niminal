@@ -8,9 +8,10 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 use niminal_engine::Opcode;
 pub use niminal_engine::ops::Wave;
 use niminal_engine::ops::{
-    Allpass, Bitcrush, Chorus, Clip, Comb, Compressor, DcBlock, Delay, Distortion, Eq, EqMode,
-    FilterMode, FinishWhen, Fn1, Fold, Follow, Formant, Func, Gain, Gate, Impulse, Lag, Limiter,
-    Noise, NoiseColor, Osc, Phaser, PitchShift, Resonator, Reverb, SampleHold, Svf, Wavetable,
+    Allpass, Bitcrush, Chorus, Clip, Comb, Compressor, Convolve, DcBlock, Delay, Distortion, Eq,
+    EqMode, FilterMode, FinishWhen, Fn1, Fold, Follow, Formant, Func, Gain, Gate, Impulse,
+    IrSpectrum, Lag, Limiter, Noise, NoiseColor, Osc, Phaser, PitchShift, Resonator, Reverb,
+    SampleHold, SpectralDelay, SpectralFreeze, Svf, Waveshape, Wavetable,
 };
 
 use crate::unit::Unit;
@@ -25,6 +26,8 @@ pub enum Kind {
     Gain,
     /// A channel layout such as `stereo`.
     Layout,
+    /// Numbers known while compiling, such as an impulse response: a table, or one per channel.
+    Table,
 }
 
 pub struct ParamSpec {
@@ -76,19 +79,6 @@ pub enum WaveArg {
 const MAX_TABLE: usize = 1 << 16;
 
 impl WaveArg {
-    /// One cycle of a wave, as given in a program.
-    pub fn table(cycle: &[f64]) -> Result<Self, String> {
-        if cycle.is_empty() {
-            return Err("a table can't be empty".into());
-        }
-        if cycle.len() > MAX_TABLE {
-            return Err(format!(
-                "a table to play can have at most {MAX_TABLE} entries"
-            ));
-        }
-        Ok(WaveArg::Table(cached_wavetable(cycle)))
-    }
-
     pub fn from_table(table: &niminal_engine::Table) -> Result<Self, String> {
         if table.is_empty() {
             return Err("a table can't be empty".into());
@@ -99,6 +89,14 @@ impl WaveArg {
             ));
         }
         Ok(WaveArg::Table(cached_wavetable(&table.as_f64())))
+    }
+
+    /// One table is a single cycle; several are a bank to morph between.
+    pub fn from_tables(tables: &[Arc<niminal_engine::Table>]) -> Result<Self, String> {
+        match tables {
+            [one] => Self::from_table(one),
+            many => Self::bank(many),
+        }
     }
 
     pub fn bank(tables: &[Arc<niminal_engine::Table>]) -> Result<Self, String> {
@@ -142,6 +140,8 @@ fn cached_wavetable(cycle: &[f64]) -> Arc<Wavetable> {
 #[derive(Default)]
 pub struct BuildArgs {
     pub wave: Option<WaveArg>,
+    /// The table for a `Kind::Table` parameter: the one for this copy's channel.
+    pub table: Option<Arc<niminal_engine::Table>>,
     /// Which channel of a multichannel signal this copy of the opcode serves.
     pub channel: usize,
     /// Tells apart the copies of an opcode in one instrument, for those that vary by it.
@@ -157,6 +157,34 @@ fn seed_of(a: &BuildArgs) -> Option<u32> {
     a.consts.get("seed").map(|s| s.round() as i64 as u32)
 }
 
+/// Impulse responses are transformed once while any program still uses them.
+fn cached_ir(table: &niminal_engine::Table) -> Arc<IrSpectrum> {
+    static MADE: LazyLock<Mutex<HashMap<Vec<u32>, Weak<IrSpectrum>>>> =
+        LazyLock::new(Mutex::default);
+    let key: Vec<u32> = table.data().iter().map(|v| v.to_bits()).collect();
+    let mut made = MADE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(ir) = made.get(&key).and_then(Weak::upgrade) {
+        return ir;
+    }
+    made.retain(|_, ir| ir.strong_count() > 0);
+    let ir = Arc::new(IrSpectrum::from_slice(table.data()));
+    made.insert(key, Arc::downgrade(&ir));
+    ir
+}
+
+/// The `size:` of a spectral effect.
+fn fft_size(a: &BuildArgs) -> Result<usize, String> {
+    let size = a.consts.get("size").map_or(1024, |s| s.round() as usize);
+    if niminal_engine::ops::valid_fft_size(size) {
+        Ok(size)
+    } else {
+        Err(format!(
+            "`size` must be a power of two from {} to 8192, not {size}",
+            niminal_engine::block_size() * 2
+        ))
+    }
+}
+
 /// The longest delay line a program may ask for.
 const MAX_DELAY_SECONDS: f64 = 30.0;
 
@@ -166,16 +194,6 @@ pub enum Build {
     Pan,
     /// `to_layout`: converts between layouts.
     ToLayout,
-    /// `convolve`: the compiler loads the IR buffer and builds the IrSpectrum.
-    Convolve,
-    /// `fft`: the compiler creates the SpectralChain shared with downstream ops.
-    Fft,
-    /// `ifft`: the compiler wires the SpectralChain from the upstream FFT.
-    Ifft,
-    /// `freeze`: the compiler wires the SpectralChain from the upstream FFT.
-    SpectralFreeze,
-    /// `spectral_delay`: per-bin delay with spread and feedback, compiler wires SpectralChain.
-    SpectralDelay,
 }
 
 pub struct OpSpec {
@@ -205,11 +223,6 @@ impl OpSpec {
         match &self.build {
             Build::Builtin(f) => f(args).map(Some),
             Build::Pan | Build::ToLayout => Ok(None),
-            Build::Convolve
-            | Build::Fft
-            | Build::Ifft
-            | Build::SpectralFreeze
-            | Build::SpectralDelay => Ok(None),
         }
     }
 }
@@ -625,39 +638,61 @@ impl Registry {
                 Build::Builtin(|_| Ok(Box::new(Resonator::default()))),
             ),
             OpSpec::new(
+                "waveshape",
+                "Maps a signal in -1..1 through a transfer table: `osc(saw, freq).waveshape(cheby([1, 0.3]))`. Values outside -1..1 are clamped to the ends.",
+                vec![req("x", SIGNAL), req("table", Kind::Table)],
+                Build::Builtin(|a| {
+                    let table = a.table.clone().expect("waveshape has a table");
+                    Ok(Box::new(Waveshape::new(table)))
+                }),
+            ),
+            OpSpec::new(
                 "convolve",
-                "Convolution with an impulse response buffer: `x.convolve(ir)`. Partitioned for real-time use; `mix` blends wet with dry. Latency is one block.",
-                vec![req("x", SIGNAL), opt("mix", SIGNAL)],
-                Build::Convolve,
+                "Convolution with an impulse response: `x.convolve(hall.data, mix: 0.3)` for a `sample hall = \"hall.wav\"`. A stereo response convolves each channel of `x` with its own. Partitioned for real-time use; `mix` blends wet with dry. No latency.",
+                vec![req("x", SIGNAL), req("ir", Kind::Table), opt("mix", SIGNAL)],
+                Build::Builtin(|a| {
+                    let ir = a.table.as_ref().expect("convolve has an impulse response");
+                    Ok(Box::new(Convolve::new(cached_ir(ir))))
+                }),
             ),
             OpSpec::new(
-                "fft",
-                "Forward STFT: `x.fft(1024)`. Analyses the signal into spectral bins for downstream spectral ops. The output is passed to `ifft` or spectral ops like `freeze`. Size must be a power of two from twice the block size (128 at the default) to 8192.",
-                vec![req("x", SIGNAL), setting("size", SIGNAL)],
-                Build::Fft,
-            ),
-            OpSpec::new(
-                "ifft",
-                "Inverse STFT: resynthesises a spectral chain back to audio. `chain.ifft()` where `chain` is the output of `fft` or a spectral op.",
-                vec![req("chain", SIGNAL)],
-                Build::Ifft,
-            ),
-            OpSpec::new(
-                "freeze",
-                "Holds the current spectral frame when `freeze` > 0: `chain.freeze(trigger)`. While frozen, magnitudes are locked but phases keep advancing to avoid clicks.",
-                vec![req("chain", SIGNAL), opt("freeze", SIGNAL)],
-                Build::SpectralFreeze,
+                "spectral_freeze",
+                "Holds the spectrum it hears while `freeze` is above 0.5: `pad.spectral_freeze(freeze: gate)`. Magnitudes are locked and phases keep turning, so the held sound is steady. `size:` is the FFT size, a power of two from twice the block size to 8192 (default 1024). Latency is `size` samples.",
+                vec![
+                    req("x", SIGNAL),
+                    opt("freeze", SIGNAL),
+                    setting("size", SIGNAL),
+                ],
+                Build::Builtin(|a| Ok(Box::new(SpectralFreeze::new(fft_size(a)?)))),
             ),
             OpSpec::new(
                 "spectral_delay",
-                "Per-bin spectral delay: `chain.spectral_delay(time: 0.2, spread: 0.5, feedback: 0.4)`. Higher bins are delayed more when `spread` > 0. Feedback re-injects delayed energy.",
+                "Delays each frequency bin separately: `x.spectral_delay(time: 300ms, spread: 0.5, feedback: 0.4)`. With `spread` above 0 the lower bins are delayed less than the higher ones. A changing `time` needs `max:` (default 2 seconds, at most 30). `size:` is the FFT size as for `spectral_freeze`.",
                 vec![
-                    req("chain", SIGNAL),
-                    opt("time", SIGNAL),
+                    req("x", SIGNAL),
+                    opt("time", Kind::Signal(Unit::Time)),
                     opt("spread", SIGNAL),
                     opt("feedback", SIGNAL),
+                    setting("max", Kind::Signal(Unit::Time)),
+                    setting("size", SIGNAL),
                 ],
-                Build::SpectralDelay,
+                Build::Builtin(|a| {
+                    let max = a
+                        .consts
+                        .get("max")
+                        .or_else(|| a.consts.get("time"))
+                        .copied()
+                        .unwrap_or(2.0);
+                    if max > MAX_DELAY_SECONDS {
+                        return Err(format!(
+                            "a spectral delay can be at most {MAX_DELAY_SECONDS} seconds long"
+                        ));
+                    }
+                    Ok(Box::new(SpectralDelay::new(
+                        fft_size(a)?,
+                        max.max(0.0) as f32,
+                    )))
+                }),
             ),
         ];
         Registry { ops }
@@ -696,13 +731,15 @@ mod tests {
     fn the_same_cycle_is_analysed_once_while_it_is_in_use() {
         let cycle = [0.0, 0.5, 1.0, 0.5, 0.0, -0.5, -1.0, -0.5, 0.123];
         let (WaveArg::Table(a), WaveArg::Table(b)) = (
-            WaveArg::table(&cycle).unwrap(),
-            WaveArg::table(&cycle).unwrap(),
+            WaveArg::from_table(&niminal_engine::Table::from_f64_slice(&cycle, None)).unwrap(),
+            WaveArg::from_table(&niminal_engine::Table::from_f64_slice(&cycle, None)).unwrap(),
         ) else {
             panic!("tables")
         };
         assert!(Arc::ptr_eq(&a, &b));
-        let WaveArg::Table(other) = WaveArg::table(&cycle[..8]).unwrap() else {
+        let WaveArg::Table(other) =
+            WaveArg::from_table(&niminal_engine::Table::from_f64_slice(&cycle[..8], None)).unwrap()
+        else {
             panic!("table")
         };
         assert!(!Arc::ptr_eq(&a, &other));

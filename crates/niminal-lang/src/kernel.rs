@@ -10,16 +10,17 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use niminal_engine::ops::{
-    ArraySource, BinOp as Op, Cmp, Fn1, Instr, Interp, Kernel, Native, NativeInput,
+    ArraySource, BinOp as Op, Cmp, Fn1, Instr, Interp, Kernel, LaneSrc, Native, NativeInput, Reduce,
 };
 use niminal_engine::{Array, Port, Table};
 use niminal_score::Tempo;
 
 use crate::ast::*;
+use crate::call::{self, ArgVal};
 use crate::diag::{Diagnostic, Span, closest};
 use crate::funcs::{self, Kind, Param};
 use crate::lower::{Datum, Names, literal_sig, unknown_name};
-use crate::opcodes::{self, Build, BuildArgs, Registry, math_fn};
+use crate::opcodes::{self, Build, Registry, math_fn};
 use crate::unit::Unit;
 
 type Res<T> = Result<T, Diagnostic>;
@@ -92,6 +93,12 @@ enum KVal {
     },
     /// A list this kernel writes.
     State {
+        id: usize,
+        unit: Unit,
+        len: usize,
+    },
+    /// A list a vector instruction computed, held in the kernel.
+    Lane {
         id: usize,
         unit: Unit,
         len: usize,
@@ -175,6 +182,13 @@ struct Kb<'a> {
     tables: Vec<Arc<Table>>,
     values: Vec<Array<usize>>,
     value_rates: Vec<Rate>,
+    /// The length and rate of each lane.
+    lanes: Vec<usize>,
+    lane_rates: Vec<Rate>,
+    frames: Vec<niminal_engine::ops::FrameScope>,
+    ffts: Vec<usize>,
+    /// Compiling the code of a frame scope, which can't hold another.
+    in_frame: bool,
     natives: Vec<Native>,
     ports: Vec<Port>,
     resets: Vec<niminal_engine::ops::ResetScope>,
@@ -260,6 +274,11 @@ fn compile_scope_depth(
         tables: Vec::new(),
         values: Vec::new(),
         value_rates: Vec::new(),
+        lanes: Vec::new(),
+        lane_rates: Vec::new(),
+        frames: Vec::new(),
+        ffts: Vec::new(),
+        in_frame: false,
         natives: Vec::new(),
         ports: Vec::new(),
         resets: Vec::new(),
@@ -306,7 +325,15 @@ fn compile_scope_depth(
         registers: kb.registers,
         state_init: kb.state_init,
         buffers: kb.buffers,
+        tables_f64: kb
+            .tables
+            .iter()
+            .map(|t| t.as_f64().into_boxed_slice())
+            .collect(),
         tables: kb.tables,
+        lanes: kb.lanes,
+        frames: kb.frames,
+        ffts: kb.ffts,
         values: kb.values,
         outputs,
         natives: kb.natives,
@@ -425,7 +452,7 @@ impl Kb<'_> {
 
     fn snapshot(&mut self, value: KVal, span: Span) -> Res<KVal> {
         match value {
-            state @ KVal::State { .. } => Ok(KVal::array(self.array_elements(state, span)?)),
+            state @ KVal::State { .. } => self.lane_copy(state, span),
             KVal::Array(items) => Ok(KVal::Array(
                 items
                     .into_iter()
@@ -1197,14 +1224,46 @@ impl Kb<'_> {
         }
         self.check_name(name)?;
         let v = self.value(value)?;
-        if let Some(KVal::State { .. }) = self.frame.scope.get(&name.name) {
-            return Err(Diagnostic::new(
-                format!(
-                    "`{0}` is a state array: write its entries with `{0}[i] = ...`",
-                    name.name
-                ),
-                name.span,
-            ));
+        if let Some(KVal::State { id, unit, len }) = self.frame.scope.get(&name.name).cloned() {
+            if !self.frame.buffers.contains(&name.name) {
+                return Err(Diagnostic::new(
+                    format!(
+                        "`{}` is not a state array, so it can't be written",
+                        name.name
+                    ),
+                    name.span,
+                ));
+            }
+            // `buf = expr` writes every entry: an array of the same length, or one value for all
+            let input = self.lane_of(v, value.span)?;
+            if input.len.is_some_and(|n| n != len) {
+                return Err(Diagnostic::new(
+                    format!(
+                        "`{}` has {len} entries, but this array has {}",
+                        name.name,
+                        input.len.unwrap_or(0)
+                    ),
+                    value.span,
+                ));
+            }
+            if input.unit != unit {
+                return Err(Diagnostic::new(
+                    format!(
+                        "`{}` holds {}, but this is {}",
+                        name.name,
+                        unit.describe(),
+                        input.unit.describe()
+                    ),
+                    value.span,
+                ));
+            }
+            let cond = self.guard;
+            self.code.push(Instr::LaneStore {
+                list: id,
+                src: input.src,
+                cond,
+            });
+            return Ok(());
         }
         if let Some(s) = self.frame.states.iter().find(|s| s.name == name.name) {
             let KVal::Num(v) = &v else {
@@ -1446,6 +1505,12 @@ impl Kb<'_> {
                     KVal::Num(self.read_array(ArraySource::State(id), unit, index, None))
                 })
                 .collect()),
+            KVal::Lane { id, unit, len } => Ok((0..len)
+                .map(|k| {
+                    let index = self.constant(Unit::Num, k as f64);
+                    KVal::Num(self.read_array(ArraySource::Lane(id), unit, index, None))
+                })
+                .collect()),
             KVal::Num(v) => Ok(vec![KVal::Num(v)]),
             KVal::Range {
                 unit,
@@ -1463,7 +1528,7 @@ impl Kb<'_> {
     fn is_array(value: &KVal) -> bool {
         matches!(
             value,
-            KVal::Array(_) | KVal::Table { .. } | KVal::State { .. }
+            KVal::Array(_) | KVal::Table { .. } | KVal::State { .. } | KVal::Lane { .. }
         )
     }
 
@@ -1884,6 +1949,10 @@ impl Kb<'_> {
     }
 
     fn extreme_value(&mut self, a: KVal, b: KVal, minimum: bool, span: Span) -> Res<KVal> {
+        let op = if minimum { Op::Min } else { Op::Max };
+        if let Some(lane) = self.lane_binary(op, |a, b| (a == b).then_some(a), &a, &b, span)? {
+            return Ok(lane);
+        }
         self.zip_values(a, b, span, |this, a, b| {
             if a.unit != b.unit {
                 return Err(Diagnostic::new(
@@ -1896,6 +1965,32 @@ impl Kb<'_> {
     }
 
     fn math_value(&mut self, f: Fn1, value: KVal, span: Span) -> Res<KVal> {
+        if let KVal::State {
+            unit: Unit::Num, ..
+        }
+        | KVal::Lane {
+            unit: Unit::Num, ..
+        } = value
+            && self.force.is_none()
+            && let Some(input) = self.lane_input(&value)
+        {
+            let len = input.len.expect("an array has a length");
+            let rate = self.rate(input.rate);
+            let dst = self.new_lane(len, rate);
+            self.push(
+                rate,
+                Instr::LaneCall {
+                    dst,
+                    f,
+                    a: input.src,
+                },
+            );
+            return Ok(KVal::Lane {
+                id: dst,
+                unit: Unit::Num,
+                len,
+            });
+        }
         self.map_value(value, span, |this, value| {
             if value.unit != Unit::Num {
                 return Err(Diagnostic::new(
@@ -1941,6 +2036,17 @@ impl Kb<'_> {
     }
 
     fn negate_value(&mut self, value: KVal, span: Span) -> Res<KVal> {
+        if let KVal::State { unit, .. } | KVal::Lane { unit, .. } = value
+            && unit != Unit::Db
+            && self.force.is_none()
+        {
+            let minus_one = self.constant(Unit::Num, -1.0);
+            if let Some(lane) =
+                self.lane_binary(Op::Mul, |a, _| Some(a), &value, &KVal::Num(minus_one), span)?
+            {
+                return Ok(lane);
+            }
+        }
         self.map_value(value, span, |this, v| {
             if v.unit == Unit::Db {
                 let one = this.constant(Unit::Num, 1.0);
@@ -1965,6 +2071,16 @@ impl Kb<'_> {
     }
 
     fn binary_value(&mut self, op: BinOp, a: KVal, b: KVal, span: Span) -> Res<KVal> {
+        type UnitRule = fn(Unit, Unit) -> Option<Unit>;
+        let (engine_op, unit_of): (Op, UnitRule) = match op {
+            BinOp::Add => (Op::Add, |a, b| (a == b && a != Unit::Db).then_some(a)),
+            BinOp::Sub => (Op::Sub, |a, b| (a == b && a != Unit::Db).then_some(a)),
+            BinOp::Mul => (Op::Mul, crate::unit::mul_unit),
+            BinOp::Div => (Op::Div, crate::unit::div_unit),
+        };
+        if let Some(lane) = self.lane_binary(engine_op, unit_of, &a, &b, span)? {
+            return Ok(lane);
+        }
         self.zip_values(a, b, span, |this, a, b| this.binary(op, a, b, span))
     }
 
@@ -2191,6 +2307,12 @@ impl Kb<'_> {
                     None,
                 )))
             }
+            KVal::Lane { id, unit, .. } => Ok(KVal::Num(self.read_array(
+                ArraySource::Lane(id),
+                unit,
+                i,
+                None,
+            ))),
             KVal::Num(v) => Ok(KVal::Num(v)),
             _ => Err(Diagnostic::new("only an array can be indexed", list.span)),
         }
@@ -2241,6 +2363,7 @@ impl Kb<'_> {
             KVal::State { len: 0, .. } => Err(Diagnostic::new("this array is empty", span)),
             KVal::Table { id, unit, .. } => Ok((ArraySource::Table(id), unit)),
             KVal::State { id, unit, .. } => Ok((ArraySource::State(id), unit)),
+            KVal::Lane { id, unit, .. } => Ok((ArraySource::Lane(id), unit)),
             other => {
                 let items = self.array_elements(other, span)?;
                 let mut registers = Vec::with_capacity(items.len());
@@ -2288,7 +2411,7 @@ impl Kb<'_> {
                     .iter()
                     .map(|reg| self.consts.get(reg).copied())
                     .collect::<Option<Vec<_>>>(),
-                ArraySource::State(_) => None,
+                ArraySource::State(_) | ArraySource::Lane(_) => None,
             };
             if let Some(data) = data {
                 return self.constant(
@@ -2300,6 +2423,7 @@ impl Kb<'_> {
         let rate = match list {
             // a state list can change every sample
             ArraySource::State(_) => Rate::Audio,
+            ArraySource::Lane(id) => self.rate(i.rate.max(self.lane_rates[id])),
             ArraySource::Table(_) => self.rate(i.rate),
             ArraySource::Values(id) => self.rate(i.rate.max(self.value_rates[id])),
         };
@@ -2586,12 +2710,9 @@ impl Kb<'_> {
                     rate,
                     port: None,
                 }),
-                KernelResult::Array(values) => KVal::Array(
-                    values
-                        .into_iter()
-                        .map(|v| result(v, first, rate))
-                        .collect(),
-                ),
+                KernelResult::Array(values) => {
+                    KVal::Array(values.into_iter().map(|v| result(v, first, rate)).collect())
+                }
                 KernelResult::Record(values) => KVal::Record(
                     values
                         .into_iter()
@@ -2703,6 +2824,12 @@ impl Kb<'_> {
         }
         if n == "reset_on" {
             return self.reset_scope(args, span);
+        }
+        match n {
+            "frames" => return self.frames_scope(name, args, span),
+            "fft" => return self.fft_call(name, args, span),
+            "ifft" => return self.ifft_call(name, args, span),
+            _ => {}
         }
         if self.instrument_scope
             && let [receiver] = args
@@ -2862,7 +2989,7 @@ impl Kb<'_> {
             "min" | "max" if args.len() == 1 && args[0].receiver => {
                 return self.array_call(name, args, span);
             }
-            "min" | "max" | "pow" | "mod" => return self.combine(name, args),
+            "min" | "max" | "pow" | "mod" | "atan2" => return self.combine(name, args),
             "clamp" => return self.clamp(name, args),
             "range" => return self.range(name, args, span),
             "hold" if args.len() == 1 && args[0].receiver => {
@@ -2873,7 +3000,9 @@ impl Kb<'_> {
                             "`hold` is for values that change at most once per block",
                             span,
                         )
-                        .with_help("compute it in a `control { ... }` scope, or read it with `.control`"));
+                        .with_help(
+                            "compute it in a `control { ... }` scope, or read it with `.control`",
+                        ));
                     }
                     Ok(v)
                 });
@@ -2886,7 +3015,9 @@ impl Kb<'_> {
                             "`smooth` is for values that change at most once per block",
                             span,
                         )
-                        .with_help("compute it in a `control { ... }` scope, or read it with `.control`"));
+                        .with_help(
+                            "compute it in a `control { ... }` scope, or read it with `.control`",
+                        ));
                     }
                     match this.emit_native(
                         Box::new(niminal_engine::ops::Ramp::default()),
@@ -2923,7 +3054,8 @@ impl Kb<'_> {
                     }
                 });
             }
-            "len" | "sum" | "map" | "indices" | "at" | "channels" | "step" => {
+            "len" | "sum" | "map" | "indices" | "at" | "channels" | "step" | "dot" | "fir"
+            | "taps" | "matvec" => {
                 return self.array_call(name, args, span);
             }
             "zeros" => {
@@ -3002,7 +3134,9 @@ impl Kb<'_> {
             .names()
             .chain(self.names.fns.keys().map(String::as_str))
             .chain(Fn1::ALL.iter().map(|f| f.name()))
-            .chain(["min", "max", "pow", "mod", "clamp", "prev", "zeros"])
+            .chain([
+                "min", "max", "pow", "mod", "atan2", "clamp", "prev", "zeros",
+            ])
             .collect();
         let mut d = Diagnostic::new(format!("unknown function `{n}`"), name.span);
         if let Some(c) = closest(n, known) {
@@ -3179,6 +3313,15 @@ impl Kb<'_> {
                 }
                 Ok(self.bin(Op::Pow, a, b, Unit::Num))
             }
+            "atan2" => {
+                if a.unit != b.unit {
+                    return Err(Diagnostic::new(
+                        "`atan2` needs values with the same unit",
+                        b_span,
+                    ));
+                }
+                Ok(self.bin(Op::Atan2, a, b, Unit::Num))
+            }
             "mod" => {
                 let unit = crate::unit::rem_unit(a.unit, b.unit).ok_or_else(|| {
                     Diagnostic::new(
@@ -3317,7 +3460,7 @@ impl Kb<'_> {
         let len = |l: &KVal| match l {
             KVal::Array(items) => Some(items.len()),
             KVal::Table { values, .. } => Some(values.len()),
-            KVal::State { len, .. } => Some(*len),
+            KVal::State { len, .. } | KVal::Lane { len, .. } => Some(*len),
             KVal::Num(_) => Some(1),
             _ => None,
         };
@@ -3346,6 +3489,27 @@ impl Kb<'_> {
                 hi: count as f64,
                 inclusive: false,
             }),
+            "sum" | "min" | "max" if matches!(l, KVal::State { .. } | KVal::Lane { .. }) => {
+                let kind = match name.name.as_str() {
+                    "sum" => Reduce::Sum,
+                    "min" => Reduce::Min,
+                    _ => Reduce::Max,
+                };
+                let input = self.lane_of(l, receiver.value.span)?;
+                let rate = self.rate(input.rate);
+                let reg = self.emit(rate, |dst| Instr::Reduce {
+                    dst,
+                    kind,
+                    a: input.src,
+                });
+                Ok(KVal::Num(Value {
+                    reg,
+                    unit: input.unit,
+                    rate,
+                    port: None,
+                }))
+            }
+            "dot" | "fir" | "taps" | "matvec" => self.vector_call(name, args, l, span),
             "sum" | "min" | "max" => {
                 let entries = self.array_elements(l, receiver.value.span)?;
                 let mut total: Option<KVal> = None;
@@ -3445,8 +3609,7 @@ impl Kb<'_> {
         }
         let names: Vec<&str> = spec.params.iter().map(|p| p.name.as_str()).collect();
         let bound = funcs::bind(&name.name, name.span, &names, spec.positional, args)?;
-        let mut wave = None;
-        let mut values = vec![None; spec.params.len()];
+        let mut vals: Vec<Option<ArgVal<Value>>> = vec![None; spec.params.len()];
         for (index, (param, arg)) in spec.params.iter().zip(bound).enumerate() {
             let Some(arg) = arg else {
                 if param.required {
@@ -3457,8 +3620,9 @@ impl Kb<'_> {
                 }
                 continue;
             };
-            match param.kind {
-                opcodes::Kind::Wave => wave = Some(self.wave_arg(&arg.value)?),
+            vals[index] = Some(match param.kind {
+                opcodes::Kind::Wave => ArgVal::Wave(self.wave_arg(&arg.value)?),
+                opcodes::Kind::Table => ArgVal::Tables(self.table_arg(&arg.value)?),
                 opcodes::Kind::Layout => {
                     return Err(Diagnostic::new(
                         format!("`{}` can't be used inside a function with state", name.name),
@@ -3467,11 +3631,11 @@ impl Kb<'_> {
                 }
                 opcodes::Kind::Signal(_) | opcodes::Kind::Gain => {
                     let value = self.value(&arg.value)?;
-                    values[index] = Some(value);
+                    self.arg_val(value, arg.value.span)?
                 }
-            }
+            });
         }
-        self.native_arrays(name, spec, wave, &values)
+        self.native_call(name, spec, &vals)
     }
 
     /// A waveform name, or a table of plain numbers known while compiling that holds one cycle.
@@ -3488,138 +3652,100 @@ impl Kb<'_> {
                 names.join(", ")
             ))
         };
-        let value = match self.value(e) {
+        let tables = match self.table_arg(e) {
             Err(_) if matches!(e.kind, ExprKind::Name(_)) => return Err(not_a_wave()),
-            value => value?,
+            tables => tables?,
         };
-        let cycle = match value {
-            KVal::Table {
-                unit: Unit::Num,
-                values,
-                ..
-            } => values.as_f64(),
-            KVal::Table { .. } => {
-                return Err(Diagnostic::new(
-                    "a table is a one-dimensional array of plain numbers",
-                    e.span,
-                ));
-            }
-            KVal::Array(_) => {
-                let mut cycle = Vec::new();
-                for item in self.array_elements(value, e.span)? {
-                    match item {
-                        KVal::Num(v) if v.unit == Unit::Num => match self.konst(&v) {
-                            Some(k) => cycle.push(k),
-                            None => {
-                                return Err(Diagnostic::new(
-                                    "the table must be known while compiling",
-                                    e.span,
-                                ));
-                            }
-                        },
-                        _ => {
-                            return Err(Diagnostic::new(
-                                "a table is a one-dimensional array of plain numbers",
-                                e.span,
-                            ));
-                        }
-                    }
-                }
-                cycle
-            }
-            _ => return Err(not_a_wave()),
-        };
-        opcodes::WaveArg::table(&cycle).map_err(|m| Diagnostic::new(m, e.span))
+        opcodes::WaveArg::from_tables(&tables).map_err(|m| Diagnostic::new(m, e.span))
     }
 
-    fn native_arrays(
-        &mut self,
-        name: &Ident,
-        spec: &opcodes::OpSpec,
-        wave: Option<opcodes::WaveArg>,
-        values: &[Option<KVal>],
-    ) -> Res<KVal> {
-        if values
-            .iter()
-            .any(|v| v.as_ref().is_some_and(Self::is_array))
-        {
-            let arrays = values
+    /// An argument of a built-in opcode: a number, or an array of them.
+    fn arg_val(&mut self, value: KVal, span: Span) -> Res<ArgVal<Value>> {
+        match value {
+            KVal::Num(v) => Ok(ArgVal::Sig(v)),
+            v if Self::is_array(&v) => Ok(ArgVal::Array(
+                self.array_elements(v, span)?
+                    .into_iter()
+                    .map(|item| self.arg_val(item, span))
+                    .collect::<Res<_>>()?,
+            )),
+            _ => Err(Diagnostic::new(
+                "opcode arguments must be numbers or arrays",
+                span,
+            )),
+        }
+    }
+
+    /// A table known while compiling, or one per channel.
+    fn table_arg(&mut self, e: &Expr) -> Res<Vec<Arc<Table>>> {
+        let value = self.value(e)?;
+        let not_a_table =
+            || Diagnostic::new("expected a table of numbers known while compiling", e.span);
+        let constants = |this: &Self, items: &[KVal]| -> Option<Arc<Table>> {
+            let numbers: Option<Vec<f64>> = items
                 .iter()
-                .map(|v| match v {
-                    Some(v) if Self::is_array(v) => self
-                        .array_elements(v.clone(), name.span)
-                        .map(KVal::array)
-                        .map(Some),
-                    other => Ok(other.clone()),
-                })
-                .collect::<Res<Vec<_>>>()?;
-            let lengths: Vec<_> = arrays
-                .iter()
-                .filter_map(|v| match v {
-                    Some(KVal::Array(items)) => Some(items.len()),
+                .map(|item| match item {
+                    KVal::Num(v) => this.konst(v),
                     _ => None,
                 })
                 .collect();
-            let count = lengths[0];
-            if lengths.iter().any(|&len| len != count) {
-                return Err(Diagnostic::new(
-                    "opcode array arguments must have matching shapes",
-                    name.span,
-                ));
-            }
-            return Ok(KVal::Array(
-                (0..count)
-                    .map(|i| {
-                        let row: Vec<_> = arrays
-                            .iter()
-                            .map(|v| match v {
-                                Some(KVal::Array(items)) => Some(items[i].clone()),
-                                other => other.clone(),
-                            })
-                            .collect();
-                        self.native_arrays(name, spec, wave.clone(), &row)
+            numbers
+                .filter(|n| !n.is_empty())
+                .map(|n| Arc::new(Table::from_f64(n, None)))
+        };
+        let tables = match value {
+            KVal::Table { values, .. } => vec![values],
+            KVal::Array(items)
+                if !items.is_empty() && items.iter().all(|i| matches!(i, KVal::Table { .. })) =>
+            {
+                items
+                    .iter()
+                    .map(|i| match i {
+                        KVal::Table { values, .. } => values.clone(),
+                        _ => unreachable!(),
                     })
+                    .collect()
+            }
+            KVal::Array(items) => vec![constants(self, &items).ok_or_else(not_a_table)?],
+            _ => return Err(not_a_table()),
+        };
+        if tables.iter().any(|t| t.is_empty()) {
+            return Err(Diagnostic::new("a table can't be empty", e.span));
+        }
+        Ok(tables)
+    }
+
+    /// One call of a built-in opcode, spread over the elements of any array argument.
+    fn native_call(
+        &mut self,
+        name: &Ident,
+        spec: &opcodes::OpSpec,
+        vals: &[Option<ArgVal<Value>>],
+    ) -> Res<KVal> {
+        if let Some(rows) = call::rows(vals).map_err(|m| Diagnostic::new(m, name.span))? {
+            return Ok(KVal::Array(
+                rows.iter()
+                    .map(|row| self.native_call(name, spec, row))
                     .collect::<Res<_>>()?,
             ));
         }
-        let mut build = BuildArgs {
-            wave,
-            salt: self.natives.len() as u32,
-            ..Default::default()
-        };
-        let mut inputs = Vec::new();
-        for (index, (param, value)) in spec.params.iter().zip(values).enumerate() {
-            let Some(value) = value else {
-                continue;
-            };
-            let KVal::Num(v) = value else {
-                return Err(Diagnostic::new(
-                    "opcode arguments must be numbers or arrays",
-                    name.span,
-                ));
-            };
-            let wanted = match param.kind {
-                opcodes::Kind::Signal(u) => u,
-                _ => Unit::Db,
-            };
-            let fits = v.unit == wanted || (wanted == Unit::Db && v.unit == Unit::Num);
-            if !fits {
+        for (param, val) in spec.params.iter().zip(vals) {
+            if let Some(ArgVal::Sig(v)) = val
+                && let Some(expected) = call::unit_expected(param.kind, v.unit)
+            {
                 return Err(Diagnostic::new(
                     format!(
                         "`{}` expects {} for `{}`, found {}",
                         name.name,
-                        wanted.describe(),
+                        call::expectation(param.kind, expected),
                         param.name,
                         v.unit.describe()
                     ),
                     name.span,
                 ));
             }
-            if let Some(c) = self.konst(v) {
-                build.consts.insert(param.name.clone(), c);
-            }
-            inputs.push((index, NativeInput::Reg(v.reg)));
         }
+        let build = call::build_args(spec, vals, |v| self.konst(v), 0, self.natives.len() as u32);
         let op = spec
             .instantiate(&build)
             .map_err(|e| Diagnostic::new(e, name.span))?
@@ -3629,6 +3755,15 @@ impl Kb<'_> {
                     name.span,
                 )
             })?;
+        if !op.per_sample() {
+            return Err(Diagnostic::new(
+                format!(
+                    "`{}` works on whole blocks, so it can't be used inside a function with state",
+                    name.name
+                ),
+                name.span,
+            ));
+        }
         // one input for each of the opcode's ports, from an argument or the port's default
         let mut wired = Vec::with_capacity(op.ports().len());
         for port in op.ports() {
@@ -3636,9 +3771,12 @@ impl Kb<'_> {
                 .params
                 .iter()
                 .position(|p| p.name == port.name)
-                .and_then(|i| inputs.iter().find(|(k, _)| *k == i));
+                .and_then(|i| match &vals[i] {
+                    Some(ArgVal::Sig(v)) => Some(NativeInput::Reg(v.reg)),
+                    _ => None,
+                });
             wired.push(match (given, port.default) {
-                (Some((_, input)), _) => *input,
+                (Some(input), _) => input,
                 (None, Some(default)) => NativeInput::Const(f64::from(default)),
                 (None, None) => {
                     return Err(Diagnostic::new(
@@ -3658,6 +3796,550 @@ impl Kb<'_> {
             rate: Rate::Audio,
             port: None,
         }))
+    }
+}
+
+// ---- lanes ------------------------------------------------------------------------------------
+
+/// What a vector instruction reads, and what is known about it.
+#[derive(Clone, Copy)]
+struct LaneIn {
+    src: LaneSrc,
+    unit: Unit,
+    /// `None` for a single value that stands for every entry.
+    len: Option<usize>,
+    rate: Rate,
+}
+
+impl Kb<'_> {
+    fn new_lane(&mut self, len: usize, rate: Rate) -> usize {
+        let id = self.lanes.len();
+        self.lanes.push(len);
+        self.lane_rates.push(rate);
+        id
+    }
+
+    /// What a vector instruction can read of `v`, if it is a number or an array it holds in memory.
+    fn lane_input(&self, v: &KVal) -> Option<LaneIn> {
+        Some(match v {
+            KVal::Num(n) => LaneIn {
+                src: LaneSrc::Reg(n.reg),
+                unit: n.unit,
+                len: None,
+                rate: n.rate,
+            },
+            KVal::State { id, unit, len } if *len > 0 => LaneIn {
+                src: LaneSrc::State(*id),
+                unit: *unit,
+                len: Some(*len),
+                rate: Rate::Audio,
+            },
+            KVal::Table { id, unit, values } if !values.is_empty() => LaneIn {
+                src: LaneSrc::Table(*id),
+                unit: *unit,
+                len: Some(values.len()),
+                rate: Rate::Const,
+            },
+            KVal::Lane { id, unit, len } if *len > 0 => LaneIn {
+                src: LaneSrc::Lane(*id),
+                unit: *unit,
+                len: Some(*len),
+                rate: self.lane_rates[*id],
+            },
+            _ => return None,
+        })
+    }
+
+    /// An array (or a single value) as something a vector instruction reads, gathering computed
+    /// elements into a lane.
+    fn lane_of(&mut self, v: KVal, span: Span) -> Res<LaneIn> {
+        if let Some(input) = self.lane_input(&v) {
+            return Ok(input);
+        }
+        let v = match v {
+            KVal::Range { .. } => KVal::array(self.array_elements(v, span)?),
+            other => other,
+        };
+        if !matches!(v, KVal::Array(_)) {
+            return Err(Diagnostic::new("expected an array of numbers here", span));
+        }
+        let (source, unit) = self.numeric_array(v, span)?;
+        let ArraySource::Values(values) = source else {
+            unreachable!("computed elements are held as values")
+        };
+        let (len, rate) = (self.values[values].len(), self.value_rates[values]);
+        let dst = self.new_lane(len, rate);
+        self.push(rate, Instr::LaneFromRegs { dst, values });
+        Ok(LaneIn {
+            src: LaneSrc::Lane(dst),
+            unit,
+            len: Some(len),
+            rate,
+        })
+    }
+
+    /// Like [`Kb::lane_of`], but `None` for anything that is not a number or a flat array of them.
+    fn lane_operand(&mut self, v: &KVal, span: Span) -> Res<Option<LaneIn>> {
+        if let Some(input) = self.lane_input(v) {
+            return Ok(Some(input));
+        }
+        let flat = match v {
+            KVal::Array(items) => {
+                !items.is_empty() && items.iter().all(|i| matches!(i, KVal::Num(_)))
+            }
+            _ => false,
+        };
+        if flat {
+            return self.lane_of(v.clone(), span).map(Some);
+        }
+        Ok(None)
+    }
+
+    /// A copy of a state array as it is now.
+    fn lane_copy(&mut self, v: KVal, span: Span) -> Res<KVal> {
+        let KVal::State { unit, len, .. } = v else {
+            return Ok(v);
+        };
+        if len == 0 || self.force.is_some() {
+            return Ok(KVal::array(self.array_elements(v, span)?));
+        }
+        let input = self.lane_input(&v).expect("a state array");
+        let one = self.constant(Unit::Num, 1.0);
+        let dst = self.new_lane(len, Rate::Audio);
+        self.push(
+            Rate::Audio,
+            Instr::LaneBin {
+                dst,
+                op: Op::Mul,
+                a: input.src,
+                b: LaneSrc::Reg(one.reg),
+            },
+        );
+        Ok(KVal::Lane { id: dst, unit, len })
+    }
+
+    /// `a op b` as one vector instruction, when one of them is a state array or a lane and the
+    /// units combine plainly. `None` means the caller should work element by element.
+    fn lane_binary(
+        &mut self,
+        op: Op,
+        unit_of: impl Fn(Unit, Unit) -> Option<Unit>,
+        a: &KVal,
+        b: &KVal,
+        span: Span,
+    ) -> Res<Option<KVal>> {
+        let held = |v: &KVal| matches!(v, KVal::State { .. } | KVal::Lane { .. });
+        if self.force.is_some() || !(held(a) || held(b)) {
+            return Ok(None);
+        }
+        let (Some(x), Some(y)) = (self.lane_operand(a, span)?, self.lane_operand(b, span)?) else {
+            return Ok(None);
+        };
+        let len = match (x.len, y.len) {
+            (Some(m), Some(n)) if m != n => {
+                return Err(Diagnostic::new(
+                    format!("can't combine an array of {m} with an array of {n}"),
+                    span,
+                ));
+            }
+            (Some(n), _) | (_, Some(n)) => n,
+            (None, None) => return Ok(None),
+        };
+        let Some(unit) = unit_of(x.unit, y.unit) else {
+            return Ok(None);
+        };
+        let rate = self.rate(x.rate.max(y.rate));
+        let dst = self.new_lane(len, rate);
+        self.push(
+            rate,
+            Instr::LaneBin {
+                dst,
+                op,
+                a: x.src,
+                b: y.src,
+            },
+        );
+        Ok(Some(KVal::Lane { id: dst, unit, len }))
+    }
+
+    /// `x.frames(size, fn(w) { ... })`: the body runs every `size / 2` samples on the last `size` samples
+    /// of `x` (windowed, as an array `w`) and returns `size` samples, which are overlapped into the output.
+    /// The output is `size` samples late.
+    fn frames_scope(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<KVal> {
+        const WINDOW: &str = "<frame window>";
+        if self.in_frame || self.guard.is_some() || self.force.is_some() {
+            return Err(Diagnostic::new(
+                "`frames` can't be used inside another frame, an `if` or here",
+                name.span,
+            ));
+        }
+        let bound = funcs::bind("frames", name.span, &["x", "size", "body"], 3, args)?;
+        let need = |i: usize, what: &str| {
+            bound[i].ok_or_else(|| Diagnostic::new(format!("`frames` needs {what}"), name.span))
+        };
+        let x = self.num(&need(0, "a signal")?.value)?;
+        if x.unit != Unit::Num {
+            return Err(Diagnostic::new(
+                "`frames` takes a plain signal",
+                need(0, "a signal")?.value.span,
+            ));
+        }
+        let size_arg = need(1, "a size")?;
+        let size = self.num(&size_arg.value)?;
+        let size = match self.konst(&size) {
+            Some(k)
+                if k.fract() == 0.0
+                    && (4.0..=65536.0).contains(&k)
+                    && (k as usize).is_power_of_two() =>
+            {
+                k as usize
+            }
+            _ => {
+                return Err(Diagnostic::new(
+                    "a frame size is a power of two from 4 to 65536, known while compiling",
+                    size_arg.value.span,
+                ));
+            }
+        };
+        let body_arg = need(2, "a function")?;
+        let KVal::Function { def, captures } = self.value(&body_arg.value)? else {
+            return Err(Diagnostic::new(
+                "the last argument of `frames` is a function, as in `fn(w) { ... }`",
+                body_arg.value.span,
+            ));
+        };
+        let window = self.new_lane(size, Rate::Audio);
+        self.frame.scope.insert(
+            WINDOW.into(),
+            KVal::Lane {
+                id: window,
+                unit: Unit::Num,
+                len: size,
+            },
+        );
+        let given = Arg {
+            name: None,
+            receiver: false,
+            value: Expr {
+                kind: ExprKind::Name(WINDOW.into()),
+                span: body_arg.value.span,
+            },
+        };
+        // the body's code is kept apart, to run when a frame is ready
+        let outer = std::mem::take(&mut self.code);
+        self.in_frame = true;
+        let called = self.call_captured(&def, name, &[given], captures);
+        let result = called.and_then(|result| self.lane_of(result, span));
+        self.in_frame = false;
+        let code = std::mem::replace(&mut self.code, outer);
+        self.frame.scope.remove(WINDOW);
+        let result = result?;
+        if result.len != Some(size) || result.unit != Unit::Num {
+            return Err(Diagnostic::new(
+                format!("the function of `frames` returns {size} plain samples"),
+                body_arg.value.span,
+            ));
+        }
+        let scope = self.frames.len();
+        self.frames.push(niminal_engine::ops::FrameScope {
+            size,
+            window,
+            result: result.src,
+            code,
+        });
+        let reg = self.emit(Rate::Audio, |dst| Instr::Frame {
+            scope,
+            input: x.reg,
+            dst,
+        });
+        Ok(KVal::Num(Value {
+            reg,
+            unit: Unit::Num,
+            rate: Rate::Audio,
+            port: None,
+        }))
+    }
+
+    /// The FFT plan for `size`, made once.
+    fn fft_plan(&mut self, size: usize) -> usize {
+        match self.ffts.iter().position(|&n| n == size) {
+            Some(plan) => plan,
+            None => {
+                self.ffts.push(size);
+                self.ffts.len() - 1
+            }
+        }
+    }
+
+    /// `fft(w)`: the spectrum of an array of `n` samples, as `[re, im]` with `n / 2 + 1` entries each.
+    fn fft_call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<KVal> {
+        let [arg] = args else {
+            return Err(Diagnostic::new("`fft` takes an array", name.span));
+        };
+        let value = self.value(&arg.value)?;
+        let input = self.lane_of(value, arg.value.span)?;
+        let n = input
+            .len
+            .filter(|n| n.is_power_of_two() && *n >= 4)
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    "`fft` takes an array whose length is a power of two, at least 4",
+                    span,
+                )
+            })?;
+        if input.unit != Unit::Num {
+            return Err(Diagnostic::new("`fft` takes plain numbers", arg.value.span));
+        }
+        let rate = self.rate(input.rate);
+        let (re, im) = (
+            self.new_lane(n / 2 + 1, rate),
+            self.new_lane(n / 2 + 1, rate),
+        );
+        let plan = self.fft_plan(n);
+        self.push(
+            rate,
+            Instr::Fft {
+                re,
+                im,
+                src: input.src,
+                plan,
+            },
+        );
+        let lane = |id| KVal::Lane {
+            id,
+            unit: Unit::Num,
+            len: n / 2 + 1,
+        };
+        Ok(KVal::array(vec![lane(re), lane(im)]))
+    }
+
+    /// `ifft(re, im)` (or `ifft([re, im])`): the `n` samples with that spectrum.
+    fn ifft_call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<KVal> {
+        let parts = match args {
+            [spectrum] => match self.value(&spectrum.value)? {
+                KVal::Array(items) if items.len() == 2 => items.into_vec(),
+                _ => {
+                    return Err(Diagnostic::new(
+                        "`ifft` takes the real and imaginary parts, as `ifft(re, im)`",
+                        name.span,
+                    ));
+                }
+            },
+            [re, im] => vec![self.value(&re.value)?, self.value(&im.value)?],
+            _ => {
+                return Err(Diagnostic::new(
+                    "`ifft` takes the real and imaginary parts, as `ifft(re, im)`",
+                    name.span,
+                ));
+            }
+        };
+        let mut lanes = Vec::new();
+        for part in parts {
+            lanes.push(self.lane_of(part, span)?);
+        }
+        let (re, im) = (lanes[0], lanes[1]);
+        let bins = match (re.len, im.len) {
+            (Some(a), Some(b)) if a == b && a >= 3 => a,
+            _ => {
+                return Err(Diagnostic::new(
+                    "`ifft` takes two arrays of the same length, `n / 2 + 1` for a signal of `n`",
+                    span,
+                ));
+            }
+        };
+        let n = (bins - 1) * 2;
+        if !n.is_power_of_two() || re.unit != Unit::Num || im.unit != Unit::Num {
+            return Err(Diagnostic::new(
+                "`ifft` makes a signal whose length is a power of two, from plain numbers",
+                span,
+            ));
+        }
+        let rate = self.rate(re.rate.max(im.rate));
+        let dst = self.new_lane(n, rate);
+        let plan = self.fft_plan(n);
+        self.push(
+            rate,
+            Instr::Ifft {
+                dst,
+                re: re.src,
+                im: im.src,
+                plan,
+            },
+        );
+        Ok(KVal::Lane {
+            id: dst,
+            unit: Unit::Num,
+            len: n,
+        })
+    }
+
+    /// `dot`, `fir`, `taps` and `matvec`: arrays in, one instruction.
+    fn vector_call(&mut self, name: &Ident, args: &[Arg], l: KVal, span: Span) -> Res<KVal> {
+        let op = name.name.as_str();
+        let (params, positional): (&[&str], usize) = match op {
+            "dot" => (&["a", "b"], 2),
+            "fir" => (&["ring", "taps", "from"], 3),
+            "taps" => (&["ring", "offsets", "from", "interp"], 3),
+            _ => (&["matrix", "v"], 2),
+        };
+        let bound = funcs::bind(op, name.span, params, positional, args)?;
+        let given = |i: usize| bound[i];
+        let need = |i: usize| {
+            given(i)
+                .ok_or_else(|| Diagnostic::new(format!("`{op}` needs `{}`", params[i]), name.span))
+        };
+        let first = need(0)?.value.span;
+        let rate_of = |this: &Self, rates: &[Rate]| {
+            this.rate(rates.iter().copied().max().unwrap_or(Rate::Const))
+        };
+        let product = |a: Unit, b: Unit| {
+            crate::unit::mul_unit(a, b).ok_or_else(|| {
+                Diagnostic::new(
+                    format!("can't multiply {} and {}", a.describe(), b.describe()),
+                    span,
+                )
+            })
+        };
+        let scalar = |this: &mut Self, reg: usize, unit: Unit, rate: Rate| {
+            KVal::Num(Value {
+                reg: {
+                    let _ = this;
+                    reg
+                },
+                unit,
+                rate,
+                port: None,
+            })
+        };
+        match op {
+            "dot" => {
+                let a = self.lane_of(l, first)?;
+                let other = self.value(&need(1)?.value)?;
+                let b = self.lane_of(other, need(1)?.value.span)?;
+                if a.len.is_none() || a.len != b.len {
+                    return Err(Diagnostic::new(
+                        "`dot` takes two arrays of the same length",
+                        span,
+                    ));
+                }
+                let unit = product(a.unit, b.unit)?;
+                let rate = rate_of(self, &[a.rate, b.rate]);
+                let reg = self.emit(rate, |dst| Instr::Dot {
+                    dst,
+                    a: a.src,
+                    b: b.src,
+                });
+                Ok(scalar(self, reg, unit, rate))
+            }
+            "fir" | "taps" => {
+                let KVal::State {
+                    id: ring,
+                    unit,
+                    len: ring_len,
+                } = l
+                else {
+                    return Err(Diagnostic::new(
+                        format!("`{op}` reads a state array, such as `state buf = zeros(1024)`"),
+                        first,
+                    ));
+                };
+                if ring_len == 0 {
+                    return Err(Diagnostic::new("this array is empty", first));
+                }
+                let array = self.value(&need(1)?.value)?;
+                let array = self.lane_of(array, need(1)?.value.span)?;
+                let Some(count) = array.len else {
+                    return Err(Diagnostic::new(
+                        format!("`{op}` takes an array of {}", params[1]),
+                        need(1)?.value.span,
+                    ));
+                };
+                let from = self.num(&need(2)?.value)?;
+                if from.unit != Unit::Num {
+                    return Err(Diagnostic::new(
+                        "a position is a plain number",
+                        need(2)?.value.span,
+                    ));
+                }
+                if op == "fir" {
+                    if count > ring_len {
+                        return Err(Diagnostic::new(
+                            format!("{count} taps are more than the {ring_len} entries to read"),
+                            need(1)?.value.span,
+                        ));
+                    }
+                    let unit = product(array.unit, unit)?;
+                    let rate = Rate::Audio;
+                    let reg = self.emit(rate, |dst| Instr::Fir {
+                        dst,
+                        taps: array.src,
+                        ring,
+                        from: from.reg,
+                    });
+                    return Ok(scalar(self, reg, unit, rate));
+                }
+                if array.unit != Unit::Num {
+                    return Err(Diagnostic::new(
+                        "offsets are plain numbers of samples",
+                        need(1)?.value.span,
+                    ));
+                }
+                let interp = match given(3) {
+                    Some(a) => interp_of(&a.value)?,
+                    None => Interp::Linear,
+                };
+                let dst = self.new_lane(count, Rate::Audio);
+                self.push(
+                    Rate::Audio,
+                    Instr::Taps {
+                        dst,
+                        ring,
+                        offsets: array.src,
+                        from: from.reg,
+                        interp,
+                    },
+                );
+                Ok(KVal::Lane {
+                    id: dst,
+                    unit,
+                    len: count,
+                })
+            }
+            _ => {
+                let m = self.lane_of(l, first)?;
+                let other = self.value(&need(1)?.value)?;
+                let v = self.lane_of(other, need(1)?.value.span)?;
+                let (Some(total), Some(cols)) = (m.len, v.len) else {
+                    return Err(Diagnostic::new(
+                        "`matvec` takes a matrix and a vector",
+                        span,
+                    ));
+                };
+                if total % cols != 0 {
+                    return Err(Diagnostic::new(
+                        format!("a matrix of {total} entries does not have rows of {cols}"),
+                        span,
+                    ));
+                }
+                let unit = product(m.unit, v.unit)?;
+                let rate = rate_of(self, &[m.rate, v.rate]);
+                let dst = self.new_lane(total / cols, rate);
+                self.push(
+                    rate,
+                    Instr::MatVec {
+                        dst,
+                        matrix: m.src,
+                        cols,
+                        v: v.src,
+                    },
+                );
+                Ok(KVal::Lane {
+                    id: dst,
+                    unit,
+                    len: total / cols,
+                })
+            }
+        }
     }
 }
 

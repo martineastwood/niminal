@@ -21,6 +21,7 @@ mod formant;
 mod gate;
 mod impulse;
 mod lag;
+mod lanes;
 mod limiter;
 mod math;
 mod noise;
@@ -44,8 +45,8 @@ pub use compress::Compressor;
 pub use control::Control;
 pub use convolve::{Convolve, IrSpectrum};
 pub use custom::{
-    ArraySource, BinOp, Cmp, Custom, Fn1, Func, Instr, Interp, Kernel, Native, NativeInput,
-    ResetScope, read_array, read_at, rem,
+    ArraySource, BinOp, Cmp, Custom, Fn1, FrameScope, Func, Instr, Interp, Kernel, LaneSrc, Native,
+    NativeInput, Reduce, ResetScope, read_array, read_at, rem,
 };
 pub use dc_block::DcBlock;
 pub use delay::Delay;
@@ -62,7 +63,7 @@ pub use lag::Lag;
 pub use limiter::Limiter;
 pub use math::{
     Add, ArrayRead, BlockHold, Compare, Context, Delay1, Div, Gain, Hold, Max, Min, Mul, NoteStart,
-    NoteTime, Pow, ReadContext, Released, Rem, SampleRate, Select, Sub, TableRead, Waveshape,
+    NoteTime, Pow, Atan2, ReadContext, Released, Rem, SampleRate, Select, Sub, TableRead, Waveshape,
 };
 pub use noise::{Noise, NoiseColor};
 pub use osc::{Osc, Wave, Wavetable};
@@ -73,7 +74,7 @@ pub use resonator::Resonator;
 pub use reverb::Reverb;
 pub use sample::{KitSampler, LoopMode, Sampler};
 pub use sample_hold::SampleHold;
-pub use spectral::{Fft, Ifft, SpectralChain, SpectralDelay, SpectralFreeze};
+pub use spectral::{SpectralDelay, SpectralFreeze, valid_fft_size};
 pub use tap::{Tap, TapOut};
 
 mod lifetime;

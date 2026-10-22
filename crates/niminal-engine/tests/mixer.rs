@@ -32,6 +32,7 @@ fn master_node() -> NodeDef {
     NodeDef {
         meter: None,
         transition: (0, 0.0),
+        reset_state: false,
         controls: Vec::new(),
         chain: None,
         inputs: vec![],
@@ -46,6 +47,7 @@ fn reader(bus: usize, factor: f32) -> NodeDef {
     NodeDef {
         meter: None,
         transition: (0, 0.0),
+        reset_state: false,
         controls: Vec::new(),
         chain: Some(amp(factor)),
         inputs: vec![ChainInput::Bus { bus, channel: 0 }],
@@ -82,6 +84,7 @@ fn a_chain_processes_its_nodes_summed_voices() {
     let def = NodeDef {
         meter: None,
         transition: (0, 0.0),
+        reset_state: false,
         controls: Vec::new(),
         chain: Some(amp(2.0)),
         inputs: vec![ChainInput::It { channel: 0 }],
@@ -206,6 +209,7 @@ fn chains_can_send_too() {
     let chain = NodeDef {
         meter: None,
         transition: (0, 0.0),
+        reset_state: false,
         controls: Vec::new(),
         chain: Some(Arc::new(g.build(silent))),
         inputs: vec![ChainInput::It { channel: 0 }],
@@ -342,6 +346,7 @@ mod stereo {
         let master = NodeDef {
             meter: None,
             transition: (0, 0.0),
+            reset_state: false,
             controls: Vec::new(),
             chain: None,
             inputs: vec![],
@@ -382,6 +387,7 @@ mod stereo {
         let reader = NodeDef {
             meter: None,
             transition: (0, 0.0),
+            reset_state: false,
             controls: Vec::new(),
             chain: Some(Arc::new(gr.build_channels(&[l, r]))),
             inputs: vec![
@@ -396,6 +402,7 @@ mod stereo {
         let writer = NodeDef {
             meter: None,
             transition: (0, 0.0),
+            reset_state: false,
             controls: Vec::new(),
             voice_sends: vec![0],
             chain: None,
@@ -418,6 +425,7 @@ mod stereo {
         let master = NodeDef {
             meter: None,
             transition: (0, 0.0),
+            reset_state: false,
             controls: Vec::new(),
             chain: None,
             inputs: vec![],
@@ -458,6 +466,7 @@ mod panic {
         let node = NodeDef {
             meter: None,
             transition: (0, 0.0),
+            reset_state: false,
             controls: Vec::new(),
             chain: Some(echo_chain()),
             inputs: vec![ChainInput::It { channel: 0 }],
@@ -597,6 +606,7 @@ mod adopting {
         NodeDef {
             meter: None,
             transition: (0, 0.0),
+            reset_state: false,
             controls: Vec::new(),
             chain: Some(Arc::new(g.build(d))),
             inputs: vec![ChainInput::It { channel: 0 }],
@@ -821,6 +831,7 @@ fn a_chain_with_nothing_going_in_or_coming_out_is_left_alone_until_something_arr
     let def = NodeDef {
         meter: None,
         transition: (0, 0.0),
+        reset_state: false,
         controls: Vec::new(),
         chain: Some(Arc::new(g.build(out))),
         inputs: vec![ChainInput::It { channel: 0 }],
@@ -876,6 +887,7 @@ fn a_resting_reverb_chain_still_rings_out_its_tail_and_wakes_for_the_next_note()
     let def = NodeDef {
         meter: None,
         transition: (0, 0.0),
+        reset_state: false,
         controls: Vec::new(),
         chain: Some(reverb_chain()),
         inputs: vec![ChainInput::It { channel: 0 }],

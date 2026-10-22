@@ -73,6 +73,7 @@ fn setup(session: &mut Session) {
                 0,
                 vec![
                     Edit::Fx {
+                        output_channels: None,
                         name: "volume".into(),
                         source: "(level: num = 1) { out = it * level }".into(),
                     },
@@ -255,6 +256,7 @@ fn a_draining_effect_rings_out_and_an_immediate_free_cuts_it_off() {
                     0,
                     vec![
                         Edit::Fx {
+                            output_channels: None,
                             name: "echo".into(),
                             source: "() { out = it.delay(time: 1ms, feedback: 0.5) }".into(),
                         },
@@ -355,6 +357,7 @@ fn redefining_or_freeing_a_template_does_not_change_existing_instances() {
                 10,
                 vec![
                     Edit::Fx {
+                        output_channels: None,
                         name: "volume".into(),
                         source: "(level: num = 1) { out = it * level * 0 }".into(),
                     },
@@ -494,6 +497,7 @@ fn node_ids_cannot_alias_fx_instances_or_the_implicit_node() {
             vec![route(
                 32,
                 vec![Edit::Fx {
+                    output_channels: None,
                     name: "bad".into(),
                     source: "() { out = it }\nfx injected { out = 1 }".into()
                 }]
@@ -512,6 +516,7 @@ fn an_unrelated_graph_edit_preserves_effect_memory_when_bus_indices_change() {
                 0,
                 vec![
                     Edit::Fx {
+                        output_channels: None,
                         name: "echo".into(),
                         source: "() { out = it.delay(time: 1ms, feedback: 0.5) }".into(),
                     },
@@ -761,4 +766,53 @@ fn overlapping_crossfades_are_rejected_without_disturbing_the_accepted_fade() {
         "queued"
     );
     assert!(s.send_events(1, vec![replace(1000)]).is_ok());
+}
+
+#[test]
+fn mono_native_modulation_bus_drives_a_stereo_fx_parameter() {
+    use serde_json::json;
+    let mut session = Session::new(RATE, Layout::Stereo).without_limiter();
+    session.send_events(1, vec![
+        json_op(json!({"op":"define","at":0,"source":"instr held() { tail = 0ms\n [1, 1].to_layout(stereo) }"})),
+        json_op(json!({"op":"routing","at":0,"edits":[
+            {"op":"fx","name":"modulator","output_channels":1,"source":"() { out = 0.5 }"},
+            {"op":"fx","name":"gain","source":"(amount: num = 0) { out = it * amount }"},
+            {"op":"bus","id":"mod","channels":1},
+            {"op":"node","id":"lfo","fx":"modulator"},
+            {"op":"node","id":"audio","fx":"gain"},
+            {"op":"connect","id":"send","from":{"kind":"node","id":"lfo"},"to":{"kind":"bus","id":"mod"}},
+            {"op":"connect","id":"out","from":{"kind":"node","id":"audio"},"to":{"kind":"master"}},
+            {"op":"map","id":"audio","param":"amount","source":{"kind":"bus","id":"mod"}}
+        ]})),
+        json_op(json!({"op":"note","at":0,"target":"held","to":"audio","dur":"1sec"}))
+    ]).unwrap();
+    let audio = session.process(512);
+    for channel in audio {
+        assert!(
+            channel[256..]
+                .iter()
+                .all(|sample| (*sample - 0.5).abs() < 0.00001)
+        );
+    }
+    assert!(session.send_events(1, vec![json_op(json!({"op":"routing","at":512,"edits":[{"op":"fx","name":"bad","output_channels":0,"source":"() { out = 0 }"}]}))]).is_err());
+}
+
+#[test]
+fn a_native_fx_reset_restarts_dsp_without_releasing_voices_or_changing_parameters() {
+    use serde_json::json;
+    let mut session = Session::new(RATE, Layout::Stereo).without_limiter();
+    session.send_events(1, vec![
+        json_op(json!({"op":"define","at":0,"source":"instr held() { tail = 0ms\n [0.2, 0.2].to_layout(stereo) }"})),
+        json_op(json!({"op":"routing","at":0,"edits":[
+            {"op":"fx","name":"moving","source":"(amount: num = 0.1) { out = it + osc(sine, 100hz) * amount }"},
+            {"op":"node","id":"audio","fx":"moving","args":{"amount":0.2}},
+            {"op":"connect","id":"out","from":{"kind":"node","id":"audio"},"to":{"kind":"master"}}
+        ]})),
+        json_op(json!({"op":"note","at":0,"target":"held","to":"audio","dur":"1sec"})),
+        json_op(json!({"op":"routing","at":512,"edits":[{"op":"reset","id":"audio"}]}))
+    ]).unwrap();
+    let audio = session.process(768);
+    for channel in audio {
+        assert_eq!(&channel[..256], &channel[512..768]);
+    }
 }

@@ -333,7 +333,10 @@ pub(crate) fn has_state(def: &FnDef, fns: &std::collections::HashMap<String, FnD
                 // a control scope owns the state inside it
                 return false;
             }
-            if name.name == "prev" {
+            if matches!(
+                name.name.as_str(),
+                "prev" | "dot" | "fir" | "taps" | "matvec" | "frames" | "fft" | "ifft"
+            ) {
                 return true;
             }
             if let Some(def) = fns.get(&name.name)
@@ -350,6 +353,94 @@ pub(crate) fn has_state(def: &FnDef, fns: &std::collections::HashMap<String, FnD
         found
     }
     visit(&def.body, fns, &mut vec![def.name.name.clone()])
+}
+
+/// Words that turn a number into a quantity, or take it away: `440.hz`, `2.bars`, `x.num`.
+pub(crate) const UNIT_WORDS: [&str; 14] = [
+    "num", "hz", "khz", "db", "sec", "ms", "beat", "beats", "bar", "bars", "bpm", "deg", "st", "ct",
+];
+
+/// Calls that are not opcodes but are built into the compiler.
+const BUILTIN_CALLS: &[&str] = &[
+    // arrays and signals
+    "map",
+    "sum",
+    "len",
+    "channels",
+    "indices",
+    "at",
+    "phase",
+    "step",
+    "active",
+    "normalize",
+    "reverse",
+    "rotate",
+    "resample",
+    "concat",
+    "integrate",
+    "mix",
+    "record",
+    "data",
+    // numbers
+    "min",
+    "max",
+    "pow",
+    "mod",
+    "atan2",
+    "clamp",
+    "hold",
+    "smooth",
+    "init",
+    "control",
+    "late",
+    "prev",
+    "range",
+    "zeros",
+    // vectors and frames
+    "dot",
+    "fir",
+    "taps",
+    "matvec",
+    "frames",
+    "fft",
+    "ifft",
+    // tables
+    "harmonics",
+    "partials",
+    "cosines",
+    "curve",
+    "steps",
+    "poly",
+    "ramp",
+    "cheby",
+    "window",
+    "random",
+    "file",
+    "bank",
+    // scopes and taps
+    "reset_on",
+    "spawn",
+    "oversample",
+    "after",
+    "report",
+    "osc_out",
+    "input",
+];
+
+/// Why `name` can't be the name of a function: it is a unit word or something built in.
+pub(crate) fn reserved_function_name(
+    name: &str,
+    registry: &crate::opcodes::Registry,
+) -> Option<String> {
+    if UNIT_WORDS.contains(&name) {
+        return Some(format!(
+            "`{name}` is a unit, so it can't be the name of a function"
+        ));
+    }
+    (registry.find(name).is_some()
+        || crate::opcodes::math_fn(name).is_some()
+        || BUILTIN_CALLS.contains(&name))
+    .then(|| format!("`{name}` is a built-in function, so it can't be defined again"))
 }
 
 /// Anonymous functions use the same call machinery and state ownership as named functions.

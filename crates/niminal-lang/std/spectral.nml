@@ -1,0 +1,44 @@
+// Spectral effects written with `frames`: `use std/spectral`. Each is `size` samples late.
+
+/// Keep only the part of the spectrum from `lo` to `hi`, as fractions of the way to half the sample rate.
+fn band_keep(x, lo: init 0..1 = 0, hi: init 0..1 = 0.25, size: const int = 1024) {
+  bins = size / 2 + 1
+  keep = (0..<bins).map((it >= lo * (bins - 1)) * (it <= hi * (bins - 1)))
+  x.frames(size, fn(w) {
+    s = fft(w)
+    ifft(s[0] * keep, s[1] * keep)
+  })
+}
+
+/// Keep every magnitude but make every phase zero: a robotic, pitched buzz at the rate of the frames.
+fn robot(x, size: const int = 1024) {
+  x.frames(size, fn(w) {
+    s = fft(w)
+    mag = sqrt(s[0] * s[0] + s[1] * s[1])
+    ifft(mag, mag * 0)
+  })
+}
+
+/// Smear the spectrum over time: each frame is mixed with what came before. `amount` near 1 is a long
+/// wash.
+fn blur(x, amount: init 0..1 = 0.9, size: const int = 1024) {
+  x.frames(size, fn(w) {
+    state held = zeros(size / 2 + 1)
+    s = fft(w)
+    mag = sqrt(s[0] * s[0] + s[1] * s[1])
+    phase = atan2(s[1], s[0])
+    held = held * amount + mag * (1 - amount)
+    ifft(held * cos(phase), held * sin(phase))
+  })
+}
+
+/// Silence the bins that are quieter than `threshold` (of the loudest possible), keeping the rest: a
+/// spectral noise gate.
+fn denoise(x, threshold: init 0..1 = 0.01, size: const int = 1024) {
+  x.frames(size, fn(w) {
+    s = fft(w)
+    mag = sqrt(s[0] * s[0] + s[1] * s[1])
+    open = mag > threshold * size / 4
+    ifft(s[0] * open, s[1] * open)
+  })
+}
