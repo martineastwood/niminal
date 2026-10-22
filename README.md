@@ -65,6 +65,10 @@ The [VS Code / Cursor extension](editors/vscode/) adds syntax highlighting, diag
 
 The language server (`nimlive lsp`) works without a server for hover, completion, and errors.
 
+## Tracker prototype
+
+[`tracker/`](tracker/) is an independent Tauri desktop app with a keyboard-driven pattern grid and a CodeMirror instrument/effect editor using the niminal LSP. This first prototype covers editing and project save/load; audio playback is not wired up yet. See its [README](tracker/README.md) for development and build commands.
+
 ## What you get
 
 - **Live** — WebSocket server, REPL, `send`, and editor integration; quantize changes to musical time. `niminal server` is the audio server (the engine), with the live sequencer as one client of its event API, so other programs can play through it too. Clients own tempo, meter and all musical scheduling.

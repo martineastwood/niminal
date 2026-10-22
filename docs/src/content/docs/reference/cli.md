@@ -22,6 +22,7 @@ Run `niminal <command> --help` or `nimlive <command> --help` for every flag.
 | `nimlive live [FILE]` | Separate live sequencer client: clips, scenes, quantized edits, file watch, `--midi`, `--osc-port`. Connects to `--engine-port` (7401); live-control API on `--port` (7400). |
 | `nimlive repl` | REPL connected to a running server (`--port`, `--quantize`, `--token`). |
 | `nimlive send` | One-shot eval to the server (code argument, `--file`, or stdin). |
+| `nimlive explain FILE` | Compile a `.nml` file and list, for each instrument and node chain, the ops that run every sample and the ones that run once per block (see [control scopes](/reference/language/units-and-rates/#control-scopes)). |
 | `nimlive lsp` | Language server on stdio — see [Editor and LSP](/reference/editor/). |
 | `niminal devices` | List the sound cards with the ids `--out-device` and `--in-device` take. |
 | `niminal docs` | Emit built-in opcode reference as Markdown (used when building the docs site). |

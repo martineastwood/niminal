@@ -17,6 +17,8 @@ pub const PITCH_PARAM: &str = "freq";
 #[derive(Clone)]
 pub struct Instrument {
     pub taps: Vec<OscTap>,
+    /// How often each named value in the body changes, for the editor.
+    pub rate_hints: Vec<RateHint>,
     pub name: String,
     pub graph: Arc<Graph>,
     /// In graph parameter order.
@@ -45,6 +47,15 @@ pub struct Instrument {
     pub pitch: String,
     /// `midi_out`: notes are sent to external gear instead of sounding here.
     pub midi: Option<MidiTarget>,
+}
+
+/// How often a named value in an instrument's body changes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RateHint {
+    /// The name where it is bound.
+    pub span: crate::Span,
+    /// `init`, `control` or `audio`.
+    pub rate: &'static str,
 }
 
 /// Where a `midi_out` instrument sends its notes.
@@ -520,6 +531,7 @@ impl Instrument {
     pub(crate) fn new(name: String, graph: Arc<Graph>, params: Vec<Param>) -> Self {
         Self {
             taps: Vec::new(),
+            rate_hints: Vec::new(),
             name,
             graph,
             params,

@@ -119,6 +119,21 @@ impl ProcessCtx {
     }
 }
 
+/// What a kernel (a `fn` or scope with state) does in each of its sections, for `niminal explain`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct KernelStats {
+    /// Instructions run once, at note start.
+    pub init: usize,
+    /// Instructions run once per block.
+    pub block: usize,
+    /// Instructions run every sample.
+    pub sample: usize,
+    /// The built-in opcodes it calls, and whether each runs once per block.
+    pub natives: Vec<(String, bool)>,
+    /// The whole kernel is a `control { ... }` scope: its "sample" section runs once per block.
+    pub control_scope: bool,
+}
+
 /// A unit generator. Built-in opcodes, niminal-defined opcodes and plugins all
 /// implement this trait, so they look identical to the graph.
 ///
@@ -238,6 +253,11 @@ pub trait Opcode: Send + Sync + std::any::Any {
     fn latency(&self) -> usize {
         0
     }
+
+    /// For a compiled kernel, what runs in each section.
+    fn kernel_stats(&self) -> Option<KernelStats> {
+        None
+    }
 }
 
 /// Lets a boxed opcode be added to a graph like any other.
@@ -344,5 +364,9 @@ impl Opcode for Box<dyn Opcode> {
 
     fn latency(&self) -> usize {
         (**self).latency()
+    }
+
+    fn kernel_stats(&self) -> Option<KernelStats> {
+        (**self).kernel_stats()
     }
 }

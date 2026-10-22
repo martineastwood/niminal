@@ -28,6 +28,8 @@ struct Document {
     /// The names from the last version of the text that parsed, so completion
     /// and hover keep working while a statement is half typed.
     symbols: Vec<Symbol>,
+    /// Where each named value in an instrument body ends, and how often it changes.
+    rate_hints: Vec<(usize, &'static str)>,
 }
 
 #[derive(Default)]
@@ -57,6 +59,7 @@ impl Server {
                     "textDocumentSync": 2,
                     "completionProvider": { "triggerCharacters": ["."] },
                     "hoverProvider": true,
+                    "inlayHintProvider": true,
                     "definitionProvider": true,
                     "documentSymbolProvider": true,
                     "documentFormattingProvider": true,
@@ -126,6 +129,7 @@ impl Server {
             }
             "textDocument/completion" => Some(self.completion(params)),
             "textDocument/hover" => Some(self.hover(params)),
+            "textDocument/inlayHint" => Some(self.inlay_hints(params)),
             "textDocument/definition" => Some(self.definition(params)),
             "textDocument/documentSymbol" => Some(self.document_symbols(params)),
             "textDocument/prepareRename" => Some(self.prepare_rename(params)),
@@ -184,9 +188,10 @@ impl Server {
             })
             .or(previous)
             .unwrap_or_default();
+        let (diagnostics, rate_hints) = diagnostics(uri, text, expanded);
         out.push(notification(
             "textDocument/publishDiagnostics",
-            json!({ "uri": uri, "diagnostics": diagnostics(uri, text, expanded) }),
+            json!({ "uri": uri, "diagnostics": diagnostics }),
         ));
         self.documents.insert(
             uri.to_string(),
@@ -194,6 +199,7 @@ impl Server {
                 text: text.to_string(),
                 imports,
                 symbols,
+                rate_hints,
             },
         );
     }
@@ -229,6 +235,31 @@ impl Server {
                 .flat_map(|i| i.symbols.clone()),
         );
         json!({ "isIncomplete": false, "items": complete::items(before, &symbols, &docs) })
+    }
+
+    /// `· control` after each value in an instrument body that changes less than every sample (and
+    /// `· audio` after those that change every sample), so a `control { ... }` scope can be placed
+    /// where it saves work.
+    fn inlay_hints(&self, params: &Value) -> Value {
+        let Some(doc) = params["textDocument"]["uri"]
+            .as_str()
+            .and_then(|uri| self.documents.get(uri))
+        else {
+            return json!([]);
+        };
+        let hints: Vec<Value> = doc
+            .rate_hints
+            .iter()
+            .map(|(end, rate)| {
+                json!({
+                    "position": text::position(&doc.text, *end),
+                    "label": format!("· {rate}"),
+                    "paddingLeft": true,
+                    "tooltip": "how often this value changes: init (note start), control (once per block) or audio (every sample)",
+                })
+            })
+            .collect();
+        json!(hints)
     }
 
     fn hover(&self, params: &Value) -> Value {
@@ -407,7 +438,7 @@ fn diagnostics(
     uri: &str,
     text: &str,
     expanded: Result<niminal_lang::Expanded, niminal_lang::Diagnostic>,
-) -> Vec<Value> {
+) -> (Vec<Value>, Vec<(usize, &'static str)>) {
     let options = CompileOptions {
         default_layout: Layout::Mono,
         samples: Samples::new(text::directory_of(uri)),
@@ -415,28 +446,39 @@ fn diagnostics(
     };
     let expanded = match expanded {
         Ok(e) => e,
-        Err(d) => return vec![diagnostic(text, &d, 1)],
+        Err(d) => return (vec![diagnostic(text, &d, 1)], Vec::new()),
     };
     // a compiler bug must not take the editor's language support down with it
     let result = std::panic::catch_unwind(|| compile_with(&expanded.text, &options));
+    let mut hints = Vec::new();
     let errors = match result {
-        Ok(Ok(_)) => Vec::new(),
+        Ok(Ok(program)) => {
+            hints = program
+                .instruments
+                .iter()
+                .flat_map(|i| &i.rate_hints)
+                .filter(|h| h.span.end <= expanded.root_len)
+                .map(|h| (h.span.end, h.rate))
+                .collect();
+            Vec::new()
+        }
         Ok(Err(errors)) => errors
             .into_iter()
             .map(|d| expanded.locate(d))
             .collect::<Vec<_>>(),
-        Err(_) => return Vec::new(),
+        Err(_) => return (Vec::new(), Vec::new()),
     };
     // a warning in a module is the module's to show, not this file's
     let warnings = niminal_compose::warnings(&expanded.text)
         .into_iter()
         .filter(|d| d.span.end <= expanded.root_len)
         .map(|d| expanded.locate(d));
-    errors
+    let diagnostics = errors
         .iter()
         .map(|d| diagnostic(text, d, 1))
         .chain(warnings.map(|d| diagnostic(text, &d, 2)))
-        .collect()
+        .collect();
+    (diagnostics, hints)
 }
 
 fn diagnostic(text: &str, d: &niminal_lang::Diagnostic, severity: u8) -> Value {
@@ -603,6 +645,28 @@ mod tests {
                 (2, "clip `fainter` has no instrument, so it plays nothing"),
             ]
         );
+    }
+
+    #[test]
+    fn inlay_hints_show_how_often_values_change() {
+        let mut server = Server::new();
+        open(
+            &mut server,
+            "instr a(freq: hz) {\n  slow = control { osc(sine, 2hz) }\n  fast = osc(sine, freq)\n  fast * slow\n}\n",
+        );
+        let hints = request(
+            &mut server,
+            1,
+            "textDocument/inlayHint",
+            json!({ "textDocument": { "uri": URI } }),
+        );
+        let labels: Vec<_> = hints
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| (h["position"]["line"].as_u64().unwrap(), h["label"].as_str().unwrap()))
+            .collect();
+        assert_eq!(labels, [(1, "· control"), (2, "· audio")]);
     }
 
     #[test]

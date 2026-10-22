@@ -733,6 +733,14 @@ impl Graph {
     }
 
     /// Number of DSP nodes that contribute audio or observable effects.
+    /// The name of each node, in execution order, and what its kernel does if it has one.
+    pub fn describe(&self) -> Vec<(String, Option<crate::KernelStats>)> {
+        self.nodes
+            .iter()
+            .map(|n| (n.op.name().to_string(), n.op.kernel_stats()))
+            .collect()
+    }
+
     pub fn node_count(&self) -> usize {
         self.nodes.len()
     }

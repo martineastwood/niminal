@@ -1,0 +1,4 @@
+/// Gently soften the incoming signal.
+fx soften {
+  out = it.lpf(cutoff: 2400hz)
+}

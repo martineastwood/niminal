@@ -88,6 +88,9 @@ pub use spawn::Spawn;
 mod oversample;
 pub use oversample::Oversample;
 
+mod control_rate;
+pub use control_rate::{ControlRate, Ramp};
+
 mod latency;
 pub use latency::SampleDelay;
 mod kernel_latency;

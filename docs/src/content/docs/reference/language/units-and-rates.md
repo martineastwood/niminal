@@ -43,6 +43,34 @@ To read a value more slowly, use a method:
 
 Parameters say which rate they need: `freq: init hz`, `cutoff: control hz`, `size: const int`. See [Functions](/reference/language/functions/).
 
+## Control scopes
+
+Rates are worked out for arithmetic, but anything with state (an oscillator, an envelope, a filter, `state`) runs every sample unless you say otherwise. **`control { ... }`** runs its body once per block instead:
+
+```nml
+instr acid(freq: hz) {
+  sweep = control { osc(sine, 0.3hz).range(300hz..3khz) }
+  osc(saw, freq).lpf(cutoff: sweep.smooth, res: 0.3)
+}
+```
+
+- **Time is a block's.** Inside the scope `sample_rate` is the control rate (the sample rate divided by `--block-size`), so `osc(sine, 0.3hz)` is still 0.3hz and `env[...]` times are still seconds. A scope's own time steps are one block, so keep it to slow movement: the highest usable frequency is half the control rate (375hz at 64 samples and 48khz), and an envelope segment shorter than a block is a single step.
+- **Inputs are read at the start of each block.** A parameter, `ctl` or other value from outside the scope is seen once per block, as with `.control`. In a `fn` with state, only parameters can be read this way and anything else that changes every sample is an error.
+- **The result has the `control` rate** and is held through the block. A bare held value steps once per block; where that is audible (a cutoff sweep, a gain) smooth it:
+
+| Written | Result |
+| --- | --- |
+| `x` | Held: a step each block. The cheapest, and right for slow movement |
+| `x.hold` | The same, checked: an error unless `x` changes at most once per block |
+| `x.smooth` | A linear ramp from the previous block's value to this block's, in instrument bodies |
+| `x.smooth(5ms)` | A one-pole lag at the sample rate. Works in a `fn` with state too |
+
+- **Scopes can appear any number of times** in an instrument, `fn` or node, each with its own state. They can't be inside an `if` or `match` branch of a `fn` with state; put the branch inside the scope.
+- **`control fn`** makes a whole function a control scope: `control fn lfo(rate: hz) { osc(sine, rate) }` is `fn lfo(rate: hz) { control { osc(sine, rate) } }`. Every call runs once per block, with state of its own. Its body has one clock, so it can use `state`, branches and any parameters. It has one result; `.smooth` the result at the call site where a step would be heard.
+- The sound depends on `--block-size`, because a step lasts a block: the same file at 32 and 256 samples has different step sizes (the frequency of a scope's LFO and its envelope times are the same).
+
+Use `nimlive explain FILE` to see what an instrument runs every sample and what runs once per block, and the editor's rate hints to see the rate of each value in an instrument body. See [Editor and LSP](/reference/editor/).
+
 ## Tuning
 
 `ct` is a cent, a hundredth of a semitone: `440hz + 50ct`. Note names are in 12-tone equal temperament with `a4` at 440hz unless the project's `config` says otherwise:

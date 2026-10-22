@@ -1,0 +1,25 @@
+// Slow modulation in a `control { ... }` scope runs once per block instead of every sample.
+// `nimlive explain examples/control_rate.nml` shows what moved.
+
+instr acid(freq: hz = 110hz) {
+  // a 0.3hz sweep: one value per block, ramped so the cutoff doesn't step
+  sweep = control { osc(sine, 0.3hz).range(300hz..3khz) }
+  amp = env[0 2ms 1 300ms.exp 0]
+  osc(saw, freq).lpf(cutoff: sweep.smooth, res: 0.3) * amp
+}
+
+// a whole `fn` can run once per block: `control fn`
+control fn lfo(rate: hz) { osc(sine, rate) }
+
+fn wob(x, rate: hz = 4hz, depth: 0..1 = 0.5) {
+  x * (1 + lfo(rate) * depth).smooth(5ms)
+}
+
+instr pad(freq: hz = 220hz) {
+  drift = control { osc(sine, 0.2hz) * 0.004 }
+  osc(saw, freq * (1 + drift)).wob(rate: 5hz).lpf(cutoff: 2khz) * 0.3
+}
+
+tempo 100bpm
+acid(freq: a2) for 2beats
+at 2beats pad(freq: a3) for 2beats

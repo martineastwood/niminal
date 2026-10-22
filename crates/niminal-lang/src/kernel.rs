@@ -1172,6 +1172,7 @@ impl Kb<'_> {
                 | "reset_on"
                 | "spawn"
                 | "oversample"
+                | "control"
         ) {
             return Err(Diagnostic::new(
                 format!("`{}` is a reserved word", name.name),
@@ -2412,10 +2413,10 @@ impl Kb<'_> {
     fn dsp_scope(&mut self, name: &str, args: &[Arg], span: Span) -> Res<KVal> {
         let usage = || {
             Diagnostic::new(
-                if name == "spawn" {
-                    "write `spawn(trigger, dur: 100ms, max: 8) { ... }`"
-                } else {
-                    "write `oversample(4) { ... }`"
+                match name {
+                    "spawn" => "write `spawn(trigger, dur: 100ms, max: 8) { ... }`",
+                    "control" => "write `control { ... }`",
+                    _ => "write `oversample(4) { ... }`",
                 },
                 span,
             )
@@ -2429,16 +2430,32 @@ impl Kb<'_> {
         if !params.is_empty() {
             return Err(usage());
         }
-        let Some((first, options)) = options.split_first() else {
-            return Err(usage());
+        let control = name == "control";
+        if control && self.guard.is_some() {
+            return Err(Diagnostic::new(
+                "a `control` scope can't be inside an `if` or `match` branch",
+                span,
+            )
+            .with_help("put the branch inside the scope instead"));
+        }
+        let (first, options) = if control {
+            if !options.is_empty() {
+                return Err(usage());
+            }
+            (None, options)
+        } else {
+            let Some((first, options)) = options.split_first() else {
+                return Err(usage());
+            };
+            if first.name.is_some() {
+                return Err(usage());
+            }
+            let first = self.num(&first.value)?;
+            if first.unit != Unit::Num {
+                return Err(usage());
+            }
+            (Some(first), options)
         };
-        if first.name.is_some() {
-            return Err(usage());
-        }
-        let first = self.num(&first.value)?;
-        if first.unit != Unit::Num {
-            return Err(usage());
-        }
         let mut duration = None;
         let mut max = None;
         for option in options {
@@ -2470,7 +2487,9 @@ impl Kb<'_> {
             }
         }
         let factor = if name == "oversample" {
-            self.konst(&first)
+            first
+                .as_ref()
+                .and_then(|first| self.konst(first))
                 .filter(|f| [2.0, 4.0, 8.0].contains(f))
                 .ok_or_else(usage)? as usize
         } else {
@@ -2491,6 +2510,11 @@ impl Kb<'_> {
         let mut wires = Vec::new();
         let mut kargs = Vec::new();
         for (n, v) in captures {
+            let v = if control {
+                self.at_block_start(&n, v, span)?
+            } else {
+                v
+            };
             def.params.push(ParamDef {
                 name: Ident { name: n, span },
                 rate: None,
@@ -2511,10 +2535,12 @@ impl Kb<'_> {
         let custom = Box::new(niminal_engine::ops::Custom::new(Arc::new(kernel)));
         let op: Box<dyn niminal_engine::Opcode> = if name == "spawn" {
             wires.extend([
-                NativeInput::Reg(first.reg),
+                NativeInput::Reg(first.expect("spawn has a trigger").reg),
                 NativeInput::Reg(duration.unwrap().reg),
             ]);
             Box::new(niminal_engine::ops::Spawn::new(custom, max.unwrap_or(8)))
+        } else if control {
+            Box::new(niminal_engine::ops::ControlRate::new(custom))
         } else {
             Box::new(niminal_engine::ops::Oversample::new(custom, factor))
         };
@@ -2523,34 +2549,83 @@ impl Kb<'_> {
         self.natives.push(Native { op, inputs: wires });
         let first = self.registers;
         self.registers += outputs;
+        let rate = if control { Rate::Control } else { Rate::Audio };
         self.push(
-            Rate::Audio,
+            rate,
             Instr::Native {
                 dst: first,
                 index,
                 guard: self.guard,
             },
         );
-        fn result(shape: KernelResult, first: usize) -> KVal {
+        fn result(shape: KernelResult, first: usize, rate: Rate) -> KVal {
             match shape {
                 KernelResult::Scalar { index, unit } => KVal::Num(Value {
                     reg: first + index,
                     unit,
-                    rate: Rate::Audio,
+                    rate,
                     port: None,
                 }),
-                KernelResult::Array(values) => {
-                    KVal::Array(values.into_iter().map(|v| result(v, first)).collect())
-                }
+                KernelResult::Array(values) => KVal::Array(
+                    values
+                        .into_iter()
+                        .map(|v| result(v, first, rate))
+                        .collect(),
+                ),
                 KernelResult::Record(values) => KVal::Record(
                     values
                         .into_iter()
-                        .map(|(n, v)| (n, result(v, first)))
+                        .map(|(n, v)| (n, result(v, first, rate)))
                         .collect(),
                 ),
             }
         }
-        Ok(result(shape, first))
+        Ok(result(shape, first, rate))
+    }
+
+    /// A value a `control` scope captures, as it is at the start of the block: a parameter is read
+    /// there, and anything that changes every sample can't be.
+    fn at_block_start(&mut self, name: &str, v: KVal, span: Span) -> Res<KVal> {
+        match v {
+            KVal::Num(x) => self.read_at_block_start(name, x, span).map(KVal::Num),
+            KVal::Buffer { selector, choices } => Ok(KVal::Buffer {
+                selector: self.read_at_block_start(name, selector, span)?,
+                choices,
+            }),
+            KVal::Function { def, captures } => Ok(KVal::Function {
+                def,
+                captures: captures
+                    .into_iter()
+                    .map(|(n, c)| Ok((n, self.at_block_start(name, c, span)?)))
+                    .collect::<Res<_>>()?,
+            }),
+            KVal::Record(fields) => Ok(KVal::Record(
+                fields
+                    .into_iter()
+                    .map(|(n, f)| Ok((n, self.at_block_start(name, f, span)?)))
+                    .collect::<Res<_>>()?,
+            )),
+            other if Self::is_array(&other) => {
+                let items = self.array_elements(other, span)?;
+                Ok(KVal::Array(
+                    items
+                        .into_iter()
+                        .map(|v| self.at_block_start(name, v, span))
+                        .collect::<Res<_>>()?,
+                ))
+            }
+            other => Ok(other),
+        }
+    }
+
+    fn read_at_block_start(&mut self, name: &str, v: Value, span: Span) -> Res<Value> {
+        self.at_control(v, span).map_err(|_| {
+            Diagnostic::new(
+                format!("`{name}` changes every sample, so a `control` scope can't read it"),
+                span,
+            )
+            .with_help("pass a parameter in, or compute the value inside the scope")
+        })
     }
 
     fn reset_scope(&mut self, args: &[Arg], span: Span) -> Res<KVal> {
@@ -2600,7 +2675,10 @@ impl Kb<'_> {
 
     fn call(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<KVal> {
         let n = name.name.as_str();
-        if matches!(n, "spawn" | "oversample") {
+        if matches!(n, "spawn" | "oversample")
+            || (n == "control"
+                && matches!(args, [a] if !a.receiver && matches!(a.value.kind, ExprKind::Lambda { .. })))
+        {
             return self.dsp_scope(n, args, span);
         }
         if n == "reset_on" {
@@ -2767,6 +2845,41 @@ impl Kb<'_> {
             "min" | "max" | "pow" | "mod" => return self.combine(name, args),
             "clamp" => return self.clamp(name, args),
             "range" => return self.range(name, args, span),
+            "hold" if args.len() == 1 && args[0].receiver => {
+                let value = self.value(&args[0].value)?;
+                return self.map_value(value, span, |_, v| {
+                    if v.rate > Rate::Control {
+                        return Err(Diagnostic::new(
+                            "`hold` is for values that change at most once per block",
+                            span,
+                        )
+                        .with_help("compute it in a `control { ... }` scope, or read it with `.control`"));
+                    }
+                    Ok(v)
+                });
+            }
+            "smooth" if args.len() == 1 && args[0].receiver => {
+                return Err(Diagnostic::new(
+                    "a linear `.smooth` is for instrument bodies",
+                    span,
+                )
+                .with_help("in a `fn` with state, give a time: `.smooth(5ms)`"));
+            }
+            "smooth" if args.len() == 2 && args[0].receiver => {
+                // `x.smooth(5ms)` is a one-pole lag
+                let mut lag = args.to_vec();
+                if lag[1].name.is_none() {
+                    lag[1].name = Some(Ident {
+                        name: "time".into(),
+                        span: name.span,
+                    });
+                }
+                let lag_name = Ident {
+                    name: "lag".into(),
+                    span: name.span,
+                };
+                return self.call(&lag_name, &lag, span);
+            }
             "init" | "control" if args.len() == 1 && args[0].receiver => {
                 let value = self.value(&args[0].value)?;
                 return self.map_value(value, span, |this, v| {

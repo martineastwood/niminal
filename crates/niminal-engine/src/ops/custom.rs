@@ -651,6 +651,28 @@ impl Opcode for Custom {
         self.kernel.latency
     }
 
+    fn kernel_stats(&self) -> Option<crate::KernelStats> {
+        let k = &self.kernel;
+        let mut natives = Vec::new();
+        let mut visit = |code: &[Instr], per_block: bool| {
+            for instr in code {
+                if let Instr::Native { index, .. } = instr {
+                    natives.push((k.natives[*index].op.name().to_string(), per_block));
+                }
+            }
+        };
+        visit(&k.init, true);
+        visit(&k.block, true);
+        visit(&k.code, false);
+        Some(crate::KernelStats {
+            init: k.init.len(),
+            block: k.block.len(),
+            sample: k.code.len(),
+            natives,
+            control_scope: false,
+        })
+    }
+
     fn name(&self) -> &str {
         &self.kernel.name
     }

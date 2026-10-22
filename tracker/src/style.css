@@ -1,0 +1,47 @@
+:root { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #d4dde7; background: #11161c; font-size: 13px; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input { font: inherit; }
+button { color: #c7d2de; background: #26313e; border: 1px solid #3a4859; border-radius: 4px; padding: 7px 12px; cursor: pointer; }
+button:hover { background: #344356; }
+button:focus-visible, input:focus-visible { outline: 2px solid #e9b66e; outline-offset: 2px; }
+#app { height: 100vh; display: flex; flex-direction: column; }
+header { height: 60px; display: flex; align-items: center; gap: 18px; padding: 0 20px; background: #1b232d; border-bottom: 1px solid #344151; flex-shrink: 0; }
+.brand { font-size: 22px; letter-spacing: -1px; font-weight: 650; }
+.brand span { color: #91a2b6; font-weight: 400; }
+.badge { color: #e9b66e; font-size: 10px; letter-spacing: 1.3px; font-weight: 600; }
+.project-actions { margin-left: auto; display: flex; gap: 8px; }
+main { display: flex; flex: 1; min-height: 0; }
+aside { width: 215px; flex-shrink: 0; padding: 20px 12px; background: #18202a; border-right: 1px solid #344151; overflow: auto; }
+.section-title { color: #8e9eb0; font-size: 10px; letter-spacing: 1.5px; padding: 0 8px 16px; }
+.definition { display: flex; align-items: center; width: 100%; text-align: left; margin-bottom: 5px; border-color: transparent; background: transparent; padding: 12px 8px; white-space: pre; }
+.definition small { margin-left: auto; color: #8297ad; font-size: 10px; }
+.definition.selected { background: #303d4d; border-color: #55667a; color: #f0c990; }
+.add-buttons { display: flex; gap: 6px; margin-top: 16px; }
+.add-buttons button { padding: 6px; font-size: 11px; }
+.aside-help { color: #7f91a5; font-size: 11px; line-height: 1.8; padding: 10px 8px; }
+.workspace { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pattern-toolbar, .editor-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 18px; background: #1d2631; gap: 12px; flex-shrink: 0; }
+.pattern-toolbar > div, .editor-toolbar > div { display: flex; align-items: center; gap: 16px; }
+.muted { color: #91a2b6; font-size: 11px; }
+input { background: #141b23; color: #d4dde7; border: 1px solid #3b4a5c; border-radius: 3px; padding: 6px 8px; }
+#octave { width: 48px; margin-left: 6px; }
+#grid { flex: 1; min-height: 100px; overflow: auto; outline: none; font-family: 'SFMono-Regular', Consolas, monospace; background: #131a22; }
+.grid-row { display: grid; grid-template-columns: 52px repeat(4, minmax(90px, 1fr)); height: 25px; }
+.grid-header { position: sticky; top: 0; height: 33px; background: #263240; z-index: 1; color: #a4b5c7; font-size: 10px; align-items: center; }
+.grid-header span { padding-left: 16px; }
+.row-number { color: #5f7389; text-align: center; padding-top: 4px; border-right: 1px solid #344151; }
+.note { padding: 3px 18px; color: #43546a; border-right: 1px solid #293645; cursor: text; }
+.beat { background: #1d2733; }
+.filled { color: #d0a5e9; }
+.cursor { background: #38485a; box-shadow: inset 0 0 0 1px #6f8298; }
+#grid:focus .cursor { background: #594a36; box-shadow: inset 0 0 0 1px #e9b66e; color: #ffe0af; }
+.grid-help, .editor-help { padding: 8px 18px; color: #8d9eb1; font-size: 10px; background: #1a232d; flex-shrink: 0; }
+.instrument-editor { height: 43%; min-height: 240px; display: flex; flex-direction: column; border-top: 1px solid #435266; resize: vertical; overflow: hidden; }
+.editor-toolbar { padding: 9px 18px; }
+#definition-name { width: 220px; background: transparent; border-color: transparent; font-weight: 600; }
+#definition-name:hover, #definition-name:focus { border-color: #53677d; }
+#code { flex: 1; min-height: 0; }
+footer { display: flex; justify-content: space-between; gap: 20px; padding: 7px 18px; background: #263341; font-size: 10px; color: #b2c1d1; flex-shrink: 0; }
+.editor-expanded .pattern-toolbar, .editor-expanded #grid, .editor-expanded .grid-help { display: none; }
+.editor-expanded .instrument-editor { height: 100%; resize: none; }

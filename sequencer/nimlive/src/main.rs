@@ -101,6 +101,11 @@ enum Command {
         #[arg(long)]
         token: Option<String>,
     },
+    /// Show what each instrument runs every sample and what runs once per block.
+    Explain {
+        /// The `.nml` file to compile.
+        file: PathBuf,
+    },
     /// Run the language server (LSP over stdin and stdout) for an editor.
     Lsp,
     /// Type code at a running live sequencer, one statement at a time.
@@ -115,11 +120,33 @@ enum Command {
     },
 }
 
+fn run_explain(file: &Path) -> Result<(), String> {
+    let source = read(file)?;
+    let name = file.display().to_string();
+    let dir = file.parent().unwrap_or(Path::new("."));
+    let options = niminal_lang::CompileOptions {
+        samples: niminal_lang::Samples::new(dir),
+        ..Default::default()
+    };
+    let expanded =
+        niminal_compose::expand(&source, dir).map_err(|d| d.render(&name, &source))?;
+    let composition = niminal_compose::compile_with(&expanded.text, &options).map_err(|errors| {
+        errors
+            .into_iter()
+            .map(|d| expanded.locate(d).render(&name, &source))
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
+    print!("{}", composition.program.explain());
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Render(args) => run_render(args),
         Command::Live(args) => run_live(args),
+        Command::Explain { file } => run_explain(&file),
         Command::Lsp => {
             if niminal_lsp::run(std::io::stdin().lock(), std::io::stdout().lock()) == 0 {
                 Ok(())

@@ -424,6 +424,45 @@ impl Parser {
                 span: start.to(end),
             };
             Ok(Item::Fx(decl))
+        } else if self.is_keyword("control") && matches!(self.peek_at(1), Tok::Ident(w) if w == "fn")
+        {
+            // `control fn f(..) { body }` is `fn f(..) { control { body } }`
+            let start = self.bump().span;
+            if !matches!(self.peek_at(1), Tok::Ident(_)) {
+                self.bump();
+                return Err(self.unexpected("a function name"));
+            }
+            let mut def = self.function()?;
+            if matches!(def.result, FnResult::Named(_)) {
+                return Err(Diagnostic::new(
+                    "a `control fn` has one result",
+                    def.name.span,
+                ));
+            }
+            let body_span = def.span;
+            let lambda = Expr {
+                kind: ExprKind::Lambda {
+                    params: Vec::new(),
+                    body: std::mem::take(&mut def.body),
+                },
+                span: body_span,
+            };
+            def.body = vec![Stmt::Expr(Expr {
+                kind: ExprKind::Call {
+                    name: Ident {
+                        name: "control".into(),
+                        span: start,
+                    },
+                    args: vec![Arg {
+                        name: None,
+                        receiver: false,
+                        value: lambda,
+                    }],
+                },
+                span: body_span,
+            })];
+            def.span = start.to(def.span);
+            Ok(Item::Fn(def))
         } else if self.is_keyword("fn") {
             if !matches!(self.peek_at(1), Tok::Ident(_)) {
                 self.bump();
@@ -1713,8 +1752,21 @@ impl Parser {
                 };
                 continue;
             }
+            if self.peek() == &Tok::LBrace && matches!(&e.kind, ExprKind::Name(n) if n == "control") {
+                // `control { ... }` takes no arguments, so it has no parentheses to make it a call
+                e = Expr {
+                    kind: ExprKind::Call {
+                        name: Ident {
+                            name: "control".into(),
+                            span: e.span,
+                        },
+                        args: Vec::new(),
+                    },
+                    span: e.span,
+                };
+            }
             if self.peek() == &Tok::LBrace
-                && matches!(&e.kind, ExprKind::Call { name, .. } if matches!(name.name.as_str(), "reset_on" | "spawn" | "oversample"))
+                && matches!(&e.kind, ExprKind::Call { name, .. } if matches!(name.name.as_str(), "reset_on" | "spawn" | "oversample" | "control"))
             {
                 let (body, end) = self.block()?;
                 let body_span = e.span.to(end);

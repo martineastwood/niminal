@@ -68,6 +68,8 @@ enum DspScope {
         duration: Sig,
     },
     Oversample(usize),
+    /// `control { ... }`: runs once per block.
+    Control,
 }
 
 const UNIT_NAMES: [&str; 13] = [
@@ -303,6 +305,7 @@ impl Names {
                 | "reset_on"
                 | "spawn"
                 | "oversample"
+                | "control"
         ) {
             return Err(Diagnostic::new(
                 format!("`{}` is a reserved word", name.name),
@@ -448,6 +451,8 @@ pub(crate) struct Lower<'a> {
     route: Route,
     /// In a node: the signals sent over OSC.
     taps: Vec<crate::program::OscTap>,
+    /// The rate of each value bound in the instrument's own body.
+    rate_hints: Vec<crate::program::RateHint>,
     /// The rate of each node result that is slower than audio.
     rates: HashMap<usize, Rate>,
     /// The rate of each graph parameter, by index.
@@ -823,6 +828,7 @@ pub(crate) fn compile_instr(
         instrument.chokes = chokes;
     }
     instrument.taps = lower.taps;
+    instrument.rate_hints = lower.rate_hints;
     instrument.arrays = arrays;
     instrument.resources = resources;
     instrument.resource_keys = resource_keys;
@@ -1420,6 +1426,7 @@ impl<'a> Lower<'a> {
             input_sigs: HashMap::new(),
             route: Route::Master,
             taps: Vec::new(),
+            rate_hints: Vec::new(),
             rates: HashMap::new(),
             param_rates: Vec::new(),
             fn_stack: Vec::new(),
@@ -1769,6 +1776,17 @@ impl<'a> Lower<'a> {
                 } else {
                     self.value(value)?
                 };
+                if !self.in_fn
+                    && let Datum::Sig(sig) = &v
+                {
+                    let rate = self.sig_rate(sig);
+                    if rate > Rate::Const {
+                        self.rate_hints.push(crate::program::RateHint {
+                            span: name.span,
+                            rate: rate.keyword(),
+                        });
+                    }
+                }
                 self.scope.insert(name.name.clone(), v);
                 Ok(())
             }
@@ -4466,6 +4484,24 @@ impl<'a> Lower<'a> {
         if let Some(sampler) = self.names.samplers.get(n) {
             return self.call_sampler(sampler, name, args);
         }
+        if n == "control"
+            && let [body] = args
+            && !body.receiver
+            && let ExprKind::Lambda { params, body } = &body.value.kind
+        {
+            if !params.is_empty() {
+                return Err(Diagnostic::new("a control body takes no arguments", span));
+            }
+            let (def, params, given) = self.scope_kernel(body, span);
+            return self.call_scoped_kernel(
+                &def,
+                &def.name,
+                &params,
+                given,
+                span,
+                Some(DspScope::Control),
+            );
+        }
         if n == "oversample" {
             let [factor, body] = args else {
                 return Err(Diagnostic::new("write `oversample(4) { ... }`", span));
@@ -4661,6 +4697,49 @@ impl<'a> Lower<'a> {
             }
             "min" | "max" | "pow" | "mod" => return self.combine(name, args),
             "clamp" => return self.clamp(name, args),
+            "hold" | "smooth" if args.len() == 1 && args[0].receiver => {
+                let value = self.value(&args[0].value)?;
+                let smooth = n == "smooth";
+                return self.map_value(value, span, move |this, v| {
+                    if this.sig_rate(&v) > Rate::Control {
+                        return Err(Diagnostic::new(
+                            format!("`{n}` is for values that change at most once per block"),
+                            span,
+                        )
+                        .with_help(
+                            "compute it in a `control { ... }` scope, or read it with `.control`",
+                        ));
+                    }
+                    if !smooth || v.konst.is_some() {
+                        return Ok(v);
+                    }
+                    let srcs: Array<Src> = v
+                        .srcs
+                        .iter()
+                        .map(|&x| {
+                            this.g
+                                .add(niminal_engine::ops::Ramp::default(), &[("x", x)])
+                                .expect("ramp ports")
+                        })
+                        .collect();
+                    Ok(Sig { srcs, ..v })
+                });
+            }
+            "smooth" if args.len() == 2 && args[0].receiver => {
+                // `x.smooth(5ms)` is a one-pole lag
+                let mut lag = args.to_vec();
+                if lag[1].name.is_none() {
+                    lag[1].name = Some(Ident {
+                        name: "time".into(),
+                        span: name.span,
+                    });
+                }
+                let lag_name = Ident {
+                    name: "lag".into(),
+                    span: name.span,
+                };
+                return self.call(&lag_name, &lag, span);
+            }
             "init" | "control" if args.len() == 1 && args[0].receiver => {
                 let value = self.value(&args[0].value)?;
                 let rate = if n == "init" {
@@ -5656,6 +5735,9 @@ impl Lower<'_> {
                         *factor,
                     ))
                 }
+                Some(DspScope::Control) => Box::new(niminal_engine::ops::ControlRate::new(
+                    Box::new(Custom::new(kernel.clone())),
+                )),
                 None => Box::new(Custom::new(kernel.clone())),
             };
             let results = self
@@ -5663,6 +5745,9 @@ impl Lower<'_> {
                 .add_outputs(op, &wired)
                 .map_err(|e| Diagnostic::new(e.to_string(), span))?;
             for (k, src) in results.into_iter().take(outputs).enumerate() {
+                if matches!(dsp_scope, Some(DspScope::Control)) {
+                    self.note_rate(src, Rate::Control);
+                }
                 per_output[k].push(src);
             }
         }

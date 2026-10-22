@@ -227,6 +227,13 @@ macro_rules! op_enum {
                     Op::Dynamic(v) => v.latency(),
                 }
             }
+            fn kernel_stats(&self) -> Option<crate::opcode::KernelStats> {
+                match self {
+                    $( Op::$IV(v) => v.kernel_stats(), )*
+                    $( Op::$BV(v) => v.kernel_stats(), )*
+                    Op::Dynamic(v) => v.kernel_stats(),
+                }
+            }
         }
     };
 }

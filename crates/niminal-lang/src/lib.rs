@@ -9,6 +9,7 @@ mod diag;
 mod dsp;
 pub use dsp::{dsp_value, validate_dsp};
 mod env_shortcut;
+mod explain;
 mod funcs;
 mod ide;
 mod kernel;
@@ -40,7 +41,7 @@ pub use lower::{GAIN_PARAM, unknown_unit};
 pub use modules::{Expanded, Import, Module, expand};
 pub use program::{
     ArgError, ControlDef, Instrument, MidiNote, MidiTarget, NodeInfo, NotePlan, OscTap,
-    PITCH_PARAM, Param, Program, engine_value, resolve_target,
+    PITCH_PARAM, Param, Program, RateHint, engine_value, resolve_target,
 };
 pub use sample::Samples;
 pub use unit::Unit;

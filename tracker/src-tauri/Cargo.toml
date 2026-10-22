@@ -1,0 +1,20 @@
+[package]
+name = "niminal-tracker"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+description = "A tracker and instrument editor for niminal"
+
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde_json = "1"
+rfd = "0.17"
+niminal-lsp = { path = "../../sequencer/lsp" }
+
+[profile.dev]
+debug = "line-tables-only"

@@ -326,7 +326,13 @@ pub(crate) fn has_state(def: &FnDef, fns: &std::collections::HashMap<String, FnD
         if blocks.into_iter().any(|b| visit(b, fns, seen)) {
             return true;
         }
-        if let ExprKind::Call { name, .. } = &e.kind {
+        if let ExprKind::Call { name, args } = &e.kind {
+            if name.name == "control"
+                && matches!(args.as_slice(), [a] if !a.receiver && matches!(a.value.kind, ExprKind::Lambda { .. }))
+            {
+                // a control scope owns the state inside it
+                return false;
+            }
             if name.name == "prev" {
                 return true;
             }

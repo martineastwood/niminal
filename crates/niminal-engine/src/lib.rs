@@ -30,7 +30,7 @@ pub use mixer::{
     Profile, Route, Stems, Transfer, VoiceId, execution_order,
 };
 pub use opcode::{
-    Clock, DEFAULT_BLOCK, MAX_BLOCK, MAX_INPUTS, MIN_BLOCK, Opcode, Port, ProcessCtx, TAIL_LEVEL,
+    Clock, DEFAULT_BLOCK, KernelStats, MAX_BLOCK, MAX_INPUTS, MIN_BLOCK, Opcode, Port, ProcessCtx, TAIL_LEVEL,
     block_size, blocks, set_block_size,
 };
 pub use table::{Buffer, Edge, Table};

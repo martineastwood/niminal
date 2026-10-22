@@ -18,6 +18,7 @@ The VS Code extension starts the same binary automatically (see settings below).
 - Diagnostics as you type (compiler messages and help)
 - **Completion** for names in the file, built-in opcodes, methods after `.`, named arguments (`lpf(` → `cutoff:`, `res:`), waveforms, unit suffixes
 - **Hover** with signatures and documentation
+- **Rate hints** (LSP inlay hints) after each named value in an instrument body that changes at note start (`· init`), once per block (`· control`) or every sample (`· audio`), so you can see where a `control { ... }` scope would save work. Constants have none. Hints appear while the file compiles.
 - **Go to definition** and **document outline**
 - A `//` or `///` comment directly above an `instr` or `fn` is its documentation
 

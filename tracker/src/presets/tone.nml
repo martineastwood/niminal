@@ -1,0 +1,5 @@
+/// A warm, short sawtooth voice.
+/// freq: fundamental frequency of the note.
+instr tone(freq: hz, amp: 0..1 = 0.15) {
+  osc(saw, freq) * env[1 | 180ms 0] * amp
+}
