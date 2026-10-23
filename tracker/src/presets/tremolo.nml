@@ -1,5 +1,9 @@
 /// Amplitude tremolo. shape selects the LFO: 0 sine, 1 triangle, 2 square, 3 saw.
-fx library_tremolo(rate: 0.1hz..20hz = 4hz, depth: 0..1 = 0.5, shape: 0..3 = 0) {
+fx library_tremolo(
+  rate: 0.1hz..20hz = 4hz,
+  depth: 0..1 = 0.5,
+  shape: 0..3 = 0
+) {
   wave = (shape < 0.5) * osc(sine, rate) + (shape >= 0.5 and shape < 1.5) * osc(tri, rate) + (shape >= 1.5 and shape < 2.5) * osc(square, rate) + (shape >= 2.5) * osc(saw, rate)
   out = in * (1 - depth * (wave * 0.5 + 0.5))
 }

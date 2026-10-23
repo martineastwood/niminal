@@ -58,10 +58,12 @@ label { display: inline-flex; align-items: center; gap: 4px; color: var(--dim); 
 main { display: flex; flex: 1; min-height: 0; }
 aside { width: 168px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--bg-panel); border-right: 1px solid var(--line); overflow: hidden; }
 aside.names-hidden { width: 84px; }
-.side-heading { display: flex; align-items: center; justify-content: space-between; height: 22px; padding: 0 4px 0 6px; background: var(--bg-bar); border-bottom: 1px solid var(--line); flex-shrink: 0; }
-.side-tools { display: flex; gap: 1px; }
+.side-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; min-height: 22px; padding: 0 4px 0 6px; background: var(--bg-bar); border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.side-tools { display: flex; flex-wrap: wrap; gap: 1px; margin-left: auto; }
 .side-tools button { height: 16px; min-width: 16px; padding: 0 3px; font-size: 10px; line-height: 1; background: transparent; border-color: transparent; }
 .side-tools button:hover { background: var(--bg-ctl-hover); }
+.side-tools button[aria-pressed=true] { background: var(--accent); border-color: #7a4a1a; color: #1a1006; }
+#loop { font-size: 13px; }
 #sequence { overflow: auto; flex: 0 1 auto; max-height: 55%; min-height: 20px; }
 .sequence-entry { display: grid; grid-template-columns: 22px 34px minmax(0, 1fr); align-items: center; gap: 2px; height: 18px; padding: 0 3px 0 0; border-left: 2px solid transparent; border-bottom: 1px solid #16181b; }
 .sequence-entry > button { height: 16px; padding: 0 2px; border: 0; background: transparent; font-family: var(--mono); font-size: 10px; color: var(--dim); text-align: center; overflow: hidden; text-overflow: ellipsis; }
@@ -70,6 +72,10 @@ aside.names-hidden { width: 84px; }
 .sequence-entry > .sequence-name { text-align: left; color: var(--text); font-family: var(--sans); font-size: 11px; white-space: nowrap; }
 .sequence-entry.selected { background: #2a2d33; border-left-color: var(--accent); }
 .sequence-entry.selected > button:first-child { color: var(--hi); }
+.sequence-entry.in-loop { background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: inset -2px 0 0 var(--accent); }
+.sequence-entry.loop-start { border-top: 1px solid var(--accent); }
+.sequence-entry.loop-end { border-bottom: 1px solid var(--accent); }
+.sequence-entry.selected.in-loop { background: color-mix(in srgb, var(--accent) 8%, #2a2d33); }
 .sequence-entry.playing { background: var(--accent-bg); }
 .names-hidden .sequence-entry { grid-template-columns: 22px 34px; }
 .names-hidden .sequence-name, .names-hidden .library { display: none; }
@@ -165,6 +171,8 @@ aside.names-hidden { width: 84px; }
 .device-head { display: flex; align-items: center; gap: 2px; padding: 2px; }
 .device-head button { height: 18px; min-width: 20px; padding: 0 4px; }
 .device-head .device-name { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; background: transparent; border-color: transparent; }
+.send-options { display: flex; gap: 8px; padding: 0 4px 2px; font-size: 11px; }
+.send-options label { display: flex; align-items: center; gap: 3px; }
 .device-head .send-target { height: 18px; max-width: 90px; font-size: 11px; }
 .device.selected .device-name { color: var(--accent-text); }
 .device .parameter-row, .device .lfo-controls, .device .device-note { margin-left: 4px; margin-right: 4px; }
@@ -219,25 +227,32 @@ footer input { height: 16px; font-size: 10px; }
 #master-scope { display: block; width: 100%; height: 100%; }
 
 /* Mixer */
-#mix-panel > #mix { flex: 1; min-height: 0; display: flex; gap: 3px; padding: 6px; overflow: auto; align-items: stretch; background: var(--bg-panel); }
-.mix-strip { flex: 0 0 96px; display: flex; flex-direction: column; gap: 4px; padding: 0 5px 5px; background: #1f2226; border: 1px solid var(--line); border-top: 4px solid var(--track-colour); }
-.mix-strip.selected { background: #292d33; box-shadow: inset 0 0 0 1px #4a505a; }
-.mix-strip.master { flex-basis: 110px; background: #25221d; }
-.mix-gap { flex: 1; min-width: 6px; }
-.mix-output { width: 100%; min-width: 0; font-size: 11px; }
-.mix-add-return { flex: 0 0 auto; align-self: flex-start; margin: 4px; }
+#mix-panel > #mix { flex: 1; min-height: 0; display: flex; gap: 2px; padding: 6px 8px; overflow: auto; align-items: stretch; background: var(--bg-panel); }
+.mix-strip { flex: 0 0 80px; display: flex; flex-direction: column; gap: 3px; padding: 0 4px 4px; background: #1c1f23; border: 1px solid var(--line); border-top: 3px solid var(--track-colour); }
+.mix-strip.selected { background: #262a30; box-shadow: inset 0 0 0 1px var(--edge); }
+.mix-strip.selected .mix-name { color: var(--accent-text); }
+.mix-strip.master { flex-basis: 88px; margin-left: auto; background: #221f1a; }
+.mix-gap { flex: 0 0 1px; margin: 0 6px; background: var(--edge); }
+.mix-output { width: 100%; min-width: 0; height: 16px; font-family: var(--sans); font-size: 10px; color: var(--dim); }
+.mix-output:hover, .mix-output:focus-visible { color: var(--hi); }
+.mix-output-label { display: flex; align-items: center; height: 16px; padding: 0 4px; font-size: 10px; color: var(--dim); }
+.mix-add-return { flex: 0 0 56px; height: auto; margin: 0 2px; background: transparent; border: 1px dashed var(--edge); color: var(--dim); }
+.mix-add-return:hover { background: var(--bg-ctl); border-color: var(--accent); color: var(--accent-text); }
 .mix-name { height: 18px; padding: 0 2px; border: 0; background: transparent; font-weight: 600; text-align: left; overflow: hidden; text-overflow: ellipsis; color: var(--hi); }
-.mix-scope { width: 100%; height: 38px; background: #0e1012; border: 1px solid var(--line); }
+.mix-name:hover { background: transparent; color: var(--accent-text); }
+.mix-scope { width: 100%; height: 28px; background: #0e1012; border: 1px solid var(--line); }
 .mix-pan { width: 100%; }
-.mix-faders { flex: 1; min-height: 70px; display: flex; gap: 6px; justify-content: center; }
-.fader { position: relative; width: 22px; background: #0e1012; border: 1px solid #2f343b; cursor: ns-resize; outline: none; touch-action: none; }
+.mix-faders { flex: 1; min-height: 70px; display: flex; gap: 5px; justify-content: center; }
+/* The tick marks 0 dB on the -60..+6 dB fader. */
+.fader { position: relative; width: 16px; border: 1px solid #2a2e34; cursor: ns-resize; outline: none; touch-action: none;
+  background: linear-gradient(to bottom, transparent calc(9.09% - .5px), #4a505a calc(9.09% - .5px), #4a505a calc(9.09% + .5px), transparent calc(9.09% + .5px)), #0e1012; }
 .fader:focus-visible { outline: 1px solid var(--accent); }
-.fader-fill { position: absolute; left: 0; right: 0; bottom: 0; background: #2e353d; }
-.fader-handle { position: absolute; left: -2px; right: -2px; height: 6px; background: #aab0ba; border: 1px solid #111; }
-.meter { position: relative; width: 7px; background: #0e1012; border: 1px solid #2f343b; }
+.fader-fill { position: absolute; left: 0; right: 0; bottom: 0; background: color-mix(in srgb, var(--track-colour) 30%, #1c2025); }
+.fader-handle { position: absolute; left: -3px; right: -3px; height: 5px; background: #c6cad1; border: 1px solid #111; }
+.meter { position: relative; width: 5px; background: #0e1012; border: 1px solid #2a2e34; }
 .meter-fill { position: absolute; left: 0; right: 0; bottom: 0; background: linear-gradient(to top, #4da36b 0%, #4da36b 70%, #d9b43f 85%, #d65a4a 100%); }
-.mix-db { text-align: center; font-family: var(--mono); font-size: 10px; color: var(--dim); }
+.mix-db { height: 16px; line-height: 14px; text-align: center; font-family: var(--mono); font-size: 10px; color: var(--dim); background: var(--bg-input); border: 1px solid #2a2e34; }
 .mix-buttons { display: flex; gap: 2px; }
-.mix-buttons button { flex: 1; min-width: 0; padding: 0 2px; height: 18px; font-size: 10px; }
+.mix-buttons button { flex: 1; min-width: 0; padding: 0 2px; height: 16px; font-size: 9px; font-weight: 600; }
 .mix-buttons button[aria-pressed=true] { background: var(--accent); color: #1a1006; }
 .mix-buttons button[aria-label^="Mute"][aria-pressed=true] { background: #b83232; color: #fff; }

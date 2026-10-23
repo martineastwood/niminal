@@ -6,10 +6,12 @@ export interface Lfo { enabled: boolean; shape: 'sine' | 'triangle' | 'saw' | 's
 /**
  * One effect in a track's chain. Its `id` is stable across reordering; lanes refer to it. A device with a
  * `target` is a send: its output feeds that return and the chain carries on past it. A return's must be a later return; the master has none.
+ * Sends tap the strip after its fader unless `pre`, which taps them at their place in the chain; a `pre` send with
+ * `mute_source` silences the chain after it.
  */
-export interface Device { id: string; definition: string; bypass: boolean; values: Record<string, number>; modulations: Record<string, Lfo>; target?: number }
+export interface Device { id: string; definition: string; bypass: boolean; values: Record<string, number>; modulations: Record<string, Lfo>; target?: number; pre?: boolean; mute_source?: boolean }
 export const maxDevices = 8;
-export const maxReturns = 4;
+export const maxReturns = 8;
 /** Where a track's or return's signal goes: the master, a return (a return can only feed a later one), or nowhere, leaving only its sends. */
 export type Output = { kind: 'master' } | { kind: 'return'; index: number } | { kind: 'none' };
 export interface Track { output?: Output; solo?: boolean; colour?: string; show?: Partial<Record<SubColumn, boolean>>; name: string; instrument: string | null; fx: Device[]; muted: boolean; volume_db: number; pan: number }
@@ -31,7 +33,9 @@ export const maxNoteColumns = 8;
 export const blankColumn = (rows: number): NoteColumn => ({ notes: Array(rows).fill(null), inst: Array(rows).fill(null), vol: Array(rows).fill(null), pan: Array(rows).fill(null), delay: Array(rows).fill(null) });
 export const cloneColumn = (column: NoteColumn): NoteColumn => ({ notes: [...column.notes], inst: [...column.inst], vol: [...column.vol], pan: [...column.pan], delay: [...column.delay] });
 export interface Pattern { id: string; name: string; rows: number; notes: NoteColumn[][]; fx: FxLane[][] }
-export interface Song { bpm: number; rows_per_beat: number; tracks: Track[]; master: Track; returns: Track[]; patterns: Pattern[]; sequence: string[]; instrument_values?: Record<string, Record<string, number>> }
+/** Song playback repeats these sequence positions (inclusive) once it reaches them, until stopped. */
+export interface LoopRange { start: number; end: number }
+export interface Song { bpm: number; rows_per_beat: number; tracks: Track[]; master: Track; returns: Track[]; patterns: Pattern[]; sequence: string[]; loop_range?: LoopRange; instrument_values?: Record<string, Record<string, number>> }
 export interface Project extends Song { version: 9; id: string; definitions: Definition[] }
 export const storageKey = 'niminal-tracker-project-v9';
 
@@ -88,7 +92,8 @@ export function readProject(raw: string): Project {
         Array.isArray(p.fx) && p.fx.length === value.tracks.length && p.fx.every(track => Array.isArray(track) && track.length >= 1 && track.length <= 4 && track.every(column => column && validEnvelope(column.envelope) && validTarget(column.target) && Array.isArray(column.values) && column.values.length >= p.rows && column.values.length <= 256 && column.values.every(v => v === null || typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) && (column.target !== null || column.values.every(v => v === null) && !column.envelope?.points.length)))) ||
       new Set(value.patterns.map((p: Pattern) => p.id)).size !== value.patterns.length ||
       !Array.isArray(value.sequence) || value.sequence.length < 1 || value.sequence.length > 1024 ||
-      !value.sequence.every((id: unknown) => value.patterns.some((p: Pattern) => p.id === id))) {
+      !value.sequence.every((id: unknown) => value.patterns.some((p: Pattern) => p.id === id)) ||
+      value.loop_range !== undefined && !(Number.isInteger(value.loop_range?.start) && Number.isInteger(value.loop_range.end) && value.loop_range.start >= 0 && value.loop_range.start <= value.loop_range.end && value.loop_range.end < value.sequence.length)) {
     throw new Error('Not a supported niminal tracker project (expected version 9)');
   }
   return value;
@@ -140,7 +145,7 @@ function validTrack(t: Track, definitions: Definition[]): boolean {
     (t.instrument === null || definitions.some((d: Definition) => d.id === t.instrument && d.kind === 'instr')) &&
     Array.isArray(t.fx) && t.fx.length <= maxDevices && t.fx.every((d, i) => !!d && validDeviceId(d.id) && t.fx.findIndex(other => other.id === d.id) === i && typeof d.bypass === 'boolean' && definitions.some((def: Definition) => def.id === d.definition && def.kind === 'fx') && !!d.values && Object.values(d.values).every(Number.isFinite) && !!d.modulations && Object.values(d.modulations).every(validLfo)) &&
     Number.isFinite(t.pan) && t.pan >= -1 && t.pan <= 1 &&
-    (t.output === undefined || validOutput(t.output)) && t.fx.every(d => d.target === undefined || Number.isInteger(d.target) && d.target >= 0 && d.target < maxReturns) &&
+    (t.output === undefined || validOutput(t.output)) && t.fx.every(d => (d.target === undefined || Number.isInteger(d.target) && d.target >= 0 && d.target < maxReturns) && [d.pre, d.mute_source].every(flag => flag === undefined || typeof flag === 'boolean')) &&
     (t.solo === undefined || typeof t.solo === 'boolean') && typeof t.muted === 'boolean' && Number.isFinite(t.volume_db) && t.volume_db >= -60 && t.volume_db <= 6
   );
 }

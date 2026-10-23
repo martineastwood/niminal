@@ -461,7 +461,12 @@ impl Worker {
                     );
                 }
                 self.set_mixer(&song)?;
+                let now = if self.playback.is_some() { self.clock()? } else { 0 };
+                let sample_rate = self.status.sample_rate;
                 if let Some(playback) = &mut self.playback {
+                    if playback.song.loop_range != song.loop_range {
+                        playback.set_loop(song.loop_range, now, sample_rate);
+                    }
                     playback.song = song;
                     playback.parameters = self.status.effect_parameters.clone();
                     playback.instrument_parameters = self.status.instrument_parameters.clone();
@@ -481,7 +486,7 @@ impl Worker {
                     .get(&instrument)
                     .ok_or("Apply this instrument before auditioning")?
                     .clone();
-                self.send_events(vec![json!({"op":"note", "at":"now", "target":target, "to":format!("track_{track}"), "dur":"200ms", "args":{"freq":pitch(&note)?}})])?;
+                self.send_events(vec![json!({"op":"note", "at":"now", "target":target, "to":format!("in_{track}"), "dur":"200ms", "args":{"freq":pitch(&note)?}})])?;
             }
             Command::Stop => self.stop()?,
         }

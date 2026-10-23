@@ -26,7 +26,23 @@ export class Arrangement {
     if (project.sequence.length >= 1024 || (kind !== 'reuse' && project.patterns.length >= 128)) return;
     const pattern = kind === 'reuse' ? this.pattern : makePattern(project, kind === 'variation' ? this.pattern : undefined);
     project.sequence.splice(this.position + 1, 0, pattern.id);
+    // A step added before the loop pushes it along; one added inside it joins the loop.
+    const loop = project.loop_range;
+    if (loop && this.position + 1 <= loop.start) { loop.start++; loop.end++; } else if (loop && this.position + 1 <= loop.end) loop.end++;
     this.select(this.position + 1); this.edited();
+  }
+
+  /** Loops the selected step, or clears the loop. */
+  toggleLoop() {
+    const project = this.project();
+    if (project.loop_range) delete project.loop_range; else project.loop_range = { start: this.position, end: this.position };
+    this.render(); this.edited();
+  }
+
+  /** Loops from the selected step to `position`, in either direction. */
+  extendLoop(position: number) {
+    this.project().loop_range = { start: Math.min(this.position, position), end: Math.max(this.position, position) };
+    this.render(); this.edited();
   }
 
   move(delta: number) {
@@ -40,6 +56,8 @@ export class Arrangement {
     const sequence = this.project().sequence;
     if (sequence.length <= 1) return;
     sequence.splice(this.position, 1);
+    const loop = this.project().loop_range;
+    if (loop && this.position < loop.start) { loop.start--; loop.end--; } else if (loop && this.position <= loop.end) { if (loop.start === loop.end) delete this.project().loop_range; else loop.end--; }
     this.select(Math.min(this.position, sequence.length - 1)); this.edited();
   }
 
@@ -51,9 +69,11 @@ export class Arrangement {
       const number = project.patterns.indexOf(pattern).toString().padStart(2, '0');
       const row = document.createElement('div'); row.className = 'sequence-entry'; row.dataset.position = String(index);
       row.classList.toggle('selected', index === this.position);
+      const loop = project.loop_range, inLoop = !!loop && index >= loop.start && index <= loop.end;
+      row.classList.toggle('in-loop', inLoop); row.classList.toggle('loop-start', inLoop && index === loop.start); row.classList.toggle('loop-end', inLoop && index === loop.end);
       const button = document.createElement('button'); button.textContent = String(index + 1).padStart(2, '0'); button.setAttribute('aria-label', `Sequence step ${index + 1}: ${pattern.name}`);
-      button.title = `Edit pattern ${number}. Used ${project.sequence.filter(ref => ref === id).length} times in the sequence.`;
-      button.onclick = () => this.select(index);
+      button.title = `Edit pattern ${number}. Used ${project.sequence.filter(ref => ref === id).length} times in the sequence. Shift-click loops from the selected step to this one.`;
+      button.onclick = event => { if (event.shiftKey) this.extendLoop(index); else this.select(index); };
       const select = document.createElement('select'); select.setAttribute('aria-label', `Pattern at sequence step ${index + 1}`); select.dataset.structure = '';
       for (const [i, p] of project.patterns.entries()) select.add(new Option(String(i).padStart(2, '0'), p.id));
       select.value = id;

@@ -79,6 +79,7 @@ export class MixPanel {
       if (ret) { const remove = document.createElement('button'); remove.textContent = '×'; remove.title = `Remove ${track.name}`; remove.setAttribute('aria-label', `Remove ${track.name}`); remove.onclick = () => this.actions.removeReturn(returnIndex(index)); buttons.append(remove); }
       element.append(name, canvas, pan, faders, readout, buttons);
       if (!master) element.append(this.output(track, project, ret ? returnIndex(index) + 1 : 0));
+      else { const out = document.createElement('span'); out.className = 'mix-output-label'; out.textContent = 'Main out'; element.append(out); }
       this.parent.append(element); this.strips.push({ track: index, element, canvas, meter: fill });
     };
     for (let i = 0; i < project.tracks.length; i++) add(i);

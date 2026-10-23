@@ -52,3 +52,33 @@ it('retains notes when shortening a pattern and rejects missing sequence referen
   project.sequence.push('missing');
   expect(() => readProject(JSON.stringify(project))).toThrow();
 });
+
+it('loops the selected step or a shift-clicked range, and keeps the loop on the same steps as the sequence changes', () => {
+  const project = newProject(), parent = document.createElement('div'), edited = vi.fn();
+  const view = new Arrangement(parent, () => project, vi.fn(), edited); view.reset();
+  for (let i = 0; i < 4; i++) view.insert('reuse'); // five steps
+  view.select(1);
+  view.toggleLoop(); expect(project.loop_range).toEqual({ start: 1, end: 1 });
+  expect(parent.querySelectorAll('.in-loop')).toHaveLength(1);
+  parent.querySelector<HTMLButtonElement>('.sequence-entry[data-position="3"] button')!.dispatchEvent(new MouseEvent('click', { shiftKey: true, bubbles: true }));
+  expect(project.loop_range).toEqual({ start: 1, end: 3 }); expect(edited).toHaveBeenCalled();
+  expect([...parent.querySelectorAll('.in-loop')].map(row => (row as HTMLElement).dataset.position)).toEqual(['1', '2', '3']);
+  expect(parent.querySelector('.loop-start')!.getAttribute('data-position')).toBe('1'); expect(parent.querySelector('.loop-end')!.getAttribute('data-position')).toBe('3');
+  expect(readProject(JSON.stringify(project)).loop_range).toEqual({ start: 1, end: 3 });
+  // A step added before the loop pushes it along, inside it joins it, and after it leaves it.
+  view.select(0); view.insert('reuse'); expect(project.loop_range).toEqual({ start: 2, end: 4 });
+  view.select(2); view.insert('reuse'); expect(project.loop_range).toEqual({ start: 2, end: 5 });
+  view.select(5); view.insert('reuse'); expect(project.loop_range).toEqual({ start: 2, end: 5 });
+  // Removing steps shifts it, shrinks it, and clears it once it is empty.
+  view.select(0); view.remove(); expect(project.loop_range).toEqual({ start: 1, end: 4 });
+  view.select(2); view.remove(); expect(project.loop_range).toEqual({ start: 1, end: 3 });
+  view.select(5); view.remove(); expect(project.loop_range).toEqual({ start: 1, end: 3 });
+  view.select(1); view.toggleLoop(); expect(project.loop_range).toBeUndefined();
+  view.toggleLoop(); view.remove(); expect(project.loop_range).toBeUndefined();
+});
+
+it('rejects a loop outside the sequence', () => {
+  const project = newProject();
+  for (const loop_range of [{ start: 1, end: 1 }, { start: 0, end: 1 }, { start: 1, end: 0 }, { start: 0.5, end: 0 }]) expect(() => readProject(JSON.stringify({ ...project, loop_range }))).toThrow();
+  expect(readProject(JSON.stringify({ ...project, loop_range: { start: 0, end: 0 } })).loop_range).toEqual({ start: 0, end: 0 });
+});

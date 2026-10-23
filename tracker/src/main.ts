@@ -16,7 +16,7 @@ import './style.css';
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <div id="toolbar">
-    <div class="group"><button id="play" title="Loop pattern (Space)">▶ Pattern</button><button id="play-song" title="Play from the selected sequence step to the end">▶ Song</button><button id="stop" title="Stop">■</button><button id="record" aria-pressed="false" title="Record mode: typed notes and values are entered (Esc)">● Rec</button><label class="check"><input id="follow" type="checkbox" checked> Follow</label><span id="play-position" class="muted"></span></div>
+    <div class="group"><button id="play" title="Loop pattern (Space)">▶ Pattern</button><button id="play-song" title="Play from the selected sequence step to the end, or repeat the loop once it is reached">▶ Song</button><button id="stop" title="Stop">■</button><button id="record" aria-pressed="false" title="Record mode: typed notes and values are entered (Esc)">● Rec</button><label class="check"><input id="follow" type="checkbox" checked> Follow</label><span id="play-position" class="muted"></span></div>
     <div class="group"><label>BPM <input id="bpm" type="number" min="20" max="300" step="1"></label><label>LPB <input id="rows-per-beat" type="number" min="1" max="16" title="Rows per beat"></label><label>Oct <input id="octave" type="number" min="0" max="8" value="4"></label><label>Step <input id="entry-step" aria-label="Note entry step" title="Rows to advance after entering a note; 0 stays on this row" type="number" min="0" max="256" value="1"></label></div>
     <div class="group"><strong id="pattern-number">00</strong><select id="pattern-picker" aria-label="Pattern to edit"></select><input id="pattern-name" aria-label="Pattern name"><label>Rows <input id="pattern-rows" type="number" min="1" max="256" data-structure></label><span id="pattern-uses" class="muted"></span></div>
     <div class="group"><button id="undo" title="Undo (Cmd/Ctrl+Z)" aria-label="Undo">↶</button><button id="redo" title="Redo (Cmd/Ctrl+Shift+Z)" aria-label="Redo">↷</button><button id="add-track" data-structure title="Add track" aria-label="Add track">+ Track</button><button id="delete-track" data-structure title="Delete selected track" aria-label="Delete selected track">− Track</button><button id="restore-track" data-structure title="Restore last deleted track" aria-label="Restore last deleted track">↺</button></div>
@@ -25,7 +25,7 @@ app.innerHTML = `
   <div id="scopebar"><canvas id="master-scope" aria-label="Master scope"></canvas></div>
   <main>
     <aside id="sequencer">
-      <div class="side-heading"><span class="section-title">SEQUENCE</span><span class="side-tools"><button id="new-pattern" data-structure title="New blank pattern" aria-label="New blank pattern">+</button><button id="variation" data-structure title="Duplicate as variation" aria-label="Duplicate as variation">⧉</button><button id="reuse" data-structure title="Reuse pattern" aria-label="Reuse pattern">↳</button><button id="move-up" data-structure title="Move sequence step up" aria-label="Move sequence step up">↑</button><button id="move-down" data-structure title="Move sequence step down" aria-label="Move sequence step down">↓</button><button id="remove-step" data-structure title="Remove sequence step" aria-label="Remove sequence step">−</button><button id="sequence-names" aria-label="Toggle pattern names" title="Show / hide pattern names" aria-expanded="true">◂</button></span></div>
+      <div class="side-heading"><span class="section-title">SEQUENCE</span><span class="side-tools"><button id="new-pattern" data-structure title="New blank pattern" aria-label="New blank pattern">+</button><button id="variation" data-structure title="Duplicate as variation" aria-label="Duplicate as variation">⧉</button><button id="reuse" data-structure title="Reuse pattern" aria-label="Reuse pattern">↳</button><button id="move-up" data-structure title="Move sequence step up" aria-label="Move sequence step up">↑</button><button id="move-down" data-structure title="Move sequence step down" aria-label="Move sequence step down">↓</button><button id="remove-step" data-structure title="Remove sequence step" aria-label="Remove sequence step">−</button><button id="loop" title="Loop the selected step; shift-click another step to loop a range. Works while playing." aria-label="Loop sequence step" aria-pressed="false">⟲</button><button id="sequence-names" aria-label="Toggle pattern names" title="Show / hide pattern names" aria-expanded="true">◂</button></span></div>
       <div id="sequence"></div>
       <div id="sound-library" class="library"><div class="side-heading"><span class="section-title">INSTRUMENTS</span><span class="side-tools"><button id="new-instrument" title="New synth" aria-label="New instrument">+</button><button id="import-sample" title="New sampler from WAV files" aria-label="Import sample">♪</button><button id="duplicate-instrument" title="Duplicate instrument" aria-label="Duplicate instrument">⧉</button><button id="delete-instrument" title="Delete instrument" aria-label="Delete instrument">−</button></span></div><div id="definitions"></div></div>
       <div id="effect-library" class="library"><div class="side-heading"><span class="section-title">EFFECTS</span><span class="side-tools"><button id="new-effect" title="New effect" aria-label="New effect">+</button><button id="duplicate-effect" title="Duplicate effect" aria-label="Duplicate effect">⧉</button><button id="delete-effect" title="Delete effect" aria-label="Delete effect">−</button></span></div><div id="effects"></div></div>
@@ -134,7 +134,7 @@ function renderDefinitions() {
 function allParameters() { return { ...audioStatus.instrument_parameters, ...audioStatus.effect_parameters }; }
 function song(): Song {
   const instrument_values = Object.fromEntries(project.definitions.filter(d => d.kind === 'instr' && d.values).map(d => [d.id, d.values!]));
-  return { bpm: project.bpm, rows_per_beat: project.rows_per_beat, tracks: project.tracks, returns: project.returns, master: project.master, patterns: project.patterns, sequence: project.sequence, instrument_values };
+  return { bpm: project.bpm, rows_per_beat: project.rows_per_beat, tracks: project.tracks, returns: project.returns, master: project.master, patterns: project.patterns, sequence: project.sequence, loop_range: project.loop_range, instrument_values };
 }
 async function action(work: () => Promise<unknown>) {
   audioError = null;
@@ -367,6 +367,7 @@ for (const [id, field, min, max] of [['bpm', 'bpm', 20, 300], ['rows-per-beat', 
 element<HTMLInputElement>('entry-step').onchange = event => {
   const input = event.target as HTMLInputElement; input.value = String(Math.max(0, Math.min(256, Math.trunc(Number(input.value) || 0))));
 };
+element('loop').onclick = () => { arrangement.toggleLoop(); patternControls(); };
 element('sequence-names').onclick = () => {
   const collapsed = element('sequencer').classList.toggle('names-hidden');
   element('sequence-names').setAttribute('aria-expanded', String(!collapsed));
@@ -483,6 +484,7 @@ element('dock-resize').onpointerdown = event => {
 };
 function patternControls() {
   const current = arrangement.pattern;
+  element('loop').setAttribute('aria-pressed', String(!!project.loop_range));
   setText('pattern-number', arrangement.number);
   element<HTMLInputElement>('pattern-name').value = current.name;
   element<HTMLInputElement>('pattern-rows').value = String(current.rows);

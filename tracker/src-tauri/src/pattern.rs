@@ -49,6 +49,12 @@ pub struct Device {
     /// unchanged. Not on the master; a return's must be a later return.
     #[serde(default)]
     pub target: Option<usize>,
+    /// A send taps the strip after its level and pan; `pre` taps it at its place in the chain instead.
+    #[serde(default)]
+    pub pre: bool,
+    /// A pre-fader send cuts the signal after it: only sends carry the sound on.
+    #[serde(default)]
+    pub mute_source: bool,
 }
 
 impl Track {
@@ -84,7 +90,7 @@ impl Track {
 }
 
 pub const MAX_DEVICES: usize = 8;
-pub const MAX_RETURNS: usize = 4;
+pub const MAX_RETURNS: usize = 8;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Lfo {
@@ -274,9 +280,18 @@ pub struct Song {
     pub returns: Vec<Track>,
     pub patterns: Vec<Pattern>,
     pub sequence: Vec<String>,
+    /// Song playback repeats these sequence positions (inclusive) once it reaches them, until stopped.
+    #[serde(default)]
+    pub loop_range: Option<LoopRange>,
     /// Each instrument's parameter values, by definition id; notes start with these.
     #[serde(default)]
     pub instrument_values: BTreeMap<String, BTreeMap<String, f64>>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+pub struct LoopRange {
+    pub start: usize,
+    pub end: usize,
 }
 
 impl Song {
@@ -358,6 +373,12 @@ impl Song {
         }
         if self.sequence.iter().any(|id| !ids.contains(id)) {
             return Err("Sequence references a missing pattern".into());
+        }
+        if self
+            .loop_range
+            .is_some_and(|l| l.start > l.end || l.end >= self.sequence.len())
+        {
+            return Err("The loop must lie within the sequence".into());
         }
         Ok(())
     }
@@ -475,25 +496,59 @@ impl Playback {
                 sequence_position: None,
             });
         }
+        // With a loop, the first pass runs from the start through the loop's end, then the loop repeats.
+        let looped = self.song.loop_range.filter(|l| l.end >= self.start_position);
         let mut row = index;
-        for (sequence_position, id) in self
-            .song
-            .sequence
-            .iter()
-            .enumerate()
-            .skip(self.start_position)
-        {
+        let first_end = looped.map_or(self.song.sequence.len(), |l| l.end + 1);
+        if let Some(found) = self.walk(self.start_position..first_end, &mut row) {
+            return Some(found);
+        }
+        let l = looped?;
+        let cycle = (l.start..=l.end)
+            .map(|p| self.rows_at(p))
+            .sum::<Option<u64>>()?;
+        row %= cycle.max(1);
+        self.walk(l.start..l.end + 1, &mut row)
+    }
+
+    fn rows_at(&self, sequence_position: usize) -> Option<u64> {
+        let id = self.song.sequence.get(sequence_position)?;
+        Some(self.song.patterns.iter().find(|p| p.id == *id)?.rows as u64)
+    }
+
+    /// The row `row` rows into the sequence positions `range`, or None after taking away the rows it passed.
+    fn walk(&self, range: std::ops::Range<usize>, row: &mut u64) -> Option<Position<'_>> {
+        for sequence_position in range {
+            let id = self.song.sequence.get(sequence_position)?;
             let pattern = self.song.patterns.iter().find(|p| p.id == *id)?;
-            if row < pattern.rows as u64 {
+            if *row < pattern.rows as u64 {
                 return Some(Position {
                     pattern,
-                    row: row as usize,
+                    row: *row as usize,
                     sequence_position: Some(sequence_position),
                 });
             }
-            row -= pattern.rows as u64;
+            *row -= pattern.rows as u64;
         }
         None
+    }
+
+    /// Changes the loop while playing without a jump: playback carries on from the start of the
+    /// pattern now sounding, and loops from there.
+    pub fn set_loop(&mut self, range: Option<LoopRange>, sample: u64, sample_rate: f64) {
+        if self.mode == Mode::Song && sample >= self.origin {
+            let index = ((sample - self.origin) as f64 / self.song.row_samples(sample_rate)).floor() as u64;
+            let now = self
+                .location(index)
+                .and_then(|p| Some((p.sequence_position?, p.row as u64)));
+            if let Some((position, row)) = now {
+                let start = index - row;
+                self.origin = self.row_at(start, sample_rate);
+                self.start_position = position;
+                self.next_row = self.next_row.saturating_sub(start);
+            }
+        }
+        self.song.loop_range = range;
     }
 
     pub fn position(&self, sample: u64, sample_rate: f64) -> Option<Position<'_>> {
@@ -722,7 +777,7 @@ impl Playback {
                                 parameter.argument(value.clamp(parameter.min, parameter.max));
                         }
                     }
-                    events.push(json!({"op":"note", "at":at + (delay * self.song.row_samples(sample_rate)).round() as u64, "target":target, "to":format!("track_{index}"), "tag":"tracker-pattern",
+                    events.push(json!({"op":"note", "at":at + (delay * self.song.row_samples(sample_rate)).round() as u64, "target":target, "to":format!("in_{index}"), "tag":"tracker-pattern",
                         "dur":format!("{:.6}sec", hold * row_seconds), "args":args}));
                 }
             }
@@ -765,10 +820,53 @@ mod tests {
                 })
                 .collect(),
             sequence: vec!["a".into(), "b".into(), "a".into()],
+            loop_range: None,
             master: Track::default(),
             returns: vec![],
             instrument_values: Default::default(),
         }
+    }
+    #[test]
+    fn a_loop_repeats_its_positions_and_moving_it_carries_on_from_the_pattern_now_playing() {
+        let seq = |play: &Playback, row: u64| play.location(row).unwrap().sequence_position;
+        // a (2 rows), b (3 rows), a (2 rows): rows 0-1, 2-4, 5-6.
+        let mut looped = song();
+        looped.loop_range = Some(LoopRange { start: 1, end: 1 });
+        let play = Playback::new(0, looped.clone(), Mode::Song, "a".into(), 0).unwrap();
+        assert_eq!((0..9).map(|r| seq(&play, r)).collect::<Vec<_>>(), [0, 0, 1, 1, 1, 1, 1, 1, 1].map(Some), "lead in, then b forever");
+        assert_eq!(play.location(100).unwrap().pattern.id, "b");
+        assert!(!play.finished(100, 48000.0));
+        // Starting inside the loop plays the rest of it, then the whole loop again.
+        looped.loop_range = Some(LoopRange { start: 0, end: 1 });
+        let play = Playback::new(0, looped.clone(), Mode::Song, "b".into(), 1).unwrap();
+        assert_eq!((0..10).map(|r| seq(&play, r)).collect::<Vec<_>>(), [1, 1, 1, 0, 0, 1, 1, 1, 0, 0].map(Some));
+        // Starting after the loop ignores it.
+        looped.loop_range = Some(LoopRange { start: 0, end: 0 });
+        let play = Playback::new(0, looped.clone(), Mode::Song, "b".into(), 1).unwrap();
+        assert_eq!(seq(&play, 3), Some(2));
+        assert!(play.location(5).is_none());
+        // The loop can change while playing; the sequence cannot.
+        assert!(song().same_timeline(&looped));
+        // Loop bounds are validated.
+        looped.loop_range = Some(LoopRange { start: 2, end: 3 });
+        assert!(looped.validate().is_err());
+        looped.loop_range = Some(LoopRange { start: 2, end: 1 });
+        assert!(looped.validate().is_err());
+
+        // Turning a loop on while playing carries on from the start of the pattern now sounding.
+        let mut play = Playback::new(1000, song(), Mode::Song, "a".into(), 0).unwrap();
+        play.next_row = 4;
+        let sample = play.row_at(3, 48000.0) + 10; // the second row of b
+        play.set_loop(Some(LoopRange { start: 1, end: 1 }), sample, 48000.0);
+        assert_eq!(play.start_position, 1);
+        assert_eq!(play.next_row, 2, "the cursor keeps its place, relative to the pattern's first row");
+        assert_eq!(play.origin, 1000 + (2.0 * play.song.row_samples(48000.0)).round() as u64);
+        assert_eq!((0..7).map(|r| seq(&play, r)).collect::<Vec<_>>(), [1; 7].map(Some));
+        // Turning it off lets the song run on from there.
+        play.set_loop(None, play.row_at(4, 48000.0), 48000.0);
+        assert_eq!(play.start_position, 1);
+        assert_eq!((0..5).map(|r| seq(&play, r)).collect::<Vec<_>>(), [1, 1, 1, 2, 2].map(Some));
+        assert!(play.location(5).is_none());
     }
     #[test]
     fn sequence_reuses_patterns_and_crosses_variable_length_boundaries_without_drift() {

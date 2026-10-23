@@ -31,6 +31,7 @@ fn test_song(note: Option<&str>) -> Song {
                 .collect(),
             fx: (0..4).map(|_| vec![FxLane::empty(32)]).collect(),
         }],
+        loop_range: None,
         sequence: vec!["p0".into()],
         master: Track::default(),
         returns: vec![],
@@ -632,17 +633,45 @@ fn outputs_route_tracks_into_returns_and_sends_tap_the_chain_where_they_sit() {
     song.returns.clear();
     assert!(ratio(&mut worker, &song, 0) < 0.001, "no return, no sound");
 
-    // A send takes the chain's signal at its position and leaves the chain as it was.
+    // A pre-fader send takes the chain's signal at its position and leaves the chain as it was.
+    let pre = |mut device: Device| {
+        device.pre = true;
+        device
+    };
     song.returns = vec![Track::default()];
     song.tracks[0].output = Output::Master;
-    song.tracks[0].fx = vec![device("e1", "half", None), device("s1", "pass", Some(0))];
+    song.tracks[0].fx = vec![device("e1", "half", None), pre(device("s1", "pass", Some(0)))];
     let r = ratio(&mut worker, &song, 0);
     assert!((r - 1.0).abs() < 0.001, "half dry plus half sent: {r}");
-    song.tracks[0].fx = vec![device("s1", "pass", Some(0)), device("e1", "half", None)];
+    song.tracks[0].fx = vec![pre(device("s1", "pass", Some(0))), device("e1", "half", None)];
     assert!((ratio(&mut worker, &song, 0) - 1.5).abs() < 0.001, "half dry plus all of it sent");
+
+    // The fader scales a post-fader send but not a pre-fader one.
+    song.tracks[0].volume_db = -20.0;
+    assert!((ratio(&mut worker, &song, 0) - 1.05).abs() < 0.001, "tenth of the dry half, all of the send");
+    song.tracks[0].fx = vec![device("s1", "pass", Some(0))];
+    assert!((ratio(&mut worker, &song, 0) - 0.2).abs() < 0.001, "post-fader: dry and send both at a tenth");
+    song.tracks[0].fx = vec![pre(device("s1", "pass", Some(0)))];
+    assert!((ratio(&mut worker, &song, 0) - 1.1).abs() < 0.001, "pre-fader: a tenth of the dry, all of the send");
+
+    // Muting the source leaves only what the sends carry, wherever they sit.
+    let mute = |mut device: Device| {
+        device.mute_source = true;
+        pre(device)
+    };
+    song.tracks[0].fx = vec![mute(device("s1", "pass", Some(0)))];
+    assert!((ratio(&mut worker, &song, 0) - 1.0).abs() < 0.001, "only the send");
+    song.tracks[0].fx = vec![device("e1", "half", None), mute(device("s1", "pass", Some(0)))];
+    assert!((ratio(&mut worker, &song, 0) - 0.5).abs() < 0.001, "only the send, after the effect");
+    song.tracks[0].fx = vec![mute(device("s1", "pass", Some(0))), device("e1", "half", None), pre(device("s2", "pass", Some(0)))];
+    assert!((ratio(&mut worker, &song, 0) - 1.0).abs() < 0.001, "nothing after the cut carries sound, not even a later send");
+    song.tracks[0].fx[0].mute_source = false;
+    assert!((ratio(&mut worker, &song, 0) - 1.55).abs() < 0.001, "taking the cut away restores the chain");
+    song.tracks[0].volume_db = 0.0;
 
     // Re-pointing a send keeps it audible; a bypassed send carries nothing.
     song.returns = vec![Track::default(), Track::default()];
+    song.tracks[0].fx = vec![pre(device("s1", "pass", Some(0))), device("e1", "half", None)];
     song.tracks[0].fx[0].target = Some(1);
     assert!((ratio(&mut worker, &song, 0) - 1.5).abs() < 0.001);
     song.tracks[0].fx[0].bypass = true;

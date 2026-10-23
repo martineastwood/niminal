@@ -85,6 +85,15 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
       head.append(to);
     }
     head.append(bypass, up, down, remove); card.append(head);
+    if (device.target !== undefined) {
+      const options = document.createElement('div'); options.className = 'send-options';
+      const flag = (text: string, title: string, key: 'pre' | 'mute_source', disabled = false) => {
+        const label = document.createElement('label'); label.title = title; const box = document.createElement('input'); box.type = 'checkbox'; box.checked = !!device[key]; box.disabled = disabled; box.setAttribute('aria-label', title);
+        box.onchange = () => { device[key] = box.checked; fx.changed(); }; label.append(box, text); return label;
+      };
+      options.append(flag('Pre-fader', 'Send before the fader, at this place in the chain', 'pre'), flag('Mute source', 'Silence the chain after this send, so only sends carry the sound on', 'mute_source', !device.pre));
+      card.append(options);
+    }
     if (device.id === fx.selected) {
       const params = parameters[device.definition];
       const hint = (text: string) => { const p = document.createElement('p'); p.className = 'device-note'; p.textContent = text; card.append(p); };

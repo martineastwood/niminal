@@ -42,6 +42,11 @@ it('adds sends to tracks only, targeting the first return, and picks the return 
   expect([...parent.querySelectorAll<HTMLOptionElement>('[aria-label="Send destination"] option')].map(o => o.text)).toEqual(['→ Verb', '→ Echo']);
   const to = parent.querySelector<HTMLSelectElement>('[aria-label="Send destination"]')!; to.value = '1'; to.dispatchEvent(new Event('change'));
   expect(device.target).toBe(1); expect(fx.changed).toHaveBeenCalled();
+  const [pre, mute] = [...parent.querySelectorAll<HTMLInputElement>('.send-options input')]; expect(pre.checked).toBe(false); expect(mute.disabled).toBe(true);
+  pre.checked = true; pre.dispatchEvent(new Event('change')); expect(device.pre).toBe(true);
+  renderMixer(parent, project, 0, vi.fn(), {}, vi.fn(), fx);
+  const unlocked = parent.querySelectorAll<HTMLInputElement>('.send-options input')[1]; expect(unlocked.disabled).toBe(false);
+  unlocked.checked = true; unlocked.dispatchEvent(new Event('change')); expect(device.mute_source).toBe(true);
   // A return's send starts on the next return and may only pick later ones; the last return and the master cannot send.
   const presets = (strip: number) => { renderMixer(parent, project, strip, vi.fn(), {}, vi.fn(), fx); return [...parent.querySelectorAll<HTMLOptionElement>('[aria-label="Add effect"] optgroup[label="New from preset"] option')].map(o => o.text); };
   expect(presets(-2)).toContain('Send'); expect(presets(-3)).not.toContain('Send');

@@ -1,13 +1,14 @@
-//! The engine graph behind the mixer. Every track, and the master, is a *strip*:
+//! The engine graph behind the mixer. Every track, return and the master is a *strip*:
 //!
-//! `track_<s>` (level and pan) → its effect devices → `tap_<s>` → `out_<s>` (mute) → next stage
+//! `in_<s>` → its effect devices → `track_<s>` (level and pan) → `tap_<s>` → `out_<s>` (mute) → next stage
 //!
-//! Tracks and returns feed `track_m`, the master's strip, which feeds the engine's master output. The
-//! tap is a pass-through so each channel's finished signal has one steady place for a scope to listen.
-//! A return is a strip labelled `r<n>`. A track's or return's tap feeds the master through `out_<track>`, or a
-//! return through `outr_<strip>_<n>`, whichever its output names; a return can only feed later returns. A send device is a node that takes
-//! the chain's signal at its position, without carrying the chain on, and feeds a return through
-//! `sendout_<track>_<device>`.
+//! Notes and other strips arrive at `in_<s>`. Tracks and returns feed `in_m`, the master's strip, which
+//! feeds the engine's master output. The tap is a pass-through so each strip's finished signal has one
+//! steady place for a scope to listen. A return is a strip labelled `r<n>`. A track's or return's tap
+//! feeds the master through `out_<s>`, or a return through `outr_<s>_<n>`, whichever its output names;
+//! a return can only feed later returns. A send device is a node that feeds a return through
+//! `sendout_<s>_<device>`. Post-fader (the default) it listens to the tap; pre-fader it listens at its
+//! place in the chain, and may *mute the source*, so nothing after it carries sound on.
 use crate::{
     commands::{EffectParameters, fx_node},
     pattern::{Device, MAX_RETURNS, Output, Track},
@@ -25,20 +26,22 @@ pub fn setup() -> Vec<Value> {
     ];
     edits.extend(crate::modulation::declarations());
     for label in labels() {
+        edits.push(json!({"op":"node", "id":format!("in_{label}"), "fx":"__tracker_tap"}));
         edits.push(json!({"op":"node", "id":format!("track_{label}"), "fx":"__tracker_mix"}));
         edits.push(json!({"op":"node", "id":format!("tap_{label}"), "fx":"__tracker_tap"}));
+        edits.push(json!({"op":"connect", "id":format!("fadein_{label}"), "from":{"kind":"node", "id":format!("in_{label}")}, "to":{"kind":"node", "id":format!("track_{label}")}}));
         edits.push(json!({"op":"connect", "id":format!("tapin_{label}"), "from":{"kind":"node", "id":format!("track_{label}")}, "to":{"kind":"node", "id":format!("tap_{label}")}}));
         let to = if label == MASTER {
             json!({"kind":"master"})
         } else {
-            json!({"kind":"node", "id":format!("track_{MASTER}")})
+            json!({"kind":"node", "id":format!("in_{MASTER}")})
         };
         edits.push(json!({"op":"connect", "id":format!("out_{label}"), "from":{"kind":"node", "id":format!("tap_{label}")}, "to":to}));
     }
     let sources = (0..16).map(|t| (t.to_string(), 0)).chain((0..MAX_RETURNS).map(|r| (format!("r{r}"), r + 1)));
     for (label, first) in sources {
         for ret in first..MAX_RETURNS {
-            edits.push(json!({"op":"connect", "id":format!("outr_{label}_{ret}"), "from":{"kind":"node", "id":format!("tap_{label}")}, "to":{"kind":"node", "id":format!("track_r{ret}")}, "gain":0.0}));
+            edits.push(json!({"op":"connect", "id":format!("outr_{label}_{ret}"), "from":{"kind":"node", "id":format!("tap_{label}")}, "to":{"kind":"node", "id":format!("in_r{ret}")}, "gain":0.0}));
         }
     }
     edits
@@ -183,7 +186,7 @@ fn send_connection(tracks: &[Track], returns: &[Track], label: &str, device: &De
     let target = device.target?;
     let id = format!("sendout_{label}_{}", device.id);
     let open = gains(label, tracks, returns).and_then(|gains| gains.get(&id).copied()).unwrap_or(0.0);
-    Some(json!({"op":"connect", "id":id, "from":{"kind":"node", "id":fx_node(label, &device.id)}, "to":{"kind":"node", "id":format!("track_r{target}")}, "gain":open}))
+    Some(json!({"op":"connect", "id":id, "from":{"kind":"node", "id":fx_node(label, &device.id)}, "to":{"kind":"node", "id":format!("in_r{target}")}, "gain":open}))
 }
 
 fn find<'a>(strips: &[(String, &'a Track)], label: &str) -> Option<&'a Track> {
@@ -252,22 +255,27 @@ pub fn events(
                 topology.extend(send_connection(tracks, returns, &label, device));
             }
         }
-        if before.is_none()
-            || !chain
-                .iter()
-                .map(|d| &d.id)
-                .eq(old_chain.iter().map(|d| &d.id))
-        {
+        let shape = |chain: &[&Device]| chain.iter().map(|d| (d.id.clone(), d.target.is_some(), d.pre, d.mute_source)).collect::<Vec<_>>();
+        if before.is_none() || shape(&chain) != shape(&old_chain) {
             // Links are named by their device, so reordering re-points them in place and removing a device takes its link too.
-            let mut from = format!("track_{label}");
+            let mut from = format!("in_{label}");
+            let mut cut = false;
+            let gate = |cut: bool| if cut { 0.0 } else { 1.0 };
             for device in &chain {
                 let to = fx_node(&label, &device.id);
-                topology.push(json!({"op":"connect", "id":format!("link_{label}_{}", device.id), "from":{"kind":"node", "id":from}, "to":{"kind":"node", "id":to}}));
+                let link = format!("link_{label}_{}", device.id);
+                if device.target.is_some() && !device.pre {
+                    topology.push(json!({"op":"connect", "id":link, "from":{"kind":"node", "id":format!("tap_{label}")}, "to":{"kind":"node", "id":to}}));
+                    continue;
+                }
+                topology.push(json!({"op":"connect", "id":link, "from":{"kind":"node", "id":from}, "to":{"kind":"node", "id":to}, "gain":gate(cut)}));
                 if device.target.is_none() {
                     from = to;
+                } else if device.mute_source {
+                    cut = true;
                 }
             }
-            topology.push(json!({"op":"connect", "id":format!("tapin_{label}"), "from":{"kind":"node", "id":from}, "to":{"kind":"node", "id":format!("tap_{label}")}}));
+            topology.push(json!({"op":"connect", "id":format!("fadein_{label}"), "from":{"kind":"node", "id":from}, "to":{"kind":"node", "id":format!("track_{label}")}, "gain":gate(cut)}));
         }
         if before.is_none_or(|o| o.volume_db != strip.volume_db || o.pan != strip.pan) {
             controls.push(base(&label, strip));
