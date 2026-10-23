@@ -87,6 +87,24 @@ Finished instruments with a few controls each, for when you want a sound and not
 | `lead(freq, cutoff: 2500hz, vibrato)` | A saw with vibrato, through a low-pass. |
 | `bell(freq, decay)` | A struck bell from two sines, one bending the phase of the other. |
 
+## std/drums
+
+A drum machine voice and twenty-one presets of it. `drum` is a function with the controls of a drum voice: an oscillator (`wave` sine, tri, square or saw; `freq`, `attack`, `decay`) with a pitch modulation (`mod_mode` `drop`, `wobble` or `random`; `mod_amount` in semitones, `mod_rate`), a noise source with its own filter (`noise_filter` low, band or high; `noise_freq`, `noise_q`) and envelope (`noise_shape` `soft`, `linear` or `burst`; `noise_attack`, `noise_decay`), a `mix` between the two, `drive`, one EQ band (`eq_freq`, `eq_gain`) and `amp`, and a velocity: `vel` (how hard the note is played) with `osc_vel`, `noise_vel` and `mod_vel` saying how much it changes the oscillator, the noise and the pitch modulation. The choices shape the instrument and are fixed when it is compiled; the numbers stay live. The output is soft-clipped, so every setting is bounded.
+
+`use std/drums`, then play a preset by name, or call `drum(...)` inside an instrument of your own. Each preset takes the note as a tuning (`c3` plays it as designed), takes the note's `gain` as its velocity, and exposes the same numeric controls, so any lane can reshape any sound. The hats share a choke group, so a closed hat ends an open one.
+
+| Presets | |
+| --- | --- |
+| `kick_deep`, `kick_808`, `kick_punch`, `kick_click`, `kick_dirty` | Kicks from a long sub to a hard, driven one. |
+| `snare_tri`, `snare_tight`, `snare_fat` | Snares with a triangle body and band-passed noise. |
+| `clap`, `clap_room` | Noise chopped into bursts, dry and with a long tail. |
+| `hat_closed`, `hat_open`, `hat_tick` | Hi-hats from high-passed noise. |
+| `tom` | A tom; play different notes for a set. |
+| `rim`, `cowbell` | Square-wave percussion: a rim shot and a driven cowbell. |
+| `zap`, `blip`, `wobble_bass`, `sweep`, `crash` | Effects: a laser, random-pitch bubbles, a slow wobble, a rising noise band, a cymbal. |
+
+Keep a preset's name different from the choice words above (a preset called `wobble` would quietly stop a file playing), and from the instruments in `std/instruments`. The tracker lists these under **▾** beside **+** in its instruments; adding one copies the `drum` function into the project with it, so the copy stands alone.
+
 ## std/fx
 
 Effects that read `in`: `lowpass`, `highpass`, `bandpass`, `band_cut`, `equalizer`, `echo`, `room_reverb`, `ensemble`, `swirl` (a phaser), `tremolo`, `compressor`, `overdrive`, `lofi` and `ceiling` (a limiter). Each has typed, ranged parameters and, where it makes sense, a `mix`. Like the instruments, each stands alone: read the module for the controls of each one. The tracker lists them under **+ Add effect…** and beside **+** in its effects library.

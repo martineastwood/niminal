@@ -370,3 +370,132 @@ fn the_effect_library_compiles() {
     assert!(program.instruments.is_empty());
     assert!(expanded.text.matches("\nfx ").count() >= 14);
 }
+
+/// Every drum preset plays one note, bounded and audible.
+#[test]
+fn the_drum_library_compiles_and_every_preset_sounds() {
+    let expanded = expand("use std/drums\n", Path::new(".")).unwrap();
+    let program = compile(&expanded.text).unwrap_or_else(|errors| {
+        panic!("{}", errors.iter().map(|e| e.render("std", &expanded.text)).collect::<String>())
+    });
+    assert_eq!(program.instruments.len(), 21);
+    for instrument in &program.instruments {
+        let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
+        voice.start_note();
+        let mut out = vec![0.0; 150 * block_size()];
+        for chunk in out.chunks_mut(block_size()) {
+            voice.process(chunk);
+        }
+        let peak = out.iter().fold(0.0f32, |a, b| a.max(b.abs()));
+        assert!(out.iter().all(|v| v.is_finite()) && peak <= 1.0, "{} is not bounded: {peak}", instrument.name);
+        assert!(rms(&out) > 1e-4, "{} is silent", instrument.name);
+    }
+}
+
+/// A choice word (`wobble` in `mod_mode: (drop | wobble | random)`) can't also name a preset: a file
+/// that uses both quietly plays nothing.
+#[test]
+fn no_drum_preset_is_named_like_a_choice_of_the_drum_voice() {
+    let text = include_str!("../std/drums.nml");
+    let voice = &text[text.find("fn drum(").unwrap()..];
+    let signature = &voice[..voice.find(") {").unwrap()];
+    let choices: Vec<&str> = signature
+        .lines()
+        .filter_map(|l| l.split_once('(').and_then(|(_, rest)| rest.split_once(')')))
+        .flat_map(|(inside, _)| inside.split('|').map(str::trim))
+        .collect();
+    assert!(choices.contains(&"wobble"), "found the choices: {choices:?}");
+    for name in text.lines().filter_map(|l| l.strip_prefix("instr ")).filter_map(|l| l.split('(').next()) {
+        assert!(!choices.contains(&name), "`{name}` is also a choice of `drum`");
+    }
+}
+
+/// Renders `instr a() { drum_call }` from `std/drums` through the engine and returns its samples.
+fn render_drum(call: &str, blocks: usize) -> Vec<f32> {
+    render(&format!("use std/drums\ninstr a() {{ {call} }}"), blocks)
+}
+
+#[test]
+fn a_softer_note_is_quieter_by_as_much_as_the_sensitivity_says() {
+    let peak = |vel: f32, osc_vel: f32| {
+        let out = render_drum(&format!("drum(freq: 100hz, decay: 300ms, vel: {vel}, osc_vel: {osc_vel})"), 60);
+        out.iter().fold(0.0f32, |a, b| a.max(b.abs()))
+    };
+    let (hard, soft, blind) = (peak(1.0, 1.0), peak(0.25, 1.0), peak(0.25, 0.0));
+    assert!(soft < hard * 0.4, "a quarter-velocity note with full sensitivity: {soft} against {hard}");
+    assert!((blind - hard).abs() < hard * 0.02, "no sensitivity ignores velocity: {blind} against {hard}");
+}
+
+#[test]
+fn the_drum_waves_have_their_own_harmonics() {
+    // a square has odd harmonics only, so at 3x the pitch it holds energy a sine doesn't
+    let at = |wave: &str| {
+        let out = render_drum(&format!("drum(freq: 500hz, wave: {wave}, decay: 2sec, drive: 0)"), 200);
+        let tail = &out[out.len() / 4..];
+        let bin = |hz: f32| {
+            let (mut re, mut im) = (0.0f32, 0.0f32);
+            for (i, v) in tail.iter().enumerate() {
+                let phase = std::f32::consts::TAU * hz * i as f32 / 48_000.0;
+                re += v * phase.cos();
+                im += v * phase.sin();
+            }
+            (re * re + im * im).sqrt() / tail.len() as f32
+        };
+        (bin(500.0), bin(1500.0))
+    };
+    // the voice always soft-clips a little, so a sine is not perfectly pure: compare the two waves
+    let (sine, square) = (at("sine"), at("square"));
+    let (sine_third, square_third) = (sine.1 / sine.0, square.1 / square.0);
+    assert!(square_third > 0.2, "a square has a strong third harmonic: {square:?}");
+    assert!(sine_third < square_third * 0.5, "a sine has much less: {sine:?} against {square:?}");
+}
+
+#[test]
+fn closed_hats_share_a_choke_group_with_open_ones() {
+    let text = include_str!("../std/drums.nml");
+    for name in ["hat_closed", "hat_open", "hat_tick"] {
+        let start = text.find(&format!("instr {name}(")).unwrap();
+        let body = &text[start..text[start..].find("\n}\n").map_or(text.len(), |e| start + e)];
+        assert!(body.contains("choke = hats"), "{name} is in the hats choke group");
+    }
+    assert_eq!(text.matches("choke = ").count(), 3, "only the hats choke");
+}
+
+/// Whatever the settings, the drum voice stays finite and no louder than full scale: random settings
+/// across every choice and the whole range of every control, with the extremes over-represented.
+#[test]
+fn the_drum_voice_is_bounded_at_any_setting() {
+    let mut state = 7u64;
+    let mut next = move || {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    for case in 0..150 {
+        let mut pick = |options: &[&'static str]| options[(next() * options.len() as f64) as usize % options.len()];
+        let (wave, mode, filter, shape) = (
+            pick(&["sine", "tri", "square", "saw"]),
+            pick(&["drop", "wobble", "random"]),
+            pick(&["low", "band", "high"]),
+            pick(&["soft", "linear", "burst"]),
+        );
+        let mut value = |lo: f64, hi: f64, log: bool| {
+            let r = next();
+            let t = if r < 0.1 { 0.0 } else if r < 0.2 { 1.0 } else { next() };
+            if log { (lo.ln() + t * (hi.ln() - lo.ln())).exp() } else { lo + t * (hi - lo) }
+        };
+        let call = format!(
+            "drum(freq: {:.2}hz, wave: {wave}, attack: {:.3}ms, decay: {:.2}ms, mod_mode: {mode}, mod_amount: {:.1}, \
+             mod_rate: {:.2}hz, noise_filter: {filter}, noise_freq: {:.1}hz, noise_q: {:.3}, noise_shape: {shape}, \
+             noise_attack: {:.3}ms, noise_decay: {:.2}ms, mix: {:.3}, drive: {:.3}, eq_freq: {:.1}hz, eq_gain: {:.1}db, \
+             amp: 0db, vel: {:.3}, osc_vel: {:.3}, noise_vel: {:.3}, mod_vel: {:.3})",
+            value(20.0, 8000.0, true), value(0.1, 50.0, true), value(5.0, 10_000.0, true), value(-48.0, 48.0, false),
+            value(1.0, 4000.0, true), value(20.0, 20_000.0, true), value(0.0, 1.0, false), value(0.1, 200.0, true),
+            value(5.0, 10_000.0, true), value(0.0, 1.0, false), value(0.0, 1.0, false), value(20.0, 20_000.0, true),
+            value(-24.0, 24.0, false), value(0.0, 1.0, false), value(0.0, 1.0, false), value(0.0, 1.0, false),
+            value(0.0, 1.0, false),
+        );
+        let out = render_drum(&call, 150);
+        let peak = out.iter().fold(0.0f32, |a, b| a.max(b.abs()));
+        assert!(out.iter().all(|v| v.is_finite()) && peak <= 1.0 + 1e-3, "case {case}: peak {peak}\n{call}");
+    }
+}

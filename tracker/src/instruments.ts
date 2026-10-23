@@ -30,7 +30,10 @@ export function addInstrument(project: Project, sample?: string): Definition {
 /** A copy of one of the instruments that come with niminal, named after its id in the code so it never collides. */
 export function addInstrumentFromPreset(project: Project, preset: Preset): Definition {
   const id = `instr_${identifier()}`;
-  const definition: Definition = { id, kind: 'instr', name: uniqueName(project, preset.name), source: preset.source.replace(/^instr \w+/m, `instr ${id}`) };
+  const source = preset.source.replace(/^instr \w+/m, `instr ${id}`);
+  // a drum preset carries its own copy of the voice it calls, named from the id like the instrument
+  const voice = preset.voice?.replace(/^fn drum\b/m, `fn ${id}_voice`).replace(/^\/\/\/.*\n/gm, '');
+  const definition: Definition = { id, kind: 'instr', name: uniqueName(project, preset.name), source: voice ? `${source.replace(/\bdrum\(/, `${id}_voice(`)}\n${voice}` : source };
   project.definitions.push(definition);
   return definition;
 }
@@ -38,7 +41,7 @@ export function addInstrumentFromPreset(project: Project, preset: Preset): Defin
 /** A copy with its own instrument name, and its own names for any samples it declares. */
 export function duplicateInstrument(project: Project, source: Definition): Definition {
   const id = `instr_${identifier()}`, name = /^instr (\w+)/m.exec(source.source)?.[1] ?? source.id;
-  let text = source.source.replace(new RegExp(`\\b${name}\\b`, 'g'), id);
+  let text = source.source.replace(new RegExp(`\\b${name}(_voice)?\\b`, 'g'), `${id}$1`);
   [...text.matchAll(/^(\w+)\s*=\s*sample\(/gm)].forEach((match, i) => { text = text.replace(new RegExp(`\\b${match[1]}\\b`, 'g'), `${id.replace(/^instr_/, 'smp_')}_${i}`); });
   const definition: Definition = { id, kind: 'instr', name: uniqueName(project, `${source.name} copy`), source: text };
   project.definitions.splice(project.definitions.indexOf(source) + 1, 0, definition);

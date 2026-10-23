@@ -125,7 +125,9 @@ it('keeps effects in a library that devices on any track, or the master, can reu
 
 it('reads its presets from the library that comes with niminal, each as a definition that stands alone', async () => {
   const { instrumentPresets, effectPresets, parseLibrary } = await import('./library');
-  expect(instrumentPresets.map(p => p.id)).toEqual(['kick', 'snare', 'hat', 'bass', 'pluck', 'pad', 'lead', 'bell']);
+  expect(instrumentPresets.map(p => p.id).slice(0, 8)).toEqual(['kick', 'snare', 'hat', 'bass', 'pluck', 'pad', 'lead', 'bell']);
+  expect(instrumentPresets.map(p => p.id)).toEqual(expect.arrayContaining(['kick_808', 'snare_tri', 'clap_room', 'hat_open', 'wobble_bass', 'rim', 'cowbell']));
+  expect(instrumentPresets.length).toBe(29);
   expect(effectPresets.map(p => p.id)).toContain('compressor'); expect(effectPresets.length).toBeGreaterThanOrEqual(14);
   for (const preset of [...instrumentPresets, ...effectPresets]) {
     expect(preset.description.length).toBeGreaterThan(10); expect(preset.source).toMatch(new RegExp(`^(///.*\\n)+(instr|fx) ${preset.id}\\(`)); expect(preset.source.trimEnd().endsWith('}')).toBe(true);
@@ -142,4 +144,17 @@ it('copies an instrument preset into a project under its own name in the code', 
   expect([first.name, second.name]).toEqual(['Kick', 'Kick 2']);
   expect(first.source).toContain(`instr ${first.id}(`); expect(first.source).not.toMatch(/instr kick\(/); expect(first.source).toContain('punch: 0..1 = 0.5');
   expect(project.definitions.filter(d => d.kind === 'instr').map(d => d.id)).toContain(second.id);
+});
+
+it('copies a drum preset together with the voice it is built on, under names that never collide', async () => {
+  const { addInstrumentFromPreset, duplicateInstrument } = await import('./instruments'), { instrumentPresets } = await import('./library');
+  const project = newProject(), preset = instrumentPresets.find(p => p.id === 'kick_808')!, before = project.definitions.length;
+  const first = addInstrumentFromPreset(project, preset), second = addInstrumentFromPreset(project, preset), copy = duplicateInstrument(project, first);
+  for (const added of [first, second, copy]) {
+    expect(added.source).toContain(`instr ${added.id}(`); expect(added.source).toContain(`fn ${added.id}_voice(`); expect(added.source).toContain(`${added.id}_voice(\n    freq:`);
+    expect(added.source).not.toMatch(/fn drum\b|\bdrum\(/);
+  }
+  const names = project.definitions.flatMap(d => [...d.source.matchAll(/^(?:instr|fn) (\w+)/gm)].map(m => m[1]));
+  expect(new Set(names).size).toBe(names.length); expect(project.definitions.length).toBe(before + 3); expect(names.filter(n => n.endsWith('_voice'))).toHaveLength(3);
+  expect(copy.source).not.toContain(first.id);
 });

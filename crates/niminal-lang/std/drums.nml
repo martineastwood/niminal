@@ -1,0 +1,994 @@
+// Drum presets. `drum` is one function with the controls of a drum machine voice, and each
+// instrument after it is that voice with its settings chosen: `use std/drums`, then play them by name.
+// A note tunes a preset (c3 plays it as designed), and the note's velocity (its `gain`) shapes the
+// oscillator, noise and pitch modulation by as much as `osc_vel`, `noise_vel` and `mod_vel` say. The
+// hats share a choke group, so a closed hat ends an open one. In the tracker, adding a preset copies the
+// voice along with it, so the copy stands alone and every control can be edited.
+
+/// A drum voice with the controls of a drum machine: an oscillator with a pitch modulation, a noise
+/// source with its own filter and envelope, a mix between them, then distortion and an EQ band.
+/// The instruments below are presets of it. `mod_mode` is how the pitch moves (`drop` falls from
+/// `mod_amount` semitones above at `mod_rate`; `wobble` is a sine; `random` steps at random);
+/// `noise_shape` is how the noise swells and fades (`burst` chops it at `mod_rate`). `vel` is how hard the
+/// note is played (0..1); `osc_vel`, `noise_vel` and `mod_vel` say how much it matters to the oscillator,
+/// the noise and the pitch modulation.
+fn drum(
+  freq: hz = 100hz,
+  wave: (sine | tri | square | saw) = sine,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 300ms,
+  mod_mode: (drop | wobble | random) = drop,
+  mod_amount: -48..48 = 0,
+  mod_rate: 1hz..4khz = 100hz,
+  noise_filter: (low | band | high) = band,
+  noise_freq: 20hz..20khz = 4khz,
+  noise_q: 0..1 = 0.3,
+  noise_shape: (soft | linear | burst) = soft,
+  noise_attack: 0.1ms..200ms = 1ms,
+  noise_decay: 5ms..10sec = 150ms,
+  mix: 0..1 = 0,
+  drive: 0..1 = 0,
+  eq_freq: 20hz..20khz = 1khz,
+  eq_gain: -24db..24db = 0db,
+  amp: db = -6db,
+  vel: 0..1 = 1,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0
+) {
+  swing = mod_amount * (1 - mod_vel * (1 - vel))
+  bend = if mod_mode == drop {
+    swing * perc(attack: 0.05ms, decay: 1sec / mod_rate.num)
+  } else if mod_mode == wobble {
+    osc(sine, mod_rate) * swing
+  } else {
+    noise().sample_hold(impulse(mod_rate)) * swing
+  }
+  cur_freq = freq * (bend * 0.0577623).exp
+  tone = if wave == sine { osc(sine, cur_freq) } else if wave == tri { osc(tri, cur_freq) } else if wave == square { osc(square, cur_freq) } else { osc(saw, cur_freq) }
+  body = tone * perc(attack: attack, decay: decay) * (1 - osc_vel * (1 - vel))
+  hiss = noise()
+  hiss = if noise_filter == low { hiss.lpf(cutoff: noise_freq, res: noise_q) } else if noise_filter == band { hiss.bpf(cutoff: noise_freq, res: noise_q) } else { hiss.hpf(cutoff: noise_freq, res: noise_q) }
+  shape = if noise_shape == linear { env[0 noise_attack 1 noise_decay 0] } else { perc(attack: noise_attack, decay: noise_decay) }
+  chop = if noise_shape == burst { osc(saw, mod_rate) * 0.5 + 0.5 } else { 1 }
+  grit = hiss * shape * chop * (1 - noise_q * 0.5) * (1 - noise_vel * (1 - vel))
+  voice = body * (1 - mix) + grit * mix
+  voice = (voice * (1 + drive * 10)).tanh * (1 / (1 + drive * 2))
+  voice.peak_eq(cutoff: eq_freq, gain: eq_gain, q: 1).tanh.gain(amp)
+}
+
+/// A deep sub kick with a long tail. Play a note to tune it.
+instr kick_deep(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 900ms,
+  mod_amount: -48..48 = 24,
+  mod_rate: 1hz..4khz = 35hz,
+  noise_freq: 20hz..20khz = 2khz,
+  noise_q: 0..1 = 0.3,
+  noise_attack: 0.1ms..200ms = 1ms,
+  noise_decay: 5ms..10sec = 6ms,
+  mix: 0..1 = 0.04,
+  drive: 0..1 = 0.1,
+  eq_freq: 20hz..20khz = 1khz,
+  eq_gain: -24db..24db = 0db,
+  amp: db = -3db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  drum(
+    freq: 42hz * (freq / c3),
+    noise_filter: high,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A round kick: a sine that drops fast, with a touch of click.
+instr kick_808(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 380ms,
+  mod_amount: -48..48 = 30,
+  mod_rate: 1hz..4khz = 55hz,
+  noise_freq: 20hz..20khz = 3khz,
+  noise_q: 0..1 = 0.3,
+  noise_attack: 0.1ms..200ms = 1ms,
+  noise_decay: 5ms..10sec = 8ms,
+  mix: 0..1 = 0.08,
+  drive: 0..1 = 0.25,
+  eq_freq: 20hz..20khz = 90hz,
+  eq_gain: -24db..24db = 3db,
+  amp: db = -3db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  drum(
+    freq: 48hz * (freq / c3),
+    noise_filter: high,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A hard, driven kick on a triangle.
+instr kick_punch(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 260ms,
+  mod_amount: -48..48 = 40,
+  mod_rate: 1hz..4khz = 90hz,
+  noise_freq: 20hz..20khz = 4khz,
+  noise_q: 0..1 = 0.3,
+  noise_attack: 0.1ms..200ms = 1ms,
+  noise_decay: 5ms..10sec = 150ms,
+  mix: 0..1 = 0,
+  drive: 0..1 = 0.7,
+  eq_freq: 20hz..20khz = 250hz,
+  eq_gain: -24db..24db = -4db,
+  amp: db = -4db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  drum(
+    freq: 58hz * (freq / c3),
+    wave: tri,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A short kick with a bright beater click.
+instr kick_click(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 220ms,
+  mod_amount: -48..48 = 36,
+  mod_rate: 1hz..4khz = 80hz,
+  noise_freq: 20hz..20khz = 4khz,
+  noise_q: 0..1 = 0.3,
+  noise_attack: 0.1ms..200ms = 1ms,
+  noise_decay: 5ms..10sec = 6ms,
+  mix: 0..1 = 0.15,
+  drive: 0..1 = 0.35,
+  eq_freq: 20hz..20khz = 1khz,
+  eq_gain: -24db..24db = 0db,
+  amp: db = -4db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  drum(
+    freq: 52hz * (freq / c3),
+    noise_filter: high,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A saturated kick that growls.
+instr kick_dirty(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 600ms,
+  mod_amount: -48..48 = 28,
+  mod_rate: 1hz..4khz = 50hz,
+  noise_freq: 20hz..20khz = 4khz,
+  noise_q: 0..1 = 0.3,
+  noise_attack: 0.1ms..200ms = 1ms,
+  noise_decay: 5ms..10sec = 150ms,
+  mix: 0..1 = 0,
+  drive: 0..1 = 0.85,
+  eq_freq: 20hz..20khz = 120hz,
+  eq_gain: -24db..24db = 5db,
+  amp: db = -5db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  drum(
+    freq: 45hz * (freq / c3),
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A snare with a triangle body and band-passed noise.
+instr snare_tri(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 110ms,
+  mod_amount: -48..48 = 10,
+  mod_rate: 1hz..4khz = 120hz,
+  noise_freq: 20hz..20khz = 4.2khz,
+  noise_q: 0..1 = 0.3,
+  noise_attack: 0.1ms..200ms = 1ms,
+  noise_decay: 5ms..10sec = 170ms,
+  mix: 0..1 = 0.62,
+  drive: 0..1 = 0.2,
+  eq_freq: 20hz..20khz = 2khz,
+  eq_gain: -24db..24db = 3db,
+  amp: db = -5db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  drum(
+    freq: 185hz * (freq / c3),
+    wave: tri,
+    noise_filter: band,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A short, dry snare.
+instr snare_tight(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 70ms,
+  mod_amount: -48..48 = 8,
+  mod_rate: 1hz..4khz = 150hz,
+  noise_freq: 20hz..20khz = 5khz,
+  noise_q: 0..1 = 0.3,
+  noise_attack: 0.1ms..200ms = 1ms,
+  noise_decay: 5ms..10sec = 110ms,
+  mix: 0..1 = 0.55,
+  drive: 0..1 = 0.2,
+  eq_freq: 20hz..20khz = 1khz,
+  eq_gain: -24db..24db = 0db,
+  amp: db = -5db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  drum(
+    freq: 200hz * (freq / c3),
+    wave: tri,
+    noise_filter: band,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A big snare with a long, darker noise tail.
+instr snare_fat(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 160ms,
+  mod_amount: -48..48 = 14,
+  mod_rate: 1hz..4khz = 100hz,
+  noise_freq: 20hz..20khz = 2.5khz,
+  noise_q: 0..1 = 0.2,
+  noise_attack: 0.1ms..200ms = 1ms,
+  noise_decay: 5ms..10sec = 260ms,
+  mix: 0..1 = 0.5,
+  drive: 0..1 = 0.4,
+  eq_freq: 20hz..20khz = 800hz,
+  eq_gain: -24db..24db = 3db,
+  amp: db = -6db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  drum(
+    freq: 160hz * (freq / c3),
+    wave: tri,
+    noise_filter: band,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A clap: noise chopped into quick bursts.
+instr clap(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 5ms,
+  mod_amount: -48..48 = 0,
+  mod_rate: 1hz..4khz = 95hz,
+  noise_freq: 20hz..20khz = 1.4khz,
+  noise_q: 0..1 = 0.45,
+  noise_attack: 0.1ms..200ms = 0.5ms,
+  noise_decay: 5ms..10sec = 220ms,
+  mix: 0..1 = 1,
+  drive: 0..1 = 0.15,
+  eq_freq: 20hz..20khz = 1khz,
+  eq_gain: -24db..24db = 0db,
+  amp: db = -5db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  drum(
+    freq: 1khz * (freq / c3),
+    noise_filter: band,
+    noise_shape: burst,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A clap with a long, roomy tail.
+instr clap_room(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 5ms,
+  mod_amount: -48..48 = 0,
+  mod_rate: 1hz..4khz = 80hz,
+  noise_freq: 20hz..20khz = 1.2khz,
+  noise_q: 0..1 = 0.4,
+  noise_attack: 0.1ms..200ms = 0.5ms,
+  noise_decay: 5ms..10sec = 480ms,
+  mix: 0..1 = 1,
+  drive: 0..1 = 0.2,
+  eq_freq: 20hz..20khz = 1khz,
+  eq_gain: -24db..24db = 0db,
+  amp: db = -6db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  drum(
+    freq: 1khz * (freq / c3),
+    noise_filter: band,
+    noise_shape: burst,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A closed hi-hat from high-passed noise.
+instr hat_closed(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 5ms,
+  mod_amount: -48..48 = 0,
+  mod_rate: 1hz..4khz = 100hz,
+  noise_freq: 20hz..20khz = 7khz,
+  noise_q: 0..1 = 0.1,
+  noise_attack: 0.1ms..200ms = 0.2ms,
+  noise_decay: 5ms..10sec = 45ms,
+  mix: 0..1 = 1,
+  drive: 0..1 = 0,
+  eq_freq: 20hz..20khz = 1khz,
+  eq_gain: -24db..24db = 0db,
+  amp: db = -12db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  choke = hats
+  drum(
+    freq: 300hz * (freq / c3),
+    noise_filter: high,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// An open hi-hat that rings for a third of a second.
+instr hat_open(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 5ms,
+  mod_amount: -48..48 = 0,
+  mod_rate: 1hz..4khz = 100hz,
+  noise_freq: 20hz..20khz = 6.5khz,
+  noise_q: 0..1 = 0.1,
+  noise_attack: 0.1ms..200ms = 0.2ms,
+  noise_decay: 5ms..10sec = 320ms,
+  mix: 0..1 = 1,
+  drive: 0..1 = 0,
+  eq_freq: 20hz..20khz = 1khz,
+  eq_gain: -24db..24db = 0db,
+  amp: db = -13db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  choke = hats
+  drum(
+    freq: 300hz * (freq / c3),
+    noise_filter: high,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A very short, bright tick.
+instr hat_tick(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 5ms,
+  mod_amount: -48..48 = 0,
+  mod_rate: 1hz..4khz = 100hz,
+  noise_freq: 20hz..20khz = 9khz,
+  noise_q: 0..1 = 0.15,
+  noise_attack: 0.1ms..200ms = 0.1ms,
+  noise_decay: 5ms..10sec = 18ms,
+  mix: 0..1 = 1,
+  drive: 0..1 = 0,
+  eq_freq: 20hz..20khz = 1khz,
+  eq_gain: -24db..24db = 0db,
+  amp: db = -12db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  choke = hats
+  drum(
+    freq: 300hz * (freq / c3),
+    noise_filter: high,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A tom. Play different notes for a set of toms.
+instr tom(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 330ms,
+  mod_amount: -48..48 = 14,
+  mod_rate: 1hz..4khz = 40hz,
+  noise_freq: 20hz..20khz = 500hz,
+  noise_q: 0..1 = 0.3,
+  noise_attack: 0.1ms..200ms = 1ms,
+  noise_decay: 5ms..10sec = 30ms,
+  mix: 0..1 = 0.12,
+  drive: 0..1 = 0,
+  eq_freq: 20hz..20khz = 1khz,
+  eq_gain: -24db..24db = 0db,
+  amp: db = -5db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  drum(
+    freq: 110hz * (freq / c3),
+    noise_filter: band,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A laser zap: a saw falling four octaves.
+instr zap(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 320ms,
+  mod_amount: -48..48 = 44,
+  mod_rate: 1hz..4khz = 18hz,
+  noise_freq: 20hz..20khz = 4khz,
+  noise_q: 0..1 = 0.3,
+  noise_attack: 0.1ms..200ms = 1ms,
+  noise_decay: 5ms..10sec = 150ms,
+  mix: 0..1 = 0,
+  drive: 0..1 = 0,
+  eq_freq: 20hz..20khz = 1khz,
+  eq_gain: -24db..24db = 0db,
+  amp: db = -9db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  drum(
+    freq: 180hz * (freq / c3),
+    wave: saw,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A bubbling blip: random pitch steps over a band-passed hiss.
+instr blip(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 600ms,
+  mod_amount: -48..48 = 24,
+  mod_rate: 1hz..4khz = 14hz,
+  noise_freq: 20hz..20khz = 3khz,
+  noise_q: 0..1 = 0.6,
+  noise_attack: 0.1ms..200ms = 1ms,
+  noise_decay: 5ms..10sec = 600ms,
+  mix: 0..1 = 0.2,
+  drive: 0..1 = 0.3,
+  eq_freq: 20hz..20khz = 1khz,
+  eq_gain: -24db..24db = 0db,
+  amp: db = -10db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  drum(
+    freq: 900hz * (freq / c3),
+    mod_mode: random,
+    noise_filter: band,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A slow wobbling bass note.
+instr wobble_bass(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 8ms,
+  decay: 5ms..10sec = 900ms,
+  mod_amount: -48..48 = 7,
+  mod_rate: 1hz..4khz = 6hz,
+  noise_freq: 20hz..20khz = 4khz,
+  noise_q: 0..1 = 0.3,
+  noise_attack: 0.1ms..200ms = 1ms,
+  noise_decay: 5ms..10sec = 150ms,
+  mix: 0..1 = 0,
+  drive: 0..1 = 0.4,
+  eq_freq: 20hz..20khz = 400hz,
+  eq_gain: -24db..24db = 5db,
+  amp: db = -9db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  drum(
+    freq: 70hz * (freq / c3),
+    wave: saw,
+    mod_mode: wobble,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A rising band of noise that fades out.
+instr sweep(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 5ms,
+  mod_amount: -48..48 = 0,
+  mod_rate: 1hz..4khz = 100hz,
+  noise_freq: 20hz..20khz = 2khz,
+  noise_q: 0..1 = 0.7,
+  noise_attack: 0.1ms..200ms = 180ms,
+  noise_decay: 5ms..10sec = 1.2sec,
+  mix: 0..1 = 1,
+  drive: 0..1 = 0,
+  eq_freq: 20hz..20khz = 1khz,
+  eq_gain: -24db..24db = 0db,
+  amp: db = -9db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  drum(
+    freq: 1khz * (freq / c3),
+    noise_filter: band,
+    noise_shape: linear,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A crash cymbal: bright noise with a dissonant ring.
+instr crash(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.5ms,
+  decay: 5ms..10sec = 1.4sec,
+  mod_amount: -48..48 = 30,
+  mod_rate: 1hz..4khz = 900hz,
+  noise_freq: 20hz..20khz = 6khz,
+  noise_q: 0..1 = 0.1,
+  noise_attack: 0.1ms..200ms = 1ms,
+  noise_decay: 5ms..10sec = 2.2sec,
+  mix: 0..1 = 0.8,
+  drive: 0..1 = 0,
+  eq_freq: 20hz..20khz = 8khz,
+  eq_gain: -24db..24db = 3db,
+  amp: db = -13db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  drum(
+    freq: 560hz * (freq / c3),
+    wave: saw,
+    mod_mode: random,
+    noise_filter: high,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A rim shot: a short square-wave knock with a click.
+instr rim(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.2ms,
+  decay: 5ms..10sec = 38ms,
+  mod_amount: -48..48 = 6,
+  mod_rate: 1hz..4khz = 400hz,
+  noise_freq: 20hz..20khz = 3khz,
+  noise_q: 0..1 = 0.3,
+  noise_attack: 0.1ms..200ms = 0.2ms,
+  noise_decay: 5ms..10sec = 14ms,
+  mix: 0..1 = 0.25,
+  drive: 0..1 = 0.3,
+  eq_freq: 20hz..20khz = 1.8khz,
+  eq_gain: -24db..24db = 3db,
+  amp: db = -8db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  drum(
+    freq: 500hz * (freq / c3),
+    wave: square,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}
+
+/// A cowbell: a driven square wave, brightened, with a quick knock. Play a note to tune it.
+instr cowbell(
+  freq: hz = c3,
+  attack: 0.1ms..50ms = 0.3ms,
+  decay: 5ms..10sec = 260ms,
+  mod_amount: -48..48 = 0,
+  mod_rate: 1hz..4khz = 100hz,
+  noise_freq: 20hz..20khz = 3khz,
+  noise_q: 0..1 = 0.4,
+  noise_attack: 0.1ms..200ms = 0.5ms,
+  noise_decay: 5ms..10sec = 25ms,
+  mix: 0..1 = 0.08,
+  drive: 0..1 = 0.55,
+  eq_freq: 20hz..20khz = 2.4khz,
+  eq_gain: -24db..24db = 5db,
+  amp: db = -10db,
+  gain: db = 0db,
+  osc_vel: 0..1 = 0.5,
+  noise_vel: 0..1 = 0.5,
+  mod_vel: 0..1 = 0.1
+) {
+  drum(
+    freq: 540hz * (freq / c3),
+    wave: square,
+    attack: attack,
+    decay: decay,
+    mod_amount: mod_amount,
+    mod_rate: mod_rate,
+    noise_freq: noise_freq,
+    noise_q: noise_q,
+    noise_attack: noise_attack,
+    noise_decay: noise_decay,
+    mix: mix,
+    drive: drive,
+    eq_freq: eq_freq,
+    eq_gain: eq_gain,
+    amp: amp,
+    vel: 1 * gain,
+    osc_vel: osc_vel,
+    noise_vel: noise_vel,
+    mod_vel: mod_vel
+  )
+}

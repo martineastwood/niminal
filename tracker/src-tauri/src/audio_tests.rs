@@ -1291,6 +1291,37 @@ fn library_instruments_expose_controls_and_sound_on_mono_and_stereo_engines() {
     }
 }
 
+/// The drum presets as the tracker adds them: the preset renamed, with its own copy of the `drum` function.
+#[test]
+fn library_drum_presets_carry_their_voice_and_sound_on_mono_and_stereo_engines() {
+    let text: &'static str = include_str!("../../../crates/niminal-lang/std/drums.nml");
+    let voice = text.split("\n\n").find(|b| b.lines().any(|l| l.starts_with("fn drum("))).expect("the drum voice");
+    let presets = library_definitions(text);
+    assert_eq!(presets.len(), 21);
+    for layout in [Layout::Mono, Layout::Stereo] {
+        let engine = Arc::new(Mutex::new(EngineServer::new(Session::new(48000.0, layout).without_limiter())));
+        let server = Server::start(engine.clone(), ServerConfig { port: 0, ..ServerConfig::default() }).unwrap();
+        let mut worker = Worker::default();
+        worker.command(Command::Connect { port: server.port(), token: None }).unwrap();
+        for (index, preset) in presets.iter().enumerate() {
+            let id = format!("library_drum_{index}");
+            let name = preset.lines().find_map(|l| l.strip_prefix("instr ")).and_then(|l| l.split('(').next()).unwrap();
+            let source = format!(
+                "{}\n{}",
+                preset.replacen(&format!("instr {name}"), &format!("instr {id}"), 1).replace("drum(", &format!("{id}_voice(")),
+                voice.replacen("fn drum", &format!("fn {id}_voice"), 1)
+            );
+            worker.command(Command::Apply { id: id.clone(), source, kind: Kind::Instr, dir: None }).unwrap();
+            assert!(!worker.sounds[&id].parameters.is_empty(), "{name} exposes its controls");
+            worker.command(Command::Audition { instrument: id, note: "C-3".into(), track: 0 }).unwrap();
+            let audio = engine.lock().unwrap().session_mut().process(24000);
+            assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
+            assert!(audio.iter().flatten().any(|sample| sample.abs() > 0.001), "silent drum {name}");
+        }
+        worker.command(Command::Disconnect).unwrap();
+    }
+}
+
 #[test]
 fn library_effects_expose_controls_and_render_on_mono_and_stereo_engines() {
     let sources = library_definitions(include_str!("../../../crates/niminal-lang/std/fx.nml"));

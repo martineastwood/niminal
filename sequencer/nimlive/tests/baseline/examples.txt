@@ -3,6 +3,7 @@ array_bank.nml: 1x196427
 breakbeat.nml: 2x354462
 composition.nml: 1x105973
 control_rate.nml: 1x115440
+drum_voice.nml: 2x381627
 drums.nml: 2x488426
 functions.nml: 2x293633
 fx.nml: 2x583652

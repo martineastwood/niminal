@@ -1,0 +1,40 @@
+// The drum presets in `std/drums`, played as a beat. Every preset is the `drum` function with its
+// settings chosen, and a note tunes it: c3 plays a preset as designed, other notes transpose it.
+// Each preset has the same controls (`decay`, `drive`, `mix`, `noise_freq`, `eq_gain`...), so any
+// lane can reshape any sound, and the open and closed hats choke each other. `my_snare` shows `drum` called directly, with the settings you pick.
+// Render with:  nimlive render examples/drum_voice.nml --out drum_voice.wav --bars 4
+use std/drums
+
+config { channels: stereo }
+tempo 124bpm
+
+instr my_snare(freq: hz = c3) {
+  drum(freq: 210hz * (freq / c3), wave: tri, mod_amount: 12, mod_rate: 130hz, decay: 90ms,
+       mix: 0.7, noise_filter: band, noise_freq: 3khz, noise_q: 0.4, noise_decay: 200ms, drive: 0.5, amp: -6db)
+}
+
+clip kick { instrument: kick_808, notes: [c3 ~ ~ ~  ~ ~ ~ c3  ~ ~ c3 ~  ~ ~ ~ ~] }
+clip punch { instrument: kick_punch, notes: [~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ c3 ~] }
+clip snare_lane { instrument: snare_tri, notes: [~ ~ ~ ~  c3 ~ ~ ~  ~ ~ ~ ~  c3 ~ ~ ~] }
+clip layer { instrument: my_snare, notes: [~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ c3] }
+clip clap_lane { instrument: clap, notes: [~ ~ ~ ~  c3 ~ ~ ~  ~ ~ ~ ~  c3 ~ ~ ~] }
+// a note's gain is its velocity: the hats accent every other hit, and each preset decides how much a
+// softer hit changes the oscillator and the noise (`osc_vel`, `noise_vel`)
+clip hats {
+  instrument: hat_closed
+  notes: [c3   c3    c3   c3     c3   c3    c3   ~      c3   c3    c3   c3     c3   c3    ~    ~]
+  gain:  [0db  -10db -3db -10db  0db  -10db -3db -10db  0db  -10db -3db -10db  0db  -10db -3db -10db]
+}
+clip open { instrument: hat_open, notes: [~ ~ ~ ~  ~ ~ ~ c3  ~ ~ ~ ~  ~ ~ ~ c3] }
+clip bells { instrument: cowbell, notes: [~ ~ ~ ~  ~ ~ ~ ~  ~ ~ c3 ~  ~ ~ ~ ~] }
+clip rims { instrument: rim, notes: [~ c3 ~ ~  ~ ~ c3 ~  ~ ~ ~ c3  ~ c3 ~ ~] }
+clip toms { instrument: tom, notes: [~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  g3 ~ e3 c3] }
+clip blips { instrument: blip, notes: [~ ~ c3 ~  ~ ~ ~ ~  ~ g3 ~ ~  ~ ~ ~ ~] }
+clip zaps { instrument: zap, length: 2bars, notes: [c3] }
+clip bass { instrument: wobble_bass, length: 2bars, notes: [c2 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  g2 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~] }
+
+scene beat { kick, punch, snare_lane, layer, clap_lane, hats, open, bells, rims, toms, blips }
+scene sweeps { zaps, bass }
+sweeps.start
+beat.start
+at +4bars hush
