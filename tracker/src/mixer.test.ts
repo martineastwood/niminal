@@ -13,6 +13,14 @@ function actions(overrides: Partial<FxActions> = {}): FxActions {
   return { selected: null, select: vi.fn(), add: vi.fn(), remove: vi.fn(), move: vi.fn(), changed: vi.fn(), ...overrides };
 }
 
+/** The names of the presets the Add effect browser lists (not the project's own effects), which it then closes. */
+function browsable(parent: HTMLElement) {
+  parent.querySelector<HTMLButtonElement>('[aria-label="Add effect"]')!.click();
+  const names = [...document.querySelectorAll('.browser-item')].filter(item => !item.closest('details')?.querySelector('summary')?.textContent?.startsWith('Project effects')).map(item => item.textContent);
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  return names;
+}
+
 it('builds a chain from presets, each device with its own copy of the code', () => {
   const project = newProject();
   const a = addDevice(project, 0, 'echo')!, b = addDevice(project, 0, 'echo')!, c = addDevice(project, 1, 'ensemble')!;
@@ -48,13 +56,13 @@ it('adds sends to tracks only, targeting the first return, and picks the return 
   const unlocked = parent.querySelectorAll<HTMLInputElement>('.send-options input')[1]; expect(unlocked.disabled).toBe(false);
   unlocked.checked = true; unlocked.dispatchEvent(new Event('change')); expect(device.mute_source).toBe(true);
   // A return's send starts on the next return and may only pick later ones; the last return and the master cannot send.
-  const presets = (strip: number) => { renderMixer(parent, project, strip, vi.fn(), {}, vi.fn(), fx); return [...parent.querySelectorAll<HTMLOptionElement>('[aria-label="Add effect"] optgroup[label="New from preset"] option')].map(o => o.text); };
+  const presets = (strip: number) => { renderMixer(parent, project, strip, vi.fn(), {}, vi.fn(), fx); return browsable(parent); };
   expect(presets(-2)).toContain('Send'); expect(presets(-3)).not.toContain('Send');
   const onReturn = addDevice(project, -2, 'send')!.device; expect(onReturn.target).toBe(1);
   renderMixer(parent, project, -2, vi.fn(), {}, vi.fn(), actions({ selected: onReturn.id }));
   expect([...parent.querySelectorAll<HTMLOptionElement>('.send-target option')].map(o => o.text)).toEqual(['→ Echo']);
   renderMixer(parent, project, -1, vi.fn(), {}, vi.fn(), fx);
-  expect([...parent.querySelectorAll<HTMLOptionElement>('[aria-label="Add effect"] optgroup[label="New from preset"] option')].map(o => o.text)).not.toContain('Send');
+  expect(browsable(parent)).not.toContain('Send');
 });
 
 it('keeps lanes that hold values when their effect is removed', () => {
@@ -87,7 +95,9 @@ it('shows each device as a card whose buttons act on the chain, with only the se
   parent.querySelector<HTMLButtonElement>('[aria-label="Move effect later"]')!.click(); expect(fx.move).toHaveBeenCalledWith(a.device.id, 1);
   parent.querySelector<HTMLButtonElement>('[aria-label="Remove Lowpass"]')!.click(); expect(fx.remove).toHaveBeenCalledWith(b.device.id);
   expect(parent.querySelector<HTMLButtonElement>('[aria-label="Move effect earlier"]')!.disabled).toBe(true);
-  const add = parent.querySelector<HTMLSelectElement>('[aria-label="Add effect"]')!; add.value = 'band_cut'; add.dispatchEvent(new Event('change')); expect(fx.add).toHaveBeenCalledWith('band_cut');
+  parent.querySelector<HTMLButtonElement>('[aria-label="Add effect"]')!.click();
+  [...document.querySelectorAll<HTMLButtonElement>('.browser-item')].find(b => b.textContent === 'Band cut')!.click(); expect(fx.add).toHaveBeenCalledWith('band_cut');
+  expect(document.querySelector('.browser')).toBeNull();
 });
 
 it('shows an instrument\'s parameters as sliders that set its values, and records them to a lane only for the track that plays it', () => {
@@ -128,6 +138,9 @@ it('reads its presets from the library that comes with niminal, each as a defini
   expect(instrumentPresets.map(p => p.id).slice(0, 8)).toEqual(['kick', 'snare', 'hat', 'bass', 'pluck', 'pad', 'lead', 'bell']);
   expect(instrumentPresets.map(p => p.id)).toEqual(expect.arrayContaining(['kick_808', 'snare_tri', 'clap_room', 'hat_open', 'wobble_bass', 'rim', 'cowbell']));
   expect(instrumentPresets.length).toBe(29);
+  expect(Object.fromEntries(instrumentPresets.map(p => [p.id, p.folder]))).toMatchObject({ kick: 'drums/kicks', kick_808: 'drums/kicks', snare_tri: 'drums/snares', hat_open: 'drums/hats', rim: 'drums/percussion', bass: 'synths/bass', wobble_bass: 'synths/bass', zap: 'sounds/fx' });
+  expect(effectPresets.every(p => p.folder.length > 0)).toBe(true); expect(effectPresets.find(p => p.id === 'echo')!.folder).toBe('time/delay');
+  expect(parseLibrary('// folder: a/b\n\n/// One.\nfx one() {\n  out = in\n}\n\n/// Two.\nfx two() {\n  out = in\n}\n\n// folder: c\n\n/// Three.\nfx three() {\n  out = in\n}\n', 'fx').map(p => [p.id, p.folder])).toEqual([['one', 'a/b'], ['two', 'a/b'], ['three', 'c']]);
   expect(effectPresets.map(p => p.id)).toContain('compressor'); expect(effectPresets.length).toBeGreaterThanOrEqual(14);
   for (const preset of [...instrumentPresets, ...effectPresets]) {
     expect(preset.description.length).toBeGreaterThan(10); expect(preset.source).toMatch(new RegExp(`^(///.*\\n)+(instr|fx) ${preset.id}\\(`)); expect(preset.source.trimEnd().endsWith('}')).toBe(true);

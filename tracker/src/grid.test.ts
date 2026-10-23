@@ -398,3 +398,21 @@ it('asks the sequence to move between steps, add or remove one, and change the p
     sequence.mockClear(); key(name, options); expect(sequence).toHaveBeenCalledWith(action);
   }
 });
+
+it('has a presets button on each track that browses for that track and selects it', () => {
+  const { parent, project } = setup(), browse = vi.fn();
+  const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, vi.fn(), vi.fn(), vi.fn(), vi.fn(), undefined, undefined, undefined, undefined, undefined, undefined, undefined, browse);
+  grid.render();
+  const button = parent.querySelector<HTMLButtonElement>('[aria-label="Lead presets"]')!;
+  button.click();
+  expect(browse).toHaveBeenCalledWith(0, button); expect(grid.activeTrack).toBe(0);
+});
+
+it('shades the beats and bars by rows per beat', () => {
+  const { parent, project, grid } = setup();
+  const shaded = (cls: string) => [...parent.querySelectorAll<HTMLElement>('.grid-row')].filter(r => r.classList.contains(cls)).map(r => Number(r.dataset.row)).slice(0, 4);
+  project.rows_per_beat = 4; grid.render();
+  expect(shaded('beat')).toEqual([0, 4, 8, 12]); expect(shaded('bar')).toEqual([0, 16]);
+  project.rows_per_beat = 6; grid.render();
+  expect(shaded('beat')).toEqual([0, 6, 12, 18]); expect(shaded('bar')).toEqual([0, 24]);
+});

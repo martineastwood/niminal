@@ -2,7 +2,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { EditorView } from '@codemirror/view';
 import { editorState, connectLanguageServer } from './editor';
 import { MatrixPanel } from './matrix';
-import { openMenu } from './menu';
+import { openBrowser } from './browser';
 import { instrumentPresets, effectPresets } from './library';
 import { newProject, emptyFxLane, blankColumn, type Device, readProject, storageKey, maxReturns, resizePattern, removeTrack, restoreTrack, trackSource, type Definition, type Song, type DeletedTrack } from './project';
 import { Arrangement } from './arrangement';
@@ -279,6 +279,14 @@ const grid = new PatternGrid(element('grid'), () => project, () => arrangement.p
     else if (action === 'new') arrangement.insert('new');
     else if (action === 'remove') arrangement.remove();
     else arrangement.shiftPattern(action === 'pattern-next' ? 1 : -1);
+  }, (track, anchor) => {
+    // choosing a preset here makes the instrument, gives it to this track and plays a note to hear it
+    openBrowser(anchor, instrumentPresets.map(p => ({ value: p.id, name: p.name, folder: p.folder, description: p.description })), item => {
+      const definition = addInstrumentFromPreset(project, instrumentPresets.find(p => p.id === item.value)!);
+      project.tracks[track].instrument = definition.id;
+      selectDefinition(definition); grid.render(); editedPattern(); mixerView(); save();
+      if (audioStatus.connected && !audioStatus.playing) void action(() => audition(definition.id, 'C-3', track));
+    });
   });
 envelopeEditor = new EnvelopeEditor(element('automation'), () => project, () => arrangement.pattern, () => allParameters(),
   () => { editedPattern(); grid.render(); });
@@ -340,7 +348,9 @@ function newLibraryEffect(preset = 'blank') {
   selectDefinition(definition, true, true); editor.focus(); save();
 }
 element('new-effect').onclick = () => newLibraryEffect();
-element('effect-presets').onclick = event => { openMenu(event.currentTarget as HTMLElement, effectPresets.map(p => ({ text: p.name, run: () => newLibraryEffect(p.id) }))); };
+element('effect-presets').onclick = event => {
+  openBrowser(event.currentTarget as HTMLElement, effectPresets.map(p => ({ value: p.id, name: p.name, folder: p.folder, description: p.description })), item => newLibraryEffect(item.value));
+};
 element('duplicate-effect').onclick = () => {
   if (selected.kind !== 'fx') { status('Select an effect to duplicate'); return; }
   const copy = duplicateEffect(project, selected); selectDefinition(copy, true, true); editor.focus(); save();
@@ -395,6 +405,7 @@ for (const [id, field, min, max] of [['bpm', 'bpm', 20, 300], ['rows-per-beat', 
     const input = event.target as HTMLInputElement;
     if (audioStatus.playing) { timingInputs(); return; }
     project[field] = Math.min(max, Math.max(min, Math.trunc(Number(input.value) || min)));
+    if (field === 'rows_per_beat') grid.render(); // the beat and bar shading follows it
     timingInputs(); save();
   };
 }
@@ -420,10 +431,10 @@ function newInstrument(sample?: string) {
 }
 element('new-instrument').onclick = () => newInstrument();
 element('instrument-presets').onclick = event => {
-  openMenu(event.currentTarget as HTMLElement, instrumentPresets.map(preset => ({ text: preset.name, run: () => {
-    const definition = addInstrumentFromPreset(project, preset);
+  openBrowser(event.currentTarget as HTMLElement, instrumentPresets.map(p => ({ value: p.id, name: p.name, folder: p.folder, description: p.description })), item => {
+    const definition = addInstrumentFromPreset(project, instrumentPresets.find(p => p.id === item.value)!);
     selectDefinition(definition); editor.focus(); grid.render(); mixerView(); save();
-  } })));
+  });
 };
 element('import-sample').onclick = async () => {
   if (!isTauri()) { status('Importing samples needs the desktop app'); return; }

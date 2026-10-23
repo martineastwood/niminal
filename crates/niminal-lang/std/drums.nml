@@ -57,6 +57,8 @@ fn drum(
   voice.peak_eq(cutoff: eq_freq, gain: eq_gain, q: 1).tanh.gain(amp)
 }
 
+// folder: drums/kicks
+
 /// A deep sub kick with a long tail. Play a note to tune it.
 instr kick_deep(
   freq: hz = c3,
@@ -276,6 +278,8 @@ instr kick_dirty(
   )
 }
 
+// folder: drums/snares
+
 /// A snare with a triangle body and band-passed noise.
 instr snare_tri(
   freq: hz = c3,
@@ -411,6 +415,8 @@ instr snare_fat(
   )
 }
 
+// folder: drums/claps
+
 /// A clap: noise chopped into quick bursts.
 instr clap(
   freq: hz = c3,
@@ -500,6 +506,8 @@ instr clap_room(
     mod_vel: mod_vel
   )
 }
+
+// folder: drums/hats
 
 /// A closed hi-hat from high-passed noise.
 instr hat_closed(
@@ -636,6 +644,8 @@ instr hat_tick(
   )
 }
 
+// folder: drums/toms
+
 /// A tom. Play different notes for a set of toms.
 instr tom(
   freq: hz = c3,
@@ -679,6 +689,8 @@ instr tom(
     mod_vel: mod_vel
   )
 }
+
+// folder: sounds/fx
 
 /// A laser zap: a saw falling four octaves.
 instr zap(
@@ -769,6 +781,8 @@ instr blip(
   )
 }
 
+// folder: synths/bass
+
 /// A slow wobbling bass note.
 instr wobble_bass(
   freq: hz = c3,
@@ -813,6 +827,8 @@ instr wobble_bass(
     mod_vel: mod_vel
   )
 }
+
+// folder: sounds/fx
 
 /// A rising band of noise that fades out.
 instr sweep(
@@ -859,6 +875,8 @@ instr sweep(
   )
 }
 
+// folder: drums/cymbals
+
 /// A crash cymbal: bright noise with a dissonant ring.
 instr crash(
   freq: hz = c3,
@@ -904,6 +922,8 @@ instr crash(
     mod_vel: mod_vel
   )
 }
+
+// folder: drums/percussion
 
 /// A rim shot: a short square-wave knock with a click.
 instr rim(

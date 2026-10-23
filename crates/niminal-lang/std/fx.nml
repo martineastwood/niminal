@@ -2,6 +2,8 @@
 // with the original where there is one. They are complete on their own, so the tracker copies one
 // into a project as it stands and you can edit it from there.
 
+// folder: filters
+
 /// Remove high frequencies. Resonance shapes the filter around cutoff.
 fx lowpass(
   cutoff: 20hz..20000hz = 2400hz,
@@ -38,6 +40,8 @@ fx band_cut(
   out = in * (1 - mix) + in.notch(cutoff: cutoff, res: resonance) * mix
 }
 
+// folder: eq
+
 /// Raise or cut the lows, a band in the middle, and the highs.
 fx equalizer(
   low: -18db..18db = 0db,
@@ -50,6 +54,8 @@ fx equalizer(
   out = in.low_shelf(cutoff: low_freq, gain: low).peak_eq(cutoff: mid_freq, gain: mid, q: 1).high_shelf(cutoff: high_freq, gain: high)
 }
 
+// folder: time/delay
+
 /// Echoes with independent left/right timing, feedback and a dry/wet blend.
 fx echo(
   left: 1ms..2sec = 250ms,
@@ -61,6 +67,8 @@ fx echo(
   out = in * (1 - mix) + wet * mix
 }
 
+// folder: time/reverb
+
 /// A room or hall: `room` is its size, `damp` how quickly the highs die away in it.
 fx room_reverb(
   room: 0..1 = 0.6,
@@ -69,6 +77,8 @@ fx room_reverb(
 ) {
   out = in * (1 - mix) + in.reverb(room: room, damp: damp) * mix
 }
+
+// folder: modulation
 
 /// Gently widen the signal with a modulated delay chorus.
 fx ensemble(
@@ -101,6 +111,8 @@ fx tremolo(
   out = in * (1 - depth * (wave * 0.5 + 0.5))
 }
 
+// folder: dynamics
+
 /// Turn loud parts down: above the threshold the level is reduced by the ratio, and makeup brings
 /// the whole signal back up.
 fx compressor(
@@ -112,6 +124,8 @@ fx compressor(
 ) {
   out = in.compress(threshold: threshold, ratio: ratio, attack: attack, release: release, makeup: makeup)
 }
+
+// folder: distortion
 
 /// Warm or hard distortion. `drive` is how hard the signal is pushed, `tone` how bright it is.
 fx overdrive(
@@ -130,6 +144,8 @@ fx lofi(
 ) {
   out = in * (1 - mix) + in.bitcrush(rate: rate, bits: bits) * mix
 }
+
+// folder: dynamics
 
 /// Stop the signal rising above the ceiling.
 fx ceiling(

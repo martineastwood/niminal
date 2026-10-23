@@ -79,6 +79,7 @@ export class PatternGrid {
     private feedback: (text: string) => void = () => {},
     private openEnvelope: (track: number, fx: number) => void = () => {},
     private sequence: (action: SequenceAction) => void = () => {},
+    private browse: (track: number, anchor: HTMLElement) => void = () => {},
   ) {
     this.playhead.className = 'playhead'; this.playhead.hidden = true; this.frame.className = 'track-frame'; this.frame.hidden = true;
     parent.parentElement?.append(this.playhead, this.frame);
@@ -259,7 +260,9 @@ export class PatternGrid {
           this.resetHistory(); this.selectTrack(index); this.edited();
         }; adjust.append(button);
       }
-      const source = document.createElement('div'); source.className = 'track-source'; source.append(select, adjust);
+      const presets = document.createElement('button'); presets.textContent = '▾'; presets.className = 'track-presets';
+      presets.title = `Choose a ready-made instrument for ${track.name}`; presets.setAttribute('aria-label', `${track.name} presets`); presets.onclick = () => { this.selectTrack(index, false); this.browse(index, presets); };
+      const source = document.createElement('div'); source.className = 'track-source'; source.append(select, presets, adjust);
       cell.append(strip, heading, source, columns); cell.onkeydown = event => event.stopPropagation();
       cell.onclick = event => { if (!(event.target as HTMLElement).closest('button, select, input')) this.selectTrack(index, false); };
       header.append(cell);

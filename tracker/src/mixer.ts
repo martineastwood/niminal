@@ -2,7 +2,7 @@ import { builtInEffects, returnIndex, sendPreset, stripOf } from './effects';
 import type { EffectParameters, Definition, Device, Lfo, Parameter, Project, FxTarget } from './project';
 import { maxDevices } from './project';
 import { trackColour } from './grid';
-
+import { openBrowser } from './browser';
 /** An instrument's parameters as sliders. Notes start with these values; lanes change them from a row on. */
 export function renderInstrument(parent: HTMLElement, project: Project, definition: Definition, parameters: EffectParameters, edited: () => void, write: (target: FxTarget, value: number) => void, activeTrack: number) {
   parent.replaceChildren();
@@ -51,18 +51,17 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
   const effects = document.createElement('section'); effects.className = 'device-card effect-device';
   const title = document.createElement('div'); title.className = 'device-heading';
   const label = document.createElement('span'); label.className = 'section-title'; label.textContent = 'FX';
-  const add = document.createElement('select'); add.setAttribute('aria-label', 'Add effect');
-  add.add(new Option('+ Add effect…', ''));
-  const group = (label: string, options: [string, string][]) => {
-    if (!options.length) return;
-    const g = document.createElement('optgroup'); g.label = label;
-    for (const [text, value] of options) g.append(new Option(text, value));
-    add.append(g);
-  };
-  group('Project effects', project.definitions.filter(d => d.kind === 'fx').map(d => [d.name, `fx:${d.id}`]));
-  group('New from preset', [['Blank', 'blank'], ...(activeTrack !== -1 && !(isReturn && returnIndex(activeTrack) >= project.returns.length - 1) ? [[sendPreset.name, sendPreset.id] as [string, string]] : []), ...builtInEffects.map((p): [string, string] => [p.name, p.id])]);
+  const add = document.createElement('button'); add.textContent = '+ Add effect…'; add.setAttribute('aria-label', 'Add effect');
   add.disabled = track.fx.length >= maxDevices;
-  add.onchange = () => { if (add.value) fx.add(add.value); };
+  add.onclick = () => {
+    const sendAllowed = activeTrack !== -1 && !(isReturn && returnIndex(activeTrack) >= project.returns.length - 1);
+    openBrowser(add, [
+      ...project.definitions.filter(d => d.kind === 'fx').map(d => ({ value: `fx:${d.id}`, name: d.name, folder: 'Project effects', description: 'An effect already in this project: edits to its code reach every device using it' })),
+      { value: 'blank', name: 'Blank', folder: '', description: 'A new effect that passes the sound through, to write yourself' },
+      ...(sendAllowed ? [{ value: sendPreset.id, name: sendPreset.name, folder: 'routing', description: 'Sends some of this track to a return' }] : []),
+      ...builtInEffects.map(p => ({ value: p.id, name: p.name, folder: p.folder, description: p.description })),
+    ], item => fx.add(item.value));
+  };
   title.append(label, add); effects.append(title);
   const note = (text: string) => { const hint = document.createElement('p'); hint.className = 'device-note'; hint.textContent = text; effects.append(hint); };
   if (!track.fx.length) note('No effects');

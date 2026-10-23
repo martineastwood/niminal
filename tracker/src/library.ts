@@ -6,22 +6,26 @@ import fx from '../../crates/niminal-lang/std/fx.nml?raw';
 /** One ready-made instrument or effect from the library that comes with niminal (`use std/instruments`, `use std/fx`). */
 export interface Preset {
   id: string; name: string; description: string; source: string;
+  /** Where it sits in the browser, like `drums/kicks`; empty for the top level. */
+  folder: string;
   /** The `drum` voice a preset of it is built on, copied into the project along with the preset. */
   voice?: string;
 }
 
 /**
  * The definitions in a library module. Each is written to stand alone, with a blank line between one
- * and the next; the comment above it is its description.
+ * and the next; the comment above it is its description. A comment block `// folder: drums/kicks` puts
+ * the definitions after it in that folder, until the next one.
  */
 export function parseLibrary(text: string, kind: Definition['kind']): Preset[] {
   const presets: Preset[] = [];
+  let folder = '';
   for (const block of text.split(/\n\s*\n/)) {
     const lines = block.trim().split('\n'), start = lines.findIndex(line => new RegExp(`^${kind} \\w+`).test(line));
-    if (start < 0) continue;
+    if (start < 0) { folder = /^\/\/ folder: *(.*)$/m.exec(block)?.[1].trim() ?? folder; continue; }
     const id = new RegExp(`^${kind} (\\w+)`).exec(lines[start])![1];
     const description = lines.slice(0, start).filter(line => line.startsWith('///')).map(line => line.slice(3).trim()).join(' ');
-    presets.push({ id, name: id.charAt(0).toUpperCase() + id.slice(1).replaceAll('_', ' '), description, source: `${lines.join('\n')}\n` });
+    presets.push({ id, name: id.charAt(0).toUpperCase() + id.slice(1).replaceAll('_', ' '), description, folder, source: `${lines.join('\n')}\n` });
   }
   return presets;
 }
