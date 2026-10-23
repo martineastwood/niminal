@@ -14,7 +14,7 @@ pub fn declarations() -> Vec<Value> {
 }
 
 struct Target<'a> {
-    /// The strip it belongs to: a track number, or the master's label.
+    /// The strip it belongs to: a track number, `r<n>` for a return, or the master's label.
     track: &'a str,
     device: &'a str,
     parameter: &'a Parameter,
@@ -74,16 +74,18 @@ fn targets<'a>(
 #[allow(clippy::too_many_arguments)]
 pub fn edits(
     tracks: &[Track],
+    returns: &[Track],
     master: &Track,
     previous: &[Track],
+    previous_returns: &[Track],
     previous_master: &Track,
     parameters: &EffectParameters,
     bpm: f64,
     rows_per_beat: u32,
     timing_changed: bool,
 ) -> (Vec<Value>, Vec<Value>) {
-    let before = crate::mixer::strips(previous, previous_master);
-    let after = crate::mixer::strips(tracks, master);
+    let before = crate::mixer::strips(previous, previous_returns, previous_master);
+    let after = crate::mixer::strips(tracks, returns, master);
     let old = targets(&before, parameters);
     let next = targets(&after, parameters);
     let mut remove = Vec::new();
@@ -117,11 +119,12 @@ pub fn edits(
 /// A native, sample-timed reset. Oscillator phase and signal generation stay in niminal.
 pub fn reset(
     tracks: &[Track],
+    returns: &[Track],
     master: &Track,
     parameters: &EffectParameters,
     at: u64,
 ) -> Vec<Value> {
-    let strips = crate::mixer::strips(tracks, master);
+    let strips = crate::mixer::strips(tracks, returns, master);
     let edits: Vec<_> = targets(&strips, parameters)
         .values()
         .flat_map(|target| {

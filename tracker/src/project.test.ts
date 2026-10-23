@@ -123,3 +123,27 @@ it('keeps a master strip and solo flags, and rejects a master with an instrument
   bad(p => { p.master.instrument = 'tone'; }); bad(p => { p.master.volume_db = 20; }); bad(p => { (p.tracks[0] as { solo: unknown }).solo = 'yes'; });
   bad(p => { p.master.fx[0].definition = 'missing'; }); bad(p => { delete (p as { master?: unknown }).master; });
 });
+
+it('keeps returns, outputs and send devices, and rejects bad routing or too many returns', () => {
+  const project = newProject();
+  const verb = { name: 'Verb', instrument: null, fx: [], pan: 0, muted: false, volume_db: 0 };
+  project.returns.push(verb); project.tracks[0].output = { kind: 'return', index: 0 };
+  expect(readProject(JSON.stringify(project))).toEqual(project);
+  project.definitions.push({ id: 'fx_a', name: 'A', kind: 'fx', source: 'fx fx_a { out = in }' }); const fx = { id: 'd1', definition: 'fx_a', bypass: false, values: {}, modulations: {} };
+  const bad = (change: (p: typeof project) => void) => { const copy = structuredClone(project); change(copy); expect(() => readProject(JSON.stringify(copy))).toThrow(); };
+  expect(readProject(JSON.stringify({ ...project, tracks: [{ ...project.tracks[0], fx: [{ ...fx, target: 3 }] }, ...project.tracks.slice(1)] }))).toBeTruthy();
+  bad(p => { p.tracks[0].output = { kind: 'return', index: 4 }; });
+  const second = { ...verb, name: 'Echo' }; project.returns.push(second);
+  expect(readProject(JSON.stringify({ ...project, returns: [{ ...verb, output: { kind: 'return', index: 1 }, fx: [{ ...fx, target: 1 }] }, second] }))).toBeTruthy();
+  bad(p => { p.returns[1].output = { kind: 'return', index: 0 }; });
+  bad(p => { p.returns[0].output = { kind: 'return', index: 0 }; });
+  bad(p => { p.returns[1].fx = [{ ...fx, target: 1 }]; });
+  bad(p => { p.master.output = { kind: 'none' }; });
+  project.returns.pop();
+  bad(p => { p.tracks[0].fx = [{ ...fx, target: 4 }]; });
+  bad(p => { p.master.fx = [{ ...fx, target: 0 }]; });
+  project.returns = Array(5).fill(verb);
+  expect(() => readProject(JSON.stringify(project))).toThrow();
+  const { returns: _, ...old } = newProject();
+  expect(readProject(JSON.stringify(old)).returns).toEqual([]);
+});

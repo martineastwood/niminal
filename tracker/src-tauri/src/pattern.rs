@@ -15,6 +15,22 @@ pub struct Track {
     #[serde(default)]
     pub solo: bool,
     pub volume_db: f64,
+    /// Where the strip's finished signal goes. A return can only feed a later return; the master has no output.
+    #[serde(default)]
+    pub output: Output,
+}
+
+/// The destination of a track's signal: the master, one return track (making it a group), or nowhere,
+/// leaving only what its send devices carry.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Output {
+    #[default]
+    Master,
+    Return {
+        index: usize,
+    },
+    None,
 }
 
 /// One effect in a track's chain. The `id` is stable across reordering, so lanes and
@@ -29,6 +45,10 @@ pub struct Device {
     pub values: BTreeMap<String, f64>,
     #[serde(default)]
     pub modulations: BTreeMap<String, Lfo>,
+    /// A send device: its output goes to this return track, and the chain carries on past it
+    /// unchanged. Not on the master; a return's must be a later return.
+    #[serde(default)]
+    pub target: Option<usize>,
 }
 
 impl Track {
@@ -39,6 +59,8 @@ impl Track {
             || !self.pan.is_finite()
             || !(-1.0..=1.0).contains(&self.pan)
             || self.fx.len() > MAX_DEVICES
+            || matches!(self.output, Output::Return { index } if index >= MAX_RETURNS)
+            || self.fx.iter().any(|d| d.target.is_some_and(|t| t >= MAX_RETURNS))
             || self.fx.iter().enumerate().any(|(i, device)| {
                 device.id.is_empty()
                     || device.id.len() > 40
@@ -62,6 +84,7 @@ impl Track {
 }
 
 pub const MAX_DEVICES: usize = 8;
+pub const MAX_RETURNS: usize = 4;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Lfo {
@@ -246,6 +269,9 @@ pub struct Song {
     /// The final stage every track feeds: a level, a pan and an effect chain.
     #[serde(default)]
     pub master: Track,
+    /// Auxiliary tracks that tracks send to: each has an effect chain and feeds the master.
+    #[serde(default)]
+    pub returns: Vec<Track>,
     pub patterns: Vec<Pattern>,
     pub sequence: Vec<String>,
     /// Each instrument's parameter values, by definition id; notes start with these.
@@ -261,6 +287,14 @@ impl Song {
             || !(1..=16).contains(&self.tracks.len())
             || self.tracks.iter().any(Track::invalid)
             || self.master.invalid()
+            || self.returns.len() > MAX_RETURNS
+            || self.returns.iter().any(Track::invalid)
+            || self.master.output != Output::Master
+            || self.master.fx.iter().any(|d| d.target.is_some())
+            || self.returns.iter().enumerate().any(|(i, t)| {
+                matches!(t.output, Output::Return { index } if index <= i)
+                    || t.fx.iter().any(|d| d.target.is_some_and(|target| target <= i))
+            })
             || self
                 .instrument_values
                 .values()
@@ -732,6 +766,7 @@ mod tests {
                 .collect(),
             sequence: vec!["a".into(), "b".into(), "a".into()],
             master: Track::default(),
+            returns: vec![],
             instrument_values: Default::default(),
         }
     }

@@ -1,7 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { EditorView } from '@codemirror/view';
 import { editorState, connectLanguageServer } from './editor';
-import { newProject, emptyFxLane, blankColumn, type Device, readProject, storageKey, resizePattern, removeTrack, restoreTrack, type Definition, type Song, type DeletedTrack } from './project';
+import { newProject, emptyFxLane, blankColumn, type Device, readProject, storageKey, maxReturns, resizePattern, removeTrack, restoreTrack, type Definition, type Song, type DeletedTrack } from './project';
 import { Arrangement } from './arrangement';
 import { PatternGrid } from './grid';
 import { EnvelopeEditor } from './envelope-editor';
@@ -134,7 +134,7 @@ function renderDefinitions() {
 function allParameters() { return { ...audioStatus.instrument_parameters, ...audioStatus.effect_parameters }; }
 function song(): Song {
   const instrument_values = Object.fromEntries(project.definitions.filter(d => d.kind === 'instr' && d.values).map(d => [d.id, d.values!]));
-  return { bpm: project.bpm, rows_per_beat: project.rows_per_beat, tracks: project.tracks, master: project.master, patterns: project.patterns, sequence: project.sequence, instrument_values };
+  return { bpm: project.bpm, rows_per_beat: project.rows_per_beat, tracks: project.tracks, returns: project.returns, master: project.master, patterns: project.patterns, sequence: project.sequence, instrument_values };
 }
 async function action(work: () => Promise<unknown>) {
   audioError = null;
@@ -165,7 +165,7 @@ function usedInstruments() {
 }
 async function ensureAssignments() {
   for (const id of usedInstruments()) await ensureSound(id);
-  for (const track of [...project.tracks, project.master]) {
+  for (const track of [...project.tracks, ...project.returns, project.master]) {
     for (const device of track.fx) await ensureSound(device.definition);
   }
 }
@@ -219,7 +219,7 @@ async function togglePlay(mode: 'pattern' | 'song' = 'pattern') {
   starting = true;
   try {
     for (const id of usedInstruments()) await ensureSound(id);
-    for (const track of [...project.tracks, project.master]) {
+    for (const track of [...project.tracks, ...project.returns, project.master]) {
       for (const device of track.fx) await ensureSound(device.definition);
       if (revision !== transportRevision) return;
     }
@@ -268,12 +268,27 @@ const grid = new PatternGrid(element('grid'), () => project, () => arrangement.p
   });
 envelopeEditor = new EnvelopeEditor(element('automation'), () => project, () => arrangement.pattern, () => allParameters(),
   () => { editedPattern(); grid.render(); });
-/** Opens the master's effect chain, in the code tab beside its controls. */
-function openMasterFx() { deviceTrack = -1; fxMode = true; showFx(); if (!element('code').hidden) editor.focus(); }
+/** Opens the effect chain of the master (-1) or a return, in the code tab beside its controls. */
+function openStripFx(strip: number) { deviceTrack = strip; fxMode = true; showFx(); if (!element('code').hidden) editor.focus(); }
 const mix = new MixPanel(element('mix'), () => project, {
   selectTrack: track => grid.selectTrack(track),
-  openFx: track => { if (track < 0) openMasterFx(); else { grid.selectTrack(track); openTrackFx(); } },
+  openFx: track => { if (track < 0) openStripFx(track); else { grid.selectTrack(track); openTrackFx(); } },
   edited: () => { editedPattern(); grid.render(); },
+  addReturn: () => {
+    if (project.returns.length >= maxReturns) return;
+    project.returns.push({ name: `Return ${String.fromCharCode(65 + project.returns.length)}`, instrument: null, fx: [], pan: 0, muted: false, volume_db: 0 });
+    editedPattern(); mixerView();
+  },
+  removeReturn: index => {
+    project.returns.splice(index, 1);
+    for (const track of [...project.tracks, ...project.returns]) {
+      // A strip that fed the removed return goes back to the master; later returns shift down.
+      if (track.output?.kind === 'return') track.output = track.output.index === index ? { kind: 'master' } : track.output.index > index ? { kind: 'return', index: track.output.index - 1 } : track.output;
+      for (const device of track.fx) if (device.target !== undefined && device.target > index) device.target--;
+    }
+    if (deviceTrack < -1) { deviceTrack = grid.activeTrack; if (fxMode) showFx(); }
+    editedPattern(); mixerView();
+  },
 });
 function refreshMix() {
   if (element('mix-panel').hidden) return;

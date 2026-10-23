@@ -4,11 +4,15 @@ import { MixPanel } from './mix';
 import { drawScope, meterLevel } from './scope';
 import { newProject } from './project';
 
+vi.stubGlobal('Option', function (text: string, value: string) {
+  const option = document.createElement('option'); option.textContent = text; option.value = value; return option;
+});
+
 afterEach(() => document.body.replaceChildren());
 
 function setup() {
   const parent = document.createElement('div'); document.body.append(parent);
-  const project = newProject(), actions = { selectTrack: vi.fn(), openFx: vi.fn(), edited: vi.fn() };
+  const project = newProject(), actions = { selectTrack: vi.fn(), openFx: vi.fn(), edited: vi.fn(), addReturn: vi.fn(), removeReturn: vi.fn() };
   const panel = new MixPanel(parent, () => project, actions); panel.render();
   return { parent, project, actions, panel };
 }
@@ -24,6 +28,27 @@ it('shows a strip for every track and the master, and each strip acts on its own
   parent.querySelectorAll<HTMLButtonElement>('.mix-name')[3].click(); expect(actions.selectTrack).toHaveBeenCalledWith(3);
   parent.querySelector<HTMLButtonElement>('.mix-strip.master .mix-name')!.click(); expect(actions.openFx).toHaveBeenCalledWith(-1);
   expect(parent.querySelector('.mix-strip.master [aria-label^="Mute"]')).toBeNull();
+});
+
+it('shows returns beside the master, with an output choice on every track', () => {
+  const { parent, project, actions, panel } = setup();
+  expect(parent.querySelector('.mix-output')!.children).toHaveLength(2);
+  parent.querySelector<HTMLButtonElement>('.mix-add-return')!.click(); expect(actions.addReturn).toHaveBeenCalled();
+  project.returns.push({ name: 'Return A', instrument: null, fx: [], pan: 0, muted: false, volume_db: 0 }, { name: 'Return B', instrument: null, fx: [], pan: 0, muted: false, volume_db: 0 });
+  panel.render();
+  expect(parent.querySelectorAll('.mix-strip')).toHaveLength(7);
+  const output = parent.querySelector<HTMLSelectElement>('[aria-label="Bass output"]')!; expect([...output.options].map(o => o.text)).toEqual(['Master', 'Return A', 'Return B', 'None']);
+  output.value = 'return1'; output.dispatchEvent(new Event('change'));
+  expect(project.tracks[1].output).toEqual({ kind: 'return', index: 1 }); expect(actions.edited).toHaveBeenCalled();
+  output.value = 'none'; output.dispatchEvent(new Event('change')); expect(project.tracks[1].output).toEqual({ kind: 'none' });
+  // A return can only feed a later one.
+  expect([...parent.querySelector<HTMLSelectElement>('[aria-label="Return A output"]')!.options].map(o => o.text)).toEqual(['Master', 'Return B', 'None']);
+  expect([...parent.querySelector<HTMLSelectElement>('[aria-label="Return B output"]')!.options].map(o => o.text)).toEqual(['Master', 'None']);
+  expect(parent.querySelector('.mix-strip.master .mix-output')).toBeNull();
+  expect(parent.querySelector('.mix-strip.return [aria-label^="Solo"]')).toBeNull();
+  parent.querySelector<HTMLButtonElement>('[aria-label="Return B effect chain"]')!.click(); expect(actions.openFx).toHaveBeenCalledWith(-3);
+  parent.querySelector<HTMLButtonElement>('[aria-label="Remove Return A"]')!.click(); expect(actions.removeReturn).toHaveBeenCalledWith(0);
+  panel.paint({ s_r1: [0.5, -0.5] }); expect(parseFloat(parent.querySelectorAll<HTMLElement>('.meter-fill')[5].style.height)).toBeGreaterThan(0);
 });
 
 it('sets level and pan from the faders, with the master as its own strip', () => {

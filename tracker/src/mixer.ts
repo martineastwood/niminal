@@ -1,4 +1,4 @@
-import { builtInEffects, stripOf } from './effects';
+import { builtInEffects, returnIndex, sendPreset, stripOf } from './effects';
 import type { EffectParameters, Definition, Device, Lfo, Parameter, Project, FxTarget } from './project';
 import { maxDevices } from './project';
 import { trackColour } from './grid';
@@ -39,11 +39,11 @@ export interface FxActions {
 
 export function renderMixer(parent: HTMLElement, project: Project, activeTrack: number, edited: () => void, parameters: EffectParameters = {}, write: (target: FxTarget, value: number) => void = () => {}, fx: FxActions) {
   parent.replaceChildren();
-  const track = stripOf(project, activeTrack), isMaster = activeTrack < 0;
+  const track = stripOf(project, activeTrack), isMaster = activeTrack < 0, isReturn = activeTrack < -1;
   const refresh = () => renderMixer(parent, project, activeTrack, edited, parameters, write, fx);
   const output = document.createElement('section'); output.className = 'device-card track-output'; output.style.setProperty('--track-colour', isMaster ? '#d9903f' : trackColour(track, activeTrack));
   const heading = document.createElement('div'); heading.className = 'device-heading';
-  const name = document.createElement('strong'); name.textContent = isMaster ? 'Master' : `${String(activeTrack + 1).padStart(2, '0')} ${track.name}`; heading.append(name); output.append(heading);
+  const name = document.createElement('strong'); name.textContent = isReturn ? track.name : isMaster ? 'Master' : `${String(activeTrack + 1).padStart(2, '0')} ${track.name}`; heading.append(name); output.append(heading);
   const volume = slider('Volume', track.volume_db, -60, 6, 'dB', value => { track.volume_db = value; edited(); }, () => write({ kind: 'volume' }, track.volume_db));
   volume.querySelector('input')!.setAttribute('aria-label', `${track.name} volume in dB`); output.append(volume);
   const pan = slider('Pan', track.pan, -1, 1, '', value => { track.pan = value; edited(); }, () => write({ kind: 'pan' }, track.pan));
@@ -60,7 +60,7 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
     add.append(g);
   };
   group('Project effects', project.definitions.filter(d => d.kind === 'fx').map(d => [d.name, `fx:${d.id}`]));
-  group('New from preset', [['Blank', 'blank'], ...builtInEffects.map((p): [string, string] => [p.name, p.id])]);
+  group('New from preset', [['Blank', 'blank'], ...(activeTrack !== -1 && !(isReturn && returnIndex(activeTrack) >= project.returns.length - 1) ? [[sendPreset.name, sendPreset.id] as [string, string]] : []), ...builtInEffects.map((p): [string, string] => [p.name, p.id])]);
   add.disabled = track.fx.length >= maxDevices;
   add.onchange = () => { if (add.value) fx.add(add.value); };
   title.append(label, add); effects.append(title);
@@ -75,7 +75,16 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
     const up = button('↑', 'Move effect earlier', () => fx.move(device.id, -1)); up.disabled = position === 0;
     const down = button('↓', 'Move effect later', () => fx.move(device.id, 1)); down.disabled = position === track.fx.length - 1;
     const remove = button('×', `Remove ${definition?.name ?? 'effect'}`, () => fx.remove(device.id));
-    head.append(pick, bypass, up, down, remove); card.append(head);
+    head.append(pick);
+    if (device.target !== undefined) {
+      const to = document.createElement('select'); to.className = 'send-target'; to.setAttribute('aria-label', `${definition?.name ?? 'Send'} destination`); to.title = 'The return this send feeds';
+      project.returns.forEach((r, i) => { if (!isReturn || i > returnIndex(activeTrack)) to.add(new Option(`→ ${r.name}`, String(i))); });
+      if (device.target >= project.returns.length) to.add(new Option('→ no return', String(device.target)));
+      to.value = String(device.target);
+      to.onchange = () => { device.target = Number(to.value); fx.changed(); };
+      head.append(to);
+    }
+    head.append(bypass, up, down, remove); card.append(head);
     if (device.id === fx.selected) {
       const params = parameters[device.definition];
       const hint = (text: string) => { const p = document.createElement('p'); p.className = 'device-note'; p.textContent = text; card.append(p); };
@@ -92,7 +101,7 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
         const row = slider(parameter.name, value, parameter.min, parameter.max, parameter.unit ?? '', value => { device.values[parameter.name] = value; edited(); }, () => {
           write({ kind: 'effect', device: device.id, parameter: parameter.name }, Math.min(parameter.max, Math.max(parameter.min, device.values[parameter.name] ?? parameter.default)));
         }, toggle);
-        // The master has no pattern lanes to record into.
+        // The master and the returns have no pattern lanes to record into.
         if (isMaster) { const record = row.querySelector<HTMLButtonElement>('button'); if (record) record.disabled = true; }
         row.querySelector('input')!.setAttribute('aria-label', `${track.name} FX ${parameter.name}`); card.append(row);
         if (lfo) card.append(lfoControls(device, parameter, lfo, edited));

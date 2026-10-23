@@ -3,10 +3,16 @@ import tone from './presets/tone.nml?raw';
 /** `values` are an instrument's parameter settings: notes start with them, unless a lane has changed them. */
 export interface Definition { id: string; name: string; kind: 'instr' | 'fx'; source: string; values?: Record<string, number> }
 export interface Lfo { enabled: boolean; shape: 'sine' | 'triangle' | 'saw' | 'square'; period: number; min: number; max: number }
-/** One effect in a track's chain. Its `id` is stable across reordering; lanes refer to it. */
-export interface Device { id: string; definition: string; bypass: boolean; values: Record<string, number>; modulations: Record<string, Lfo> }
+/**
+ * One effect in a track's chain. Its `id` is stable across reordering; lanes refer to it. A device with a
+ * `target` is a send: its output feeds that return and the chain carries on past it. A return's must be a later return; the master has none.
+ */
+export interface Device { id: string; definition: string; bypass: boolean; values: Record<string, number>; modulations: Record<string, Lfo>; target?: number }
 export const maxDevices = 8;
-export interface Track { solo?: boolean; colour?: string; show?: Partial<Record<SubColumn, boolean>>; name: string; instrument: string | null; fx: Device[]; muted: boolean; volume_db: number; pan: number }
+export const maxReturns = 4;
+/** Where a track's or return's signal goes: the master, a return (a return can only feed a later one), or nowhere, leaving only its sends. */
+export type Output = { kind: 'master' } | { kind: 'return'; index: number } | { kind: 'none' };
+export interface Track { output?: Output; solo?: boolean; colour?: string; show?: Partial<Record<SubColumn, boolean>>; name: string; instrument: string | null; fx: Device[]; muted: boolean; volume_db: number; pan: number }
 export interface Parameter { name: string; min: number; max: number; default: number; unit: string | null }
 export type EffectParameters = Record<string, Parameter[]>;
 export type FxTarget = { kind: 'volume' } | { kind: 'pan' } | { kind: 'effect'; device: string; parameter: string } | { kind: 'instrument'; parameter: string };
@@ -25,7 +31,7 @@ export const maxNoteColumns = 8;
 export const blankColumn = (rows: number): NoteColumn => ({ notes: Array(rows).fill(null), inst: Array(rows).fill(null), vol: Array(rows).fill(null), pan: Array(rows).fill(null), delay: Array(rows).fill(null) });
 export const cloneColumn = (column: NoteColumn): NoteColumn => ({ notes: [...column.notes], inst: [...column.inst], vol: [...column.vol], pan: [...column.pan], delay: [...column.delay] });
 export interface Pattern { id: string; name: string; rows: number; notes: NoteColumn[][]; fx: FxLane[][] }
-export interface Song { bpm: number; rows_per_beat: number; tracks: Track[]; master: Track; patterns: Pattern[]; sequence: string[]; instrument_values?: Record<string, Record<string, number>> }
+export interface Song { bpm: number; rows_per_beat: number; tracks: Track[]; master: Track; returns: Track[]; patterns: Pattern[]; sequence: string[]; instrument_values?: Record<string, Record<string, number>> }
 export interface Project extends Song { version: 9; id: string; definitions: Definition[] }
 export const storageKey = 'niminal-tracker-project-v9';
 
@@ -35,6 +41,7 @@ export function newProject(): Project {
     definitions: [
       { id: 'tone', name: 'Warm saw', kind: 'instr', source: tone },
     ],
+    returns: [],
     master: { name: 'Master', instrument: null, fx: [], pan: 0, muted: false, volume_db: 0 },
     tracks: ['Lead', 'Bass', 'Drums', 'Texture'].map((name, track) => ({ name, instrument: track === 0 ? 'tone' : null, fx: [], pan: 0, muted: false, volume_db: 0 })),
     patterns: [{ fx: Array.from({ length: 4 }, () => [emptyFxLane(32)]), id: 'pattern_00', name: 'First idea', rows: 32, notes: Array.from({ length: 4 }, (_, track) => [{ ...blankColumn(32), notes: Array.from({ length: 32 }, (_, row) => track === 0 && row % 4 === 0 ? ['C-4', 'D#4', 'G-4', 'A#4'][Math.floor(row / 4) % 4] : null) }]) }],
@@ -63,6 +70,7 @@ export function resizePattern(pattern: Pattern, rows: number) {
 
 export function readProject(raw: string): Project {
   const value = JSON.parse(raw);
+  if (value && typeof value === 'object') value.returns ??= [];
   if (value?.version !== 9 || typeof value.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value.id) || !Array.isArray(value.definitions) || value.definitions.length === 0 ||
       !value.definitions.every((d: Definition) => d && typeof d.id === 'string' && /^[a-zA-Z_][\w-]*$/.test(d.id) && typeof d.name === 'string' && typeof d.source === 'string' && ['instr', 'fx'].includes(d.kind) && (d.values === undefined || !!d.values && typeof d.values === 'object' && Object.values(d.values).every(Number.isFinite))) ||
       new Set(value.definitions.map((d: Definition) => d.id)).size !== value.definitions.length ||
@@ -70,6 +78,9 @@ export function readProject(raw: string): Project {
       !Number.isInteger(value.rows_per_beat) || value.rows_per_beat < 1 || value.rows_per_beat > 16 ||
       !Array.isArray(value.tracks) || (value.tracks.length < 1 || value.tracks.length > 16) ||
       !value.tracks.every((t: Track) => validTrack(t, value.definitions)) || !validTrack(value.master, value.definitions) || value.master.instrument !== null ||
+      !Array.isArray(value.returns) || value.returns.length > maxReturns || !value.returns.every((t: Track) => validTrack(t, value.definitions) && t.instrument === null) ||
+      (value.master.output && value.master.output.kind !== 'master' || value.master.fx.some((d: Device) => d.target !== undefined)) ||
+      value.returns.some((t: Track, i: number) => t.output?.kind === 'return' && t.output.index <= i || t.fx.some(d => d.target !== undefined && d.target <= i)) ||
       !Array.isArray(value.patterns) || value.patterns.length < 1 || value.patterns.length > 128 ||
       !value.patterns.every((p: Pattern) => p && typeof p.id === 'string' && /^[a-zA-Z_][\w-]*$/.test(p.id) && typeof p.name === 'string' &&
         Number.isInteger(p.rows) && p.rows >= 1 && p.rows <= 256 && Array.isArray(p.notes) && p.notes.length === value.tracks.length &&
@@ -129,9 +140,11 @@ function validTrack(t: Track, definitions: Definition[]): boolean {
     (t.instrument === null || definitions.some((d: Definition) => d.id === t.instrument && d.kind === 'instr')) &&
     Array.isArray(t.fx) && t.fx.length <= maxDevices && t.fx.every((d, i) => !!d && validDeviceId(d.id) && t.fx.findIndex(other => other.id === d.id) === i && typeof d.bypass === 'boolean' && definitions.some((def: Definition) => def.id === d.definition && def.kind === 'fx') && !!d.values && Object.values(d.values).every(Number.isFinite) && !!d.modulations && Object.values(d.modulations).every(validLfo)) &&
     Number.isFinite(t.pan) && t.pan >= -1 && t.pan <= 1 &&
+    (t.output === undefined || validOutput(t.output)) && t.fx.every(d => d.target === undefined || Number.isInteger(d.target) && d.target >= 0 && d.target < maxReturns) &&
     (t.solo === undefined || typeof t.solo === 'boolean') && typeof t.muted === 'boolean' && Number.isFinite(t.volume_db) && t.volume_db >= -60 && t.volume_db <= 6
   );
 }
+const validOutput = (o: Output) => !!o && (o.kind === 'master' || o.kind === 'none' || o.kind === 'return' && Number.isInteger(o.index) && o.index >= 0 && o.index < maxReturns);
 export const validDeviceId = (id: unknown) => typeof id === 'string' && /^[a-zA-Z0-9_]{1,40}$/.test(id);
 function validEnvelope(envelope: Envelope | undefined) {
   return envelope === undefined || !!envelope && typeof envelope.enabled === 'boolean' && ['hold', 'linear'].includes(envelope.mode) && Array.isArray(envelope.points) && envelope.points.length <= 4097 && envelope.points.every((p, i) => p && Number.isFinite(p.row) && p.row >= 0 && p.row <= 256 && Number.isFinite(p.value) && (i === 0 || p.row > envelope.points[i - 1].row));

@@ -33,6 +33,25 @@ it('builds a chain from presets, each device with its own copy of the code', () 
   expect(project.tracks[2].fx).toHaveLength(8);
 });
 
+it('adds sends to tracks only, targeting the first return, and picks the return on the device', () => {
+  const project = newProject(); project.returns.push({ name: 'Verb', instrument: null, fx: [], pan: 0, muted: false, volume_db: 0 }, { name: 'Echo', instrument: null, fx: [], pan: 0, muted: false, volume_db: 0 });
+  const { device, definition } = addDevice(project, 0, 'send')!;
+  expect(device.target).toBe(0); expect(definition.source).toContain('amount'); expect(addDevice(project, 0, 'delay')!.device.target).toBeUndefined();
+  const parent = document.createElement('div'), fx = actions({ selected: device.id }); document.body.append(parent);
+  renderMixer(parent, project, 0, vi.fn(), {}, vi.fn(), fx);
+  expect([...parent.querySelectorAll<HTMLOptionElement>('[aria-label="Send destination"] option')].map(o => o.text)).toEqual(['→ Verb', '→ Echo']);
+  const to = parent.querySelector<HTMLSelectElement>('[aria-label="Send destination"]')!; to.value = '1'; to.dispatchEvent(new Event('change'));
+  expect(device.target).toBe(1); expect(fx.changed).toHaveBeenCalled();
+  // A return's send starts on the next return and may only pick later ones; the last return and the master cannot send.
+  const presets = (strip: number) => { renderMixer(parent, project, strip, vi.fn(), {}, vi.fn(), fx); return [...parent.querySelectorAll<HTMLOptionElement>('[aria-label="Add effect"] optgroup[label="New from preset"] option')].map(o => o.text); };
+  expect(presets(-2)).toContain('Send'); expect(presets(-3)).not.toContain('Send');
+  const onReturn = addDevice(project, -2, 'send')!.device; expect(onReturn.target).toBe(1);
+  renderMixer(parent, project, -2, vi.fn(), {}, vi.fn(), actions({ selected: onReturn.id }));
+  expect([...parent.querySelectorAll<HTMLOptionElement>('.send-target option')].map(o => o.text)).toEqual(['→ Echo']);
+  renderMixer(parent, project, -1, vi.fn(), {}, vi.fn(), fx);
+  expect([...parent.querySelectorAll<HTMLOptionElement>('[aria-label="Add effect"] optgroup[label="New from preset"] option')].map(o => o.text)).not.toContain('Send');
+});
+
 it('keeps lanes that hold values when their effect is removed', () => {
   const project = newProject(); const { device } = addDevice(project, 0, 'delay')!;
   const lane = project.patterns[0].fx[0][0]; lane.target = { kind: 'effect', device: device.id, parameter: 'mix' }; lane.values[4] = '0.5';

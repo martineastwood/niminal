@@ -7,6 +7,7 @@ import highpass from './presets/highpass.nml?raw';
 import bandpass from './presets/bandpass.nml?raw';
 import notch from './presets/notch.nml?raw';
 import tremolo from './presets/tremolo.nml?raw';
+import send from './presets/send.nml?raw';
 
 export const builtInEffects = [
   { id: 'delay', name: 'Stereo delay', source: delay },
@@ -18,11 +19,16 @@ export const builtInEffects = [
   { id: 'tremolo', name: 'Tremolo', source: tremolo },
 ];
 
+/** The preset that makes a send device; offered on tracks only. */
+export const sendPreset = { id: 'send', name: 'Send', source: send };
+
 const blank = { name: 'Blank', source: 'fx blank() { out = in }\n' };
 
-/** A track number, or this for the master. */
+/** A strip is a track number (0 and up), `master`, or a return: `returnStrip(0)` and below. */
 export const master = -1;
-export const stripOf = (project: Project, track: number): Track => track < 0 ? project.master : project.tracks[track];
+export const returnStrip = (index: number) => -2 - index;
+export const returnIndex = (strip: number) => -2 - strip;
+export const stripOf = (project: Project, strip: number): Track => strip >= 0 ? project.tracks[strip] : strip === master ? project.master : project.returns[returnIndex(strip)];
 
 const effectName = (project: Project, base: string) => {
   const taken = new Set(project.definitions.filter(d => d.kind === 'fx').map(d => d.name));
@@ -33,7 +39,7 @@ const effectName = (project: Project, base: string) => {
 
 /** A new effect in the project's library, from a preset or blank. Its code names itself after its id, so copies never collide. */
 export function newEffect(project: Project, presetId = 'blank'): Definition | null {
-  const preset = presetId === 'blank' ? blank : builtInEffects.find(p => p.id === presetId);
+  const preset = presetId === 'blank' ? blank : presetId === sendPreset.id ? sendPreset : builtInEffects.find(p => p.id === presetId);
   if (!preset) return null;
   const id = `fx_${crypto.randomUUID().replaceAll('-', '_')}`;
   const definition: Definition = { id, name: effectName(project, preset.name), kind: 'fx', source: preset.source.replace(/^fx \w+/m, `fx ${id}`) };
@@ -51,7 +57,7 @@ export function duplicateEffect(project: Project, source: Definition): Definitio
 
 /** Where an effect is used: the names of the tracks (or Master) that have a device running it. */
 export function effectUsers(project: Project, id: string): string[] {
-  return [project.master, ...project.tracks].filter(t => t.fx.some(d => d.definition === id)).map(t => t === project.master ? 'Master' : t.name);
+  return [project.master, ...project.returns, ...project.tracks].filter(t => t.fx.some(d => d.definition === id)).map(t => t === project.master ? 'Master' : t.name);
 }
 
 /** Removes an effect from the library unless a device runs it. Returns why not. */
@@ -71,7 +77,7 @@ export function addDevice(project: Project, track: number, choice: string): { de
   if (chain.length >= maxDevices) return null;
   const definition = choice.startsWith('fx:') ? project.definitions.find(d => d.id === choice.slice(3) && d.kind === 'fx') : newEffect(project, choice);
   if (!definition) return null;
-  const device: Device = { id: `d_${crypto.randomUUID().replaceAll('-', '_').slice(0, 12)}`, definition: definition.id, bypass: false, values: {}, modulations: {} };
+  const device: Device = { id: `d_${crypto.randomUUID().replaceAll('-', '_').slice(0, 12)}`, definition: definition.id, bypass: false, values: {}, modulations: {}, ...(choice === sendPreset.id ? { target: track < -1 ? returnIndex(track) + 1 : 0 } : {}) };
   chain.push(device);
   return { device, definition };
 }

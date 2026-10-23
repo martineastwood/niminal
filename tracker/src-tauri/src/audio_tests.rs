@@ -1,5 +1,5 @@
 use super::*;
-use crate::pattern::{Device, FxLane, NoteColumn, Pattern, Track};
+use crate::pattern::{Device, FxLane, NoteColumn, Output, Pattern, Track};
 use niminal_lang::Layout;
 use niminal_server::{EngineServer, Session};
 use niminal_ws::{Server, ServerConfig};
@@ -33,6 +33,7 @@ fn test_song(note: Option<&str>) -> Song {
         }],
         sequence: vec!["p0".into()],
         master: Track::default(),
+        returns: vec![],
         instrument_values: Default::default(),
     }
 }
@@ -442,6 +443,227 @@ fn the_master_has_its_own_level_and_effects_and_solo_silences_other_tracks() {
         .command(Command::Update { song: song.clone() })
         .unwrap();
     assert!(level(&mut worker, 0) > 0.09);
+    worker.command(Command::Disconnect).unwrap();
+    drop(worker);
+    server.stop();
+}
+
+#[test]
+fn tracks_send_to_returns_that_have_their_own_effects_level_and_mute() {
+    let engine = Arc::new(Mutex::new(EngineServer::new(
+        Session::new(48000.0, Layout::Mono).without_limiter(),
+    )));
+    let server = Server::start(
+        engine.clone(),
+        ServerConfig {
+            port: 0,
+            ..ServerConfig::default()
+        },
+    )
+    .unwrap();
+    let mut worker = Worker::default();
+    worker
+        .command(Command::Connect {
+            port: server.port(),
+            token: None,
+        })
+        .unwrap();
+    for (id, source, kind) in [
+        ("tone", "instr flat(freq: hz) { 0.1 }", Kind::Instr),
+        ("half", "fx half { out = in * 0.5 }", Kind::Fx),
+        ("pass", "fx pass { out = in }", Kind::Fx),
+    ] {
+        worker
+            .command(Command::Apply {
+                id: id.into(),
+                source: source.into(),
+                kind,
+                dir: None,
+            })
+            .unwrap();
+    }
+    let level = |worker: &mut Worker, track: usize| {
+        worker
+            .command(Command::Audition {
+                instrument: "tone".into(),
+                note: "C-4".into(),
+                track,
+            })
+            .unwrap();
+        let audio = engine.lock().unwrap().session_mut().process(16000);
+        audio[0][2048..4096].iter().map(|s| s.abs()).sum::<f32>() / 2048.0
+    };
+    let mut song = test_song(None);
+    let dry = level(&mut worker, 0);
+    let send = |definition: &str| Device {
+        id: "s1".into(),
+        definition: definition.into(),
+        target: Some(0),
+        ..Device::default()
+    };
+
+    // A send adds the track's signal again through the return.
+    song.returns = vec![Track {
+        name: "Verb".into(),
+        ..Track::default()
+    }];
+    song.tracks[0].fx = vec![send("pass")];
+    worker
+        .command(Command::Update { song: song.clone() })
+        .unwrap();
+    assert!((level(&mut worker, 0) / dry - 2.0).abs() < 0.001, "dry plus send");
+    assert!((level(&mut worker, 1) / dry - 1.0).abs() < 0.001, "other tracks do not send");
+
+    // The return's effect chain processes only what is sent.
+    song.returns[0].fx = vec![Device {
+        id: "r1".into(),
+        definition: "half".into(),
+        ..Device::default()
+    }];
+    worker
+        .command(Command::Update { song: song.clone() })
+        .unwrap();
+    assert!((level(&mut worker, 0) / dry - 1.5).abs() < 0.001);
+
+    // A send device's own effect sets the send level; return mute and track mute take the send away.
+    song.tracks[0].fx = vec![send("half")];
+    worker
+        .command(Command::Update { song: song.clone() })
+        .unwrap();
+    assert!((level(&mut worker, 0) / dry - 1.25).abs() < 0.001);
+    song.returns[0].muted = true;
+    worker
+        .command(Command::Update { song: song.clone() })
+        .unwrap();
+    assert!((level(&mut worker, 0) / dry - 1.0).abs() < 0.001);
+    song.returns[0].muted = false;
+    song.tracks[0].muted = true;
+    worker
+        .command(Command::Update { song: song.clone() })
+        .unwrap();
+    assert_eq!(level(&mut worker, 0), 0.0, "a muted track sends nothing");
+
+    // Removing the return silences its sends.
+    song.tracks[0].muted = false;
+    song.returns.clear();
+    worker
+        .command(Command::Update { song: song.clone() })
+        .unwrap();
+    assert!((level(&mut worker, 0) / dry - 1.0).abs() < 0.001);
+    worker.command(Command::Disconnect).unwrap();
+    drop(worker);
+    server.stop();
+}
+
+#[test]
+fn outputs_route_tracks_into_returns_and_sends_tap_the_chain_where_they_sit() {
+    let engine = Arc::new(Mutex::new(EngineServer::new(
+        Session::new(48000.0, Layout::Mono).without_limiter(),
+    )));
+    let server = Server::start(
+        engine.clone(),
+        ServerConfig {
+            port: 0,
+            ..ServerConfig::default()
+        },
+    )
+    .unwrap();
+    let mut worker = Worker::default();
+    worker
+        .command(Command::Connect {
+            port: server.port(),
+            token: None,
+        })
+        .unwrap();
+    for (id, source, kind) in [
+        ("tone", "instr flat(freq: hz) { 0.1 }", Kind::Instr),
+        ("half", "fx half { out = in * 0.5 }", Kind::Fx),
+        ("pass", "fx pass { out = in }", Kind::Fx),
+    ] {
+        worker
+            .command(Command::Apply {
+                id: id.into(),
+                source: source.into(),
+                kind,
+                dir: None,
+            })
+            .unwrap();
+    }
+    let level = |worker: &mut Worker, track: usize| {
+        worker
+            .command(Command::Audition {
+                instrument: "tone".into(),
+                note: "C-4".into(),
+                track,
+            })
+            .unwrap();
+        let audio = engine.lock().unwrap().session_mut().process(16000);
+        audio[0][2048..4096].iter().map(|s| s.abs()).sum::<f32>() / 2048.0
+    };
+    let device = |id: &str, definition: &str, target: Option<usize>| Device {
+        id: id.into(),
+        definition: definition.into(),
+        target,
+        ..Device::default()
+    };
+    let mut song = test_song(None);
+    let dry = level(&mut worker, 0);
+    let ratio = |worker: &mut Worker, song: &Song, track| {
+        worker.command(Command::Update { song: song.clone() }).unwrap();
+        level(worker, track) / dry
+    };
+
+    // A track output into a return is heard only through the return's effects.
+    song.returns = vec![Track {
+        name: "Drums".into(),
+        fx: vec![device("r1", "half", None)],
+        ..Track::default()
+    }];
+    song.tracks[0].output = Output::Return { index: 0 };
+    assert!((ratio(&mut worker, &song, 0) - 0.5).abs() < 0.001, "wet only");
+    assert!((ratio(&mut worker, &song, 1) - 1.0).abs() < 0.001, "other tracks still reach the master");
+
+    // No output leaves only the sends; a muted track and a missing return are silent.
+    song.tracks[0].output = Output::None;
+    assert_eq!(ratio(&mut worker, &song, 0), 0.0);
+    song.tracks[0].fx = vec![device("s1", "pass", Some(0))];
+    assert!((ratio(&mut worker, &song, 0) - 0.5).abs() < 0.001, "send only, through the return's effect");
+    song.tracks[0].output = Output::Return { index: 0 };
+    song.returns.clear();
+    assert!(ratio(&mut worker, &song, 0) < 0.001, "no return, no sound");
+
+    // A send takes the chain's signal at its position and leaves the chain as it was.
+    song.returns = vec![Track::default()];
+    song.tracks[0].output = Output::Master;
+    song.tracks[0].fx = vec![device("e1", "half", None), device("s1", "pass", Some(0))];
+    let r = ratio(&mut worker, &song, 0);
+    assert!((r - 1.0).abs() < 0.001, "half dry plus half sent: {r}");
+    song.tracks[0].fx = vec![device("s1", "pass", Some(0)), device("e1", "half", None)];
+    assert!((ratio(&mut worker, &song, 0) - 1.5).abs() < 0.001, "half dry plus all of it sent");
+
+    // Re-pointing a send keeps it audible; a bypassed send carries nothing.
+    song.returns = vec![Track::default(), Track::default()];
+    song.tracks[0].fx[0].target = Some(1);
+    assert!((ratio(&mut worker, &song, 0) - 1.5).abs() < 0.001);
+    song.tracks[0].fx[0].bypass = true;
+    let r = ratio(&mut worker, &song, 0);
+    assert!((r - 0.5).abs() < 0.001, "{r}");
+
+    // Returns feed later returns, by output or by their own sends.
+    song.tracks[0].fx.clear();
+    song.tracks[0].output = Output::Return { index: 0 };
+    song.returns[1].fx = vec![device("r1", "half", None)];
+    song.returns[0].output = Output::Return { index: 1 };
+    assert!((ratio(&mut worker, &song, 0) - 0.5).abs() < 0.001, "track into A into B's effect");
+    song.returns[0].output = Output::None;
+    song.returns[0].fx = vec![device("r2", "half", None), device("s2", "pass", Some(1))];
+    assert!((ratio(&mut worker, &song, 0) - 0.25).abs() < 0.001, "only A's send reaches B");
+    assert!(song.validate().is_ok());
+    song.returns[1].output = Output::Return { index: 0 };
+    assert!(song.validate().is_err(), "a return cannot feed an earlier one");
+    song.returns[1].output = Output::Master;
+    song.returns[1].fx = vec![device("s3", "pass", Some(1))];
+    assert!(song.validate().is_err(), "nor send to itself");
     worker.command(Command::Disconnect).unwrap();
     drop(worker);
     server.stop();

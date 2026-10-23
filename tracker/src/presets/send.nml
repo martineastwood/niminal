@@ -1,0 +1,4 @@
+/// A send. Its output goes to the return track chosen on the device and the chain carries on past it unchanged, so effects before it shape what is sent. Add effects to the code to colour the send itself.
+fx library_send(amount: 0..1 = 0.5) {
+  out = in * amount
+}

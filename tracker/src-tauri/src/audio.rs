@@ -155,6 +155,7 @@ struct Worker {
     status: Status,
     sounds: BTreeMap<String, Sound>,
     mixer: Vec<Track>,
+    mixer_returns: Vec<Track>,
     mixer_master: Track,
     scopes: Scopes,
     playback: Option<Playback>,
@@ -190,6 +191,7 @@ impl Worker {
                 self.playback = None;
                 self.sounds.clear();
                 self.mixer.clear();
+                self.mixer_returns.clear();
                 self.mixer_master = Track::default();
                 self.status = Status {
                     error: Some(error.clone()),
@@ -262,6 +264,7 @@ impl Worker {
             self.call("panic", json!({}))?;
             self.send_events(mixer::reset(
                 &self.mixer,
+                &self.mixer_returns,
                 &self.mixer_master,
                 &self.status.effect_parameters,
             ))?;
@@ -277,6 +280,7 @@ impl Worker {
                 self.client = None;
                 self.sounds.clear();
                 self.mixer.clear();
+                self.mixer_returns.clear();
                 self.mixer_master = Track::default();
                 self.status = Status::default();
                 let (client, hello) =
@@ -291,10 +295,7 @@ impl Worker {
                 ])?;
                 self.scopes.clear();
                 self.call("subscribe", json!({"topics":["scopes"]}))?;
-                for label in (0..16)
-                    .map(|t| t.to_string())
-                    .chain([mixer::MASTER.to_string()])
-                {
+                for label in mixer::labels() {
                     self.call(
                         "scopes.create",
                         json!({"id":format!("s_{label}"), "endpoint":{"kind":"node", "id":format!("tap_{label}")}, "frames":SCOPE_FRAMES, "rate":SCOPE_RATE}),
@@ -307,6 +308,7 @@ impl Worker {
                 self.client = None;
                 self.sounds.clear();
                 self.mixer.clear();
+                self.mixer_returns.clear();
                 self.mixer_master = Track::default();
                 self.status = Status::default();
                 result?;
@@ -360,8 +362,10 @@ impl Worker {
                     .collect();
                 let (remove_modulators, _) = crate::modulation::edits(
                     &[],
+                    &[],
                     &Track::default(),
                     &self.mixer,
+                    &self.mixer_returns,
                     &self.mixer_master,
                     &self.status.effect_parameters,
                     self.mixer_timing.0,
@@ -371,13 +375,16 @@ impl Worker {
                 edits.extend(remove_modulators);
                 edits.extend(mixer::replacements(
                     &self.mixer,
+                    &self.mixer_returns,
                     &self.mixer_master,
                     &effects,
                     &parameters,
                 )?);
                 let (_, modulators) = crate::modulation::edits(
                     &self.mixer,
+                    &self.mixer_returns,
                     &self.mixer_master,
+                    &[],
                     &[],
                     &Track::default(),
                     &parameters,
@@ -422,6 +429,7 @@ impl Worker {
                 self.set_mixer(&playback.song)?;
                 self.send_events(mixer::reset(
                     &playback.song.tracks,
+                    &playback.song.returns,
                     &playback.song.master,
                     &self.status.effect_parameters,
                 ))?;
@@ -430,6 +438,7 @@ impl Worker {
                 playback.origin = self.clock()? + (self.status.sample_rate * 0.15).round() as u64;
                 self.send_events(crate::modulation::reset(
                     &playback.song.tracks,
+                    &playback.song.returns,
                     &playback.song.master,
                     &self.status.effect_parameters,
                     playback.origin,
@@ -481,13 +490,20 @@ impl Worker {
 
     fn check_assignments(&self, song: &Song) -> Result<(), String> {
         song.validate()?;
-        if song.master.fx.iter().any(|device| {
-            !self
-                .status
-                .effect_parameters
-                .contains_key(&device.definition)
-        }) {
-            return Err("Apply the master's effects first".into());
+        for (strip, name) in song
+            .returns
+            .iter()
+            .map(|r| (r, r.name.as_str()))
+            .chain([(&song.master, "the master")])
+        {
+            if strip.fx.iter().any(|device| {
+                !self
+                    .status
+                    .effect_parameters
+                    .contains_key(&device.definition)
+            }) {
+                return Err(format!("Apply the effects assigned to {name} first"));
+            }
         }
         for (index, track) in song.tracks.iter().enumerate() {
             if let Some(id) = &track.instrument
@@ -561,8 +577,10 @@ impl Worker {
     fn set_mixer(&mut self, song: &Song) -> Result<(), String> {
         let events = mixer::events(
             &song.tracks,
+            &song.returns,
             &song.master,
             &self.mixer,
+            &self.mixer_returns,
             &self.mixer_master,
             &self.status.effects,
             &self.status.effect_parameters,
@@ -572,6 +590,7 @@ impl Worker {
         )?;
         self.send_events(events)?;
         self.mixer = song.tracks.clone();
+        self.mixer_returns = song.returns.clone();
         self.mixer_master = song.master.clone();
         self.mixer_timing = (song.bpm, song.rows_per_beat);
         Ok(())
