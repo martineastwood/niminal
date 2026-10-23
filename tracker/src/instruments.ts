@@ -1,4 +1,5 @@
 import type { Definition, Project } from './project';
+import type { Preset } from './library';
 
 const identifier = () => crypto.randomUUID().replaceAll('-', '_');
 
@@ -22,6 +23,14 @@ export function addInstrument(project: Project, sample?: string): Definition {
   const id = `instr_${identifier()}`;
   const stem = sample?.split('/').pop()?.replace(/\.wav$/i, '');
   const definition: Definition = { id, kind: 'instr', name: uniqueName(project, stem ?? 'Synth'), source: sample ? samplerSource(id, sample) : synthSource(id) };
+  project.definitions.push(definition);
+  return definition;
+}
+
+/** A copy of one of the instruments that come with niminal, named after its id in the code so it never collides. */
+export function addInstrumentFromPreset(project: Project, preset: Preset): Definition {
+  const id = `instr_${identifier()}`;
+  const definition: Definition = { id, kind: 'instr', name: uniqueName(project, preset.name), source: preset.source.replace(/^instr \w+/m, `instr ${id}`) };
   project.definitions.push(definition);
   return definition;
 }

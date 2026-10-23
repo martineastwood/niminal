@@ -1,7 +1,0 @@
-/// Gently soften the incoming signal. Cutoff and resonance can be automated.
-fx soften(
-  cutoff: hz = 2400hz,
-  resonance: 0..1 = 0.2
-) {
-  out = in.lpf(cutoff: cutoff, res: resonance)
-}

@@ -1,23 +1,10 @@
 import type { Definition, Device, Project, Track } from './project';
 import { maxDevices } from './project';
-import delay from './presets/delay.nml?raw';
-import chorus from './presets/chorus.nml?raw';
-import lowpass from './presets/lowpass.nml?raw';
-import highpass from './presets/highpass.nml?raw';
-import bandpass from './presets/bandpass.nml?raw';
-import notch from './presets/notch.nml?raw';
-import tremolo from './presets/tremolo.nml?raw';
 import send from './presets/send.nml?raw';
+import { effectPresets } from './library';
 
-export const builtInEffects = [
-  { id: 'delay', name: 'Stereo delay', source: delay },
-  { id: 'chorus', name: 'Chorus', source: chorus },
-  { id: 'lowpass', name: 'Low pass', source: lowpass },
-  { id: 'highpass', name: 'High pass', source: highpass },
-  { id: 'bandpass', name: 'Band pass', source: bandpass },
-  { id: 'notch', name: 'Notch', source: notch },
-  { id: 'tremolo', name: 'Tremolo', source: tremolo },
-];
+/** The effects that come with niminal (`std/fx`), each copied into a project as it is added. */
+export const builtInEffects = effectPresets;
 
 /** The preset that makes a send device; offered on tracks only. */
 export const sendPreset = { id: 'send', name: 'Send', source: send };

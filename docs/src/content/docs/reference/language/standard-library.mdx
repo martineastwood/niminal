@@ -1,6 +1,6 @@
 ---
 title: Standard library
-description: Filters, physical models, delays, a reverb and spectral effects, written in niminal and shipped with it.
+description: Filters, physical models, delays, a reverb, spectral effects, and ready-made instruments and effects, written in niminal and shipped with it.
 ---
 
 import Example from '../../../../components/Example.astro';
@@ -71,6 +71,29 @@ These use [`frames`](/reference/language/functions/#frames-and-the-fft), so each
 | `robot(x, size: 1024)` | Keeps every magnitude and zeroes every phase: a buzz at the frame rate. |
 | `blur(x, amount: 0.9, size: 1024)` | Mixes each spectrum with the ones before it: a long wash. |
 | `denoise(x, threshold: 0.01, size: 1024)` | Silences the bins quieter than `threshold`: a spectral noise gate. |
+
+## std/instruments
+
+Finished instruments with a few controls each, for when you want a sound and not a function. `use std/instruments`, then play them by name (`instrument: kick`, or `kick(freq: c2) for 1beat`). Each is complete on its own, so you can copy one into your file and change it. The tracker offers the same list under **▾** beside **+** in its instruments.
+
+| Instrument | What it is |
+| --- | --- |
+| `kick(freq: 55hz, punch, decay)` | A sine that drops in pitch, with a click on the front. |
+| `snare(freq: 180hz, snap, decay)` | A short triangle thump under band-passed noise. |
+| `hat(open)` | High-passed, crushed noise; `open` goes from a tick to a wash. The note's pitch is ignored. |
+| `bass(freq, cutoff: 600hz, res)` | A saw with a sine an octave down, through a low-pass. |
+| `pluck(freq, tone, decay)` | A plucked string that is bright at the start and dulls as it dies away. |
+| `pad(freq, attack, release, detune)` | Three slightly detuned saws, softened by a low-pass, with a slow envelope. |
+| `lead(freq, cutoff: 2500hz, vibrato)` | A saw with vibrato, through a low-pass. |
+| `bell(freq, decay)` | A struck bell from two sines, one bending the phase of the other. |
+
+## std/fx
+
+Effects that read `in`: `lowpass`, `highpass`, `bandpass`, `band_cut`, `equalizer`, `echo`, `room_reverb`, `ensemble`, `swirl` (a phaser), `tremolo`, `compressor`, `overdrive`, `lofi` and `ceiling` (a limiter). Each has typed, ranged parameters and, where it makes sense, a `mix`. Like the instruments, each stands alone: read the module for the controls of each one. The tracker lists them under **+ Add effect…** and beside **+** in its effects library.
+
+```nml
+use std/fx
+```
 
 ## Examples
 

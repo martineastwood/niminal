@@ -283,9 +283,24 @@ pub struct Song {
     /// Song playback repeats these sequence positions (inclusive) once it reaches them, until stopped.
     #[serde(default)]
     pub loop_range: Option<LoopRange>,
+    /// By sequence step, then track: where the track plays from if not the step's own pattern.
+    /// Steps and tracks beyond the ends of these lists play their own pattern.
+    #[serde(default)]
+    pub matrix: Vec<Vec<Option<TrackSource>>>,
     /// Each instrument's parameter values, by definition id; notes start with these.
     #[serde(default)]
     pub instrument_values: BTreeMap<String, BTreeMap<String, f64>>,
+}
+
+/// Where one track plays from in one sequence step, when not from the step's own pattern.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum TrackSource {
+    /// The track is silent for the whole step, and a note still sounding from before ends there.
+    Mute,
+    /// The track plays another pattern's notes and lanes. If that pattern is shorter than the step,
+    /// the track falls silent after its last row.
+    Pattern { id: String },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
@@ -373,6 +388,16 @@ impl Song {
         }
         if self.sequence.iter().any(|id| !ids.contains(id)) {
             return Err("Sequence references a missing pattern".into());
+        }
+        if self.matrix.len() > self.sequence.len()
+            || self.matrix.iter().any(|step| {
+                step.len() > self.tracks.len()
+                    || step.iter().flatten().any(|source| {
+                        matches!(source, TrackSource::Pattern { id } if !ids.contains(id))
+                    })
+            })
+        {
+            return Err("The matrix must name existing patterns and tracks".into());
         }
         if self
             .loop_range
@@ -574,6 +599,26 @@ impl Playback {
             && self.position(sample, sample_rate).is_none()
     }
 
+    /// The pattern `track` plays from at `position`: the step's own, or another one if the matrix says
+    /// so. None when the track is muted there, or the other pattern has run out of rows.
+    fn track_pattern<'a>(&'a self, position: &Position<'a>, track: usize) -> Option<&'a Pattern> {
+        let source = position
+            .sequence_position
+            .and_then(|step| self.song.matrix.get(step))
+            .and_then(|step| step.get(track))
+            .and_then(Option::as_ref);
+        match source {
+            None => Some(position.pattern),
+            Some(TrackSource::Mute) => None,
+            Some(TrackSource::Pattern { id }) => self
+                .song
+                .patterns
+                .iter()
+                .find(|p| p.id == *id)
+                .filter(|p| position.row < p.rows),
+        }
+    }
+
     /// How many rows a note started on row `index` (itself `delay` rows late) is held: until
     /// the column next has a note or an OFF, or until the song or pattern runs out.
     fn hold_rows(&self, index: u64, track: usize, column: usize, delay: f64) -> f64 {
@@ -583,7 +628,11 @@ impl Playback {
                 // The song ends here.
                 return (ahead as f64 - delay).max(MIN_HOLD);
             };
-            let Some(next) = position.pattern.notes[track].get(column) else {
+            let Some(pattern) = self.track_pattern(&position, track) else {
+                // The track is muted from here, so the note ends where the mute begins.
+                return (ahead as f64 - delay).max(MIN_HOLD);
+            };
+            let Some(next) = pattern.notes[track].get(column) else {
                 continue;
             };
             if next.note(position.row).is_some() {
@@ -617,8 +666,11 @@ impl Playback {
                 continue;
             }
             for (index, track) in self.song.tracks.iter().enumerate() {
+                let Some(pattern) = self.track_pattern(&position, index) else {
+                    continue;
+                };
                 let mut edits = Vec::new();
-                for lane in &position.pattern.fx[index] {
+                for lane in &pattern.fx[index] {
                     if let Some(crate::commands::FxTarget::Instrument { parameter }) = &lane.target
                     {
                         // Remembered until changed, and given to each note as it starts.
@@ -706,11 +758,11 @@ impl Playback {
                             }
                         }
                         if envelope.mode == "hold"
-                            && position.row + 1 == position.pattern.rows
+                            && position.row + 1 == pattern.rows
                             && let Some(point) = envelope
                                 .points
                                 .iter()
-                                .find(|p| p.row == position.pattern.rows as f64)
+                                .find(|p| p.row == pattern.rows as f64)
                         {
                             let edit = crate::commands::edit(
                                 target,
@@ -723,7 +775,7 @@ impl Playback {
                         }
                         continue;
                     }
-                    let (Some(target), Some(value)) = (&lane.target, &lane.values[position.row])
+                    let (Some(target), Some(Some(value))) = (&lane.target, lane.values.get(position.row))
                     else {
                         continue;
                     };
@@ -737,7 +789,7 @@ impl Playback {
                         json!({"op":"routing", "at":at, "tag":"tracker-pattern", "edits":edits}),
                     );
                 }
-                for (column_index, column) in position.pattern.notes[index].iter().enumerate() {
+                for (column_index, column) in pattern.notes[index].iter().enumerate() {
                     let Some(note) = column.note(position.row) else {
                         continue;
                     };
@@ -821,11 +873,81 @@ mod tests {
                 .collect(),
             sequence: vec!["a".into(), "b".into(), "a".into()],
             loop_range: None,
+            matrix: vec![],
             master: Track::default(),
             returns: vec![],
             instrument_values: Default::default(),
         }
     }
+    /// The notes track 0 plays over the whole of `song`, as (frequency, duration in seconds).
+    fn track_zero(song: &Song) -> Vec<(String, f64)> {
+        let mut play = Playback::new(0, song.clone(), Mode::Song, "a".into(), 0).unwrap();
+        let targets = BTreeMap::from([("tone".into(), "voice".into())]);
+        let horizon = play.row_at(100, 48000.0);
+        let (events, _) = play.events_until(0, horizon, 48000.0, &targets).unwrap();
+        events
+            .iter()
+            .filter(|e| e["op"] == "note" && e["to"] == "in_0")
+            .map(|e| (e["args"]["freq"].as_str().unwrap().to_string(), e["dur"].as_str().unwrap().trim_end_matches("sec").parse().unwrap()))
+            .collect()
+    }
+    fn freqs(notes: &[(String, f64)]) -> Vec<&str> {
+        notes.iter().map(|(f, _)| f.as_str()).collect()
+    }
+
+    #[test]
+    fn the_matrix_mutes_or_redirects_one_track_in_one_step() {
+        // a (2 rows) and b (3 rows) have notes on every row; sequence a, b, a.
+        let mut s = song();
+        assert_eq!(freqs(&track_zero(&s)), ["c4", "c4", "d#4", "d#4", "d#4", "c4", "c4"]);
+        // Muted in step 1: only a's rows sound. Other tracks and other steps are untouched.
+        s.matrix = vec![vec![], vec![Some(TrackSource::Mute)]];
+        assert_eq!(freqs(&track_zero(&s)), ["c4", "c4", "c4", "c4"]);
+        s.matrix = vec![vec![None, Some(TrackSource::Mute)]];
+        assert_eq!(track_zero(&s).len(), 7, "track 1 is muted, not track 0");
+        // Redirected: step 0 plays b's notes, and step 1 plays a's, which has run out after two rows.
+        s.matrix = vec![
+            vec![Some(TrackSource::Pattern { id: "b".into() })],
+            vec![Some(TrackSource::Pattern { id: "a".into() })],
+        ];
+        assert_eq!(freqs(&track_zero(&s)), ["d#4", "d#4", "c4", "c4", "c4", "c4"]);
+        // Pattern mode ignores the matrix.
+        s.matrix = vec![vec![Some(TrackSource::Mute)]];
+        let play = Playback::new(0, s.clone(), Mode::Pattern, "a".into(), 0).unwrap();
+        assert_eq!(play.track_pattern(&play.location(0).unwrap(), 0).unwrap().id, "a");
+        // The matrix is validated.
+        assert!(s.validate().is_ok());
+        s.matrix = vec![vec![Some(TrackSource::Pattern { id: "missing".into() })]];
+        assert!(s.validate().is_err());
+        s.matrix = vec![vec![]; 4];
+        assert!(s.validate().is_err(), "more steps than the sequence");
+        s.matrix = vec![vec![None; 5]];
+        assert!(s.validate().is_err(), "more tracks than the song");
+        // It can change while playing; the timeline does not.
+        assert!(song().same_timeline(&s));
+    }
+
+    #[test]
+    fn a_note_ends_where_a_muted_step_begins() {
+        // a: two rows with a note on the first; b: three silent rows.
+        let mut s = song();
+        s.bpm = 120.0;
+        s.sequence = vec!["a".into(), "b".into()];
+        s.patterns[0].notes[0][0].notes = vec![Some("C-4".into()), None];
+        s.patterns[1].notes[0][0].notes = vec![None; 3];
+        let held = track_zero(&s);
+        assert_eq!(held.len(), 1);
+        assert!((held[0].1 - 5.0 * 0.125).abs() < 1e-9, "rings to the end of the song: {held:?}");
+        s.matrix = vec![vec![], vec![Some(TrackSource::Mute)]];
+        let cut = track_zero(&s);
+        assert!((cut[0].1 - 2.0 * 0.125).abs() < 1e-9, "stops at the mute: {cut:?}");
+        // A track that falls silent because its pattern is shorter stops there too.
+        s.matrix = vec![vec![], vec![Some(TrackSource::Pattern { id: "a".into() })]];
+        let alias = track_zero(&s);
+        assert_eq!(alias.len(), 2, "the alias plays a's note on step 1's first row");
+        assert!((alias[1].1 - 2.0 * 0.125).abs() < 1e-9, "and a has only two rows, so it stops after them: {alias:?}");
+    }
+
     #[test]
     fn a_loop_repeats_its_positions_and_moving_it_carries_on_from_the_pattern_now_playing() {
         let seq = |play: &Playback, row: u64| play.location(row).unwrap().sequence_position;

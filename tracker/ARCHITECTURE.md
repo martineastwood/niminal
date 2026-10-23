@@ -4,6 +4,8 @@ Niminal owns all DSP, audio buffers, mixing, parameter interpolation, oscillator
 
 A musical track is represented by native niminal routing resources. Notes target its engine collection node. Track pre-volume/pan use native fx parameters. Insert effects are native fx instances connected with native routing edges. Mute uses a native connection gain. Shared code definitions may have many independent native instances.
 
+The sequence is a list of pattern references, and the song's *matrix* lists, per step and track, where that track plays from when not from the step's own pattern: nowhere (`mute`) or another pattern (`pattern`). The scheduler resolves this for each row and track (`Playback::track_pattern`), so a redirected track reads that pattern's notes and parameter lanes, a muted one produces nothing, and a note's hold stops where a muted step, or a redirected pattern that has run out of rows, begins. The matrix does not change the timeline (step lengths come from each step's own pattern), so it can be edited while playing.
+
 Track modulation uses the existing native bus-mapping API:
 
 ```mermaid

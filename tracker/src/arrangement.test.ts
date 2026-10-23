@@ -133,3 +133,16 @@ it('points the selected step at the previous or next pattern, within the pool', 
   view.shiftPattern(-2); expect(project.sequence[0]).toBe(a); view.shiftPattern(-1); expect(project.sequence[0]).toBe(a);
   expect(edited).toHaveBeenCalled();
 });
+
+it('keeps each step\'s mutes and redirects with the step as the sequence changes', () => {
+  const project = newProject(), parent = document.createElement('div');
+  const view = new Arrangement(parent, () => project, vi.fn(), vi.fn()); view.reset();
+  for (let i = 0; i < 3; i++) view.insert('reuse'); // four steps
+  project.matrix = [[], [{ kind: 'mute' }], [], [null, { kind: 'mute' }]];
+  view.select(1); view.insert('reuse'); // a step after step 1: step 2 is new, the old steps 2 and 3 move down
+  expect(project.matrix).toEqual([[], [{ kind: 'mute' }], [], [], [null, { kind: 'mute' }]]);
+  view.select(1); view.move(1); // the muted step swaps with the one after it
+  expect(project.matrix).toEqual([[], [], [{ kind: 'mute' }], [], [null, { kind: 'mute' }]]);
+  view.select(2); view.remove(); expect(project.matrix).toEqual([[], [], [], [null, { kind: 'mute' }]]);
+  view.select(3); view.remove(); expect(project.matrix).toBeUndefined();
+});

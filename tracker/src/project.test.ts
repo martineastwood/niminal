@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { keyboardNote, transposeNote, newProject, emptyFxLane, blankColumn, makePattern, removeTrack, restoreTrack, readProject, resizePattern } from './project';
+import { keyboardNote, transposeNote, setTrackSource, trackSource, newProject, emptyFxLane, blankColumn, makePattern, removeTrack, restoreTrack, readProject, resizePattern } from './project';
 
 it('round trips source and notes and rejects unsupported project data', () => {
   const project = newProject();
@@ -151,4 +151,29 @@ it('keeps returns, outputs and send devices, and rejects bad routing or too many
   expect(() => readProject(JSON.stringify(project))).toThrow();
   const { returns: _, ...old } = newProject();
   expect(readProject(JSON.stringify(old)).returns).toEqual([]);
+});
+
+it('keeps the matrix as small as it can be, and validates it', () => {
+  const project = newProject(); const other = makePattern(project); project.sequence.push(other.id, project.patterns[0].id);
+  expect(trackSource(project, 1, 2)).toBeNull();
+  setTrackSource(project, 1, 2, { kind: 'mute' }); expect(project.matrix).toEqual([[], [null, null, { kind: 'mute' }]]);
+  setTrackSource(project, 2, 0, { kind: 'pattern', id: other.id }); expect(trackSource(project, 2, 0)).toEqual({ kind: 'pattern', id: other.id });
+  expect(readProject(JSON.stringify(project)).matrix).toEqual(project.matrix);
+  setTrackSource(project, 1, 2, null); setTrackSource(project, 2, 0, null); expect(project.matrix).toBeUndefined();
+  const read = (matrix: unknown) => () => readProject(JSON.stringify({ ...project, matrix }));
+  expect(read([[null, { kind: 'mute' }]])).not.toThrow();
+  for (const bad of [[[{ kind: 'pattern', id: 'missing' }]], [[], [], [], []], [[null, null, null, null, null]], [[{ kind: 'solo' }]], [['mute']], 'x']) expect(read(bad)).toThrow();
+});
+
+it("takes a deleted track's matrix cells with it and puts them back, shifting the tracks after it either way", () => {
+  const project = newProject(); project.sequence.push(project.patterns[0].id);
+  setTrackSource(project, 0, 1, { kind: 'mute' }); setTrackSource(project, 1, 2, { kind: 'mute' }); setTrackSource(project, 1, 3, { kind: 'pattern', id: project.patterns[0].id });
+  const deleted = removeTrack(project, 1)!;
+  expect(project.matrix).toEqual([[], [null, { kind: 'mute' }, { kind: 'pattern', id: project.patterns[0].id }]]);
+  expect(restoreTrack(project, deleted)).toBe(true);
+  expect(project.matrix).toEqual([[null, { kind: 'mute' }], [null, null, { kind: 'mute' }, { kind: 'pattern', id: project.patterns[0].id }]]);
+  // If the sequence changed in between, the cells are not guessed at, but the other tracks still shift.
+  const again = removeTrack(project, 1)!; project.sequence.push(project.patterns[0].id);
+  expect(restoreTrack(project, again)).toBe(true);
+  expect(project.matrix).toEqual([[], [null, null, { kind: 'mute' }, { kind: 'pattern', id: project.patterns[0].id }]]);
 });

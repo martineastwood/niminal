@@ -1,0 +1,92 @@
+// Ready-made instruments: `use std/instruments`, then play them by name. Each is a short, finished
+// sound with a few controls. They are complete on their own, so the tracker copies one into a
+// project as it stands and you can edit it from there.
+
+/// A kick: a sine that drops in pitch, with a click on the front. `punch` is how far and how hard it
+/// drops; `decay` is how long it rings.
+instr kick(
+  freq: hz = 55hz,
+  punch: 0..1 = 0.5,
+  decay: 80ms..1sec = 300ms
+) {
+  sweep = env[(freq * (2 + punch * 4)) 40ms freq]
+  body = osc(sine, sweep) * perc(decay: decay)
+  click = noise().hpf(cutoff: 2khz) * env[1 3ms 0] * 0.3 * punch
+  (body + click).tanh * 0.9
+}
+
+/// A snare: a short triangle thump under a burst of band-passed noise. `snap` brings the noise up.
+instr snare(
+  freq: hz = 180hz,
+  snap: 0..1 = 0.6,
+  decay: 60ms..600ms = 160ms
+) {
+  tone = osc(tri, freq) * perc(decay: decay * 0.7) * 0.4
+  air = pinknoise().bpf(cutoff: 4khz, res: 0.3) * perc(decay: decay)
+  (tone + air * (0.3 + snap * 0.7)).clip(level: 0.9) * 0.85
+}
+
+/// A hi-hat from high-passed, crushed noise. `open` lengthens it from a tick to a wash. The pitch of
+/// the note does not matter.
+instr hat(
+  freq: hz = 8khz,
+  open: 0..1 = 0
+) {
+  noise().hpf(cutoff: 7khz).bitcrush(rate: 22khz, bits: 12) * perc(decay: 40ms + open * 180ms) * 0.22
+}
+
+/// A round bass: a saw with a sine an octave down, through a low-pass that rings a little at `res`.
+instr bass(
+  freq: hz,
+  cutoff: hz = 600hz,
+  res: 0..1 = 0.3
+) {
+  level = env[0 5ms 1 150ms 0.8 | 120ms 0]
+  voice = osc(saw, freq) * 0.6 + osc(sine, freq * 0.5) * 0.5
+  voice.lpf(cutoff: cutoff, res: res).tanh * level * 0.5
+}
+
+/// A plucked string, bright as it starts and dulling as it dies away. `tone` is how bright the
+/// attack is; `decay` how long the note lasts.
+instr pluck(
+  freq: hz,
+  tone: 0..1 = 0.5,
+  decay: 100ms..3sec = 700ms
+) {
+  level = perc(decay: decay)
+  voice = osc(saw, freq) + osc(tri, freq * 2.003) * 0.3
+  voice.lpf(cutoff: 250hz + level * (800hz + tone * 6khz), res: 0.2) * level * 0.5
+}
+
+/// A slow pad: three saws a hair apart in pitch, softened by a low-pass. `detune` widens them;
+/// `attack` and `release` set how it swells in and fades out.
+instr pad(
+  freq: hz,
+  attack: 20ms..4sec = 400ms,
+  release: 50ms..6sec = 1500ms,
+  detune: 0..1 = 0.3
+) {
+  spread = 1 + detune * 0.012
+  voice = osc(saw, freq) + osc(saw, freq * spread) + osc(saw, freq / spread)
+  voice.lpf(cutoff: 1800hz, res: 0.1) * env[0 attack 1 | release 0] * 0.12
+}
+
+/// A singing lead: a saw with a touch of vibrato, through a low-pass at `cutoff`.
+instr lead(
+  freq: hz,
+  cutoff: hz = 2500hz,
+  vibrato: 0..1 = 0.2
+) {
+  bend = 1 + osc(sine, 5.5hz) * vibrato * 0.01
+  level = env[0 8ms 1 200ms 0.7 | 250ms 0]
+  osc(saw, freq * bend).lpf(cutoff: cutoff, res: 0.15) * level * 0.3
+}
+
+/// A struck bell: two sines, one bending the phase of the other. `decay` is how long it rings.
+instr bell(
+  freq: hz,
+  decay: 300ms..4sec = 2sec
+) {
+  shimmer = osc(sine, freq * 3.5) * perc(decay: decay * 0.5) * 2
+  osc(sine, freq, phase_mod: shimmer) * perc(decay: decay) * 0.3
+}

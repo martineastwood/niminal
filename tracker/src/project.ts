@@ -35,7 +35,11 @@ export const cloneColumn = (column: NoteColumn): NoteColumn => ({ notes: [...col
 export interface Pattern { id: string; name: string; rows: number; notes: NoteColumn[][]; fx: FxLane[][] }
 /** Song playback repeats these sequence positions (inclusive) once it reaches them, until stopped. */
 export interface LoopRange { start: number; end: number }
-export interface Song { bpm: number; rows_per_beat: number; tracks: Track[]; master: Track; returns: Track[]; patterns: Pattern[]; sequence: string[]; loop_range?: LoopRange; instrument_values?: Record<string, Record<string, number>> }
+/** Where one track plays from in one sequence step, when not from the step's own pattern: silent, or another pattern's track. */
+export type TrackSource = { kind: 'mute' } | { kind: 'pattern'; id: string };
+export interface Song { bpm: number; rows_per_beat: number; tracks: Track[]; master: Track; returns: Track[]; patterns: Pattern[]; sequence: string[]; loop_range?: LoopRange;
+  /** By sequence step, then track. Steps and tracks beyond the ends of the lists, and `null`, play the step's own pattern. */
+  matrix?: (TrackSource | null)[][]; instrument_values?: Record<string, Record<string, number>> }
 /** A named group of consecutive sequence steps, from `start` up to the next section's start. It only organises the sequence list. */
 export interface Section { start: number; name: string; collapsed?: boolean }
 export interface Project extends Song { version: 9; id: string; definitions: Definition[]; sections?: Section[] }
@@ -96,6 +100,7 @@ export function readProject(raw: string): Project {
       !Array.isArray(value.sequence) || value.sequence.length < 1 || value.sequence.length > 1024 ||
       !value.sequence.every((id: unknown) => value.patterns.some((p: Pattern) => p.id === id)) ||
       value.sections !== undefined && !(Array.isArray(value.sections) && value.sections.every((s: Section, i: number) => !!s && Number.isInteger(s.start) && s.start >= 0 && s.start < value.sequence.length && (i === 0 || s.start > value.sections[i - 1].start) && typeof s.name === 'string' && s.name.length <= 60 && (s.collapsed === undefined || typeof s.collapsed === 'boolean'))) ||
+      value.matrix !== undefined && !(Array.isArray(value.matrix) && value.matrix.length <= value.sequence.length && value.matrix.every((step: unknown) => Array.isArray(step) && step.length <= value.tracks.length && step.every((s: TrackSource | null) => s === null || !!s && (s.kind === 'mute' || s.kind === 'pattern' && value.patterns.some((p: Pattern) => p.id === s.id))))) ||
       value.loop_range !== undefined && !(Number.isInteger(value.loop_range?.start) && Number.isInteger(value.loop_range.end) && value.loop_range.start >= 0 && value.loop_range.start <= value.loop_range.end && value.loop_range.end < value.sequence.length)) {
     throw new Error('Not a supported niminal tracker project (expected version 9)');
   }
@@ -120,16 +125,49 @@ export function transposeNote(note: string, semitones: number): string | null {
   return total < 0 || total > 107 ? null : `${noteNames[total % 12]}${Math.floor(total / 12)}`;
 }
 
-export interface DeletedTrack { index: number; track: Track; notes: Map<string, NoteColumn[]>; fx: Map<string, FxLane[]> }
+export const trackSource = (project: Song, step: number, track: number): TrackSource | null => project.matrix?.[step]?.[track] ?? null;
+
+/** Sets where a track plays from in a step, keeping the matrix as small as it can be. */
+export function setTrackSource(project: Song, step: number, track: number, source: TrackSource | null) {
+  const matrix = project.matrix ??= [];
+  while (matrix.length <= step) matrix.push([]);
+  while (matrix[step].length <= track) matrix[step].push(null);
+  matrix[step][track] = source;
+  tidyMatrix(project);
+}
+
+/** Drops empty steps from the end and the whole matrix when nothing is set. */
+export function tidyMatrix(project: Song) {
+  const matrix = project.matrix; if (!matrix) return;
+  for (const step of matrix) while (step.length && step[step.length - 1] === null) step.pop();
+  while (matrix.length && !matrix[matrix.length - 1].length) matrix.pop();
+  if (!matrix.length) delete project.matrix;
+}
+
+export interface DeletedTrack { index: number; track: Track; notes: Map<string, NoteColumn[]>; fx: Map<string, FxLane[]>; matrix: (TrackSource | null)[]; sequence: string[] }
 
 export function removeTrack(project: Project, index: number): DeletedTrack | null {
   if (project.tracks.length <= 1 || index < 0 || index >= project.tracks.length) return null;
-  return { index, track: project.tracks.splice(index, 1)[0], notes: new Map(project.patterns.map(p => [p.id, p.notes.splice(index, 1)[0]])), fx: new Map(project.patterns.map(p => [p.id, p.fx.splice(index, 1)[0]])) };
+  // The track's matrix cells go with it, by step.
+  const matrix = project.sequence.map((_, step) => trackSource(project, step, index));
+  for (const step of project.matrix ?? []) if (index < step.length) step.splice(index, 1);
+  tidyMatrix(project);
+  return { index, track: project.tracks.splice(index, 1)[0], matrix, sequence: [...project.sequence], notes: new Map(project.patterns.map(p => [p.id, p.notes.splice(index, 1)[0]])), fx: new Map(project.patterns.map(p => [p.id, p.fx.splice(index, 1)[0]])) };
 }
 
 export function restoreTrack(project: Project, deleted: DeletedTrack): boolean {
   if (project.tracks.length >= 16) return false;
   project.tracks.splice(deleted.index, 0, deleted.track);
+  // Tracks after it move along in every step. Its own cells come back only if the sequence is as it was.
+  const same = deleted.sequence.length === project.sequence.length && deleted.sequence.every((id, step) => id === project.sequence[step]);
+  project.sequence.forEach((_, step) => {
+    const source = same ? deleted.matrix[step] : null, row = project.matrix?.[step];
+    if (source === null && (!row || row.length <= deleted.index)) return;
+    const matrix = project.matrix ??= []; while (matrix.length <= step) matrix.push([]);
+    while (matrix[step].length < deleted.index) matrix[step].push(null);
+    matrix[step].splice(deleted.index, 0, source);
+  });
+  tidyMatrix(project);
   for (const pattern of project.patterns) {
     const restored = (deleted.notes.get(pattern.id) ?? [blankColumn(pattern.rows)]).map(cloneColumn);
     for (const column of restored) for (const cells of [column.notes, column.inst, column.vol, column.pan, column.delay]) while (cells.length < pattern.rows) cells.push(null);

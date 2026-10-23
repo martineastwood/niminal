@@ -32,6 +32,7 @@ fn test_song(note: Option<&str>) -> Song {
             fx: (0..4).map(|_| vec![FxLane::empty(32)]).collect(),
         }],
         loop_range: None,
+        matrix: vec![],
         sequence: vec!["p0".into()],
         master: Track::default(),
         returns: vec![],
@@ -1261,16 +1262,39 @@ fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
     server.stop();
 }
 
+/// The definitions in one of the library modules that come with niminal, each of which stands alone.
+fn library_definitions(text: &'static str) -> Vec<&'static str> {
+    text.split("\n\n")
+        .filter(|block| block.lines().any(|l| l.starts_with("fx ") || l.starts_with("instr ")))
+        .collect()
+}
+
+#[test]
+fn library_instruments_expose_controls_and_sound_on_mono_and_stereo_engines() {
+    let sources = library_definitions(include_str!("../../../crates/niminal-lang/std/instruments.nml"));
+    assert_eq!(sources.len(), 8);
+    for layout in [Layout::Mono, Layout::Stereo] {
+        let engine = Arc::new(Mutex::new(EngineServer::new(Session::new(48000.0, layout).without_limiter())));
+        let server = Server::start(engine.clone(), ServerConfig { port: 0, ..ServerConfig::default() }).unwrap();
+        let mut worker = Worker::default();
+        worker.command(Command::Connect { port: server.port(), token: None }).unwrap();
+        for (index, source) in sources.iter().enumerate() {
+            let id = format!("library_instrument_{index}");
+            worker.command(Command::Apply { id: id.clone(), source: (*source).into(), kind: Kind::Instr, dir: None }).unwrap();
+            assert!(!worker.sounds[&id].parameters.is_empty(), "{id} exposes its controls");
+            worker.command(Command::Audition { instrument: id, note: "C-3".into(), track: 0 }).unwrap();
+            let audio = engine.lock().unwrap().session_mut().process(24000);
+            assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
+            assert!(audio.iter().flatten().any(|sample| sample.abs() > 0.001), "silent instrument {index}");
+        }
+        worker.command(Command::Disconnect).unwrap();
+    }
+}
+
 #[test]
 fn library_effects_expose_controls_and_render_on_mono_and_stereo_engines() {
-    let sources = [
-        include_str!("../../src/presets/delay.nml"),
-        include_str!("../../src/presets/chorus.nml"),
-        include_str!("../../src/presets/lowpass.nml"),
-        include_str!("../../src/presets/highpass.nml"),
-        include_str!("../../src/presets/bandpass.nml"),
-        include_str!("../../src/presets/notch.nml"),
-    ];
+    let sources = library_definitions(include_str!("../../../crates/niminal-lang/std/fx.nml"));
+    assert!(sources.len() >= 14);
     for layout in [Layout::Mono, Layout::Stereo] {
         let engine = Arc::new(Mutex::new(EngineServer::new(
             Session::new(48000.0, layout).without_limiter(),
@@ -1308,7 +1332,7 @@ fn library_effects_expose_controls_and_render_on_mono_and_stereo_engines() {
                     dir: None,
                 })
                 .unwrap();
-            assert!(worker.sounds[&id].parameters.len() >= 3);
+            assert!(worker.sounds[&id].parameters.len() >= 2);
             engine.lock().unwrap().session_mut().process(2048);
             let mut song = test_song(None);
             song.tracks[0].fx = vec![Device {
@@ -1328,7 +1352,7 @@ fn library_effects_expose_controls_and_render_on_mono_and_stereo_engines() {
             assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
             assert!(
                 audio.iter().flatten().any(|sample| sample.abs() > 0.001),
-                "silent preset {index}"
+                "silent effect {index}"
             );
         }
         worker.command(Command::Disconnect).unwrap();

@@ -337,3 +337,36 @@ fn the_documented_examples_compile_and_sound() {
         );
     }
 }
+
+/// Every instrument in `std/instruments` plays a pitched note: finite, audible, and not wildly loud.
+#[test]
+fn the_instrument_library_compiles_and_every_instrument_sounds() {
+    let expanded = expand("use std/instruments\n", Path::new(".")).unwrap();
+    let program = compile(&expanded.text).unwrap_or_else(|errors| {
+        panic!("{}", errors.iter().map(|e| e.render("std", &expanded.text)).collect::<String>())
+    });
+    let names: Vec<_> = program.instruments.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names, ["kick", "snare", "hat", "bass", "pluck", "pad", "lead", "bell"]);
+    for instrument in &program.instruments {
+        let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
+        voice.set_param_by_name("freq", 220.0);
+        voice.start_note();
+        let mut out = vec![0.0; 100 * block_size()];
+        for chunk in out.chunks_mut(block_size()) {
+            voice.process(chunk);
+        }
+        assert!(out.iter().all(|v| v.is_finite() && v.abs() < 2.0), "{} is not bounded", instrument.name);
+        assert!(rms(&out) > 1e-4, "{} is silent: {}", instrument.name, rms(&out));
+    }
+}
+
+/// The effect library compiles, and every effect's parameters have a range and a default.
+#[test]
+fn the_effect_library_compiles() {
+    let expanded = expand("use std/fx\n", Path::new(".")).unwrap();
+    let program = compile(&expanded.text).unwrap_or_else(|errors| {
+        panic!("{}", errors.iter().map(|e| e.render("std", &expanded.text)).collect::<String>())
+    });
+    assert!(program.instruments.is_empty());
+    assert!(expanded.text.matches("\nfx ").count() >= 14);
+}

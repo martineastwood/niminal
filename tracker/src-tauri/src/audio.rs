@@ -64,6 +64,10 @@ pub enum Command {
         track: usize,
     },
     Stop,
+    /// Whether the mixer view needs every strip's scope; the master's is always on.
+    Scopes {
+        strips: bool,
+    },
 }
 
 type Request = (Command, mpsc::Sender<Result<Status, String>>);
@@ -158,6 +162,7 @@ struct Worker {
     mixer_returns: Vec<Track>,
     mixer_master: Track,
     scopes: Scopes,
+    strip_scopes: bool,
     playback: Option<Playback>,
     mixer_timing: (f64, u32),
     dir: Option<String>,
@@ -242,6 +247,32 @@ impl Worker {
         Ok(())
     }
 
+    /// Creates (or, unless `fresh`, removes) the strip scopes to match `strip_scopes`; the master's
+    /// scope is created once per connection. Each scope costs a JSON message every frame it reports.
+    fn sync_scopes(&mut self, fresh: bool) -> Result<(), String> {
+        let wanted = self.strip_scopes;
+        for label in mixer::labels() {
+            let master = label == mixer::MASTER;
+            if master && !fresh {
+                continue;
+            }
+            if !master && !wanted && fresh {
+                continue;
+            }
+            let id = format!("s_{label}");
+            if wanted || master {
+                self.call(
+                    "scopes.create",
+                    json!({"id":id, "endpoint":{"kind":"node", "id":format!("tap_{label}")}, "frames":SCOPE_FRAMES, "rate":SCOPE_RATE}),
+                )?;
+            } else {
+                self.call("scopes.remove", json!({"id":id}))?;
+                self.scopes.remove(&id);
+            }
+        }
+        Ok(())
+    }
+
     fn clock(&mut self) -> Result<u64, String> {
         self.call("clock", json!({}))?["sample"]
             .as_u64()
@@ -295,12 +326,7 @@ impl Worker {
                 ])?;
                 self.scopes.clear();
                 self.call("subscribe", json!({"topics":["scopes"]}))?;
-                for label in mixer::labels() {
-                    self.call(
-                        "scopes.create",
-                        json!({"id":format!("s_{label}"), "endpoint":{"kind":"node", "id":format!("tap_{label}")}, "frames":SCOPE_FRAMES, "rate":SCOPE_RATE}),
-                    )?;
-                }
+                self.sync_scopes(true)?;
                 self.status.connected = true;
             }
             Command::Disconnect => {
@@ -489,6 +515,14 @@ impl Worker {
                 self.send_events(vec![json!({"op":"note", "at":"now", "target":target, "to":format!("in_{track}"), "dur":"200ms", "args":{"freq":pitch(&note)?}})])?;
             }
             Command::Stop => self.stop()?,
+            Command::Scopes { strips } => {
+                if self.strip_scopes != strips {
+                    self.strip_scopes = strips;
+                    if self.client.is_some() {
+                        self.sync_scopes(false)?;
+                    }
+                }
+            }
         }
         Ok(())
     }

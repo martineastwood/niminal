@@ -1,4 +1,4 @@
-import { makePattern, type Pattern, type Project, type Section } from './project';
+import { makePattern, tidyMatrix, type Pattern, type Project, type Section } from './project';
 
 export class Arrangement {
   position = 0;
@@ -29,6 +29,7 @@ export class Arrangement {
     // A step added before the loop pushes it along; one added inside it joins the loop.
     const loop = project.loop_range;
     if (loop && this.position + 1 <= loop.start) { loop.start++; loop.end++; } else if (loop && this.position + 1 <= loop.end) loop.end++;
+    if (project.matrix && this.position + 1 < project.matrix.length) project.matrix.splice(this.position + 1, 0, []);
     // Sections that began at or after the new step move down with their steps; the new step joins the section before it.
     for (const section of project.sections ?? []) if (section.start >= this.position + 1) section.start++;
     const joined = this.sectionAt(this.position + 1); if (joined) delete joined.collapsed;
@@ -97,6 +98,9 @@ export class Arrangement {
     const sequence = this.project().sequence, next = this.position + delta;
     if (next < 0 || next >= sequence.length) return;
     [sequence[this.position], sequence[next]] = [sequence[next], sequence[this.position]];
+    // A step's mutes and redirects move with it.
+    const project = this.project(), matrix = project.matrix;
+    if (matrix) { while (matrix.length <= Math.max(this.position, next)) matrix.push([]); [matrix[this.position], matrix[next]] = [matrix[next], matrix[this.position]]; tidyMatrix(project); }
     this.select(next); this.edited();
   }
 
@@ -104,6 +108,8 @@ export class Arrangement {
     const sequence = this.project().sequence;
     if (sequence.length <= 1) return;
     this.removeFromSections();
+    const project = this.project();
+    if (project.matrix && this.position < project.matrix.length) { project.matrix.splice(this.position, 1); tidyMatrix(project); }
     sequence.splice(this.position, 1);
     const loop = this.project().loop_range;
     if (loop && this.position < loop.start) { loop.start--; loop.end--; } else if (loop && this.position <= loop.end) { if (loop.start === loop.end) delete this.project().loop_range; else loop.end--; }

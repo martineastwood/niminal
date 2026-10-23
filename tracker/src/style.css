@@ -265,3 +265,28 @@ footer input { height: 16px; font-size: 10px; }
 .mix-buttons button { flex: 1; min-width: 0; padding: 0 2px; height: 16px; font-size: 9px; font-weight: 600; }
 .mix-buttons button[aria-pressed=true] { background: var(--accent); color: #1a1006; }
 .mix-buttons button[aria-label^="Mute"][aria-pressed=true] { background: #b83232; color: #fff; }
+
+/* Pattern matrix */
+#matrix-panel > #matrix { flex: 1; min-height: 0; overflow: auto; padding: 6px 8px; background: var(--bg-panel); }
+.matrix-grid { display: flex; flex-direction: column; width: max-content; min-width: 100%; }
+.matrix-row { display: grid; grid-template-columns: 170px repeat(var(--tracks), minmax(48px, 64px)); gap: 1px; align-items: center; height: 20px; border-left: 2px solid transparent; }
+.matrix-row.selected { background: #2a2d33; border-left-color: var(--accent); }
+.matrix-row.playing { background: var(--accent-bg); }
+.matrix-head { position: sticky; top: 0; z-index: 1; height: 18px; background: var(--bg-panel); }
+.matrix-track { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 3px; border-top: 3px solid var(--track-colour); font-size: 10px; font-weight: 600; color: var(--hi); }
+.matrix-step { height: 18px; padding: 0 4px; border: 0; background: transparent; font-family: var(--mono); font-size: 10px; text-align: left; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+.matrix-step:hover { color: var(--accent-text); background: transparent; }
+.matrix-section { padding: 2px 6px 0; font-size: 9px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); }
+.matrix-cell { height: 16px; padding: 0; border-color: #24282d; background: #1c1f23; font-family: var(--mono); font-size: 10px; color: var(--dim); }
+.matrix-cell:hover { background: var(--bg-ctl-hover); color: var(--hi); }
+.matrix-cell.pattern { background: color-mix(in srgb, var(--accent) 22%, #1c1f23); color: var(--accent-text); border-color: #7a4a1a; }
+.matrix-cell.mute { background: #3a1f1f; color: #e08b8b; border-color: #5a2a2a; }
+.menu { position: fixed; z-index: 20; display: flex; flex-direction: column; min-width: 170px; max-height: 260px; overflow: auto; padding: 2px; background: var(--bg-bar); border: 1px solid var(--edge); box-shadow: 0 4px 14px #000a; }
+.menu button { height: 20px; border-color: transparent; background: transparent; text-align: left; }
+.menu button:hover, .menu button:focus-visible { background: var(--bg-ctl-hover); }
+.menu button[aria-checked=true] { color: var(--accent-text); }
+.menu-heading { padding: 4px 6px 1px; font-size: 9px; letter-spacing: 1px; font-weight: 600; color: var(--dim); }
+/* A track that does not play this pattern's notes in the selected step. */
+.track-header[data-slot=mute] { opacity: .55; }
+.track-header[data-slot=mute] .track-name { text-decoration: line-through; }
+.track-header[data-slot=alias] { box-shadow: inset 0 -2px 0 var(--accent); }

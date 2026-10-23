@@ -58,6 +58,8 @@ export class PatternGrid {
   /** Record mode: typed keys enter notes and values. Otherwise they only preview the instrument. */
   recording = false;
   modeChanged: (recording: boolean) => void = () => {};
+  /** Set by the owner: why a track's cells in the selected sequence step are not played, if they are not. */
+  slot: (track: number) => { kind: 'mute' | 'alias'; text: string } | null = () => null;
   private dragging = false;
   private dragged = false;
 
@@ -191,6 +193,7 @@ export class PatternGrid {
     const label = document.createElement('span'); label.setAttribute('role', 'columnheader'); header.append(label);
     for (const [index, track] of project.tracks.entries()) {
       const cell = document.createElement('div'); cell.setAttribute('role', 'columnheader'); cell.className = 'track-header'; cell.dataset.track = String(index);
+      const slot = this.slot(index); if (slot) { cell.dataset.slot = slot.kind; cell.title = slot.text; }
       cell.style.setProperty('--track-colour', trackColour(track, index)); cell.classList.toggle('selected-track', index === this.activeTrack);
       const strip = document.createElement('button'); strip.className = 'track-colour'; strip.title = 'Track colour'; strip.setAttribute('aria-label', `${track.name} colour`);
       strip.onclick = () => this.pickColour(track, strip);
