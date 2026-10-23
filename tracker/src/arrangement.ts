@@ -1,4 +1,4 @@
-import { makePattern, type Pattern, type Project } from './project';
+import { makePattern, type Pattern, type Project, type Section } from './project';
 
 export class Arrangement {
   position = 0;
@@ -29,7 +29,48 @@ export class Arrangement {
     // A step added before the loop pushes it along; one added inside it joins the loop.
     const loop = project.loop_range;
     if (loop && this.position + 1 <= loop.start) { loop.start++; loop.end++; } else if (loop && this.position + 1 <= loop.end) loop.end++;
+    // Sections that began at or after the new step move down with their steps; the new step joins the section before it.
+    for (const section of project.sections ?? []) if (section.start >= this.position + 1) section.start++;
+    const joined = this.sectionAt(this.position + 1); if (joined) delete joined.collapsed;
     this.select(this.position + 1); this.edited();
+  }
+
+  /** The section a step belongs to, if it is after the first section's start. */
+  private sectionAt(position: number): Section | undefined {
+    return (this.project().sections ?? []).filter(s => s.start <= position).at(-1);
+  }
+
+  /** One past a section's last step. */
+  private sectionEnd(section: Section) {
+    const project = this.project();
+    return (project.sections ?? []).find(s => s.start > section.start)?.start ?? project.sequence.length;
+  }
+
+  /** Starts a section at the selected step, or removes the one that starts there. */
+  toggleSection() {
+    const project = this.project(), sections = project.sections ??= [];
+    const existing = sections.findIndex(s => s.start === this.position);
+    if (existing >= 0) sections.splice(existing, 1);
+    else { sections.push({ start: this.position, name: `Section ${sections.length + 1}` }); sections.sort((a, b) => a.start - b.start); }
+    if (!sections.length) delete project.sections;
+    this.render(); this.edited();
+  }
+
+  /** Loops a section, or clears the loop if it already loops exactly that section. */
+  loopSection(section: Section) {
+    const project = this.project(), loop = project.loop_range, end = this.sectionEnd(section) - 1;
+    if (loop && loop.start === section.start && loop.end === end) delete project.loop_range; else project.loop_range = { start: section.start, end };
+    this.render(); this.edited();
+  }
+
+  /** Called before the selected step is removed: later sections move up, and one left with no steps goes. */
+  private removeFromSections() {
+    const project = this.project(), sections = project.sections;
+    if (!sections) return;
+    const q = this.position, emptied = new Set(sections.filter(s => s.start === q && this.sectionEnd(s) - s.start <= 1));
+    project.sections = sections.filter(s => !emptied.has(s));
+    for (const section of project.sections) if (section.start > q) section.start--;
+    if (!project.sections.length) delete project.sections;
   }
 
   /** Loops the selected step, or clears the loop. */
@@ -55,6 +96,7 @@ export class Arrangement {
   remove() {
     const sequence = this.project().sequence;
     if (sequence.length <= 1) return;
+    this.removeFromSections();
     sequence.splice(this.position, 1);
     const loop = this.project().loop_range;
     if (loop && this.position < loop.start) { loop.start--; loop.end--; } else if (loop && this.position <= loop.end) { if (loop.start === loop.end) delete this.project().loop_range; else loop.end--; }
@@ -64,7 +106,11 @@ export class Arrangement {
   render() {
     const project = this.project();
     this.parent.replaceChildren();
+    let hidden = false;
     for (const [index, id] of project.sequence.entries()) {
+      const section = project.sections?.find(s => s.start === index);
+      if (section) { this.parent.append(this.header(section)); hidden = !!section.collapsed; }
+      if (hidden) continue;
       const pattern = project.patterns.find(p => p.id === id)!;
       const number = project.patterns.indexOf(pattern).toString().padStart(2, '0');
       const row = document.createElement('div'); row.className = 'sequence-entry'; row.dataset.position = String(index);
@@ -84,7 +130,23 @@ export class Arrangement {
     }
   }
 
+  private header(section: Section) {
+    const project = this.project(), size = this.sectionEnd(section) - section.start;
+    const element = document.createElement('div'); element.className = 'sequence-section'; element.dataset.start = String(section.start); element.dataset.end = String(section.start + size);
+    element.classList.toggle('selected', !!section.collapsed && this.position >= section.start && this.position < section.start + size);
+    const caret = document.createElement('button'); caret.textContent = section.collapsed ? '▸' : '▾'; caret.setAttribute('aria-expanded', String(!section.collapsed));
+    const verb = section.collapsed ? 'Expand' : 'Collapse'; caret.title = `${verb} ${section.name}`; caret.setAttribute('aria-label', caret.title);
+    caret.onclick = () => { if (section.collapsed) delete section.collapsed; else section.collapsed = true; this.render(); this.edited(); };
+    const name = document.createElement('input'); name.value = section.name; name.maxLength = 60; name.setAttribute('aria-label', `Name of the section starting at step ${section.start + 1}`);
+    name.onchange = () => { section.name = name.value.trim() || 'Section'; this.render(); this.edited(); };
+    const count = document.createElement('span'); count.className = 'sequence-count'; count.textContent = String(size); count.title = `${size} step${size === 1 ? '' : 's'}`;
+    const loop = document.createElement('button'); loop.textContent = '⟲'; loop.title = `Loop ${section.name}`; loop.setAttribute('aria-label', loop.title);
+    loop.setAttribute('aria-pressed', String(project.loop_range?.start === section.start && project.loop_range.end === section.start + size - 1)); loop.onclick = () => this.loopSection(section);
+    element.append(caret, name, count, loop); return element;
+  }
+
   paint(position: number | null, playing: boolean) {
+    for (const header of this.parent.querySelectorAll<HTMLElement>('.sequence-section')) header.classList.toggle('playing', position !== null && position >= Number(header.dataset.start) && position < Number(header.dataset.end) && header.querySelector('[aria-expanded=false]') !== null);
     for (const row of this.parent.querySelectorAll<HTMLElement>('.sequence-entry')) row.classList.toggle('playing', position !== null && Number(row.dataset.position) === position);
     for (const select of this.parent.querySelectorAll<HTMLSelectElement>('select')) select.disabled = playing;
   }

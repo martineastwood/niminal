@@ -36,7 +36,9 @@ export interface Pattern { id: string; name: string; rows: number; notes: NoteCo
 /** Song playback repeats these sequence positions (inclusive) once it reaches them, until stopped. */
 export interface LoopRange { start: number; end: number }
 export interface Song { bpm: number; rows_per_beat: number; tracks: Track[]; master: Track; returns: Track[]; patterns: Pattern[]; sequence: string[]; loop_range?: LoopRange; instrument_values?: Record<string, Record<string, number>> }
-export interface Project extends Song { version: 9; id: string; definitions: Definition[] }
+/** A named group of consecutive sequence steps, from `start` up to the next section's start. It only organises the sequence list. */
+export interface Section { start: number; name: string; collapsed?: boolean }
+export interface Project extends Song { version: 9; id: string; definitions: Definition[]; sections?: Section[] }
 export const storageKey = 'niminal-tracker-project-v9';
 
 export function newProject(): Project {
@@ -93,18 +95,29 @@ export function readProject(raw: string): Project {
       new Set(value.patterns.map((p: Pattern) => p.id)).size !== value.patterns.length ||
       !Array.isArray(value.sequence) || value.sequence.length < 1 || value.sequence.length > 1024 ||
       !value.sequence.every((id: unknown) => value.patterns.some((p: Pattern) => p.id === id)) ||
+      value.sections !== undefined && !(Array.isArray(value.sections) && value.sections.every((s: Section, i: number) => !!s && Number.isInteger(s.start) && s.start >= 0 && s.start < value.sequence.length && (i === 0 || s.start > value.sections[i - 1].start) && typeof s.name === 'string' && s.name.length <= 60 && (s.collapsed === undefined || typeof s.collapsed === 'boolean'))) ||
       value.loop_range !== undefined && !(Number.isInteger(value.loop_range?.start) && Number.isInteger(value.loop_range.end) && value.loop_range.start >= 0 && value.loop_range.start <= value.loop_range.end && value.loop_range.end < value.sequence.length)) {
     throw new Error('Not a supported niminal tracker project (expected version 9)');
   }
   return value;
 }
 
-const keyboard = 'zsxdcvgbhnjm';
+const noteNames = ['C-', 'C#', 'D-', 'D#', 'E-', 'F-', 'F#', 'G-', 'G#', 'A-', 'A#', 'B-'];
+/** The laptop keyboard as a piano: the Z row plays from `octave`, the Q row from the octave above, with the black keys on the rows between. */
+const keyboard = ['zsxdcvgbhnjm,l.;/', 'q2w3er5t6y7ui9o0p'];
 export function keyboardNote(key: string, octave: number): string | null {
   if (key.length !== 1 || !Number.isInteger(octave) || octave < 0 || octave > 8) return null;
-  const semitone = keyboard.indexOf(key.toLowerCase());
-  if (semitone < 0) return null;
-  return ['C-', 'C#', 'D-', 'D#', 'E-', 'F-', 'F#', 'G-', 'G#', 'A-', 'A#', 'B-'][semitone] + octave;
+  const lower = keyboard[0].indexOf(key.toLowerCase()), upper = keyboard[1].indexOf(key.toLowerCase());
+  const semitone = lower >= 0 ? lower : upper >= 0 ? 12 + upper : -1;
+  return semitone < 0 ? null : transposeNote(`C-${octave}`, semitone);
+}
+
+/** A note moved by some semitones, or null for OFF, anything else that is not a note, or a result outside C-0 to B-8. */
+export function transposeNote(note: string, semitones: number): string | null {
+  const match = /^([A-G][#-])([0-8])$/.exec(note), index = match ? noteNames.indexOf(match[1]) : -1;
+  if (!match || index < 0) return null;
+  const total = Number(match[2]) * 12 + index + semitones;
+  return total < 0 || total > 107 ? null : `${noteNames[total % 12]}${Math.floor(total / 12)}`;
 }
 
 export interface DeletedTrack { index: number; track: Track; notes: Map<string, NoteColumn[]>; fx: Map<string, FxLane[]> }

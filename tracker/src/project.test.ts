@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { keyboardNote, newProject, emptyFxLane, blankColumn, makePattern, removeTrack, restoreTrack, readProject, resizePattern } from './project';
+import { keyboardNote, transposeNote, newProject, emptyFxLane, blankColumn, makePattern, removeTrack, restoreTrack, readProject, resizePattern } from './project';
 
 it('round trips source and notes and rejects unsupported project data', () => {
   const project = newProject();
@@ -14,6 +14,9 @@ it('maps the laptop keyboard chromatically without consuming navigation keys', (
   expect(keyboardNote('z', 4)).toBe('C-4');
   expect(keyboardNote('s', 4)).toBe('C#4');
   expect(keyboardNote('M', 3)).toBe('B-3');
+  expect(keyboardNote('q', 4)).toBe('C-5'); expect(keyboardNote('u', 4)).toBe('B-5'); expect(keyboardNote('i', 4)).toBe('C-6'); expect(keyboardNote(',', 4)).toBe('C-5');
+  expect(keyboardNote('m', 8)).toBe('B-8'); expect(keyboardNote('q', 8)).toBeNull();
+  expect(transposeNote('C-4', 1)).toBe('C#4'); expect(transposeNote('C-4', -1)).toBe('B-3'); expect(transposeNote('B-8', 1)).toBeNull(); expect(transposeNote('C-0', -1)).toBeNull(); expect(transposeNote('OFF', 1)).toBeNull();
   expect(keyboardNote('ArrowUp', 4)).toBeNull();
   expect(keyboardNote('', 4)).toBeNull();
   expect(keyboardNote('z', NaN)).toBeNull();

@@ -25,7 +25,7 @@ app.innerHTML = `
   <div id="scopebar"><canvas id="master-scope" aria-label="Master scope"></canvas></div>
   <main>
     <aside id="sequencer">
-      <div class="side-heading"><span class="section-title">SEQUENCE</span><span class="side-tools"><button id="new-pattern" data-structure title="New blank pattern" aria-label="New blank pattern">+</button><button id="variation" data-structure title="Duplicate as variation" aria-label="Duplicate as variation">⧉</button><button id="reuse" data-structure title="Reuse pattern" aria-label="Reuse pattern">↳</button><button id="move-up" data-structure title="Move sequence step up" aria-label="Move sequence step up">↑</button><button id="move-down" data-structure title="Move sequence step down" aria-label="Move sequence step down">↓</button><button id="remove-step" data-structure title="Remove sequence step" aria-label="Remove sequence step">−</button><button id="loop" title="Loop the selected step; shift-click another step to loop a range. Works while playing." aria-label="Loop sequence step" aria-pressed="false">⟲</button><button id="sequence-names" aria-label="Toggle pattern names" title="Show / hide pattern names" aria-expanded="true">◂</button></span></div>
+      <div class="side-heading"><span class="section-title">SEQUENCE</span><span class="side-tools"><button id="new-pattern" data-structure title="New blank pattern" aria-label="New blank pattern">+</button><button id="variation" data-structure title="Duplicate as variation" aria-label="Duplicate as variation">⧉</button><button id="reuse" data-structure title="Reuse pattern" aria-label="Reuse pattern">↳</button><button id="move-up" data-structure title="Move sequence step up" aria-label="Move sequence step up">↑</button><button id="move-down" data-structure title="Move sequence step down" aria-label="Move sequence step down">↓</button><button id="remove-step" data-structure title="Remove sequence step" aria-label="Remove sequence step">−</button><button id="section" title="Start a section at the selected step, or remove the one that starts there" aria-label="Start or remove a section" aria-pressed="false">§</button><button id="loop" title="Loop the selected step; shift-click another step to loop a range. Works while playing." aria-label="Loop sequence step" aria-pressed="false">⟲</button><button id="sequence-names" aria-label="Toggle pattern names" title="Show / hide pattern names" aria-expanded="true">◂</button></span></div>
       <div id="sequence"></div>
       <div id="sound-library" class="library"><div class="side-heading"><span class="section-title">INSTRUMENTS</span><span class="side-tools"><button id="new-instrument" title="New synth" aria-label="New instrument">+</button><button id="import-sample" title="New sampler from WAV files" aria-label="Import sample">♪</button><button id="duplicate-instrument" title="Duplicate instrument" aria-label="Duplicate instrument">⧉</button><button id="delete-instrument" title="Delete instrument" aria-label="Delete instrument">−</button></span></div><div id="definitions"></div></div>
       <div id="effect-library" class="library"><div class="side-heading"><span class="section-title">EFFECTS</span><span class="side-tools"><button id="new-effect" title="New effect" aria-label="New effect">+</button><button id="duplicate-effect" title="Duplicate effect" aria-label="Duplicate effect">⧉</button><button id="delete-effect" title="Delete effect" aria-label="Delete effect">−</button></span></div><div id="effects"></div></div>
@@ -367,6 +367,7 @@ for (const [id, field, min, max] of [['bpm', 'bpm', 20, 300], ['rows-per-beat', 
 element<HTMLInputElement>('entry-step').onchange = event => {
   const input = event.target as HTMLInputElement; input.value = String(Math.max(0, Math.min(256, Math.trunc(Number(input.value) || 0))));
 };
+element('section').onclick = () => { arrangement.toggleSection(); patternControls(); };
 element('loop').onclick = () => { arrangement.toggleLoop(); patternControls(); };
 element('sequence-names').onclick = () => {
   const collapsed = element('sequencer').classList.toggle('names-hidden');
@@ -485,6 +486,7 @@ element('dock-resize').onpointerdown = event => {
 function patternControls() {
   const current = arrangement.pattern;
   element('loop').setAttribute('aria-pressed', String(!!project.loop_range));
+  element('section').setAttribute('aria-pressed', String(!!project.sections?.some(s => s.start === arrangement.position)));
   setText('pattern-number', arrangement.number);
   element<HTMLInputElement>('pattern-name').value = current.name;
   element<HTMLInputElement>('pattern-rows').value = String(current.rows);

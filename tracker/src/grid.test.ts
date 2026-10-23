@@ -316,3 +316,56 @@ it('records a parameter into a new lane that spans every row', () => {
   const lane = project.patterns[0].fx[0].find(l => l.target?.kind === 'instrument')!;
   expect(lane.values).toHaveLength(32); expect(lane.values.filter(v => v !== null)).toEqual(['900']);
 });
+
+it('transposes the selected notes by semitones and octaves, leaving OFF and notes that would leave the range', () => {
+  const { project, key, click } = setup(); const notes = project.patterns[0].notes[0][0].notes;
+  notes[0] = 'C-4'; notes[1] = 'OFF'; notes[2] = 'B-8'; notes[3] = 'C-0';
+  click(0, 0); for (let i = 0; i < 3; i++) key('ArrowDown', { shiftKey: true });
+  key('ArrowUp', { metaKey: true }); expect(notes.slice(0, 4)).toEqual(['C#4', 'OFF', 'B-8', 'C#0']);
+  key('ArrowUp', { metaKey: true, shiftKey: true }); expect(notes.slice(0, 4)).toEqual(['C#5', 'OFF', 'B-8', 'C#1']);
+  key('ArrowDown', { ctrlKey: true, shiftKey: true }); key('ArrowDown', { metaKey: true }); expect(notes.slice(0, 4)).toEqual(['C-4', 'OFF', 'A#7', 'C-0']); // B-8 could not go up, so it only came down
+  key('z', { metaKey: true }); expect(notes[0]).toBe('C#4');
+});
+
+it('only edits with record mode on', () => {
+  const { project, key, click, grid } = setup(); const notes = project.patterns[0].notes[0][0].notes; notes[0] = 'C-4';
+  grid.recording = false; click(0, 0);
+  for (const [name, options] of [['ArrowUp', { metaKey: true }], ['Enter', { metaKey: true }], ['d', { metaKey: true }], ['Insert', {}]] as const) key(name, options);
+  expect(notes.slice(0, 3)).toEqual(['C-4', null, null]);
+});
+
+it('interpolates the values between the first and last selected row, and rejects a selection with nothing to fill from', () => {
+  const { project, key, grid, parent } = setup(); project.tracks[0].show = { vol: true }; grid.render();
+  const vol = project.patterns[0].notes[0][0].vol; vol[0] = '0'; vol[4] = '128';
+  parent.querySelector<HTMLElement>('#cell-0-0-0-vol')!.click(); for (let i = 0; i < 4; i++) key('ArrowDown', { shiftKey: true });
+  key('i', { metaKey: true }); expect(vol.slice(0, 5)).toEqual(['0', '32', '64', '96', '128']);
+  key('z', { metaKey: true }); expect(vol.slice(0, 5)).toEqual(['0', null, null, null, '128']);
+  vol[4] = null; key('i', { metaKey: true }); expect(vol.slice(0, 5)).toEqual(['0', null, null, null, null]);
+});
+
+it('inserts and deletes a row, shifting the whole track and keeping it undoable', () => {
+  const { project, key, click } = setup(); const column = project.patterns[0].notes[0][0], rows = project.patterns[0].rows, other = project.patterns[0].notes[1][0].notes;
+  column.notes.fill(null); column.notes[1] = 'C-4'; column.notes[2] = 'D-4'; column.notes[rows - 1] = 'E-4'; other[1] = 'G-4';
+  click(1, 0); key('Enter', { metaKey: true });
+  expect(column.notes.slice(0, 4)).toEqual([null, null, 'C-4', 'D-4']); expect(column.notes[rows - 1]).toBeNull(); expect(other[1]).toBe('G-4');
+  key('Backspace', { ctrlKey: true }); expect(column.notes.slice(0, 4)).toEqual([null, 'C-4', 'D-4', null]);
+  key('Insert'); expect(column.notes.slice(0, 4)).toEqual([null, null, 'C-4', 'D-4']);
+  key('z', { metaKey: true }); expect(column.notes.slice(0, 4)).toEqual([null, 'C-4', 'D-4', null]);
+});
+
+it('duplicates the selection below itself and carries on when repeated', () => {
+  const { project, key, click } = setup(); const notes = project.patterns[0].notes[0][0].notes;
+  notes.fill(null); notes[0] = 'C-4'; notes[1] = 'E-4'; click(0, 0); key('ArrowDown', { shiftKey: true });
+  key('d', { metaKey: true }); expect(notes.slice(0, 4)).toEqual(['C-4', 'E-4', 'C-4', 'E-4']);
+  key('d', { metaKey: true }); expect(notes.slice(0, 6)).toEqual(['C-4', 'E-4', 'C-4', 'E-4', 'C-4', 'E-4']);
+  key('z', { metaKey: true }); expect(notes.slice(4, 6)).toEqual([null, null]);
+});
+
+it('plays a second octave on the Q row and moves by bars and to the ends of the pattern', () => {
+  const { project, key, click } = setup(); const notes = project.patterns[0].notes[0][0].notes, last = project.patterns[0].rows - 1;
+  click(0, 0); key('q'); expect(notes[0]).toBe('C-5');
+  key('PageDown'); key('z'); expect(notes[16]).toBe('C-4');
+  key('End'); key('u'); expect(notes[last]).toBe('B-5');
+  key('Home'); key('i'); expect(notes[0]).toBe('C-6');
+  key('End'); key('PageUp'); key('x'); expect(notes[last - 16]).toBe('D-4');
+});
