@@ -265,6 +265,16 @@ const grid = new PatternGrid(element('grid'), () => project, () => arrangement.p
     }
   }, () => Number(element<HTMLInputElement>('entry-step').value), () => allParameters(), status, (track, lane) => {
     grid.selectTrack(track); showPanel('automation', true); envelopeEditor?.select(track, lane);
+  }, action => {
+    const last = project.sequence.length - 1;
+    if (action === 'previous') arrangement.select(Math.max(0, arrangement.position - 1));
+    else if (action === 'next') arrangement.select(Math.min(last, arrangement.position + 1));
+    else if (action === 'first') arrangement.select(0);
+    else if (action === 'last') arrangement.select(last);
+    else if (audioStatus.playing) return; // the sequence cannot change while it plays
+    else if (action === 'new') arrangement.insert('new');
+    else if (action === 'remove') arrangement.remove();
+    else arrangement.shiftPattern(action === 'pattern-next' ? 1 : -1);
   });
 envelopeEditor = new EnvelopeEditor(element('automation'), () => project, () => arrangement.pattern, () => allParameters(),
   () => { editedPattern(); grid.render(); });

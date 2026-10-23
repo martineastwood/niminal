@@ -35,6 +35,13 @@ export class Arrangement {
     this.select(this.position + 1); this.edited();
   }
 
+  /** Points the selected step at the previous or next pattern in the pool. */
+  shiftPattern(delta: number) {
+    const project = this.project(), index = project.patterns.findIndex(p => p.id === project.sequence[this.position]) + delta;
+    if (index < 0 || index >= project.patterns.length) return;
+    project.sequence[this.position] = project.patterns[index].id; this.select(this.position); this.edited();
+  }
+
   /** The section a step belongs to, if it is after the first section's start. */
   private sectionAt(position: number): Section | undefined {
     return (this.project().sections ?? []).filter(s => s.start <= position).at(-1);

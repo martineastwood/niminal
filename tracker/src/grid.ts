@@ -2,6 +2,9 @@ import { laneParameter, targetKey, formatValue, parseValue, envelopeValue } from
 import { keyboardNote, transposeNote, emptyFxLane, blankColumn, subColumns, maxNoteColumns, type FxTarget, type EffectParameters, type Project, type Pattern, type Track, type SubColumn } from './project';
 import { NoteHistory, parseNotes, type NoteEdit } from './history';
 
+/** What the grid asks of the sequence: move between steps, insert or remove one, or point the step at another pattern. */
+export type SequenceAction = 'previous' | 'next' | 'first' | 'last' | 'new' | 'remove' | 'pattern-previous' | 'pattern-next';
+
 const ROW_WIDTH = 30, NOTE_WIDTH = 44, SUB_WIDTH = 26, LANE_WIDTH = 100;
 
 /** A column of cells. Note-family lanes have `fx` null; parameter lanes have a `kind` of null. */
@@ -73,6 +76,7 @@ export class PatternGrid {
     private parameters: () => EffectParameters = () => ({}),
     private feedback: (text: string) => void = () => {},
     private openEnvelope: (track: number, fx: number) => void = () => {},
+    private sequence: (action: SequenceAction) => void = () => {},
   ) {
     this.playhead.className = 'playhead'; this.playhead.hidden = true; this.frame.className = 'track-frame'; this.frame.hidden = true;
     parent.parentElement?.append(this.playhead, this.frame);
@@ -459,12 +463,12 @@ export class PatternGrid {
     if (bottom - top < 2 || !edits.length) { this.feedback('Interpolate needs three or more rows selected, with values at the first and last row of a volume, pan, delay or parameter column.'); return; }
     this.apply(edits);
   }
-  /** Inserts a blank row at the top of the selection, or deletes that row, shifting the rest of each selected track up or down. */
-  private shiftRows(direction: 1 | -1) {
+  /** Inserts a blank row at the top of the selection, or deletes that row, shifting the rest of each selected track (or just the selected columns) up or down. */
+  private shiftRows(direction: 1 | -1, scope: 'track' | 'column' = 'track') {
     const { top, left, right } = this.bounds, lanes = this.lanes, rows = this.pattern().rows, edits: NoteEdit[] = [];
     const tracks = new Set(lanes.slice(left, right + 1).map(lane => lane.track));
     lanes.forEach((lane, column) => {
-      if (!tracks.has(lane.track) || !this.editable(lane)) return;
+      if ((scope === 'track' ? !tracks.has(lane.track) : column < left || column > right) || !this.editable(lane)) return;
       for (let row = top; row < rows; row++) {
         const source = direction === 1 ? (row === top ? null : lane.values[row - 1]) : row + 1 < rows ? lane.values[row + 1] : null;
         edits.push({ row, track: column, before: lane.values[row], after: source });
@@ -536,11 +540,18 @@ export class PatternGrid {
   private keydown(event: KeyboardEvent) {
     if ((event.target as HTMLElement).closest('input, select, textarea')) return;
     if (event.ctrlKey || event.metaKey) {
-      if (event.key.toLowerCase() === 'z') { event.preventDefault(); if (event.shiftKey) this.redo(); else this.undo(); }
-      if (event.key.toLowerCase() === 'a') { event.preventDefault(); this.anchor = { row: 0, column: 0 }; this.row = this.pattern().rows - 1; this.column = this.lanes.length - 1; this.trackSelected(this.activeTrack); this.render(); }
-      const edit = { ArrowUp: () => this.transpose(event.shiftKey ? 12 : 1), ArrowDown: () => this.transpose(event.shiftKey ? -12 : -1), i: () => this.interpolate(), d: () => this.duplicate(), Enter: () => this.shiftRows(1), Backspace: () => this.shiftRows(-1) }[event.key.length === 1 ? event.key.toLowerCase() : event.key];
-      if (edit && this.recording) { event.preventDefault(); edit(); } else if (edit) event.preventDefault();
+      const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+      if (key === 'z') { event.preventDefault(); if (event.shiftKey) this.redo(); else this.undo(); }
+      if (key === 'y') { event.preventDefault(); this.redo(); }
+      if (key === 'a') { event.preventDefault(); this.anchor = { row: 0, column: 0 }; this.row = this.pattern().rows - 1; this.column = this.lanes.length - 1; this.trackSelected(this.activeTrack); this.render(); }
+      const sequence: Record<string, SequenceAction> = { ArrowUp: 'previous', ArrowDown: 'next', Home: 'first', End: 'last', ArrowLeft: 'pattern-previous', ArrowRight: 'pattern-next', ...(event.shiftKey ? {} : { Insert: 'new', Delete: 'remove' }) };
+      const edit: Record<string, () => void> = { i: () => this.interpolate(), d: () => this.duplicate(), Enter: () => this.shiftRows(1), Backspace: () => this.shiftRows(-1), ...(event.shiftKey ? { Insert: () => this.shiftRows(1, 'column'), Delete: () => this.shiftRows(-1, 'column') } : {}) };
+      if (sequence[key]) { event.preventDefault(); this.sequence(sequence[key]); }
+      else if (edit[key]) { event.preventDefault(); if (this.recording) edit[key](); }
       return;
+    }
+    if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+      event.preventDefault(); if (this.recording) this.transpose((event.key === 'ArrowUp' ? 1 : -1) * (event.shiftKey ? 12 : 1)); return;
     }
     if (event.altKey) return;
     const lanes = this.lanes, lane = lanes[this.column];
@@ -554,10 +565,14 @@ export class PatternGrid {
       case 'Tab': this.selectTrack((this.activeTrack + (event.shiftKey ? this.project().tracks.length - 1 : 1)) % this.project().tracks.length); event.preventDefault(); return;
       case 'PageUp': this.row = Math.max(0, this.row - this.project().rows_per_beat * 4); break;
       case 'PageDown': this.row = Math.min(this.pattern().rows - 1, this.row + this.project().rows_per_beat * 4); break;
-      case 'Home': this.row = 0; break;
+      case 'Home': case 'F9': this.row = 0; break;
       case 'End': this.row = this.pattern().rows - 1; break;
+      case 'F10': this.row = Math.floor(this.pattern().rows / 4); break;
+      case 'F11': this.row = Math.floor(this.pattern().rows / 2); break;
+      case 'F12': this.row = Math.floor(this.pattern().rows * 3 / 4); break;
       case 'Insert': if (!this.recording) return; event.preventDefault(); this.shiftRows(1); return;
-      case 'Delete': case 'Backspace': if (!this.recording) return; event.preventDefault(); this.clearSelection(); return;
+      case 'Backspace': if (!this.recording) return; event.preventDefault(); this.shiftRows(-1); return;
+      case 'Delete': if (!this.recording) return; event.preventDefault(); this.clearSelection(); return;
       default: {
         if (lane.fx !== null) {
           if (!this.recording) return;

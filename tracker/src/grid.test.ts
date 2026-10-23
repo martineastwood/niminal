@@ -10,15 +10,15 @@ vi.stubGlobal('Option', function (text: string, value: string) {
 });
 afterEach(() => document.body.replaceChildren());
 
-function setup() {
+function setup(sequence = vi.fn()) {
   const parent = document.createElement('div'); parent.tabIndex = 0; document.body.append(parent);
   const project = newProject(), edited = vi.fn(), audition = vi.fn(), play = vi.fn();
-  const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, edited, vi.fn(), audition, play);
+  const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, edited, vi.fn(), audition, play, undefined, undefined, undefined, undefined, undefined, undefined, sequence);
   grid.recording = true;
   grid.render();
   const key = (key: string, options: KeyboardEventInit = {}) => parent.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...options }));
   const click = (row: number, track: number) => parent.querySelector<HTMLElement>(`#cell-${row}-${track}`)!.click();
-  return { parent, project, grid, key, click, edited, audition, play };
+  return { parent, project, grid, key, click, edited, audition, play, sequence };
 }
 
 function clipboard(parent: HTMLElement, type: 'copy' | 'paste', text = '') {
@@ -321,16 +321,16 @@ it('transposes the selected notes by semitones and octaves, leaving OFF and note
   const { project, key, click } = setup(); const notes = project.patterns[0].notes[0][0].notes;
   notes[0] = 'C-4'; notes[1] = 'OFF'; notes[2] = 'B-8'; notes[3] = 'C-0';
   click(0, 0); for (let i = 0; i < 3; i++) key('ArrowDown', { shiftKey: true });
-  key('ArrowUp', { metaKey: true }); expect(notes.slice(0, 4)).toEqual(['C#4', 'OFF', 'B-8', 'C#0']);
-  key('ArrowUp', { metaKey: true, shiftKey: true }); expect(notes.slice(0, 4)).toEqual(['C#5', 'OFF', 'B-8', 'C#1']);
-  key('ArrowDown', { ctrlKey: true, shiftKey: true }); key('ArrowDown', { metaKey: true }); expect(notes.slice(0, 4)).toEqual(['C-4', 'OFF', 'A#7', 'C-0']); // B-8 could not go up, so it only came down
+  key('ArrowUp', { altKey: true }); expect(notes.slice(0, 4)).toEqual(['C#4', 'OFF', 'B-8', 'C#0']);
+  key('ArrowUp', { altKey: true, shiftKey: true }); expect(notes.slice(0, 4)).toEqual(['C#5', 'OFF', 'B-8', 'C#1']);
+  key('ArrowDown', { altKey: true, shiftKey: true }); key('ArrowDown', { altKey: true }); expect(notes.slice(0, 4)).toEqual(['C-4', 'OFF', 'A#7', 'C-0']); // B-8 could not go up, so it only came down
   key('z', { metaKey: true }); expect(notes[0]).toBe('C#4');
 });
 
 it('only edits with record mode on', () => {
   const { project, key, click, grid } = setup(); const notes = project.patterns[0].notes[0][0].notes; notes[0] = 'C-4';
   grid.recording = false; click(0, 0);
-  for (const [name, options] of [['ArrowUp', { metaKey: true }], ['Enter', { metaKey: true }], ['d', { metaKey: true }], ['Insert', {}]] as const) key(name, options);
+  for (const [name, options] of [['ArrowUp', { altKey: true }], ['Enter', { metaKey: true }], ['d', { metaKey: true }], ['Insert', {}], ['Backspace', {}]] as const) key(name, options);
   expect(notes.slice(0, 3)).toEqual(['C-4', null, null]);
 });
 
@@ -368,4 +368,33 @@ it('plays a second octave on the Q row and moves by bars and to the ends of the 
   key('End'); key('u'); expect(notes[last]).toBe('B-5');
   key('Home'); key('i'); expect(notes[0]).toBe('C-6');
   key('End'); key('PageUp'); key('x'); expect(notes[last - 16]).toBe('D-4');
+});
+
+it('follows Renoise for Backspace, Delete and the column variants of insert and delete row', () => {
+  const { project, key, click } = setup(); const first = project.patterns[0].notes[0][0].notes, second = project.patterns[0].notes[1][0].notes;
+  first.fill(null); second.fill(null); first[1] = 'C-4'; first[2] = 'D-4'; second[1] = 'E-4'; second[2] = 'F-4';
+  click(1, 0); key('Backspace'); expect(first.slice(0, 3)).toEqual([null, 'D-4', null]); // deletes the row and pulls the rest up
+  key('z', { metaKey: true }); expect(first.slice(0, 3)).toEqual([null, 'C-4', 'D-4']);
+  key('Delete'); expect(first.slice(0, 3)).toEqual([null, null, 'D-4']); // Delete only clears
+  key('z', { metaKey: true }); expect(first.slice(0, 3)).toEqual([null, 'C-4', 'D-4']);
+  key('y', { ctrlKey: true }); expect(first.slice(0, 3)).toEqual([null, null, 'D-4']); // Ctrl+Y redoes
+  key('z', { metaKey: true }); expect(first.slice(0, 3)).toEqual([null, 'C-4', 'D-4']);
+  // With the column variants only the selected column moves, not the rest of the track or the other tracks.
+  const column = project.patterns[0].notes[0][0];
+  key('Insert', { metaKey: true, shiftKey: true }); expect(first.slice(0, 4)).toEqual([null, null, 'C-4', 'D-4']); expect(second[1]).toBe('E-4');
+  key('Delete', { ctrlKey: true, shiftKey: true }); expect(first.slice(0, 3)).toEqual([null, 'C-4', 'D-4']); expect(column.notes).toBe(first);
+});
+
+it('jumps to the quarter points of the pattern with F9 to F12', () => {
+  const { project, key, click } = setup(); const notes = project.patterns[0].notes[0][0].notes; notes.fill(null); const rows = project.patterns[0].rows;
+  click(5, 0);
+  for (const [name, row] of [['F10', rows / 4], ['F11', rows / 2], ['F12', rows * 3 / 4], ['F9', 0]] as const) { key(name); key('z'); expect(notes[row]).toBe('C-4'); }
+});
+
+it('asks the sequence to move between steps, add or remove one, and change the pattern a step plays', () => {
+  const { key, sequence } = setup();
+  for (const [name, options, action] of [['ArrowUp', { metaKey: true }, 'previous'], ['ArrowDown', { ctrlKey: true }, 'next'], ['Home', { metaKey: true }, 'first'], ['End', { metaKey: true }, 'last'],
+    ['ArrowLeft', { metaKey: true }, 'pattern-previous'], ['ArrowRight', { metaKey: true }, 'pattern-next'], ['Insert', { metaKey: true }, 'new'], ['Delete', { metaKey: true }, 'remove']] as const) {
+    sequence.mockClear(); key(name, options); expect(sequence).toHaveBeenCalledWith(action);
+  }
 });

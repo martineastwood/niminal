@@ -122,3 +122,14 @@ it('rejects sections that are out of order or outside the sequence', () => {
   expect(read([{ start: 0, name: 'A' }, { start: 2, name: 'B', collapsed: true }])).not.toThrow();
   for (const bad of [[{ start: 4, name: 'A' }], [{ start: 2, name: 'A' }, { start: 2, name: 'B' }], [{ start: 2, name: 'A' }, { start: 1, name: 'B' }], [{ start: 0, name: 7 }], [{ start: 0, name: 'A', collapsed: 'yes' }], 'x']) expect(read(bad)).toThrow();
 });
+
+it('points the selected step at the previous or next pattern, within the pool', () => {
+  const project = newProject(), parent = document.createElement('div'), edited = vi.fn();
+  const view = new Arrangement(parent, () => project, vi.fn(), edited); view.reset();
+  view.insert('new'); view.insert('new'); view.select(0);
+  const [a, b, c] = project.patterns.map(p => p.id);
+  view.shiftPattern(1); expect(project.sequence[0]).toBe(b); expect(view.pattern.id).toBe(b);
+  view.shiftPattern(1); expect(project.sequence[0]).toBe(c); view.shiftPattern(1); expect(project.sequence[0]).toBe(c);
+  view.shiftPattern(-2); expect(project.sequence[0]).toBe(a); view.shiftPattern(-1); expect(project.sequence[0]).toBe(a);
+  expect(edited).toHaveBeenCalled();
+});
