@@ -44,7 +44,9 @@ impl Layout {
             4 => Ok(Layout::Quad),
             6 => Ok(Layout::Surround51),
             8 => Ok(Layout::Surround71),
-            n => Err(format!("error: there is no standard layout with {n} channels; use 1, 2, 4, 6 or 8")),
+            n => Err(format!(
+                "error: there is no standard layout with {n} channels; use 1, 2, 4, 6 or 8"
+            )),
         }
     }
 

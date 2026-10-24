@@ -7,8 +7,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use niminal_server::{AudioInput, EngineServer, RealtimeConfig, RealtimeRenderer};
 use niminal_engine::MAX_CHANNELS;
+use niminal_server::{AudioInput, EngineServer, RealtimeConfig, RealtimeRenderer};
 use rtrb::RingBuffer;
 
 /// Control and event preparation share the server. DSP owns its state and
@@ -228,7 +228,10 @@ impl Listening {
             .default_input_config()
             .map_err(|e| format!("can't query the audio input: {e}"))?;
         let all = usize::from(default.channels());
-        let kept = all.min(MAX_CHANNELS).min(channels.unwrap_or(usize::MAX)).max(1);
+        let kept = all
+            .min(MAX_CHANNELS)
+            .min(channels.unwrap_or(usize::MAX))
+            .max(1);
         let (mut producer, ring) = AudioInput::ring(kept, ring_frames);
         let config = cpal::StreamConfig {
             channels: default.channels(),
@@ -546,7 +549,10 @@ fn select_device(input: bool, id: Option<&str>) -> Result<cpal::Device, String> 
         devices
             .find(|d| d.to_string().to_lowercase().contains(&wanted))
             .ok_or_else(|| {
-                format!("no audio {} device matches `{id}`; `niminal devices` lists them", if input { "input" } else { "output" })
+                format!(
+                    "no audio {} device matches `{id}`; `niminal devices` lists them",
+                    if input { "input" } else { "output" }
+                )
             })
     } else {
         if input {
@@ -669,9 +675,15 @@ mod tests {
         })
         .join();
         assert!(server.is_poisoned());
-        let (mut playback, _helpers) =
-            Playback::start(server, 2, 48_000, Arc::default(), None, RealtimeConfig::default())
-                .unwrap();
+        let (mut playback, _helpers) = Playback::start(
+            server,
+            2,
+            48_000,
+            Arc::default(),
+            None,
+            RealtimeConfig::default(),
+        )
+        .unwrap();
         // the planner keeps feeding the renderer, so the tone is still heard
         let mut heard = false;
         for _ in 0..50 {
@@ -710,9 +722,15 @@ mod tests {
         let mut reference = tone_session();
         let expected = reference.process(FRAMES * 4);
         let server = Arc::new(Mutex::new(EngineServer::new(tone_session())));
-        let (mut playback, helpers) =
-            Playback::start(server.clone(), 2, 48_000, Arc::default(), None, RealtimeConfig::default())
-                .unwrap();
+        let (mut playback, helpers) = Playback::start(
+            server.clone(),
+            2,
+            48_000,
+            Arc::default(),
+            None,
+            RealtimeConfig::default(),
+        )
+        .unwrap();
         // let the planner prepare the notes before something holds the server
         thread::sleep(Duration::from_millis(200));
         let guard = lock(&server);

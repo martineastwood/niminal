@@ -3,6 +3,8 @@ title: Functions
 description: fn, state, arrays, rates and chaining.
 ---
 
+**Compiled by niminal.** Functions become part of the compiled sound.
+
 `fn` is the one way to write reusable code. What a function becomes depends on its body:
 
 - **Without `state`** it is pure, and works at any rate: while compiling (a constant, a table), at note start, per block or per sample.

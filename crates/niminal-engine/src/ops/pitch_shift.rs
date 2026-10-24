@@ -43,7 +43,9 @@ impl Opcode for PitchShift {
         self.grain_phase = [0.0, 0.5];
     }
 
-    fn name(&self) -> &str { "pitch_shift" }
+    fn name(&self) -> &str {
+        "pitch_shift"
+    }
 
     fn ports(&self) -> &[Port] {
         const PORTS: &[Port] = &[

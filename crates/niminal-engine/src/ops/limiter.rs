@@ -149,16 +149,29 @@ impl Opcode for Limiter {
         let recovery = 1.0 - (-1.0 / (release * sr)).exp();
         let n = self.window;
         for (i, o) in out.iter_mut().enumerate() {
-            let x = if inputs[0][i].is_finite() { inputs[0][i] } else { 0.0 };
+            let x = if inputs[0][i].is_finite() {
+                inputs[0][i]
+            } else {
+                0.0
+            };
             let ceiling = f64::from(inputs[1][i].abs().max(1e-6));
             let level = f64::from(x).abs();
-            let required = if level > ceiling { ceiling / level } else { 1.0 };
+            let required = if level > ceiling {
+                ceiling / level
+            } else {
+                1.0
+            };
 
             let lowest = self.lowest_with(required);
             let p = self.pos;
-            self.reduced = self.reduced + usize::from(lowest < 1.0) - usize::from(self.lowest[p] < 1.0);
+            self.reduced =
+                self.reduced + usize::from(lowest < 1.0) - usize::from(self.lowest[p] < 1.0);
             // the running sum drifts a little with every change, so when nothing is reduced it is set exactly
-            self.sum = if self.reduced == 0 { n as f64 } else { self.sum + lowest - self.lowest[p] };
+            self.sum = if self.reduced == 0 {
+                n as f64
+            } else {
+                self.sum + lowest - self.lowest[p]
+            };
             self.lowest[p] = lowest;
             let smoothed = (self.sum / n as f64).min(1.0);
 
@@ -167,7 +180,11 @@ impl Opcode for Limiter {
                 smoothed
             } else {
                 let gain = self.gain + (smoothed - self.gain) * recovery;
-                if smoothed == 1.0 && 1.0 - gain < 1e-12 { 1.0 } else { gain }
+                if smoothed == 1.0 && 1.0 - gain < 1e-12 {
+                    1.0
+                } else {
+                    gain
+                }
             };
 
             self.delay[p] = x;
@@ -198,7 +215,11 @@ mod tests {
             .map(|i| {
                 state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
                 let noise = (state >> 8) as f32 / (1u32 << 23) as f32 - 1.0;
-                if (2000..16_000).contains(&i) { noise * 2.0 } else { noise * 0.1 }
+                if (2000..16_000).contains(&i) {
+                    noise * 2.0
+                } else {
+                    noise * 0.1
+                }
             })
             .collect()
     }
@@ -211,7 +232,10 @@ mod tests {
             let out = run(&mut limiter, &burst(30_000), 0.5, release);
             let peak = out.iter().fold(0.0f32, |a, b| a.max(b.abs()));
             assert!(peak <= 0.5 + 1e-6, "release {release}: peak {peak}");
-            assert!(peak > 0.45, "release {release}: the loud part is limited, not silenced ({peak})");
+            assert!(
+                peak > 0.45,
+                "release {release}: the loud part is limited, not silenced ({peak})"
+            );
         }
     }
 
@@ -237,7 +261,11 @@ mod tests {
         input[1000] = 4.0;
         let out = run(&mut limiter, &input, 1.0, 0.05);
         assert!(out[1000 + limiter.latency()] <= 1.0 + 1e-6);
-        assert!((out[47_000] - 0.2).abs() < 1e-3, "recovered to {}", out[47_000]);
+        assert!(
+            (out[47_000] - 0.2).abs() < 1e-3,
+            "recovered to {}",
+            out[47_000]
+        );
     }
 
     #[test]

@@ -66,7 +66,7 @@ pub(crate) fn build(program: &Program) -> Vec<State> {
         .controls
         .iter()
         .map(|c| State {
-            unit:c.unit,
+            unit: c.unit,
             key: c.key.clone(),
             initial: c.initial,
             revision: 0,
@@ -82,7 +82,10 @@ pub(crate) fn build(program: &Program) -> Vec<State> {
 /// transfer allocate nothing; changed declarations glide to their new defaults.
 pub(crate) fn adopt(new: &mut [State], old: &[State], program: &Program, at: u64, rate: f32) {
     for (state, def) in new.iter_mut().zip(&program.controls) {
-        if let Some(previous) = old.iter().find(|p| p.key == state.key && p.unit == state.unit) {
+        if let Some(previous) = old
+            .iter()
+            .find(|p| p.key == state.key && p.unit == state.unit)
+        {
             let changed = state.revision != 0 && state.revision != previous.revision;
             if state.revision == 0 {
                 state.revision = previous.revision;

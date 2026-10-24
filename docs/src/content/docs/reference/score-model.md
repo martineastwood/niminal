@@ -3,6 +3,8 @@ title: Score model
 description: Events, sections, projects, and the .nms JSON format.
 ---
 
+**Played by niminal.** The server plays score events; nimlive, a `.nms` file or a client of your own can be what writes them.
+
 The engine can play **score events** that do not come from niminal source: a `.nms` file on the command line, or `events.send` / `clip.define` on a live server. The orchestra still defines the instruments; the score times and names the notes, clips and scenes.
 
 ## Elements

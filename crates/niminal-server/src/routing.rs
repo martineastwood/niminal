@@ -479,7 +479,11 @@ impl Routing {
                 RoutingEdit::Map { .. }
                 | RoutingEdit::Array { .. }
                 | RoutingEdit::BindBuffer { .. } => {}
-                RoutingEdit::Fx { name, source, output_channels } => {
+                RoutingEdit::Fx {
+                    name,
+                    source,
+                    output_channels,
+                } => {
                     valid(name)?;
                     let internal = format!("__routing_template_{client}_{name}");
                     let declaration = format!("fx {internal}{source}");
@@ -490,8 +494,12 @@ impl Routing {
                     let text = format!("{}\n{declaration}", definitions.source);
                     let mut options = options.clone();
                     if let Some(channels) = output_channels {
-                        if !(1..=16).contains(channels) { return Err("fx output_channels must be from 1 to 16".into()); }
-                        options.node_outputs.insert(internal.clone(), Layout::from_count(*channels));
+                        if !(1..=16).contains(channels) {
+                            return Err("fx output_channels must be from 1 to 16".into());
+                        }
+                        options
+                            .node_outputs
+                            .insert(internal.clone(), Layout::from_count(*channels));
                     }
                     options.buffers = definitions.buffers.iter().cloned().collect();
                     options.namespaces = definitions.namespaces.clone();
@@ -695,7 +703,10 @@ impl Routing {
                     );
                 }
                 RoutingEdit::Reset { id } => {
-                    let node = patch.nodes.get_mut(id).ok_or_else(|| format!("no node `{id}`"))?;
+                    let node = patch
+                        .nodes
+                        .get_mut(id)
+                        .ok_or_else(|| format!("no node `{id}`"))?;
                     node.generation += 1;
                     node.fade = 0.0;
                     node.reset_state = true;

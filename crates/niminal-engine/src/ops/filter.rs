@@ -88,7 +88,10 @@ impl Svf {
 }
 
 impl Opcode for Svf {
-    fn reset(&mut self) { self.ic1 = 0.0; self.ic2 = 0.0; }
+    fn reset(&mut self) {
+        self.ic1 = 0.0;
+        self.ic2 = 0.0;
+    }
     fn name(&self) -> &'static str {
         match self.mode {
             FilterMode::Low => "lpf",
@@ -168,17 +171,34 @@ mod one_sample_tests {
         assert!(one.has_process_one());
         for i in 0..n {
             let x: Vec<f32> = inputs.iter().map(|v| v[i]).collect();
-            assert_eq!(one.process_one(&ctx, &x), expected[i], "sample {i} of {}", one.name());
+            assert_eq!(
+                one.process_one(&ctx, &x),
+                expected[i],
+                "sample {i} of {}",
+                one.name()
+            );
         }
     }
 
     #[test]
     fn the_one_sample_paths_match_the_block_paths() {
-        same(Box::new(Svf::new(FilterMode::Low)), Box::new(Svf::new(FilterMode::Low)));
-        same(Box::new(Svf::new(FilterMode::High)), Box::new(Svf::new(FilterMode::High)));
+        same(
+            Box::new(Svf::new(FilterMode::Low)),
+            Box::new(Svf::new(FilterMode::Low)),
+        );
+        same(
+            Box::new(Svf::new(FilterMode::High)),
+            Box::new(Svf::new(FilterMode::High)),
+        );
         same(Box::new(Osc::new(Wave::Saw)), Box::new(Osc::new(Wave::Saw)));
-        same(Box::new(Osc::new(Wave::Pulse)), Box::new(Osc::new(Wave::Pulse)));
-        same(Box::new(Osc::new(Wave::Sine)), Box::new(Osc::new(Wave::Sine)));
+        same(
+            Box::new(Osc::new(Wave::Pulse)),
+            Box::new(Osc::new(Wave::Pulse)),
+        );
+        same(
+            Box::new(Osc::new(Wave::Sine)),
+            Box::new(Osc::new(Wave::Sine)),
+        );
         same(Box::new(Lag::default()), Box::new(Lag::default()));
     }
 }

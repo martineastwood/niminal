@@ -3,7 +3,7 @@ title: Patterns
 description: Mini-notation, grids, and pattern transforms.
 ---
 
-The server evaluates **mini-notation** and **grids** itself for endless live patterns and clip lanes. Finite event lists from outside niminal use [`.nms` scores](/reference/score-model/).
+**Read by nimlive.** Patterns are evaluated by the sequencer while a piece plays; the server only sees the notes that come out of them. Finite event lists from outside niminal use [`.nms` scores](/reference/score-model/).
 
 ## Shared symbols
 

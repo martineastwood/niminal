@@ -4,7 +4,9 @@ use crate::denormals::flush32 as flush;
 use crate::opcode::{Opcode, Port, ProcessCtx, TAIL_LEVEL};
 
 /// Line lengths in samples at 48kHz, mutually prime so the lines don't ring in step.
-const LENGTHS: [f32; 8] = [1031.0, 1327.0, 1523.0, 1871.0, 2053.0, 2381.0, 2713.0, 3079.0];
+const LENGTHS: [f32; 8] = [
+    1031.0, 1327.0, 1523.0, 1871.0, 2053.0, 2381.0, 2713.0, 3079.0,
+];
 /// The longest `size` a line has room for.
 const MAX_SIZE: f32 = 2.0;
 /// Samples (at 48kHz) added to every line for each successive channel, so the channels of a
@@ -97,7 +99,9 @@ impl Opcode for Fdn {
     fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
         // room for the longest line at the largest size, and a sample either side for interpolating
-        self.lines = (0..8).map(|i| vec![0.0; (self.base_length(i) * MAX_SIZE).ceil() as usize + 4]).collect();
+        self.lines = (0..8)
+            .map(|i| vec![0.0; (self.base_length(i) * MAX_SIZE).ceil() as usize + 4])
+            .collect();
         self.longest = self.lines.iter().map(Vec::len).max().unwrap_or(0);
         self.pos = [0; 8];
         self.lowpass = [0.0; 8];
@@ -161,13 +165,18 @@ impl Opcode for Fdn {
             }
             let mut loudest = x.abs();
             for i in 0..8 {
-                self.lowpass[i] = flush(self.lowpass[i] * pole + mixed[i] * HADAMARD_SCALE * (1.0 - pole));
+                self.lowpass[i] =
+                    flush(self.lowpass[i] * pole + mixed[i] * HADAMARD_SCALE * (1.0 - pole));
                 let stored = flush(x + self.lowpass[i] * feedback[i]);
                 loudest = loudest.max(stored.abs());
                 self.lines[i][self.pos[i]] = stored;
                 self.pos[i] = (self.pos[i] + 1) % self.lines[i].len();
             }
-            self.quiet_run = if loudest < quiet { self.quiet_run + 1 } else { 0 };
+            self.quiet_run = if loudest < quiet {
+                self.quiet_run + 1
+            } else {
+                0
+            };
         }
     }
 
@@ -183,7 +192,11 @@ mod tests {
 
     fn run(fdn: &mut Fdn, input: &[f32], time: f32, damp: f32, size: f32) -> Vec<f32> {
         let ctx = ProcessCtx::new(48_000.0, true);
-        let (times, damps, sizes) = (vec![time; input.len()], vec![damp; input.len()], vec![size; input.len()]);
+        let (times, damps, sizes) = (
+            vec![time; input.len()],
+            vec![damp; input.len()],
+            vec![size; input.len()],
+        );
         let mut out = vec![0.0; input.len()];
         fdn.process(&ctx, &[input, &times, &damps, &sizes], &mut out);
         out
@@ -203,11 +216,15 @@ mod tests {
     fn the_tail_falls_by_sixty_decibels_over_the_time() {
         let mut fdn = Fdn::default();
         let out = run(&mut fdn, &impulse(48_000 * 3), 1.0, 12_000.0, 1.0);
-        let window = |from: f32| rms(&out[(from * 48_000.0) as usize..(from * 48_000.0) as usize + 4800]);
+        let window =
+            |from: f32| rms(&out[(from * 48_000.0) as usize..(from * 48_000.0) as usize + 4800]);
         let (early, late) = (window(0.2), window(1.2));
         // a second later is 60db down (a thousandth), give or take how the energy happens to fall
         let drop = 20.0 * (late / early).log10();
-        assert!((-80.0..-45.0).contains(&drop), "fell by {drop}db in a second");
+        assert!(
+            (-80.0..-45.0).contains(&drop),
+            "fell by {drop}db in a second"
+        );
         assert!(out.iter().all(|v| v.is_finite()));
     }
 
@@ -255,11 +272,21 @@ mod tests {
 
     #[test]
     fn extreme_settings_stay_finite_and_bounded() {
-        for (time, damp, size) in [(0.0, 20.0, 0.25), (30.0, 40_000.0, 2.0), (30.0, 20.0, 0.25), (0.01, 40_000.0, 2.0)] {
+        for (time, damp, size) in [
+            (0.0, 20.0, 0.25),
+            (30.0, 40_000.0, 2.0),
+            (30.0, 20.0, 0.25),
+            (0.01, 40_000.0, 2.0),
+        ] {
             let mut fdn = Fdn::default();
-            let noise: Vec<f32> = (0..48_000).map(|i| ((i * 7919) % 2001) as f32 / 1000.0 - 1.0).collect();
+            let noise: Vec<f32> = (0..48_000)
+                .map(|i| ((i * 7919) % 2001) as f32 / 1000.0 - 1.0)
+                .collect();
             let out = run(&mut fdn, &noise, time, damp, size);
-            assert!(out.iter().all(|v| v.is_finite() && v.abs() < 50.0), "{time} {damp} {size}");
+            assert!(
+                out.iter().all(|v| v.is_finite() && v.abs() < 50.0),
+                "{time} {damp} {size}"
+            );
         }
     }
 }

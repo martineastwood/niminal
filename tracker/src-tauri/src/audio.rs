@@ -7,7 +7,7 @@ use niminal_ws::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::pattern::{Mode, Playback, Song, Track, note_args};
+use crate::pattern::{Mode, NoteCommand, Playback, Song, Track, command_args, fit_to_tempo, note_args};
 use crate::{
     mixer,
     sound::{Kind, Sound},
@@ -79,6 +79,9 @@ pub enum Command {
         /// How long the note is held, in milliseconds.
         #[serde(default = "audition_ms")]
         ms: u32,
+        /// A note command to hear with it: offset, reverse or retrigger.
+        #[serde(default)]
+        command: Option<String>,
     },
     Stop,
     /// The tracker is closing: stop the sound and the engine it started.
@@ -596,6 +599,7 @@ impl Worker {
                         args[&parameter.name] = parameter.argument(value.clamp(parameter.min, parameter.max));
                     }
                 }
+                fit_to_tempo(&mut args, self.status.instrument_parameters.get(&instrument).map_or(&[], Vec::as_slice), self.mixer_timing.0);
                 args["gain"] = json!(format!("{}db", 20.0 * (f64::from(velocity) / 127.0).log10()));
                 let id = crate::pattern::NOTE_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 self.send_events(vec![json!({"op":"note", "at":"now", "id":id, "tag":format!("tracker-midi-{key}"), "target":target, "to":format!("in_{track}"), "args":args})])?;
@@ -607,6 +611,7 @@ impl Worker {
                 note,
                 track,
                 ms,
+                command,
             } => {
                 if track >= 16 {
                     return Err("Invalid audition track".into());
@@ -618,10 +623,25 @@ impl Worker {
                     .ok_or("Apply this instrument before auditioning")?
                     .clone();
                 let slices = self.status.instrument_slices.get(&instrument).copied();
-                let Some(args) = note_args(&note, slices)? else {
+                let Some(mut args) = note_args(&note, slices)? else {
                     return Ok(());
                 };
-                self.send_events(vec![json!({"op":"note", "at":"now", "target":target, "to":format!("in_{track}"), "dur":format!("{ms}ms"), "args":args})])?;
+                let command = command.as_deref().and_then(NoteCommand::parse);
+                fit_to_tempo(&mut args, self.status.instrument_parameters.get(&instrument).map_or(&[], Vec::as_slice), self.mixer_timing.0);
+                command_args(&mut args, command, self.status.instrument_parameters.get(&instrument).map_or(&[], Vec::as_slice));
+                // a retrigger shares the time between its hits
+                let hits = match command {
+                    Some(NoteCommand::Retrigger(n)) => n,
+                    _ => 1,
+                };
+                let start = if hits > 1 { self.clock()? + (self.status.sample_rate * 0.02) as u64 } else { 0 };
+                let events = (0..hits)
+                    .map(|hit| {
+                        let at = if hits > 1 { json!(start + (f64::from(hit) * f64::from(ms) / f64::from(hits) / 1000.0 * self.status.sample_rate) as u64) } else { json!("now") };
+                        json!({"op":"note", "at":at, "target":target, "to":format!("in_{track}"), "dur":format!("{}ms", ms / hits), "args":args})
+                    })
+                    .collect();
+                self.send_events(events)?;
             }
             Command::Stop => self.stop()?,
             Command::Quit => {
@@ -648,7 +668,8 @@ impl Worker {
     /// Whether every value a parameter lane holds can be sent to the strip named `slot`.
     fn check_lane(&self, slot: &str, strip: &Track, lane: &crate::pattern::FxLane) -> Result<(), String> {
         let parameters = &self.status.effect_parameters;
-        if lane.target.as_ref().is_some_and(|target| !target.available(strip, parameters)) {
+        // an instrument's parameter is given to its notes as they sound, so there is no mixer edit to check
+        if lane.target.as_ref().is_some_and(|target| !target.available(strip, parameters) || matches!(target, crate::commands::FxTarget::Instrument { .. })) {
             return Ok(());
         }
         if let Some(envelope) = &lane.envelope {

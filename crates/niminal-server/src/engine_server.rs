@@ -561,7 +561,9 @@ impl EngineServer {
                     started.elapsed().as_secs_f64() * 1e3
                 )
             }),
-            Err(e) => self.trace(1, || format!("client {client} {method} failed: {}", e.message)),
+            Err(e) => self.trace(1, || {
+                format!("client {client} {method} failed: {}", e.message)
+            }),
         }
         match (id, outcome) {
             (None, _) => Vec::new(), // a notification from the client gets no reply
@@ -592,7 +594,9 @@ impl EngineServer {
             }
             self.trace(1, || {
                 let name = match &request {
-                    EngineRequest::Hello { client: Some(name), .. } => name.as_str(),
+                    EngineRequest::Hello {
+                        client: Some(name), ..
+                    } => name.as_str(),
                     _ => "unnamed",
                 };
                 format!("client {client} said hello as {name}")

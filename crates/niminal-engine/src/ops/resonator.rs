@@ -56,9 +56,14 @@ impl Resonator {
 }
 
 impl Opcode for Resonator {
-    fn reset(&mut self) { self.y1 = 0.0; self.y2 = 0.0; }
+    fn reset(&mut self) {
+        self.y1 = 0.0;
+        self.y2 = 0.0;
+    }
 
-    fn name(&self) -> &str { "resonator" }
+    fn name(&self) -> &str {
+        "resonator"
+    }
 
     fn ports(&self) -> &[Port] {
         const PORTS: &[Port] = &[
@@ -97,6 +102,7 @@ impl Opcode for Resonator {
     }
 
     fn is_active(&self) -> bool {
-        self.y1.abs() > f64::from(crate::opcode::TAIL_LEVEL) || self.y2.abs() > f64::from(crate::opcode::TAIL_LEVEL)
+        self.y1.abs() > f64::from(crate::opcode::TAIL_LEVEL)
+            || self.y2.abs() > f64::from(crate::opcode::TAIL_LEVEL)
     }
 }

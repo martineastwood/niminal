@@ -287,7 +287,8 @@ impl Parser {
                 span: start.to(end),
             };
             Ok(if fx { Item::Fx(decl) } else { Item::Node(decl) })
-        } else if self.is_keyword("control") && matches!(self.peek_at(1), Tok::Ident(w) if w == "fn")
+        } else if self.is_keyword("control")
+            && matches!(self.peek_at(1), Tok::Ident(w) if w == "fn")
         {
             // `control fn f(..) { body }` is `fn f(..) { control { body } }`
             let start = self.bump().span;
@@ -990,7 +991,8 @@ impl Parser {
                 };
                 continue;
             }
-            if self.peek() == &Tok::LBrace && matches!(&e.kind, ExprKind::Name(n) if n == "control") {
+            if self.peek() == &Tok::LBrace && matches!(&e.kind, ExprKind::Name(n) if n == "control")
+            {
                 // `control { ... }` takes no arguments, so it has no parentheses to make it a call
                 e = Expr {
                     kind: ExprKind::Call {
@@ -1537,8 +1539,16 @@ fn sample_decl(name: Ident, value: Expr) -> Res<SampleDecl> {
         }
         let receiver = args.remove(0).value;
         if call.name == "slices" {
-            let (
-                ExprKind::Name(sample),
+            let usage = || {
+                Diagnostic::new(
+                    "`slices` cuts a sample into equal pieces, as in `amen.slices(16)`, or at places in it, as in `amen.slices([0, 0.25, 0.6])`",
+                    at,
+                )
+            };
+            let ExprKind::Name(sample) = &receiver.kind else {
+                return Err(usage());
+            };
+            let (count, places) = match args.as_slice() {
                 [
                     Arg {
                         name: None,
@@ -1553,13 +1563,28 @@ fn sample_decl(name: Ident, value: Expr) -> Res<SampleDecl> {
                             },
                         ..
                     },
-                ],
-            ) = (&receiver.kind, args.as_slice())
-            else {
-                return Err(Diagnostic::new(
-                    "`slices` cuts a sample into equal pieces, as in `amen.slices(16)`",
-                    at,
-                ));
+                ] => (*count, Vec::new()),
+                [
+                    Arg {
+                        name: None,
+                        value:
+                            Expr {
+                                kind: ExprKind::Array(items),
+                                ..
+                            },
+                        ..
+                    },
+                ] if !items.is_empty() => {
+                    let mut places = Vec::new();
+                    for item in items {
+                        let ExprKind::Num { value, unit: None } = &item.kind else {
+                            return Err(usage());
+                        };
+                        places.push(*value);
+                    }
+                    (places.len() as f64, places)
+                }
+                _ => return Err(usage()),
             };
             let sample = Ident {
                 name: sample.clone(),
@@ -1569,7 +1594,8 @@ fn sample_decl(name: Ident, value: Expr) -> Res<SampleDecl> {
                 true,
                 SampleSource::Slices {
                     sample,
-                    count: *count,
+                    count,
+                    at: places,
                 },
                 at,
             );

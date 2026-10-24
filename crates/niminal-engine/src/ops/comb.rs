@@ -46,7 +46,9 @@ impl Opcode for Comb {
         self.damp_state = 0.0;
     }
 
-    fn name(&self) -> &str { "comb" }
+    fn name(&self) -> &str {
+        "comb"
+    }
 
     fn ports(&self) -> &[Port] {
         const PORTS: &[Port] = &[
@@ -93,7 +95,12 @@ impl Opcode for Comb {
         for (i, o) in out.iter_mut().enumerate() {
             let exact = f64::from(inputs[1][i]) * sr;
             let snapped = exact.round();
-            let samples = if (exact - snapped).abs() < 1e-3 { snapped } else { exact }.clamp(1.0, max_samples);
+            let samples = if (exact - snapped).abs() < 1e-3 {
+                snapped
+            } else {
+                exact
+            }
+            .clamp(1.0, max_samples);
             let whole = samples.floor() as usize;
             let frac = (samples - samples.floor()) as f32;
 
@@ -116,7 +123,11 @@ impl Opcode for Comb {
             self.in_flight = samples.ceil() as usize + 1;
 
             let result = inputs[0][i] + delayed * ff + fb_damped;
-            self.quiet_run = if result.abs() < TAIL_LEVEL { self.quiet_run.saturating_add(1) } else { 0 };
+            self.quiet_run = if result.abs() < TAIL_LEVEL {
+                self.quiet_run.saturating_add(1)
+            } else {
+                0
+            };
             *o = result;
         }
     }

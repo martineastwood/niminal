@@ -123,7 +123,11 @@ mod tests {
         let mut d = Distortion::default();
         d.prepare(48_000.0);
         let ctx = ProcessCtx::new(48_000.0, true);
-        let (drives, tones, mixes) = (vec![drive; input.len()], vec![tone; input.len()], vec![1.0; input.len()]);
+        let (drives, tones, mixes) = (
+            vec![drive; input.len()],
+            vec![tone; input.len()],
+            vec![1.0; input.len()],
+        );
         let mut out = vec![0.0; input.len()];
         d.process(&ctx, &[input, &drives, &tones, &mixes], &mut out);
         out
@@ -131,18 +135,25 @@ mod tests {
 
     #[test]
     fn hard_asymmetric_clipping_leaves_no_offset() {
-        let sine: Vec<f32> = (0..48_000).map(|i| (std::f32::consts::TAU * 220.0 * i as f32 / 48_000.0).sin()).collect();
+        let sine: Vec<f32> = (0..48_000)
+            .map(|i| (std::f32::consts::TAU * 220.0 * i as f32 / 48_000.0).sin())
+            .collect();
         let out = run(8.0, 1.0, &sine);
         let tail = &out[24_000..];
         let mean = tail.iter().sum::<f32>() / tail.len() as f32;
         let loudest = tail.iter().fold(0.0f32, |a, b| a.max(b.abs()));
-        assert!(mean.abs() < 0.01 * loudest, "offset {mean} against a peak of {loudest}");
+        assert!(
+            mean.abs() < 0.01 * loudest,
+            "offset {mean} against a peak of {loudest}"
+        );
     }
 
     #[test]
     fn it_still_makes_even_harmonics() {
         // the asymmetry is what gives a second harmonic; the blocker must not take it away
-        let sine: Vec<f32> = (0..48_000).map(|i| (std::f32::consts::TAU * 1000.0 * i as f32 / 48_000.0).sin()).collect();
+        let sine: Vec<f32> = (0..48_000)
+            .map(|i| (std::f32::consts::TAU * 1000.0 * i as f32 / 48_000.0).sin())
+            .collect();
         let out = run(4.0, 1.0, &sine);
         let bin = |hz: f32| {
             let (mut re, mut im) = (0.0f32, 0.0f32);
@@ -153,6 +164,11 @@ mod tests {
             }
             (re * re + im * im).sqrt()
         };
-        assert!(bin(2000.0) > 0.05 * bin(1000.0), "second harmonic {} against {}", bin(2000.0), bin(1000.0));
+        assert!(
+            bin(2000.0) > 0.05 * bin(1000.0),
+            "second harmonic {} against {}",
+            bin(2000.0),
+            bin(1000.0)
+        );
     }
 }

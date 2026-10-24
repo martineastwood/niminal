@@ -1,7 +1,7 @@
 import tone from './presets/tone.nml?raw';
 
 /** `values` are an instrument's parameter settings: notes start with them, unless a lane has changed them. */
-export interface Definition { id: string; name: string; kind: 'instr' | 'fx'; source: string; values?: Record<string, number> }
+export interface Definition { id: string; name: string; kind: 'instr' | 'fx'; source: string; values?: Record<string, number>; /** Parameters of an instrument whose sliders are hidden; lanes can still target them. */ hidden?: string[] }
 export interface Lfo { enabled: boolean; shape: 'sine' | 'triangle' | 'saw' | 'square'; period: number; min: number; max: number }
 /**
  * One effect in a track's chain. Its `id` is stable across reordering; lanes refer to it. A device with a
@@ -153,7 +153,7 @@ export function readProject(raw: string): Project {
   // projects saved before commands existed have no command cells
   for (const pattern of Array.isArray(value?.patterns) ? value.patterns : []) for (const column of Array.isArray(pattern?.notes) ? pattern.notes.flat() : []) if (column && typeof column === 'object') column.cmd ??= [];
   if (value?.version !== 11 || typeof value.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value.id) || !Array.isArray(value.definitions) || value.definitions.length === 0 ||
-      !value.definitions.every((d: Definition) => d && typeof d.id === 'string' && /^[a-zA-Z_][\w-]*$/.test(d.id) && typeof d.name === 'string' && typeof d.source === 'string' && ['instr', 'fx'].includes(d.kind) && (d.values === undefined || !!d.values && typeof d.values === 'object' && Object.values(d.values).every(Number.isFinite))) ||
+      !value.definitions.every((d: Definition) => d && typeof d.id === 'string' && /^[a-zA-Z_][\w-]*$/.test(d.id) && typeof d.name === 'string' && typeof d.source === 'string' && ['instr', 'fx'].includes(d.kind) && (d.values === undefined || !!d.values && typeof d.values === 'object' && Object.values(d.values).every(Number.isFinite)) && (d.hidden === undefined || Array.isArray(d.hidden) && d.hidden.every((name: unknown) => typeof name === 'string'))) ||
       new Set(value.definitions.map((d: Definition) => d.id)).size !== value.definitions.length ||
       !Number.isFinite(value.bpm) || value.bpm < 20 || value.bpm > 300 ||
       !Number.isInteger(value.rows_per_beat) || value.rows_per_beat < 1 || value.rows_per_beat > 16 ||
@@ -189,12 +189,19 @@ export function keyboardNote(key: string, octave: number): string | null {
   return semitone < 0 ? null : transposeNote(`C-${octave}`, semitone);
 }
 
+/** A note's place on the keyboard counted in semitones from C-0, or null for OFF, CUT and anything else that is not a note. */
+export function noteNumber(note: string): number | null {
+  const match = /^([A-G][#-])([0-8])$/.exec(note), index = match ? noteNames.indexOf(match[1]) : -1;
+  return match && index >= 0 ? Number(match[2]) * 12 + index : null;
+}
+/** The note at `number` semitones from C-0, or null outside C-0 to B-8. */
+export function noteAt(number: number): string | null {
+  return Number.isInteger(number) && number >= 0 && number <= 107 ? `${noteNames[number % 12]}${Math.floor(number / 12)}` : null;
+}
 /** A note moved by some semitones, or null for OFF, anything else that is not a note, or a result outside C-0 to B-8. */
 export function transposeNote(note: string, semitones: number): string | null {
-  const match = /^([A-G][#-])([0-8])$/.exec(note), index = match ? noteNames.indexOf(match[1]) : -1;
-  if (!match || index < 0) return null;
-  const total = Number(match[2]) * 12 + index + semitones;
-  return total < 0 || total > 107 ? null : `${noteNames[total % 12]}${Math.floor(total / 12)}`;
+  const number = noteNumber(note);
+  return number === null ? null : noteAt(number + semitones);
 }
 
 export const trackSource = (project: Song, step: number, track: number): TrackSource | null => project.matrix?.[step]?.[track] ?? null;

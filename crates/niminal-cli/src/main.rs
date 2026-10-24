@@ -125,11 +125,9 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Replay(args) => {
-            niminal_engine::set_control_step(args.control_step)
-                .map_err(|e| format!("error: {e}"))
-                .and_then(|()| run_replay(&args.log, &args.out, args.channels, args.no_limiter))
-        }
+        Command::Replay(args) => niminal_engine::set_control_step(args.control_step)
+            .map_err(|e| format!("error: {e}"))
+            .and_then(|()| run_replay(&args.log, &args.out, args.channels, args.no_limiter)),
         Command::Server(mut args) => {
             install_crash_log();
             if args.log.is_none() && !args.no_log {
@@ -428,7 +426,10 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
             })();
             if verbose > 0 {
                 match &prepared {
-                    Ok(_) => eprintln!("audio: restarting with {}", serde_json::to_string(&settings).unwrap_or_default()),
+                    Ok(_) => eprintln!(
+                        "audio: restarting with {}",
+                        serde_json::to_string(&settings).unwrap_or_default()
+                    ),
                     Err(error) => eprintln!("audio: new settings rejected: {error}"),
                 }
             }
@@ -512,9 +513,9 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
                 let e = niminal_cli::audio::lock(&engine);
                 (e.session().state().voices, e.session().realtime_metrics())
             };
-            let underruns = health
-                .as_ref()
-                .map_or(0, |h| h.underruns.load(std::sync::atomic::Ordering::Relaxed));
+            let underruns = health.as_ref().map_or(0, |h| {
+                h.underruns.load(std::sync::atomic::Ordering::Relaxed)
+            });
             match metrics {
                 Some(m) => eprintln!(
                     "status: {voices} voices, slowest render {} us, {} late events, {} starved frames, {} deadline misses, {underruns} underruns",

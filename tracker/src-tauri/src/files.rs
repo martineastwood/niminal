@@ -59,6 +59,49 @@ pub fn import_sample(dir: &Path, source: &Path) -> Result<String, String> {
     Ok(format!("samples/{name}"))
 }
 
+/// A name made of letters, digits and underscores, as a sample in a kit needs to be named in a pattern.
+fn member_name(stem: &str) -> String {
+    let name: String = stem.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect();
+    if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) { format!("s{name}") } else { name }
+}
+
+/// Copies WAVs into a new kit folder of the project, `samples/<name>`, each named for its sample. Returns
+/// the folder, relative to the project, and the sample names in the order the engine counts them (by file name).
+pub fn import_kit(dir: &Path, sources: &[PathBuf], name: &str) -> Result<(String, Vec<String>), String> {
+    if sources.is_empty() {
+        return Err("Choose the samples of the kit".into());
+    }
+    let base = member_name(name);
+    let samples = dir.join("samples");
+    let mut folder = base.clone();
+    for n in 2.. {
+        if !samples.join(&folder).exists() {
+            break;
+        }
+        folder = format!("{base}_{n}");
+    }
+    let target = samples.join(&folder);
+    fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+    let mut members: Vec<String> = Vec::new();
+    for source in sources {
+        if source.extension().and_then(|e| e.to_str()).map(str::to_lowercase).as_deref() != Some("wav") {
+            return Err("Samples need to be WAV files".into());
+        }
+        let stem = member_name(source.file_stem().and_then(|s| s.to_str()).unwrap_or("sample"));
+        let mut member = stem.clone();
+        for n in 2.. {
+            if !members.contains(&member) {
+                break;
+            }
+            member = format!("{stem}_{n}");
+        }
+        fs::copy(source, target.join(format!("{member}.wav"))).map_err(|e| e.to_string())?;
+        members.push(member);
+    }
+    members.sort_by_key(|member| format!("{member}.wav"));
+    Ok((format!("samples/{folder}"), members))
+}
+
 /// Copies every file in `from` into `to`, replacing files of the same name.
 pub fn copy_samples(from: &Path, to: &Path) -> Result<(), String> {
     let Ok(entries) = fs::read_dir(from) else {
@@ -102,6 +145,15 @@ mod tests {
         assert!(dir.join("samples/Kick_Drum_.wav").exists());
         assert!(import_sample(&dir, &base.join("notes.txt")).is_err());
         assert!(project_dir(&base, "../escape").is_err());
+
+        fs::write(base.join("snare.WAV"), b"RIFF").unwrap();
+        let (folder, members) = import_kit(&dir, &[original.clone(), base.join("snare.WAV"), original.clone()], "My kit!").unwrap();
+        assert_eq!(folder, "samples/My_kit_");
+        assert_eq!(members, ["Kick_Drum_", "Kick_Drum__2", "snare"]);
+        assert!(dir.join("samples/My_kit_/snare.wav").exists());
+        assert_eq!(import_kit(&dir, std::slice::from_ref(&original), "My kit!").unwrap().0, "samples/My_kit__2");
+        assert!(import_kit(&dir, &[base.join("notes.txt")], "x").is_err() && import_kit(&dir, &[], "x").is_err());
+        assert_eq!(member_name("808 kick"), "s808_kick");
 
         let package = base.join("package");
         copy_samples(&dir.join("samples"), &package.join("samples")).unwrap();

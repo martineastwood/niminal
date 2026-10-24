@@ -12,17 +12,29 @@ export function renderInstrument(parent: HTMLElement, definition: Definition, pa
   const name = document.createElement('strong'); name.textContent = definition.name; heading.append(label, name); card.append(heading);
   const params = parameters[definition.id];
   const note = (text: string) => { const hint = document.createElement('p'); hint.className = 'device-note'; hint.textContent = text; card.append(hint); };
+  const refresh = () => renderInstrument(parent, definition, parameters, edited, write, activeTrack);
+  const hidden = new Set(definition.hidden ?? []);
+  const setHidden = () => { if (hidden.size) definition.hidden = [...hidden]; else delete definition.hidden; edited(); refresh(); };
   if (!params) note('Apply to expose parameters');
   else if (!params.length) note('No parameters');
-  else for (const parameter of params) {
-    const row = slider(parameter.name, definition.values?.[parameter.name] ?? parameter.default, parameter.min, parameter.max, parameter.unit ?? '', value => { (definition.values ??= {})[parameter.name] = value; edited(); }, () => {
-      const value = definition.values?.[parameter.name] ?? parameter.default;
-      write({ kind: 'instrument', instrument: definition.id, parameter: parameter.name }, Math.min(parameter.max, Math.max(parameter.min, value)));
-    });
-    row.querySelector('input')!.setAttribute('aria-label', `${definition.name} ${parameter.name}`);
-    const record = row.querySelector<HTMLButtonElement>('button')!;
-    record.disabled = activeTrack < 0; if (activeTrack < 0) record.title = 'Only a track has parameter lanes';
-    card.append(row);
+  else {
+    for (const parameter of params.filter(p => !hidden.has(p.name))) {
+      const hide = button('−', `Hide the ${parameter.name} slider (its lanes still work)`, () => { hidden.add(parameter.name); setHidden(); });
+      hide.setAttribute('aria-label', `Hide ${parameter.name}`);
+      const row = slider(parameter.name, definition.values?.[parameter.name] ?? parameter.default, parameter.min, parameter.max, parameter.unit ?? '', value => { (definition.values ??= {})[parameter.name] = value; edited(); }, () => {
+        const value = definition.values?.[parameter.name] ?? parameter.default;
+        write({ kind: 'instrument', instrument: definition.id, parameter: parameter.name }, Math.min(parameter.max, Math.max(parameter.min, value)));
+      }, hide);
+      row.querySelector('input')!.setAttribute('aria-label', `${definition.name} ${parameter.name}`);
+      const record = row.querySelector<HTMLButtonElement>('button')!;
+      record.disabled = activeTrack < 0; if (activeTrack < 0) record.title = 'Only a track has parameter lanes';
+      card.append(row);
+    }
+    const count = params.filter(p => hidden.has(p.name)).length;
+    if (count) {
+      const show = document.createElement('button'); show.className = 'show-sliders'; show.textContent = `${count} hidden · show all`; show.onclick = () => { hidden.clear(); setHidden(); };
+      card.append(show);
+    }
   }
   parent.append(card);
 }

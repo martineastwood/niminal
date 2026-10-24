@@ -3,6 +3,8 @@ title: Tables
 description: Compile-time tables, constructors, transforms, readers and shared buffers.
 ---
 
+**Compiled by niminal.** Tables are built by the compiler and read by the running instrument.
+
 Tables are fixed-length arrays of plain numbers, shared by every voice. They hold wavetable cycles, transfer functions, windows, impulse responses and lookup curves. Samples are tables with playback metadata; shared `buffer` declarations are writable tables that outlive voices.
 
 ## Constant tables

@@ -413,7 +413,11 @@ impl Program {
             }
         }
         // An explicit pan parameter is wired by the instrument; otherwise pan the note output.
-        let note_pan = if self.instruments[instrument].params.iter().any(|p| p.name == "pan") {
+        let note_pan = if self.instruments[instrument]
+            .params
+            .iter()
+            .any(|p| p.name == "pan")
+        {
             None
         } else {
             args.remove("pan")

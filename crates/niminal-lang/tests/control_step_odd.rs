@@ -21,7 +21,9 @@ fn render(voice: &mut Voice, total: usize, chunk: usize) -> Vec<f32> {
 }
 
 fn crossings(x: &[f32]) -> usize {
-    x.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count()
+    x.windows(2)
+        .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
+        .count()
 }
 
 #[test]
@@ -53,7 +55,11 @@ fn the_sound_does_not_depend_on_how_the_calls_are_split() {
     let source = "instr a() { lfo(7hz).smooth }";
     let whole = render(&mut voice(source), 4096, block_size());
     for chunk in [4, 7, 23, 64] {
-        assert_eq!(render(&mut voice(source), 4096, chunk), whole, "chunks of {chunk}");
+        assert_eq!(
+            render(&mut voice(source), 4096, chunk),
+            whole,
+            "chunks of {chunk}"
+        );
     }
 }
 

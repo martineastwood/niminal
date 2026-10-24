@@ -122,10 +122,24 @@ mod tests {
         c.prepare(48_000.0);
         let ctx = ProcessCtx::new(48_000.0, true);
         let n = 48_000;
-        let (x, threshold, ratio, attack, release, makeup, side, knee) =
-            (vec![level; n], vec![0.25; n], vec![4.0; n], vec![0.001; n], vec![0.05; n], vec![1.0; n], vec![f32::NAN; n], vec![knee; n]);
+        let (x, threshold, ratio, attack, release, makeup, side, knee) = (
+            vec![level; n],
+            vec![0.25; n],
+            vec![4.0; n],
+            vec![0.001; n],
+            vec![0.05; n],
+            vec![1.0; n],
+            vec![f32::NAN; n],
+            vec![knee; n],
+        );
         let mut out = vec![0.0; n];
-        c.process(&ctx, &[&x, &threshold, &ratio, &attack, &release, &makeup, &side, &knee], &mut out);
+        c.process(
+            &ctx,
+            &[
+                &x, &threshold, &ratio, &attack, &release, &makeup, &side, &knee,
+            ],
+            &mut out,
+        );
         20.0 * (out[n - 1] / level).log10()
     }
 
@@ -134,7 +148,11 @@ mod tests {
         assert_eq!(settled_reduction(0.1, 1.0), 0.0);
         // 12db over the threshold at ratio 4: three quarters of it is taken off
         let over = 20.0 * (1.0f32 / 0.25).log10();
-        assert!((settled_reduction(1.0, 1.0) - (over * (0.25 - 1.0))).abs() < 0.05, "{}", settled_reduction(1.0, 1.0));
+        assert!(
+            (settled_reduction(1.0, 1.0) - (over * (0.25 - 1.0))).abs() < 0.05,
+            "{}",
+            settled_reduction(1.0, 1.0)
+        );
     }
 
     #[test]
@@ -148,7 +166,10 @@ mod tests {
         // past the knee it rejoins the straight line
         let over = 20.0 * (1.0f32 / 0.25).log10();
         let past = settled_reduction(1.0, knee);
-        assert!((past - over * (0.25 - 1.0)).abs() < 0.05, "past the knee: {past}");
+        assert!(
+            (past - over * (0.25 - 1.0)).abs() < 0.05,
+            "past the knee: {past}"
+        );
         // and it is never harder than the hard knee, nor softer than nothing
         let inside = settled_reduction(0.25 * 10f32.powf(2.0 / 20.0), knee);
         assert!(inside < 0.0 && inside > over * (0.25 - 1.0), "{inside}");

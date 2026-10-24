@@ -3,6 +3,8 @@ title: Sequencer protocol
 description: JSON-RPC 2.0 over WebSocket for live evaluation, clips and scenes, and the state of a live session.
 ---
 
+**Read by nimlive.** This is the sequencer's API, not the server's: what a program uses to start clips, set tempo and make quantized changes.
+
 `niminal server` is the generic audio server on port 7401: its API is the [Engine API](/reference/engine-api/). Clips, scenes, lanes, transforms, looping and quantized edits belong to the **live sequencer client**, which owns tempo, meter and musical position and turns them into events stamped in absolute samples.
 
 VS Code starts and owns a private `nimlive live --port 0 --parent-stdio` process, connected to the configured server. Closing the editor stops its sequencer. For terminal use, start `nimlive live [FILE]`: its live-control API defaults to `ws://127.0.0.1:7400/`, with `--engine-port 7401` selecting the server. Each live process owns its own performance state. Other clients can use the generic engine directly without using these abstractions.
@@ -204,4 +206,4 @@ The [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%
 ← {"jsonrpc":"2.0","method":"landed","params":{"id":2,"at":96000,"changes":["t.transpose(+12st)"],...}}
 ```
 
-See also [Command line](/reference/cli/) (`send`, `repl`), [Editor and LSP](/reference/editor/), and [Live coding](/guide/live-coding/).
+See [Command line](/reference/nimlive/cli/) (`send`, `repl`), [Editor and LSP](/reference/editor/), and [Live coding](/guide/live-coding/).

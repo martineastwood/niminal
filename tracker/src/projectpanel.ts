@@ -15,6 +15,8 @@ export interface ProjectPanelActions {
   edit(id: string): void;
   /** The buttons above the list. */
   manage(op: ManageOp): void;
+  /** The kit button: choose WAV files and make one instrument that plays them by key. */
+  kit(): void;
   /** The scissors button: offers to cut the current sampler into pieces, with a menu under `anchor`. */
   slice(anchor: HTMLElement): void;
   /** Escape: the cursor goes back to the grid. */
@@ -36,6 +38,8 @@ export class ProjectPanel {
       const button = document.createElement('button'); button.textContent = text; button.title = label; button.setAttribute('aria-label', label);
       button.onclick = () => actions.manage(op); tools.append(button);
     }
+    const kit = document.createElement('button'); kit.textContent = '▦'; kit.title = 'New instrument from WAV files: one sample on each key, from C-4'; kit.setAttribute('aria-label', kit.title);
+    kit.onclick = () => actions.kit(); tools.append(kit);
     const scissors = document.createElement('button'); scissors.textContent = '✂'; scissors.title = 'New instrument that plays the current sampler cut into pieces'; scissors.setAttribute('aria-label', scissors.title);
     scissors.onclick = () => actions.slice(scissors); tools.append(scissors);
     heading.append(tools);

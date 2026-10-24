@@ -1215,6 +1215,7 @@ fn slice_members(
     decl: &SampleDecl,
     sample: &Ident,
     count: f64,
+    at: &[f64],
     state: &SampleState,
 ) -> Res<Vec<Member>> {
     let Some((data, speed)) = state.loaded.get(&sample.name) else {
@@ -1237,19 +1238,31 @@ fn slice_members(
         ));
     }
     let count = count as usize;
-    let each = frames / count;
+    // where each piece starts: equal shares of the sample, or the places the code gives as shares of its length
+    let starts: Vec<usize> = if at.is_empty() {
+        (0..count).map(|i| i * (frames / count)).collect()
+    } else {
+        if at.iter().any(|p| !(0.0..1.0).contains(p)) || at.windows(2).any(|w| w[1] <= w[0]) {
+            return Err(Diagnostic::new(
+                "slice places are shares of the sample from 0 up to (not including) 1, each later than the one before",
+                decl.source_span,
+            ));
+        }
+        at.iter()
+            .map(|p| (p * frames as f64).round() as usize)
+            .collect()
+    };
+    if starts.windows(2).any(|w| w[1] <= w[0]) || starts.last().is_some_and(|&s| s >= frames) {
+        return Err(Diagnostic::new(
+            format!("the slice places are too close together for a sample of {frames} frames"),
+            decl.source_span,
+        ));
+    }
     Ok((0..count)
         .map(|i| Member {
             name: format!("s{i}"),
             channels: data.clone(),
-            slice: Some((
-                i * each,
-                if i + 1 == count {
-                    frames
-                } else {
-                    (i + 1) * each
-                },
-            )),
+            slice: Some((starts[i], starts.get(i + 1).copied().unwrap_or(frames))),
             speed: *speed,
             loop_mode: niminal_engine::ops::LoopMode::None,
             interp: niminal_engine::ops::SampleInterp::Cubic,
@@ -1370,8 +1383,8 @@ fn compile_sample(
                 interp: niminal_engine::ops::SampleInterp::Cubic,
             }]
         }
-        (SampleSource::Slices { sample, count }, _) => {
-            let mut members = slice_members(decl, sample, *count, state)?;
+        (SampleSource::Slices { sample, count, at }, _) => {
+            let mut members = slice_members(decl, sample, *count, at, state)?;
             let mode = loop_mode_of(&decl.options)?;
             for m in &mut members {
                 m.loop_mode = mode;

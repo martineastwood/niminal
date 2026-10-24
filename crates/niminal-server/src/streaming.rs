@@ -98,11 +98,11 @@ pub(crate) fn prepare(
                     wanted.push(loop_start / STREAM_PAGE as u64);
                 }
                 for page in wanted {
-                    if !worker.cached(page)
-                        && fill(&mut reader, &worker, page, &channels).is_err() {
-                            worker.failed.store(true, Ordering::Release);
-                            return;
-                        }
+                    if !worker.cached(page) && fill(&mut reader, &worker, page, &channels).is_err()
+                    {
+                        worker.failed.store(true, Ordering::Release);
+                        return;
+                    }
                 }
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }

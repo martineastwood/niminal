@@ -1,7 +1,7 @@
 import { patternTiming, patternSeconds, patternRow } from './project';
 import { instrumentsOnTrack } from './instruments';
 import { laneParameter, targetKey, formatValue, parseValue, envelopeValue } from './automation';
-import { commandValue, keyboardNote, transposeNote, emptyFxLane, blankColumn, subColumns, maxNoteColumns, columnCount, columnStrip, columnLanes, type FxTarget, type FxLane, type EffectParameters, type Project, type Song, type Pattern, type Track, type SubColumn } from './project';
+import { commandValue, keyboardNote, noteAt, noteNumber, transposeNote, emptyFxLane, blankColumn, subColumns, maxNoteColumns, columnCount, columnStrip, columnLanes, type FxTarget, type FxLane, type EffectParameters, type Project, type Song, type Pattern, type Track, type SubColumn } from './project';
 import { NoteHistory, parseNotes, type NoteEdit } from './history';
 import { openBrowser } from './browser';
 
@@ -76,7 +76,7 @@ export class PatternGrid {
     private pattern: () => Pattern,
     private octave: () => number,
     private edited: () => void,
-    private audition: (id: string, note: string, track: number) => void,
+    private audition: (id: string, note: string, track: number, command?: string) => void,
     private togglePlay: () => void,
     private trackSelected: (track: number) => void = () => {},
     private step: () => number = () => 1,
@@ -465,10 +465,23 @@ export class PatternGrid {
       if (commit && !blank && value === null) { this.feedback(kind === 'inst' ? 'No instrument has that number.' : `Enter ${subRange[kind]}.`); if (advance) { input.focus(); return; } commit = false; }
       finished = true;
       if (commit) this.apply([{ row, track: column, before: lane.values[row], after: value }]);
+      if (commit && kind === 'cmd' && value) this.previewCommand(row, lane, value);
       if (advance && commit) this.advance(); this.render(); if (advance) this.parent.focus();
     };
     input.onkeydown = event => { event.stopPropagation(); if (event.key === 'Enter' || event.key === 'Escape' || event.key === 'Tab') { event.preventDefault(); finish(event.key !== 'Escape', true); } };
     input.onblur = () => finish(true, false);
+  }
+  /** Plays the note a command at `row` acts on, with the command: the note in the row, or the one held above it. */
+  private previewCommand(row: number, lane: Lane, command: string) {
+    const column = this.pattern().notes[lane.track]?.[lane.col]; if (!column) return;
+    for (let at = row; at >= 0; at--) {
+      const note = column.notes[at];
+      if (note === null) continue;
+      if (noteNumber(note) === null) return;
+      const instrument = instrumentAt(column.inst, at);
+      if (instrument) this.audition(instrument, note, lane.track, command);
+      return;
+    }
   }
   setRecording(on: boolean) { this.recording = on; this.modeChanged(on); }
   /** Corner brackets mark the selected track, from its header to the bottom of the grid. */
@@ -491,6 +504,10 @@ export class PatternGrid {
   }
   private copy(event: ClipboardEvent) {
     if ((event.target as HTMLElement).closest('input')) return;
+    event.clipboardData?.setData('text/plain', this.selectionText()); event.preventDefault();
+  }
+  /** The selection as the clipboard holds it: a line for each row, the cells separated by tabs. */
+  private selectionText() {
     const rows: string[] = [], lanes = this.lanes;
     for (let row = Math.min(this.row, this.anchor.row); row <= Math.max(this.row, this.anchor.row); row++) {
       const values: string[] = [];
@@ -501,7 +518,44 @@ export class PatternGrid {
       }
       rows.push(values.join('\t'));
     }
-    event.clipboardData?.setData('text/plain', rows.join('\n')); event.preventDefault();
+    return rows.join('\n');
+  }
+  /** Copies the whole track the cursor is in and clears it (clearing needs record mode, as every edit does). */
+  cutTrack() {
+    this.selectWholeTrack();
+    void navigator.clipboard?.writeText(this.selectionText()).catch(() => this.feedback('Could not reach the clipboard.'));
+    if (this.recording) this.clearSelection(); else this.feedback('Copied the track. Turn on record mode to clear it.');
+  }
+  /** Reverses the order of the selected rows in each selected column. */
+  reverseSelection() {
+    if (!this.recording) { this.feedback('Turn on record mode to edit the selection.'); return; }
+    const { top, bottom, left, right } = this.bounds, edits: NoteEdit[] = [];
+    for (let column = left; column <= right; column++) {
+      const lane = this.lanes[column]; if (!this.editable(lane)) continue;
+      for (let row = top; row <= bottom; row++) edits.push({ row, track: column, before: lane.values[row], after: lane.values[top + bottom - row] });
+    }
+    this.apply(edits);
+  }
+  /** Random generator for {@link randomizeSelection}; replaced in tests. */
+  random: () => number = Math.random;
+  /** Gives each note or value in the selection a new random one between the lowest and highest in its column; blanks, OFF and CUT stay. */
+  randomizeSelection() {
+    if (!this.recording) { this.feedback('Turn on record mode to edit the selection.'); return; }
+    const { top, bottom, left, right } = this.bounds, edits: NoteEdit[] = [];
+    for (let column = left; column <= right; column++) {
+      const lane = this.lanes[column]; if (!this.editable(lane) || lane.kind === 'inst' || lane.kind === 'cmd') continue;
+      const number = (value: string | null) => value === null ? null : lane.kind === 'note' ? noteNumber(value) : Number.isFinite(Number(value)) ? Number(value) : null;
+      const rows = Array.from({ length: bottom - top + 1 }, (_, i) => top + i).filter(row => number(lane.values[row]) !== null);
+      const numbers = rows.map(row => number(lane.values[row])!), low = Math.min(...numbers), high = Math.max(...numbers);
+      if (rows.length < 2 || low === high) continue;
+      for (const row of rows) {
+        const pick = low + this.random() * (high - low);
+        const after = lane.kind === 'note' ? noteAt(Math.round(pick)) : String(lane.fx === null ? Math.round(pick) : Number(pick.toPrecision(8)));
+        edits.push({ row, track: column, before: lane.values[row], after });
+      }
+    }
+    if (!edits.length) { this.feedback('Randomize needs two or more notes or values in a column, that differ.'); return; }
+    this.apply(edits);
   }
   /** Selects every row of every column of the track the cursor is in, ready to copy or cut and paste onto another track or pattern. */
   selectWholeTrack() {
@@ -651,6 +705,14 @@ export class PatternGrid {
     this.render();
   }
 
+  /** Plays the key as a note on the cursor's track while focus is outside the grid, so the keyboard sounds from anywhere. */
+  auditionKey(event: KeyboardEvent) {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
+    const note = keyboardNote(event.key, this.octave()), instrument = this.currentInstrument();
+    if (!note || !instrument) return;
+    event.preventDefault();
+    this.audition(instrument, note, Math.min(this.lanes[this.column].track, this.project().tracks.length - 1));
+  }
   private keydown(event: KeyboardEvent) {
     if ((event.target as HTMLElement).closest('input, select, textarea')) return;
     if (event.ctrlKey || event.metaKey) {

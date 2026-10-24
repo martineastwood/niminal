@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it, vi } from 'vitest';
 import { renderMixer, renderInstrument, type FxActions } from './mixer';
-import { newProject } from './project';
+import { newProject, readProject } from './project';
 import { addDevice, duplicateEffect, effectUsers, moveDevice, newEffect, removeDevice, removeEffect } from './effects';
 
 vi.stubGlobal('Option', function (text: string, value: string) {
@@ -113,6 +113,19 @@ it('shows an instrument\'s parameters as sliders that set its values, and record
   expect(write).toHaveBeenCalledWith({ kind: 'instrument', instrument: 'tone', parameter: 'cutoff' }, 500);
   renderInstrument(parent, tone, parameters, edited, write, -1);
   expect(parent.querySelector<HTMLButtonElement>('[aria-label="Write cutoff to pattern"]')!.disabled).toBe(true);
+});
+
+it('hides an instrument slider on request, and brings all of them back', () => {
+  const project = newProject(), parent = document.createElement('div'), edited = vi.fn(); document.body.append(parent);
+  const tone = project.definitions[0];
+  const parameters = { tone: [{ name: 'cutoff', min: 200, max: 8000, default: 2000, unit: 'hz' }, { name: 'amp', min: 0, max: 1, default: 0.5, unit: null }] };
+  renderInstrument(parent, tone, parameters, edited, vi.fn(), 0);
+  parent.querySelector<HTMLButtonElement>('[aria-label="Hide cutoff"]')!.click();
+  expect(tone.hidden).toEqual(['cutoff']); expect(edited).toHaveBeenCalledOnce();
+  expect(parent.querySelector('[aria-label="cutoff value"]')).toBeNull(); expect(parent.querySelector('[aria-label="amp value"]')).not.toBeNull();
+  expect(readProject(JSON.stringify(project)).definitions[0].hidden).toEqual(['cutoff']);
+  parent.querySelector<HTMLButtonElement>('.show-sliders')!.click();
+  expect(tone.hidden).toBeUndefined(); expect(parent.querySelector('[aria-label="cutoff value"]')).not.toBeNull(); expect(parent.querySelector('.show-sliders')).toBeNull();
 });
 
 it('keeps effects in a library that devices on any track, or the master, can reuse', () => {

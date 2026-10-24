@@ -786,9 +786,9 @@ impl Graph {
             for (k, &slot) in node.inputs.iter().enumerate() {
                 let passes = arithmetic
                     || effects
-                    || ports.get(k).is_none_or(|p| {
-                        matches!(&*p.name, "x" | "chain" | "sidechain")
-                    });
+                    || ports
+                        .get(k)
+                        .is_none_or(|p| matches!(&*p.name, "x" | "chain" | "sidechain"));
                 if passes && let Some(j) = producer(slot) {
                     signal[j] = true;
                 }
@@ -802,11 +802,7 @@ impl Graph {
                 stats: node.op.kernel_stats(),
                 modulation_only: !signal[i],
                 warnings: node.op.control_warnings(sample_rate),
-                inputs: node
-                    .inputs
-                    .iter()
-                    .map(|&slot| const_value(slot))
-                    .collect(),
+                inputs: node.inputs.iter().map(|&slot| const_value(slot)).collect(),
             })
             .collect()
     }

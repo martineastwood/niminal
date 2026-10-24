@@ -3,6 +3,8 @@ title: Instruments
 description: instr and mono, voices, out, parameters, and multichannel.
 ---
 
+**Compiled by niminal.** An instrument is compiled by the server; a client only decides when to play it.
+
 Instruments are templates; each note is a **voice**. An instrument is a function the score can call: everything in [Functions](/reference/language/functions/) applies, and its parameters are set by notes.
 
 ## Result: last expression or `out`

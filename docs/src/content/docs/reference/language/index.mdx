@@ -1,27 +1,47 @@
 ---
 title: Language overview
-description: The niminal orchestra language — syntax, instruments, routing, patterns and performance.
+description: The niminal language — one file, half compiled by the server, half read by the sequencer.
 ---
 
-The **orchestra** is niminal’s DSP and composition language: typed parameters, named arguments, functions and opcodes you can chain, and a score you can also drive from outside.
+A `.nml` file is one language: typed parameters, named arguments, functions and opcodes you can chain, and a score you can also drive from outside.
+
+Two programs read it. **niminal**, the server, compiles instruments, effects and routing into sound. **nimlive**, the sequencer, adds tempo, clips, scenes and patterns on top, and sends the server notes stamped with a time. Every page below says which of the two runs what it describes.
 
 niminal is in alpha. This reference describes what works today. The [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%20Spec.md) is the longer-term design; where the two disagree, trust the docs and the compiler.
+
+## Compiled by niminal
+
+The server's half, which becomes sound:
+
+| Section | Topics |
+| --- | --- |
+| [Instruments](/reference/language/instruments/) | `instr`, `mono`, voices, `out`, parameters |
+| [Envelopes](/reference/language/envelopes/) | `env[...]`, sustain, curves, `adsr`, `perc` |
+| [Samples](/reference/language/samples/) | WAV samples, kits, slices, grids |
+| [Functions](/reference/language/functions/) | `fn`, `state`, lists, rates and chaining |
+| [Tables](/reference/language/tables/) | Constant tables, buffers, transforms |
+| [Routing](/reference/language/routing/) | Buses, execution order, delay, layouts |
+| [Standard library](/reference/language/standard-library/) | Filters, delays, a reverb, ready-made sounds |
+| [Built-in opcodes](/reference/opcodes/) | Core opcode library |
+
+## Read by nimlive
+
+The sequencer's half, which decides what plays when:
+
+| Section | Topics |
+| --- | --- |
+| [Patterns](/reference/language/patterns/) | Mini-notation, grids, pattern transforms |
+| [Performance](/reference/language/performance/) | Clips, scenes, arrangements, live commands |
+
+## Read by both programs
 
 | Section | Topics |
 | --- | --- |
 | [Syntax](/reference/language/syntax/) | Comments, bindings, UFCS, control flow |
 | [Units and rates](/reference/language/units-and-rates/) | Hz, dB, beats; init, control and audio |
-| [Envelopes](/reference/language/envelopes/) | `env[...]`, sustain, curves, `adsr`, `perc` |
-| [Instruments](/reference/language/instruments/) | `instr`, `mono`, voices, `out`, parameters |
-| [Functions](/reference/language/functions/) | `fn`, `state`, lists, rates and chaining |
-| [Routing](/reference/language/routing/) | Buses, execution order, delay, layouts |
-| [Samples](/reference/language/samples/) | WAV samples, kits, slices, grids |
-| [Patterns](/reference/language/patterns/) | Mini-notation, grids, pattern transforms |
-| [Performance](/reference/language/performance/) | Clips, scenes, arrangements, live commands |
 | [Modules](/reference/language/modules/) | `use`, packages, reloading |
-| [Score model](/reference/score-model/) | Events and `.nms` files |
+| [Scores (.nms)](/reference/score-model/) | Events, sections and projects from outside niminal |
 | [Reserved words](/reference/reserved-words/) | Names the language keeps |
-| [Built-in opcodes](/reference/opcodes/) | Core opcode library |
 
 A minimal instrument:
 

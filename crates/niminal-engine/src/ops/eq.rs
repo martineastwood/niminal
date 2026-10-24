@@ -160,11 +160,16 @@ impl Opcode for Eq {
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         let default_q = self.default_q();
         for (i, o) in out.iter_mut().enumerate() {
-            let q = if inputs[3][i].is_nan() { default_q } else { inputs[3][i] };
+            let q = if inputs[3][i].is_nan() {
+                default_q
+            } else {
+                inputs[3][i]
+            };
             self.update(inputs[1][i], inputs[2][i], q);
             let x = f64::from(inputs[0][i]);
             let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2
-                - self.a1 * self.y1 - self.a2 * self.y2;
+                - self.a1 * self.y1
+                - self.a2 * self.y2;
             self.x2 = self.x1;
             self.x1 = x;
             self.y2 = flush(self.y1);

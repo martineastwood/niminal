@@ -89,7 +89,8 @@ impl Shared {
         while let Some(i) = self.claim(batch) {
             // SAFETY: a job of this batch was just taken and is not finished, so `run` has not
             // returned, and the pointer it stored before publishing the batch points at its `Job`.
-            let job = job.unwrap_or_else(|| unsafe { *(self.job.load(Acquire) as *const Job<'static>) });
+            let job =
+                job.unwrap_or_else(|| unsafe { *(self.job.load(Acquire) as *const Job<'static>) });
             if let Err(e) = catch_unwind(AssertUnwindSafe(|| job(i))) {
                 self.panic
                     .lock()
@@ -118,7 +119,6 @@ impl Pool {
     fn now(&self) -> u64 {
         self.start.elapsed().as_nanos() as u64
     }
-
 
     /// `workers` threads besides the caller's. `init` runs first on each, for scheduling hints.
     pub fn new(workers: usize, policy: Policy, init: impl Fn() + Send + Sync + 'static) -> Pool {
@@ -263,7 +263,11 @@ impl Fork for Pool {
             }
         }
         if s.panicked.swap(false, AcqRel) {
-            let panic = s.panic.lock().unwrap_or_else(PoisonError::into_inner).take();
+            let panic = s
+                .panic
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
             if let Some(panic) = panic {
                 resume_unwind(panic);
             }

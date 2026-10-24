@@ -35,7 +35,9 @@ impl Opcode for Phaser {
         self.feedback_state = 0.0;
     }
 
-    fn name(&self) -> &str { "phaser" }
+    fn name(&self) -> &str {
+        "phaser"
+    }
 
     fn ports(&self) -> &[Port] {
         const PORTS: &[Port] = &[

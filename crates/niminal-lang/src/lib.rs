@@ -41,8 +41,8 @@ pub use layout::Layout;
 pub use lexer::{Tok, Token, lex};
 pub use lower::{GAIN_PARAM, unknown_unit};
 pub use modules::{
-    Expanded, Import, Module, ModuleRules, STD_DIR, check_private_words, embedded as embedded_module,
-    expand, expand_with_rules, packages_dir,
+    Expanded, Import, Module, ModuleRules, STD_DIR, check_private_words,
+    embedded as embedded_module, expand, expand_with_rules, packages_dir,
 };
 pub use program::{
     ArgError, ControlDef, Instrument, MidiNote, MidiTarget, NodeInfo, NotePlan, OscTap,
@@ -50,3 +50,5 @@ pub use program::{
 };
 pub use sample::Samples;
 pub use unit::Unit;
+
+pub use niminal_engine::ops::detect_transients;

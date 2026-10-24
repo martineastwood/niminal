@@ -58,8 +58,13 @@ fn a_path_can_hold_constants_and_data_files_are_tables() {
     let dir = std::env::temp_dir().join(format!("niminal-paths-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("curve07.csv"), "x, y\n0, 0\n1, 1\n").unwrap();
-    let path = dir.join("curve{n:2}.csv").to_string_lossy().replace('\\', "/");
-    let src = format!("const n = 3 + 4\nconst t = file(\"{path}\", channel: 1)\ninstr a(freq: hz) {{ osc(t, freq) * env[1 10ms 0] }}");
+    let path = dir
+        .join("curve{n:2}.csv")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let src = format!(
+        "const n = 3 + 4\nconst t = file(\"{path}\", channel: 1)\ninstr a(freq: hz) {{ osc(t, freq) * env[1 10ms 0] }}"
+    );
     ok(&src);
     let missing = src.replace("{n:2}", "{m}");
     let errors = compile(&missing).err().expect("`m` is not defined");
@@ -83,5 +88,32 @@ instr a(freq: hz) { pad(freq: freq) }
         errors
             .iter()
             .any(|e| e.message.contains("`interp` is `cubic` or `sinc`"))
+    );
+}
+
+#[test]
+fn a_sample_can_be_cut_at_places_in_it() {
+    let program = compile("const wave = harmonics([1], size: 1000)\npad = sample(wave)\nchops = pad.slices([0, 0.25, 0.6])\ninstr a(freq: hz) { chops(sample: s1) }").unwrap();
+    let chops = program
+        .instruments
+        .iter()
+        .find(|i| i.name == "chops")
+        .unwrap();
+    assert_eq!(chops.members, ["s0", "s1", "s2"]);
+    for bad in [
+        "[0.5, 0.2]",
+        "[0, 1]",
+        "[0, 0, 0.5]",
+        "[-0.1]",
+        "[0.001, 0.0011]",
+    ] {
+        let source = format!(
+            "const wave = harmonics([1], size: 1000)\npad = sample(wave)\nchops = pad.slices({bad})\n"
+        );
+        assert!(compile(&source).is_err(), "{bad}");
+    }
+    assert!(
+        compile("const wave = zeros(64)\npad = sample(wave)\nchops = pad.slices([\"a\"])\n")
+            .is_err()
     );
 }

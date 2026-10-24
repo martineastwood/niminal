@@ -234,13 +234,10 @@ impl Master {
             peak = peak.max(sample.abs());
             // the stretches between samples need looking at only if they could reach the ceiling
             if state.interpolation_candidates > 0 {
-                let between = self.between.iter().map(|w| {
-                    w.iter()
-                        .zip(recent)
-                        .map(|(w, r)| w * r)
-                        .sum::<f64>()
-                        .abs()
-                });
+                let between = self
+                    .between
+                    .iter()
+                    .map(|w| w.iter().zip(recent).map(|(w, r)| w * r).sum::<f64>().abs());
                 peak = between.fold(peak, f64::max);
             }
         }

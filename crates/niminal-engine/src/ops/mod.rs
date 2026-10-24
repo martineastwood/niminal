@@ -6,7 +6,6 @@ mod buffer;
 mod chorus;
 mod comb;
 mod compress;
-mod fdn;
 mod control;
 mod convolve;
 mod custom;
@@ -15,6 +14,7 @@ mod delay;
 mod distortion;
 mod env;
 mod eq;
+mod fdn;
 mod filter;
 mod fold;
 mod follow;
@@ -43,7 +43,6 @@ pub use buffer::{BufferRead, BufferReadBank, BufferRecord, BufferWrite};
 pub use chorus::Chorus;
 pub use comb::Comb;
 pub use compress::Compressor;
-pub use fdn::Fdn;
 pub use control::Control;
 pub use convolve::{Convolve, IrSpectrum};
 pub use custom::{
@@ -55,6 +54,7 @@ pub use delay::Delay;
 pub use distortion::Distortion;
 pub use env::{Curve, Env, EnvField, Segment, shape};
 pub use eq::{Eq, EqMode};
+pub use fdn::Fdn;
 pub use filter::{FilterMode, Svf};
 pub use fold::{Clip, Fold};
 pub use follow::Follow;
@@ -64,8 +64,9 @@ pub use impulse::Impulse;
 pub use lag::Lag;
 pub use limiter::Limiter;
 pub use math::{
-    Add, ArrayRead, BlockHold, Compare, Context, Delay1, Div, Gain, Hold, Max, Min, Mul, NoteStart,
-    NoteTime, Pow, Atan2, ReadContext, Released, Rem, SampleRate, Select, Sub, TableRead, Waveshape,
+    Add, ArrayRead, Atan2, BlockHold, Compare, Context, Delay1, Div, Gain, Hold, Max, Min, Mul,
+    NoteStart, NoteTime, Pow, ReadContext, Released, Rem, SampleRate, Select, Sub, TableRead,
+    Waveshape,
 };
 pub use noise::{Noise, NoiseColor};
 pub use osc::{Osc, Wave, Wavetable};
@@ -103,3 +104,6 @@ pub use report::{Report, ReportOut};
 
 mod stream;
 pub use stream::{STREAM_PAGE, StreamCache, StreamOut};
+
+mod transients;
+pub use transients::detect_transients;

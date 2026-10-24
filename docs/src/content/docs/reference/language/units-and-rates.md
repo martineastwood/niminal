@@ -3,6 +3,8 @@ title: Units and rates
 description: Typed units, conversions, ranges, and signal rates in niminal.
 ---
 
+**Compiled by niminal.** Rates are the server's business; both programs understand the units.
+
 ## Units
 
 Strict units, free rates: anything can be patched into anything; the scale factor states the meaning (like an attenuverter on a patch cable).

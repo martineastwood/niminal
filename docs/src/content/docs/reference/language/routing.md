@@ -3,6 +3,8 @@ title: Routing
 description: Buses, execution order, delay, and channel layouts.
 ---
 
+**Compiled by niminal.** Buses, fx instances and connections are the server's.
+
 ## Instruments and fx instances
 
 An instrument is a per-note template: every note gets its own DSP state. A clip selects the instrument and supplies notes and parameter lanes. An fx is a persistent audio instance: its state is shared across incoming notes and survives their release.

@@ -524,6 +524,14 @@ impl Song {
     }
 }
 
+/// A note that an instrument-parameter lane can still change: it has an id, and sounds until `until`.
+struct Sounding {
+    id: u64,
+    track: usize,
+    instrument: String,
+    until: u64,
+}
+
 /// A change of pitch to a held note: from `delay` rows into row `index`, over `rows` rows, to `midi`.
 struct Bend {
     index: u64,
@@ -592,6 +600,30 @@ fn midi(note: &str) -> Option<f64> {
     Some(f64::from((octave + 1) * 12 + base + i32::from(mark == b'#')))
 }
 
+/// Sets what an offset or reverse command asks of a note's arguments, when the instrument has the
+/// parameter it needs (`begin` or `rate`); the other commands change the notes, not their arguments.
+pub fn command_args(args: &mut Value, command: Option<NoteCommand>, parameters: &[crate::commands::Parameter]) {
+    let has = |name: &str| parameters.iter().any(|p| p.name == name);
+    match command {
+        Some(NoteCommand::Offset(share)) if has("begin") => args["begin"] = json!(share),
+        Some(NoteCommand::Reverse) if has("rate") => args["rate"] = json!(-1.0),
+        _ => {}
+    }
+}
+
+/// A sampler with a `from_bpm` plays in time with the song: it is stretched by the tempo its sample was
+/// recorded at over the tempo `bpm` now, on top of its own `stretch`, and so keeps its pitch.
+pub fn fit_to_tempo(args: &mut Value, parameters: &[crate::commands::Parameter], bpm: f64) {
+    let value = |name: &str| args.get(name).and_then(Value::as_f64).or_else(|| parameters.iter().find(|p| p.name == name).map(|p| p.default));
+    if !parameters.iter().any(|p| p.name == "stretch") {
+        return;
+    }
+    let (Some(from), stretch) = (value("from_bpm").filter(|from| *from > 0.0), value("stretch").unwrap_or(1.0)) else {
+        return;
+    };
+    args["stretch"] = json!((stretch * from / bpm).clamp(0.25, 4.0));
+}
+
 /// The arguments that make an instrument play `note`: its pitch, or for a sliced sample (one with
 /// `slices` pieces) the piece at that place on the keyboard counting up from `C-4`, at its recorded
 /// pitch. None when the note has no piece.
@@ -621,6 +653,8 @@ pub struct Playback {
     pub instrument_parameters: crate::commands::EffectParameters,
     /// How many pieces each sliced sample instrument has, by instrument id.
     pub instrument_slices: BTreeMap<String, usize>,
+    /// Notes still sounding that instrument-parameter lanes change as they pass.
+    sounding: Vec<Sounding>,
     /// Notes (row, track, column) that a glide has taken over, so they start no note of their own.
     absorbed: BTreeSet<(u64, usize, usize)>,
     /// Each track's instrument parameter lanes, by instrument and parameter, as of the last row played.
@@ -659,12 +693,21 @@ impl Playback {
             instrument_parameters: BTreeMap::new(),
             instrument_slices: BTreeMap::new(),
             absorbed: Default::default(),
+            sounding: Vec::new(),
             lane_state: Vec::new(),
             song,
             mode,
             pattern_id,
             start_position,
         })
+    }
+
+    /// The tempo in beats a minute at row `index`.
+    fn bpm_at(&self, index: u64) -> f64 {
+        match self.location(index) {
+            Some(p) => p.pattern.timing.as_ref().map_or(self.song.bpm, |timing| timing.bpm_at(p.row as f64)),
+            None => self.song.bpm,
+        }
     }
 
     fn row_seconds(&self, index: u64, fraction: f64) -> f64 {
@@ -876,6 +919,56 @@ impl Playback {
         ended(hold, LOOKAHEAD as f64, false)
     }
 
+    /// Whether any pattern has a lane on `track` for a parameter of `instrument`, so its notes are named
+    /// and can be changed while they sound.
+    fn listens(&self, track: usize, instrument: &str) -> bool {
+        self.song.patterns.iter().any(|p| {
+            p.fx.get(track).is_some_and(|lanes| {
+                lanes.iter().any(|l| matches!(&l.target, Some(crate::commands::FxTarget::Instrument { instrument: i, .. }) if i == instrument))
+            })
+        })
+    }
+
+    /// Changes the notes of `instrument` that are sounding on `track` to what an instrument-parameter lane
+    /// says at `row`: a value set on the row, or the steps and ramps of an envelope across it.
+    fn change_sounding(&self, sounding: &[Sounding], track: usize, lane: &FxLane, parameter: &crate::commands::Parameter, when: (usize, u64, f64), events: &mut Vec<Value>) {
+        let (row, at, sample_rate) = when;
+        let instrument = match &lane.target {
+            Some(crate::commands::FxTarget::Instrument { instrument, .. }) => instrument,
+            _ => return,
+        };
+        let mut set = |id: u64, at: u64, value: f64, glide: Option<f64>| {
+            let mut event = json!({"op":"set", "id":id, "at":at, "tag":"tracker-pattern", "args":{ &parameter.name: parameter.argument(value.clamp(parameter.min, parameter.max)) }});
+            if let Some(seconds) = glide {
+                event["glide"] = json!(format!("{seconds:.6}sec"));
+            }
+            events.push(event);
+        };
+        let listeners = || sounding.iter().filter(|n| n.track == track && n.instrument == *instrument && n.until > at);
+        if let Some(envelope) = lane.envelope.as_ref().filter(|e| e.enabled) {
+            let db = parameter.unit.as_deref() == Some("db");
+            let (start, end) = (row as f64, row as f64 + 1.0);
+            let mut breaks = vec![start];
+            breaks.extend(envelope.points.iter().filter(|p| p.row > start && p.row < end).map(|p| p.row));
+            breaks.push(end);
+            for pair in breaks.windows(2) {
+                let Some(value) = envelope.value(pair[0], db) else { continue };
+                let from = self.origin + (self.seconds_at(self.next_row as f64 + pair[0] - start) * sample_rate).round() as u64;
+                let to = self.origin + (self.seconds_at(self.next_row as f64 + pair[1] - start) * sample_rate).round() as u64;
+                for note in listeners() {
+                    set(note.id, from, value, None);
+                    if envelope.mode == "linear" && to > from + 1 && let Some(next) = envelope.value(pair[1], db) {
+                        set(note.id, from + 1, next, Some((to - from - 1) as f64 / sample_rate));
+                    }
+                }
+            }
+        } else if let Some(value) = lane.values.get(row).and_then(|v| v.as_deref()).and_then(|v| v.parse::<f64>().ok()) {
+            for note in listeners() {
+                set(note.id, at, value, None);
+            }
+        }
+    }
+
     /// The engine edits for one parameter lane at one row of a pattern: a value or the steps of an
     /// envelope across the row, for the strip named `slot` (a track's number, `r<n>` or `m`).
     /// `when` is the pattern's length and current row; `out` takes the edits made at
@@ -991,6 +1084,7 @@ impl Playback {
         // Held apart from `self` so rows can be read while it is updated.
         let mut state = std::mem::take(&mut self.lane_state);
         let mut absorbed = std::mem::take(&mut self.absorbed);
+        let mut sounding = std::mem::take(&mut self.sounding);
         state.resize_with(self.song.tracks.len(), BTreeMap::new);
         while self.row_at(self.next_row, sample_rate) < horizon {
             let at = self.row_at(self.next_row, sample_rate);
@@ -1002,6 +1096,7 @@ impl Playback {
                 self.next_row += 1;
                 continue;
             }
+            sounding.retain(|note| note.until > at);
             events.extend(crate::modulation::timing(&self.song, &self.parameters, self.row_seconds(self.next_row, 1.0), at));
             for (index, track) in self.song.tracks.iter().enumerate() {
                 let Some(pattern) = self.track_pattern(&position, index) else {
@@ -1032,6 +1127,9 @@ impl Playback {
                         };
                         if let Some(value) = value {
                             state[index].insert((instrument.clone(), parameter.clone()), value);
+                        }
+                        if let Some(info) = info {
+                            self.change_sounding(&sounding, index, lane, info, (position.row, at, sample_rate), &mut events);
                         }
                         continue;
                     }
@@ -1094,14 +1192,9 @@ impl Playback {
                                 parameter.argument(value.clamp(parameter.min, parameter.max));
                         }
                     }
-                    // Offset and reverse need the instrument to have the parameter they set; the rest do not.
-                    let has = |name: &str| self.instrument_parameters.get(id).is_some_and(|all| all.iter().any(|p| p.name == name));
                     let command = column.command(position.row);
-                    match command {
-                        Some(NoteCommand::Offset(share)) if has("begin") => args["begin"] = json!(share),
-                        Some(NoteCommand::Reverse) if has("rate") => args["rate"] = json!(-1.0),
-                        _ => {}
-                    }
+                    fit_to_tempo(&mut args, self.instrument_parameters.get(id).map_or(&[], Vec::as_slice), self.bpm_at(self.next_row));
+                    command_args(&mut args, command, self.instrument_parameters.get(id).map_or(&[], Vec::as_slice));
                     let hits = match command {
                         Some(NoteCommand::Retrigger(n)) => n,
                         _ => 1,
@@ -1115,13 +1208,19 @@ impl Playback {
                             "dur":format!("{:.6}sec", self.seconds_at(self.next_row as f64 + delay + offset + rows) - self.seconds_at(self.next_row as f64 + delay + offset)), "args":args});
                         // A cut ends the sound where the note ends, with no release, and a bend changes its
                         // pitch while it sounds: either way the note is given an id to find it by.
-                        let named = last && (hold.cut || !hold.bends.is_empty());
+                        let changes = last && self.listens(index, id);
+                        let named = last && (hold.cut || !hold.bends.is_empty()) || changes;
                         let note_id = named.then(|| NOTE_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
                         if let Some(id) = note_id {
                             note_event["id"] = json!(id);
                         }
                         events.push(note_event);
-                        let Some(id) = note_id else { continue };
+                        let Some(note_id) = note_id else { continue };
+                        let end = self.origin + (self.seconds_at(self.next_row as f64 + delay + offset + rows) * sample_rate).round() as u64;
+                        if changes {
+                            sounding.push(Sounding { id: note_id, track: index, instrument: id.to_string(), until: end });
+                        }
+                        let id = note_id;
                         for bend in &hold.bends {
                             let from = self.origin + (self.seconds_at(bend.index as f64 + bend.delay) * sample_rate).round() as u64;
                             events.push(json!({"op":"set", "id":id, "at":from.max(begins + 1), "tag":"tracker-pattern",
@@ -1129,7 +1228,6 @@ impl Playback {
                         }
                         if hold.cut {
                             // the fall takes 2 ms and ends where the note does, since a note that has been released ignores it
-                            let end = self.origin + (self.seconds_at(self.next_row as f64 + delay + offset + rows) * sample_rate).round() as u64;
                             let fall = (sample_rate * 0.002) as u64;
                             events.push(json!({"op":"set", "id":id, "at":end.saturating_sub(fall).max(begins), "tag":"tracker-pattern",
                                 "args":{"gain":"-120db"}, "glide":"2ms"}));
@@ -1161,6 +1259,7 @@ impl Playback {
         self.lane_state = state;
         absorbed.retain(|(row, ..)| *row >= self.next_row);
         self.absorbed = absorbed;
+        self.sounding = sounding;
         Ok((events, skipped))
     }
 }
@@ -1531,6 +1630,32 @@ mod tests {
     }
 
     #[test]
+    fn a_sampler_with_a_source_tempo_is_stretched_to_the_tempo_of_the_song() {
+        let fitted = |from: f64, stretch: Option<f64>, timing: Option<Timing>| {
+            let events = played_with(2, vec![column(2, &[(0, "C-4")])], Mode::Song, |play| {
+                let ranged = |name: &str, min, max, default| crate::commands::Parameter { name: name.into(), min, max, default, unit: None };
+                play.instrument_parameters.insert("tone".into(), vec![ranged("stretch", 0.25, 4.0, 1.0), ranged("from_bpm", 0.0, 400.0, 0.0)]);
+                let values = play.song.instrument_values.entry("tone".into()).or_default();
+                values.insert("from_bpm".into(), from);
+                if let Some(stretch) = stretch { values.insert("stretch".into(), stretch); }
+                play.song.patterns[0].timing = timing;
+            });
+            events[0]["args"]["stretch"].as_f64()
+        };
+        // a 140 bpm break in a 120 bpm song lasts 140/120 as long, and the stretch of its own multiplies that
+        assert!((fitted(140.0, None, None).unwrap() - 140.0 / 120.0).abs() < 1e-9);
+        assert!((fitted(140.0, Some(1.5), None).unwrap() - 1.75).abs() < 1e-9);
+        // a pattern with a tempo of its own sets it
+        assert!((fitted(120.0, None, Some(timing(60.0))).unwrap() - 2.0).abs() < 1e-9);
+        // and the engine's range is kept
+        assert_eq!(fitted(400.0, None, Some(timing(60.0))), Some(4.0)); assert_eq!(fitted(20.0, Some(0.5), Some(timing(300.0))), Some(0.25));
+        // 0 leaves the sample alone, and an instrument without the parameters is not touched
+        assert_eq!(fitted(0.0, Some(2.0), None), Some(2.0));
+        let plain = played_with(2, vec![column(2, &[(0, "C-4")])], Mode::Song, |play| { play.instrument_parameters.insert("tone".into(), vec![parameter("from_bpm")]); });
+        assert!(plain[0]["args"].get("stretch").is_none());
+    }
+
+    #[test]
     fn commands_are_a_letter_and_a_number() {
         use NoteCommand::*;
         assert_eq!(NoteCommand::parse("O50"), Some(Offset(0.5)));
@@ -1621,6 +1746,50 @@ mod tests {
         assert_eq!(sets[0]["glide"], "0.125000sec");
     }
 
+    fn lane_on(play: &mut Playback, cutoff: &[(usize, &str)]) {
+        play.instrument_parameters.insert("tone".into(), vec![parameter("cutoff")]);
+        let lane = &mut play.song.patterns[0].fx[0][0];
+        lane.target = Some(crate::commands::FxTarget::Instrument { instrument: "tone".into(), parameter: "cutoff".into() });
+        for (row, value) in cutoff {
+            lane.values[*row] = Some((*value).into());
+        }
+    }
+
+    #[test]
+    fn an_instrument_lane_changes_the_notes_sounding_as_it_passes() {
+        // C-4 held through row 4's OFF, another note from row 6; the lane sets a value on rows 3, 5 and 7
+        let events = played_with(10, vec![column(10, &[(0, "C-4"), (4, "OFF"), (6, "E-4")])], Mode::Song, |play| lane_on(play, &[(3, "0.5"), (5, "0.25"), (7, "0.75")]));
+        let notes: Vec<_> = events.iter().filter(|e| e["op"] == "note").collect();
+        let sets: Vec<_> = events.iter().filter(|e| e["op"] == "set").collect();
+        assert_eq!(notes.len(), 2);
+        assert!(notes[0]["id"].is_u64() && notes[1]["id"].is_u64(), "notes that a lane can change are named");
+        assert_eq!(sets.len(), 2, "{sets:?}");
+        // the held note hears row 3 only: it has been released by row 5; the later note hears row 7 and had row 5's value from the start
+        assert_eq!((sets[0]["id"].clone(), sets[0]["at"].as_u64(), sets[0]["args"]["cutoff"].clone()), (notes[0]["id"].clone(), Some(3 * 6000), json!(0.5)));
+        assert_eq!((sets[1]["id"].clone(), sets[1]["at"].as_u64(), sets[1]["args"]["cutoff"].clone()), (notes[1]["id"].clone(), Some(7 * 6000), json!(0.75)));
+        assert_eq!(notes[1]["args"]["cutoff"], json!(0.25));
+        assert!(notes[0]["args"].get("cutoff").is_none());
+    }
+
+    #[test]
+    fn an_envelope_on_an_instrument_lane_ramps_the_sounding_note() {
+        let events = played_with(8, vec![column(8, &[(0, "C-4")])], Mode::Song, |play| {
+            lane_on(play, &[]);
+            play.song.patterns[0].fx[0][0].envelope = Some(Envelope {
+                enabled: true,
+                mode: "linear".into(),
+                points: vec![EnvelopePoint { row: 0.0, value: 0.0 }, EnvelopePoint { row: 4.0, value: 1.0 }],
+            });
+        });
+        let sets: Vec<_> = events.iter().filter(|e| e["op"] == "set").collect();
+        // each of the four rows steps to its start value then glides to its end; after the last point nothing is sent... except it holds
+        let row = |n: usize| sets.iter().filter(|e| e["at"].as_u64().is_some_and(|at| at / 6000 == n as u64)).collect::<Vec<_>>();
+        assert_eq!(row(2)[0]["args"]["cutoff"], json!(0.5));
+        assert_eq!(row(2)[1]["args"]["cutoff"], json!(0.75));
+        assert_eq!(row(2)[1]["at"].as_u64(), Some(2 * 6000 + 1));
+        assert!(row(2)[1]["glide"].as_str().unwrap().starts_with("0.12497"), "{:?}", row(2)[1]);
+    }
+
     #[test]
     fn an_instrument_set_on_a_row_plays_the_notes_below_it_until_another_is_set() {
         let mut notes = column(4, &[(0, "C-4"), (1, "D-4"), (2, "E-4"), (3, "F-4")]);
@@ -1664,9 +1833,14 @@ mod tests {
         play.instrument_parameters = BTreeMap::from([("tone".into(), vec![cutoff.clone()]), ("alt".into(), vec![cutoff])]);
         let targets = BTreeMap::from([("tone".into(), "voice".into()), ("alt".into(), "other".into())]);
         let (events, _) = play.events_until(0, play.row_at(4, 48000.0), 48000.0, &targets).unwrap();
-        let cutoffs: Vec<_> = events.iter().map(|e| e["args"].get("cutoff").and_then(|c| c.as_str()).unwrap_or("-").to_string()).collect();
+        let notes: Vec<_> = events.iter().filter(|e| e["op"] == "note").collect();
+        let cutoffs: Vec<_> = notes.iter().map(|e| e["args"].get("cutoff").and_then(|c| c.as_str()).unwrap_or("-").to_string()).collect();
         // the lane starts at row 1: the first tone note is before it, the alt note is another instrument's, the last is after it
         assert_eq!(cutoffs, ["-", "-", "500hz"]);
+        // the first note is still sounding at row 1 and is changed then; the alt note's instrument has no lane
+        let sets: Vec<_> = events.iter().filter(|e| e["op"] == "set").collect();
+        assert_eq!(sets.len(), 1, "{sets:?}");
+        assert_eq!((sets[0]["id"].clone(), sets[0]["at"].as_u64(), sets[0]["args"]["cutoff"].clone()), (notes[0]["id"].clone(), Some(6000), json!("500hz")));
     }
 
     #[test]

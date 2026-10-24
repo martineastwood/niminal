@@ -19,7 +19,11 @@ pub fn flush(x: f64) -> f64 {
 /// `x`, or zero if it is too small to matter.
 #[inline]
 pub fn flush32(x: f32) -> f32 {
-    if f64::from(x).abs() < FLUSH_BELOW { 0.0 } else { x }
+    if f64::from(x).abs() < FLUSH_BELOW {
+        0.0
+    } else {
+        x
+    }
 }
 
 /// Denormals are flushed to zero for as long as this exists, and the floating-point mode is put back
@@ -62,20 +66,26 @@ const FTZ_DAZ: u32 = (1 << 15) | (1 << 6);
 fn set_mode() -> Option<Mode> {
     let mut saved: u32 = 0;
     // SAFETY: reads the calling thread's MXCSR into `saved`, a local that outlives the instruction.
-    unsafe { std::arch::asm!("stmxcsr [{}]", in(reg) &mut saved, options(nostack, preserves_flags)) };
+    unsafe {
+        std::arch::asm!("stmxcsr [{}]", in(reg) &mut saved, options(nostack, preserves_flags))
+    };
     if saved & FTZ_DAZ == FTZ_DAZ {
         return None;
     }
     let flushing = saved | FTZ_DAZ;
     // SAFETY: loads a MXCSR value made by setting two bits of the one just read, so no exception is unmasked.
-    unsafe { std::arch::asm!("ldmxcsr [{}]", in(reg) &flushing, options(nostack, readonly, preserves_flags)) };
+    unsafe {
+        std::arch::asm!("ldmxcsr [{}]", in(reg) &flushing, options(nostack, readonly, preserves_flags))
+    };
     Some(saved)
 }
 
 #[cfg(target_arch = "x86_64")]
 fn restore_mode(saved: Mode) {
     // SAFETY: loads back the MXCSR value that `set_mode` read.
-    unsafe { std::arch::asm!("ldmxcsr [{}]", in(reg) &saved, options(nostack, readonly, preserves_flags)) };
+    unsafe {
+        std::arch::asm!("ldmxcsr [{}]", in(reg) &saved, options(nostack, readonly, preserves_flags))
+    };
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -94,7 +104,9 @@ fn set_mode() -> Option<Mode> {
         return None;
     }
     // SAFETY: writes back the value just read with one more bit set, which only changes how tiny numbers are treated.
-    unsafe { std::arch::asm!("msr fpcr, {}", in(reg) saved | FZ, options(nostack, preserves_flags)) };
+    unsafe {
+        std::arch::asm!("msr fpcr, {}", in(reg) saved | FZ, options(nostack, preserves_flags))
+    };
     Some(saved)
 }
 
@@ -125,7 +137,10 @@ mod tests {
     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     fn tiny_numbers_are_zero_only_while_the_guard_lives() {
         let tiny = || black_box(f32::MIN_POSITIVE) * black_box(0.5);
-        assert!(tiny().is_subnormal(), "the machine does not flush by default");
+        assert!(
+            tiny().is_subnormal(),
+            "the machine does not flush by default"
+        );
         {
             let _guard = FlushToZero::new();
             assert_eq!(tiny(), 0.0);

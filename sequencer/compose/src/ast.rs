@@ -227,8 +227,13 @@ pub struct SectionRef {
 pub enum SampleSource {
     /// A file, or for a kit a folder.
     Path(String),
-    /// `amen.slices(16)`: a kit of equal pieces of a sample declared earlier.
-    Slices { sample: Ident, count: f64 },
+    /// `amen.slices(16)`: a kit of equal pieces of a sample declared earlier, or `amen.slices([0, 0.25, 0.6])`:
+    /// pieces starting at those shares of its length. `count` is the number of pieces either way.
+    Slices {
+        sample: Ident,
+        count: f64,
+        at: Vec<f64>,
+    },
     /// A const table (or expression that yields one): `pad = sample(organ)`.
     Table(Expr),
 }

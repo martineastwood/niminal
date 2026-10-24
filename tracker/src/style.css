@@ -176,6 +176,7 @@ aside.names-hidden { width: 84px; }
 .device-heading select { flex: 1; min-width: 0; }
 .device-heading button { min-width: 20px; padding: 0 5px; }
 .device-note { margin: 4px 0; color: var(--dim); }
+.show-sliders { margin: 4px; font-size: 11px; }
 .device { margin-bottom: 3px; border: 1px solid var(--line); border-left: 3px solid #3a3f46; background: #1f2226; }
 .device.selected { border-left-color: var(--accent); background: #24282d; }
 .device.bypassed .device-name { opacity: .5; text-decoration: line-through; }
@@ -290,6 +291,8 @@ footer input { height: 16px; font-size: 10px; }
 .menu button { height: 20px; border-color: transparent; background: transparent; text-align: left; }
 .menu button:hover, .menu button:focus-visible { background: var(--bg-ctl-hover); }
 .menu button[aria-checked=true] { color: var(--accent-text); }
+.menu-number { display: flex; gap: 4px; align-items: center; padding: 2px 6px; }
+.menu-number input { width: 3.5em; }
 .menu-heading { padding: 4px 6px 1px; font-size: 9px; letter-spacing: 1px; font-weight: 600; color: var(--dim); }
 .browser { position: fixed; z-index: 20; display: flex; flex-direction: column; width: 260px; max-height: 360px; background: var(--bg-bar); border: 1px solid var(--edge); box-shadow: 0 4px 14px #000a; }
 .browser input[type=search] { margin: 4px; height: 20px; }
@@ -341,3 +344,8 @@ footer input { height: 16px; font-size: 10px; }
 
 .has-fx { flex: none; font-size: 7px; color: var(--accent-text); }
 .lane-heading.idle, .fx-command.idle { opacity: .45; }
+
+#sample { padding: 4px 8px; }
+.sample-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 4px; }
+.sample-title { margin-right: auto; color: var(--text); }
+.sample-canvas { display: block; width: 100%; border: 1px solid var(--edge); outline-offset: 1px; touch-action: none; }

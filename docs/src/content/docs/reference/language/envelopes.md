@@ -3,6 +3,8 @@ title: Envelopes
 description: Envelope literals, sustain, curves, adsr, and perc.
 ---
 
+**Compiled by niminal.** An envelope is part of an instrument's code, compiled into the sound.
+
 Envelopes use their own literal: **levels and durations alternate**.
 
 ```nml

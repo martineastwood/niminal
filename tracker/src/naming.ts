@@ -28,9 +28,9 @@ export function uniqueName(project: Project, kind: Definition['kind'], base: str
   return name;
 }
 
-/** `source` with the code name `from` changed to `to`, along with the helpers named after it (`from_voice`, `from_sample`). Strings and comments are left alone. */
+/** `source` with the code name `from` changed to `to`, along with the helpers named after it (`from_voice`, `from_sample`, `from_slices`, `from_kit`). Strings and comments are left alone. */
 export const renameInSource = (source: string, from: string, to: string) =>
-  source.replace(new RegExp(`("(?:[^"\\\\]|\\\\.)*"|//[^\\n]*)|\\b${from}(_voice|_sample)?\\b`, 'g'), (match, literal, helper) => literal ? match : `${to}${helper ?? ''}`);
+  source.replace(new RegExp(`("(?:[^"\\\\]|\\\\.)*"|//[^\\n]*)|\\b${from}(_voice|_sample|_slices|_kit)?\\b`, 'g'), (match, literal, helper) => literal ? match : `${to}${helper ?? ''}`);
 
 /** Gives a definition a new name, and its code the matching name (made unique among the definitions). */
 export function renameDefinition(project: Project, definition: Definition, name: string) {

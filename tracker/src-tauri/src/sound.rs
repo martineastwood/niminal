@@ -82,9 +82,23 @@ impl Sound {
         if kind == Kind::Instr && !definition.params.iter().any(|param| param.name == "freq") {
             return Err("Tracker instruments currently need a freq: hz parameter".into());
         }
-        let mut kits = definitions.iter().filter(|s| s.kind == SymbolKind::Kit && !s.params.is_empty());
+        let options = niminal_lang::CompileOptions {
+            samples: dir.map_or_else(niminal_lang::Samples::default, niminal_lang::Samples::new),
+            ..Default::default()
+        };
+        // The compiler can't always load an instrument on its own (a sampler needs its
+        // folder), and the engine reports real errors on Apply, so no controls will do.
+        let compiled = if kind == Kind::Instr { niminal_lang::compile_with(&source, &options).ok() } else { None };
+        // A sample cut into pieces, or a kit of samples, played by key: the instrument has a `sample` parameter
+        // and the code makes exactly one kit. How many members it has is known from the code or, for a folder, the files.
+        let mut kits = definitions.iter().filter(|s| s.kind == SymbolKind::Kit);
         let slices = match (kind, kits.next(), kits.next()) {
-            (Kind::Instr, Some(kit), None) if definition.params.iter().any(|p| p.name == "sample") => Some(kit.params.len()),
+            (Kind::Instr, Some(kit), None) if definition.params.iter().any(|p| p.name == "sample") => compiled
+                .as_ref()
+                .and_then(|program| program.instruments.iter().find(|i| i.name == kit.name))
+                .map(|kit| kit.members.len())
+                .filter(|&count| count > 0)
+                .or(Some(kit.params.len()).filter(|&count| count > 0)),
             _ => None,
         };
         let mut parameters = Vec::new();
@@ -113,14 +127,8 @@ impl Sound {
                 ));
             }
         }
-        let options = niminal_lang::CompileOptions {
-            samples: dir.map_or_else(niminal_lang::Samples::default, niminal_lang::Samples::new),
-            ..Default::default()
-        };
         if kind == Kind::Instr
-            // The compiler can't always load an instrument on its own (a sampler needs its
-            // folder), and the engine reports real errors on Apply, so no controls will do.
-            && let Ok(program) = niminal_lang::compile_with(&source, &options)
+            && let Some(program) = &compiled
             && let Some(instrument) = program.instruments.iter().find(|i| i.name == definition.name)
         {
             for param in &instrument.params {

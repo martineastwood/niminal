@@ -9,6 +9,8 @@ import { MatrixPanel } from './matrix';
 import type { BrowserItem } from './browser';
 import { ProjectPanel, neighbour } from './projectpanel';
 import { openMenu } from './menu';
+import { SamplePanel } from './waveform';
+import { pieceKey } from './slices';
 import { SoundBrowser, type SoundKind, type ManageOp } from './soundbrowser';
 import { instrumentPresets, effectPresets, type Preset } from './library';
 import { emptyProject, columnCount, emptyFxLane, blankColumn, type Device, readProject, storageKey, maxReturns, resizePattern, removeTrack, restoreTrack, duplicateTrack, trackSource, type Definition, type Song, type DeletedTrack } from './project';
@@ -20,7 +22,7 @@ import { addDevice, removeDevice, moveDevice, newEffect, duplicateEffect, effect
 import { MixPanel } from './mix';
 import { drawScope } from './scope';
 import { renameDefinition, freeCodeName, slug } from './naming';
-import { presetSource, addInstrument, addInstrumentFromPreset, duplicateInstrument, instrumentUsers, removeInstrument, sliceInstrument } from './instruments';
+import { presetSource, addInstrument, addInstrumentFromPreset, duplicateInstrument, instrumentUsers, removeInstrument, sliceInstrument, sampleFile, maxSlices, addKit } from './instruments';
 import { audioCommand, audioStatus, observeAudio } from './audio';
 import './style.css';
 
@@ -43,10 +45,11 @@ app.innerHTML = `
       <div id="grid-wrap"><div id="grid" tabindex="0" role="grid" aria-label="Pattern editor"></div></div>
       <div id="bottom-dock" hidden>
         <div class="dock-resize" id="dock-resize"></div>
-        <div class="dock-bar"><button class="tab" data-tab="code">Code</button><button class="tab" data-tab="automation">Automation</button><button class="tab" data-tab="mix">Mixer</button><button class="tab" data-tab="matrix">Matrix</button><span id="code-tools"><span class="segmented"><button id="show-instrument" title="This track's instrument">Instrument</button><button id="show-fx" title="This track's effects">FX</button></span><span id="definition-kind" class="badge"></span><input id="definition-name" aria-label="Definition name"><button id="apply" title="Apply the code and play a note through it (Cmd/Ctrl+Enter in the editor)">Apply ⌘↩</button><span id="apply-status" class="muted"></span></span><span class="spacer"></span><button id="expand" title="Expand editor" aria-label="Expand editor">⤢</button><button id="close-dock" title="Close" aria-label="Close panel">×</button></div>
+        <div class="dock-bar"><button class="tab" data-tab="code">Code</button><button class="tab" data-tab="automation">Automation</button><button class="tab" data-tab="mix">Mixer</button><button class="tab" data-tab="matrix">Matrix</button><button class="tab" data-tab="sample">Sample</button><span id="code-tools"><span class="segmented"><button id="show-instrument" title="This track's instrument">Instrument</button><button id="show-fx" title="This track's effects">FX</button></span><span id="definition-kind" class="badge"></span><input id="definition-name" aria-label="Definition name"><button id="apply" title="Apply the code and play a note through it (Cmd/Ctrl+Enter in the editor)">Apply ⌘↩</button><span id="apply-status" class="muted"></span></span><span class="spacer"></span><button id="expand" title="Expand editor" aria-label="Expand editor">⤢</button><button id="close-dock" title="Close" aria-label="Close panel">×</button></div>
         <section id="automation-panel" hidden><div id="automation"></div></section>
         <section id="mix-panel" hidden><div id="mix"></div></section>
         <section id="matrix-panel" hidden><div id="matrix"></div></section>
+        <section id="sample-panel" hidden><div id="sample"></div></section>
         <section class="instrument-editor" id="code-panel" hidden><div class="code-workspace"><div id="mixer" aria-label="Track FX controls" hidden></div><div id="code"></div></div></section>
       </div>
     </section>
@@ -110,7 +113,7 @@ function documentUri(id: string) {
   return projectDir ? `file://${projectDir.split('/').map(encodeURIComponent).join('/')}/${id}.nml` : `file:///niminal-tracker/${id}.nml`;
 }
 function documentState(definition: Definition) {
-  return editorState(documentUri(definition.id), definition.source, source => { definition.source = source; save(`source:${definition.id}`); renderApplyStatus(); }, () => { void action(() => applyAndAudition(definition)); });
+  return editorState(documentUri(definition.id), definition.source, source => { definition.source = source; save(`source:${definition.id}`); renderApplyStatus(); sampleChanged(); }, () => { void action(() => applyAndAudition(definition)); });
 }
 function refreshProjectDir() {
   projectDirReady = isTauri() ? invoke<string>('project_dir', { id: project.id }).then(dir => {
@@ -152,7 +155,7 @@ function selectDefinition(definition: Definition, reveal = true, library = false
   element('definition-kind').textContent = definition.kind === 'instr' ? 'INSTRUMENT' : 'EFFECT';
   fxMode = definition.kind === 'fx'; libraryFx = library ? definition.id : null;
   element('mixer').hidden = false; element('code').hidden = false;
-  renderDefinitions(); renderApplyStatus(); mixerView();
+  renderDefinitions(); renderApplyStatus(); mixerView(); sampleChanged();
 }
 /** The browser's Project folder lists the definitions, so it follows them. */
 function renderDefinitions() { soundBrowser.refresh(); projectPanel.refresh(); }
@@ -283,10 +286,10 @@ function editedPattern() {
     });
   }, 50);
 }
-async function audition(id: string, note: string, track: number, ms = 300) {
+async function audition(id: string, note: string, track: number, ms = 300, command?: string) {
   await ensureSound(id); await ensureAssignments();
   await audioCommand({ op: 'update', song: song() });
-  await audioCommand({ op: 'audition', instrument: id, note, track, ms });
+  await audioCommand({ op: 'audition', instrument: id, note, track, ms, command });
 }
 /** Slots in the engine for what the sound browser is playing; they are not part of the project. */
 const previewInstrument = 'preview_instr', previewEffect = 'preview_fx';
@@ -327,7 +330,7 @@ const arrangement = new Arrangement(element('sequence'), () => project, manual =
   grid.render(); deviceTrack = activeStrip(); mixerView(); patternControls();
 }, editedPattern);
 const grid = new PatternGrid(element('grid'), () => project, () => arrangement.pattern, () => Number(element<HTMLInputElement>('octave').value), () => { editedPattern(); mixerView(); },
-  (id, note, track) => { if (audioStatus.connected) void action(() => audition(id, note, track)); },
+  (id, note, track, command) => { if (audioStatus.connected) void action(() => audition(id, note, track, 300, command)); },
   () => { void action(() => togglePlay()); },
   column => { const strip = columnToStrip(project, column); if (deviceTrack !== strip) { const editingFx = fxMode && !element('code-panel').hidden; deviceTrack = strip; if (editingFx) showFx(); else mixerView(); } },
   () => Number(element<HTMLInputElement>('entry-step').value), () => allParameters(), status, (track, lane) => {
@@ -434,10 +437,9 @@ const soundBrowser = new SoundBrowser(element('sound-browser'), browserItems, {
   leave: () => { void action(endPreview); },
 }, () => element('grid').focus());
 const projectInstruments = () => project.definitions.filter(d => d.kind === 'instr');
-/** Makes an instrument the current one, shows its code, and plays a note so it can be heard. */
+/** Makes an instrument the current one and shows its code. */
 function chooseInstrument(definition: Definition) {
   selectDefinition(definition, false);
-  if (audioStatus.connected) void action(() => audition(definition.id, 'C-3', noteTrack(), 400));
 }
 const projectPanel = new ProjectPanel(element('project-panel'),
   () => projectInstruments().map(d => { const users = instrumentUsers(project, d.id).length; return { id: d.id, name: d.name, note: users ? `×${users}` : undefined }; }),
@@ -445,16 +447,50 @@ const projectPanel = new ProjectPanel(element('project-panel'),
     choose: id => { const definition = project.definitions.find(d => d.id === id); if (definition) chooseInstrument(definition); },
     edit: id => { const definition = project.definitions.find(d => d.id === id); if (definition) { selectDefinition(definition); editor.focus(); } },
     manage: op => manageSound(op, 'instr', { value: `project:${currentInstrument}`, name: '', folder: '' }),
-    slice: anchor => openMenu(anchor, [{ heading: 'Cut into pieces' }, ...[4, 8, 16, 32].map(count => ({ text: `${count} pieces`, run: () => sliceCurrent(count) }))]),
+    kit: () => void importKit(),
+    slice: anchor => openMenu(anchor, [
+      { heading: 'Cut into equal pieces' }, ...[4, 8, 16, 32].map(count => ({ text: `${count} pieces`, run: () => sliceCurrent(count) })),
+      { number: 'Pieces', value: 12, min: 2, max: maxSlices, run: count => sliceCurrent(count) },
+      { heading: 'Cut at the hits' }, { text: 'At transients', run: () => void sliceAtTransients() },
+    ]),
     leave: () => element('grid').focus(),
   });
-/** A new instrument that plays the current sampler in `count` pieces, one per key from C-4. */
-function sliceCurrent(count: number) {
+/** Puts new code in an instrument, in the editor if it is the one open, and applies it so the change is heard. */
+function setDefinitionSource(definition: Definition, source: string) {
+  if (definition === selected && editor) editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: source } });
+  else { definition.source = source; states.delete(definition.id); save(); }
+}
+const samplePanel = new SamplePanel(element('sample'), {
+  current: () => project.definitions.find(d => d.id === currentInstrument && d.kind === 'instr') ?? null,
+  loadPeaks: file => invoke('sample_peaks', { id: project.id, file, buckets: 2000 }),
+  edit: (definition, source) => { setDefinitionSource(definition, source); if (audioStatus.connected) void action(() => applyDefinition(definition)); },
+  hear: (definition, piece) => { if (audioStatus.connected) void action(() => audition(definition.id, pieceKey(piece), noteTrack())); },
+  detect: (file, max = maxSlices) => invoke('detect_slices', { id: project.id, file, max }),
+});
+let sampleTimer = 0;
+/** Draws the Sample tab again shortly after the instrument or its code changes, if it is showing. */
+function sampleChanged() {
+  if (element('sample-panel').hidden) return;
+  clearTimeout(sampleTimer); sampleTimer = window.setTimeout(() => void samplePanel.refresh(), 250);
+}
+
+/** A new instrument that plays the current sampler in pieces, one per key from C-4: a count of equal pieces, or the shares of the sample where each starts. */
+function sliceCurrent(pieces: number | number[]) {
   const source = project.definitions.find(d => d.id === currentInstrument);
-  const definition = source && sliceInstrument(project, source, count);
-  if (!definition) { status('Choose a sampler first: the scissors cut the sample an instrument plays'); return; }
+  const definition = source && sliceInstrument(project, source, pieces);
+  if (!definition) { status(`Choose a sampler first: the scissors cut the sample an instrument plays, into 2 to ${maxSlices} pieces`); return; }
   selectDefinition(definition); editor.focus(); grid.render(); mixerView(); save();
-  status(`${definition.name}: C-4 plays the first of ${count} pieces`);
+  status(`${definition.name}: C-4 plays the first of ${typeof pieces === 'number' ? pieces : pieces.length} pieces`);
+}
+/** Cuts the current sampler where its hits begin. */
+async function sliceAtTransients() {
+  const source = project.definitions.find(d => d.id === currentInstrument), file = source && sampleFile(source);
+  if (!file) { status('Choose a sampler first: the scissors cut the sample an instrument plays'); return; }
+  if (!isTauri()) { status('Finding hits needs the desktop app'); return; }
+  try {
+    const places = await invoke<number[]>('detect_slices', { id: project.id, file, max: maxSlices });
+    if (places.length < 2) status('No separate hits found in that sample; cut it into equal pieces instead'); else sliceCurrent(places);
+  } catch (error) { status(`Could not read the sample: ${error}`); }
 }
 /** Option+Up and Option+Down: the previous or next instrument of the project, from anywhere but a text box. */
 function stepInstrument(delta: number) {
@@ -466,6 +502,11 @@ document.addEventListener('keydown', event => {
   if ((event.target as HTMLElement).closest('input, select, textarea, .cm-editor')) return;
   event.preventDefault(); event.stopPropagation(); stepInstrument(event.key === 'ArrowDown' ? 1 : -1);
 }, true);
+// Notes sound from anywhere but a text box, the code editor or the grid (which handles its own keys).
+document.addEventListener('keydown', event => {
+  if ((event.target as HTMLElement).closest('input, select, textarea, .cm-editor, #grid, [contenteditable]')) return;
+  grid.auditionKey(event);
+});
 /** Shows or hides the browser; showing it puts the cursor in its search box. */
 function toggleBrowser(kind?: SoundKind) {
   const section = element('sound-browser');
@@ -620,18 +661,30 @@ element<HTMLInputElement>('definition-name').onchange = event => {
   if (selected.source !== before) editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: selected.source } });
   renderDefinitions(); grid.render(); mixerView(); save();
 };
-function newInstrument(sample?: string) {
-  const definition = addInstrument(project, sample);
+function newInstrument(sample?: string, seconds = 0) {
+  const definition = addInstrument(project, sample, seconds);
   selectDefinition(definition); editor.focus(); grid.render(); mixerView(); save();
   return definition;
 }
 async function importSamples() {
   if (!isTauri()) { status('Importing samples needs the desktop app'); return; }
   try {
-    const files = await invoke<string[]>('import_samples', { id: project.id });
-    for (const file of files) newInstrument(file);
+    const files = await invoke<{ file: string; seconds: number }[]>('import_samples', { id: project.id });
+    for (const { file, seconds } of files) newInstrument(file, seconds);
     if (files.length) status(`Added ${files.length} sampler${files.length > 1 ? 's' : ''}`);
   } catch (error) { status(`Could not import samples: ${error}`); }
+}
+/** Several WAV files as one instrument with a sample on each key from C-4. */
+async function importKit() {
+  if (!isTauri()) { status('Importing samples needs the desktop app'); return; }
+  try {
+    const kit = await invoke<{ folder: string; members: string[] } | null>('import_kit', { id: project.id });
+    if (!kit) return;
+    const definition = addKit(project, kit.folder, kit.members);
+    if (!definition) { status(`A kit holds 1 to ${maxSlices} samples, one on each key from C-4`); return; }
+    selectDefinition(definition); editor.focus(); grid.render(); mixerView(); save();
+    status(`${definition.name}: ${kit.members.length} samples, C-4 plays ${kit.members[0]}`);
+  } catch (error) { status(`Could not import the kit: ${error}`); }
 }
 /** The buttons under the browser's list: new, import, and what can be done to a sound of this project. */
 function manageSound(op: ManageOp, kind: SoundKind, item: BrowserItem | null) {
@@ -700,8 +753,8 @@ element('import').onclick = async () => {
   };
   input.click();
 };
-type Panel = 'code' | 'automation' | 'mix' | 'matrix';
-const panels: Panel[] = ['code', 'automation', 'mix', 'matrix'];
+type Panel = 'code' | 'automation' | 'mix' | 'matrix' | 'sample';
+const panels: Panel[] = ['code', 'automation', 'mix', 'matrix', 'sample'];
 function showPanel(panel: Panel, visible: boolean) {
   for (const candidate of panels) {
     const section = element(`${candidate}-panel`);
@@ -715,6 +768,7 @@ function showPanel(panel: Panel, visible: boolean) {
   if (!element('mix-panel').hidden) refreshMix();
   watchStrips();
   refreshMatrix();
+  if (!element('sample-panel').hidden) void samplePanel.refresh();
   if (element('code-panel').hidden) {
     element('app').classList.remove('editor-expanded'); setText('expand', '⤢');
   }
@@ -859,6 +913,7 @@ const menuActions: Record<string, () => void> = {
   open: () => element('import').click(),
   save: () => element('export').click(),
   'import-samples': () => void importSamples(),
+  'import-kit': () => void importKit(),
   'export-wav': () => void exportAudio(false),
   'export-stems': () => void exportAudio(true),
   undo: () => undoProject(),
@@ -869,6 +924,9 @@ const menuActions: Record<string, () => void> = {
   'add-track': () => element('add-track').click(),
   'duplicate-track': () => element('duplicate-track').click(),
   'select-track': () => { element('grid').focus(); grid.selectWholeTrack(); },
+  'cut-track': () => { element('grid').focus(); grid.cutTrack(); },
+  'reverse-selection': () => { element('grid').focus(); grid.reverseSelection(); },
+  'randomize-selection': () => { element('grid').focus(); grid.randomizeSelection(); },
   'new-pattern': () => element('new-pattern').click(),
   reconnect: () => { void action(async () => { if (audioStatus.connected) await audioCommand({ op: 'disconnect' }); }).then(toggleConnection); },
   'new-instrument': () => newInstrument(),
@@ -877,6 +935,7 @@ const menuActions: Record<string, () => void> = {
   code: () => showPanel('code', true),
   mixer: () => element('open-mix').click(),
   matrix: () => element('open-matrix').click(),
+  sample: () => showPanel('sample', true),
   browser: () => toggleBrowser(),
 };
 if (isTauri()) {

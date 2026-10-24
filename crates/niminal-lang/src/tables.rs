@@ -15,7 +15,8 @@ pub fn harmonics(amps: &[f64], phases: Option<&[f64]>, size: usize) -> Table {
             amps.iter()
                 .enumerate()
                 .map(|(h, w)| {
-                    let phase = phases.and_then(|p| p.get(h)).copied().unwrap_or(0.0) * std::f64::consts::TAU;
+                    let phase = phases.and_then(|p| p.get(h)).copied().unwrap_or(0.0)
+                        * std::f64::consts::TAU;
                     w * (t * (h + 1) as f64 + phase).sin()
                 })
                 .sum()
@@ -94,7 +95,11 @@ fn interpolate_curve(pts: &[[f64; 2]], x: f64, shape: CurveShape) -> f64 {
     if x >= pts[pts.len() - 1][0] {
         return pts[pts.len() - 1][1];
     }
-    let i = pts.iter().position(|p| p[0] > x).unwrap_or(1).saturating_sub(1);
+    let i = pts
+        .iter()
+        .position(|p| p[0] > x)
+        .unwrap_or(1)
+        .saturating_sub(1);
     let (x0, y0) = (pts[i][0], pts[i][1]);
     let (x1, y1) = (pts[i + 1][0], pts[i + 1][1]);
     let t = (x - x0) / (x1 - x0);
@@ -329,11 +334,7 @@ pub fn random(size: usize, dist: Dist, seed: u64) -> Table {
             }
             Dist::Bilateral => {
                 let u = next().max(1e-12);
-                if next() < 0.5 {
-                    u.ln()
-                } else {
-                    -u.ln()
-                }
+                if next() < 0.5 { u.ln() } else { -u.ln() }
             }
             Dist::Cauchy => {
                 let u = (next() - 0.5).clamp(-0.499, 0.499);

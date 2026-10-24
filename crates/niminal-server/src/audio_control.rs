@@ -65,12 +65,12 @@ impl AudioControl {
         for (kind, selected) in [("outputs", &settings.output), ("inputs", &settings.input)] {
             if let Some(id) = selected
                 && id != "default"
-                    && !state.devices[kind]
-                        .as_array()
-                        .is_some_and(|ds| ds.iter().any(|d| d["id"] == *id))
-                {
-                    return Err(format!("unknown audio device `{id}`"));
-                }
+                && !state.devices[kind]
+                    .as_array()
+                    .is_some_and(|ds| ds.iter().any(|d| d["id"] == *id))
+            {
+                return Err(format!("unknown audio device `{id}`"));
+            }
         }
         if state.pending.is_some() {
             return Err("an audio restart is already queued".into());

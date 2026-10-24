@@ -93,6 +93,7 @@ fn real_engine_plays_last_good_source_and_stop_cancels_the_loop() {
             note: "C-4".into(),
             track: 0,
             ms: 200,
+            command: None,
         })
         .unwrap();
     let audio = engine.lock().unwrap().session_mut().process(24000);
@@ -137,6 +138,7 @@ fn real_engine_plays_last_good_source_and_stop_cancels_the_loop() {
             note: "D#4".into(),
             track: 0,
             ms: 200,
+            command: None,
         })
         .unwrap();
     assert!(
@@ -195,6 +197,7 @@ fn track_effects_gain_and_mute_change_rendered_audio_and_reject_bad_fx_edits() {
                 note: "C-4".into(),
                 track: 0,
             ms: 200,
+                command: None,
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -324,6 +327,8 @@ fn each_channel_and_the_master_have_a_scope() {
             token: None,
         })
         .unwrap();
+    // Strip scopes are enabled only while the mixer needs them.
+    worker.command(Command::Scopes { strips: true }).unwrap();
     worker
         .command(Command::Apply {
             id: "tone".into(),
@@ -338,6 +343,7 @@ fn each_channel_and_the_master_have_a_scope() {
             note: "C-4".into(),
             track: 0,
             ms: 200,
+            command: None,
         })
         .unwrap();
     // The engine renders in blocks; scopes reach the client as it renders and the client asks.
@@ -417,6 +423,7 @@ fn the_master_has_its_own_level_and_effects_and_solo_silences_other_tracks() {
                 note: "C-4".into(),
                 track,
             ms: 200,
+                command: None,
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -513,6 +520,7 @@ fn tracks_send_to_returns_that_have_their_own_effects_level_and_mute() {
                 note: "C-4".into(),
                 track,
             ms: 200,
+                command: None,
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -623,6 +631,7 @@ fn outputs_route_tracks_into_returns_and_sends_tap_the_chain_where_they_sit() {
                 note: "C-4".into(),
                 track,
             ms: 200,
+                command: None,
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -918,6 +927,7 @@ fn imported_samples_play_from_the_project_folder() {
             note: "C-4".into(),
             track: 0,
             ms: 200,
+            command: None,
         })
         .unwrap();
     let audio = engine.lock().unwrap().session_mut().process(8000);
@@ -975,6 +985,7 @@ fn device_chain_runs_in_order_and_can_be_edited_while_playing() {
                 note: "C-4".into(),
                 track: 0,
             ms: 200,
+                command: None,
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -1172,6 +1183,7 @@ fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
             note: "C-4".into(),
             track: 0,
             ms: 200,
+            command: None,
         })
         .unwrap();
     let audio = engine.lock().unwrap().session_mut().process(8000);
@@ -1316,7 +1328,7 @@ fn library_instruments_expose_controls_and_sound_on_mono_and_stereo_engines() {
             let id = format!("library_instrument_{index}");
             worker.command(Command::Apply { id: id.clone(), source: (*source).into(), kind: Kind::Instr, dir: None }).unwrap();
             assert!(!worker.sounds[&id].parameters.is_empty(), "{id} exposes its controls");
-            worker.command(Command::Audition { instrument: id, note: "C-3".into(), track: 0, ms: 200 }).unwrap();
+            worker.command(Command::Audition { instrument: id, note: "C-3".into(), track: 0, ms: 200, command: None }).unwrap();
             let audio = engine.lock().unwrap().session_mut().process(24000);
             assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
             assert!(audio.iter().flatten().any(|sample| sample.abs() > 0.001), "silent instrument {index}");
@@ -1347,7 +1359,7 @@ fn library_drum_presets_carry_their_voice_and_sound_on_mono_and_stereo_engines()
             );
             worker.command(Command::Apply { id: id.clone(), source, kind: Kind::Instr, dir: None }).unwrap();
             assert!(!worker.sounds[&id].parameters.is_empty(), "{name} exposes its controls");
-            worker.command(Command::Audition { instrument: id, note: "C-3".into(), track: 0, ms: 200 }).unwrap();
+            worker.command(Command::Audition { instrument: id, note: "C-3".into(), track: 0, ms: 200, command: None }).unwrap();
             let audio = engine.lock().unwrap().session_mut().process(24000);
             assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
             assert!(audio.iter().flatten().any(|sample| sample.abs() > 0.001), "silent drum {name}");
@@ -1376,7 +1388,7 @@ fn overdriven_loudness(drive: f64) -> f32 {
         ..Device::default()
     }];
     worker.command(Command::Update { song }).unwrap();
-    worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track: 0, ms: 200 }).unwrap();
+    worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track: 0, ms: 200, command: None }).unwrap();
     let audio = engine.lock().unwrap().session_mut().process(24000);
     worker.command(Command::Disconnect).unwrap();
     let samples: Vec<f32> = audio.iter().flatten().copied().collect();
@@ -1409,7 +1421,7 @@ fn left_over_right(compressor_link: Option<f64>) -> f32 {
         }];
     }
     worker.command(Command::Update { song }).unwrap();
-    worker.command(Command::Audition { instrument: "tilted".into(), note: "C-4".into(), track: 0, ms: 200 }).unwrap();
+    worker.command(Command::Audition { instrument: "tilted".into(), note: "C-4".into(), track: 0, ms: 200, command: None }).unwrap();
     let audio = engine.lock().unwrap().session_mut().process(24000);
     worker.command(Command::Disconnect).unwrap();
     let rms = |c: usize| (audio[c][4000..].iter().map(|s| s * s).sum::<f32>() / (audio[c].len() - 4000) as f32).sqrt();
@@ -1487,6 +1499,7 @@ fn library_effects_expose_controls_and_render_on_mono_and_stereo_engines() {
                     note: "C-4".into(),
                     track: 0,
             ms: 200,
+                    command: None,
                 })
                 .unwrap();
             let audio = engine.lock().unwrap().session_mut().process(24000);
@@ -1796,6 +1809,15 @@ fn offset_reverse_and_slices_choose_what_part_of_a_sample_plays() {
     assert!((offset - 0.45).abs() < 0.1, "O50 starts half way up the ramp: {offset}");
     assert!(reversed > 0.8, "V starts at the loud end: {reversed}");
     worker.command(Command::Stop).unwrap();
+    // entering a command in the grid plays the note with it
+    let heard = |worker: &mut Worker, command: &str| {
+        worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track: 0, ms: 200, command: Some(command.into()) }).unwrap();
+        let audio = engine.lock().unwrap().session_mut().process(4800);
+        let start = audio[0].iter().position(|s| s.abs() > 0.01).unwrap_or(0);
+        audio[0][start + 20..start + 60].iter().sum::<f32>() / 40.0
+    };
+    assert!((heard(&mut worker, "O50") - 0.45).abs() < 0.1);
+    assert!(heard(&mut worker, "V") > 0.8);
 
     // a sliced sample plays the piece for each key; the ramp's fourth quarter is its loudest
     apply(&mut worker, format!("smp = sample(\"{file}\").root(c4)\nchops = smp.slices(4)\ninstr chop(freq: hz, sample: num = 0, begin: 0..1 = 0, rate: -4..4 = 1) {{ chops(sample: sample, begin: begin, rate: rate) }}")).unwrap();
@@ -1807,6 +1829,15 @@ fn offset_reverse_and_slices_choose_what_part_of_a_sample_plays() {
     assert!(level(0) < 0.4, "C-4 is the first piece: {}", level(0));
     assert!(level(4) > 0.7, "D#4 is the fourth: {}", level(4));
     assert!(audio[0][from + 8 * 5760..from + 9 * 5760].iter().all(|s| s.abs() < 0.0001), "E-4 is past the last piece");
+    // and cut at chosen places: the second piece starts three quarters of the way up the ramp
+    worker.command(Command::Stop).unwrap();
+    apply(&mut worker, format!("smp = sample(\"{file}\").root(c4)\nchops = smp.slices([0, 0.75])\ninstr chop(freq: hz, sample: num = 0, begin: 0..1 = 0, rate: -4..4 = 1) {{ chops(sample: sample, begin: begin, rate: rate) }}")).unwrap();
+    assert_eq!(worker.status.instrument_slices["tone"], 2);
+    play_song(&mut worker, one_column(8, &[(0, "C-4"), (4, "C#4")], &[]));
+    let audio = [run(&engine, &mut worker, 8 * 5760 + 7200)];
+    let level = |row: usize| audio[0][from + row * 5760 + 300..from + row * 5760 + 340].iter().sum::<f32>() / 40.0;
+    assert!(level(0) < 0.1, "the first piece starts at the start: {}", level(0));
+    assert!(level(4) > 0.7, "the second starts at 75%: {}", level(4));
     worker.command(Command::Disconnect).unwrap();
     drop(worker);
     server.stop();
@@ -1909,4 +1940,110 @@ fn a_tempo_ramp_times_every_note_of_an_export_by_the_integral_of_the_tempo() {
     worker.command(Command::Disconnect).unwrap();
     drop(worker);
     server.stop();
+}
+
+#[test]
+fn a_lane_on_an_instrument_parameter_changes_the_note_that_is_sounding() {
+    let (engine, server, mut worker) = engine_worker();
+    worker.command(Command::Apply { id: "tone".into(), source: "instr steady(freq: hz, level: 0..1 = 0.1) { level }".into(), kind: Kind::Instr, dir: None }).unwrap();
+    let mut song = one_column(8, &[(0, "C-4")], &[]);
+    let lane = &mut song.patterns[0].fx[0][0];
+    lane.target = Some(crate::commands::FxTarget::Instrument { instrument: "tone".into(), parameter: "level".into() });
+    lane.values[3] = Some("0.5".into());
+    play_song(&mut worker, song);
+    let audio = run(&engine, &mut worker, 8 * 5760 + 7200);
+    let level = |from: usize, to: usize| audio[7200 + from..7200 + to].iter().sum::<f32>() / (to - from) as f32;
+    assert!((level(2 * 5760, 3 * 5760 - 200) - 0.1).abs() < 0.01, "before the row: {}", level(2 * 5760, 3 * 5760 - 200));
+    assert!((level(3 * 5760 + 200, 6 * 5760) - 0.5).abs() < 0.01, "from the row on: {}", level(3 * 5760 + 200, 6 * 5760));
+    worker.command(Command::Disconnect).unwrap();
+    drop(worker);
+    server.stop();
+}
+
+#[test]
+fn a_sampler_with_a_gate_follows_its_note_and_one_without_plays_out() {
+    let base = std::env::temp_dir().join(format!("niminal-tracker-gate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let dir = crate::files::project_dir(&base, "song").unwrap();
+    let level = base.join("level.wav");
+    write_wav(&level, 24000, 16384);
+    let file = crate::files::import_sample(&dir, &level).unwrap();
+    let (engine, server, mut worker) = engine_worker();
+    let source = format!("smp = sample(\"{file}\").root(c4)\ninstr hit(freq: hz, gate: 0..1 = 1, release: 0ms..2sec = 10ms) {{ smp(freq: freq) * (1 - gate + gate * env[1 | release 0]) }}");
+    worker.command(Command::Apply { id: "tone".into(), source, kind: Kind::Instr, dir: Some(dir.to_string_lossy().into_owned()) }).unwrap();
+    // the note is held two rows (11520 samples) and then ended by an OFF; the sample is half a second (24000 samples) long
+    let heard = |worker: &mut Worker, gate: &str| {
+        let mut song = one_column(8, &[(0, "C-4"), (2, "OFF")], &[]);
+        song.instrument_values.insert("tone".into(), [("gate".to_string(), gate.parse().unwrap())].into());
+        play_song(worker, song);
+        let audio = run(&engine, worker, 7200 + 8 * 5760);
+        worker.command(Command::Stop).unwrap();
+        let mean = |from: usize, to: usize| audio[7200 + from..7200 + to].iter().map(|s| s.abs()).sum::<f32>() / (to - from) as f32;
+        (mean(5000, 9000), mean(14000, 20000))
+    };
+    let (during, after) = heard(&mut worker, "1");
+    assert!(during > 0.4 && after < 0.01, "gate on: {during} then {after}");
+    let (during, after) = heard(&mut worker, "0");
+    assert!(during > 0.4 && after > 0.4, "gate off: {during} then {after}");
+    worker.command(Command::Disconnect).unwrap();
+    drop(worker);
+    server.stop();
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_kit_folder_plays_one_sample_on_each_key() {
+    let base = std::env::temp_dir().join(format!("niminal-tracker-kit-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let dir = crate::files::project_dir(&base, "song").unwrap();
+    let (quiet, loud) = (base.join("quiet.wav"), base.join("Loud one.wav"));
+    write_wav(&quiet, 12000, 4000);
+    write_wav(&loud, 12000, 20000);
+    let (folder, members) = crate::files::import_kit(&dir, &[quiet, loud], "drums").unwrap();
+    assert_eq!(members, ["Loud_one", "quiet"]);
+    let (engine, server, mut worker) = engine_worker();
+    // the code the tracker writes for a kit
+    let source = format!("drums_kit = kit(\"{folder}\")\ninstr drums(freq: hz, sample: num = 0, begin: 0..1 = 0, rate: -4..4 = 1, gate: 0..1 = 0, release: 0ms..2sec = 10ms) {{\n  drums_kit(sample: sample, begin: begin, rate: rate) * (1 - gate + gate * env[1 | release 0])\n}}\n");
+    worker.command(Command::Apply { id: "tone".into(), source, kind: Kind::Instr, dir: Some(dir.to_string_lossy().into_owned()) }).unwrap();
+    assert_eq!(worker.status.instrument_slices["tone"], 2, "one key for each file in the folder");
+    play_song(&mut worker, one_column(12, &[(0, "C-4"), (4, "C#4"), (8, "D-4")], &[]));
+    let audio = run(&engine, &mut worker, 7200 + 12 * 5760);
+    let level = |row: usize| audio[7200 + row * 5760 + 300..7200 + row * 5760 + 340].iter().sum::<f32>() / 40.0;
+    assert!((level(0) - 0.61).abs() < 0.05, "C-4 is the first sample, by file name: {}", level(0));
+    assert!((level(4) - 0.12).abs() < 0.05, "C#4 the second: {}", level(4));
+    assert!(audio[7200 + 8 * 5760..7200 + 9 * 5760].iter().all(|s| s.abs() < 0.0001), "D-4 is past the last");
+    worker.command(Command::Disconnect).unwrap();
+    drop(worker);
+    server.stop();
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_sampler_fitted_to_the_tempo_lasts_as_long_as_the_song_tempo_makes_it() {
+    let base = std::env::temp_dir().join(format!("niminal-tracker-fit-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let dir = crate::files::project_dir(&base, "song").unwrap();
+    let level = base.join("level.wav");
+    write_wav(&level, 24000, 16384);
+    let file = crate::files::import_sample(&dir, &level).unwrap();
+    let (engine, server, mut worker) = engine_worker();
+    // the code the tracker writes for a sampler; the song is 125 bpm, so a sample recorded at 250 bpm lasts twice as long
+    let source = |from: u32| format!("smp = sample(\"{file}\").root(c4)\ninstr hit(freq: hz, begin: 0..1 = 0, rate: -4..4 = 1, stretch: 0.25..4 = 1, stretch_mode: 0..1 = 0, from_bpm: 0..400 = {from}, gate: 0..1 = 0, release: 0ms..2sec = 10ms) {{\n  smp(freq: freq, begin: begin, rate: rate, stretch: stretch, stretch_mode: stretch_mode) * (1 - gate + gate * env[1 | release 0])\n}}\n");
+    let lasts = |worker: &mut Worker, from: u32| {
+        worker.command(Command::Apply { id: "tone".into(), source: source(from), kind: Kind::Instr, dir: Some(dir.to_string_lossy().into_owned()) }).unwrap();
+        play_song(worker, one_column(16, &[(0, "C-4")], &[]));
+        let audio = run(&engine, worker, 7200 + 16 * 5760);
+        worker.command(Command::Stop).unwrap();
+        let mean = |from: usize, to: usize| audio[7200 + from..7200 + to].iter().map(|s| s.abs()).sum::<f32>() / (to - from) as f32;
+        (mean(30000, 40000), mean(55000, 65000))
+    };
+    let (at_three_quarters, at_one_and_a_quarter) = lasts(&mut worker, 0);
+    assert!(at_three_quarters < 0.01 && at_one_and_a_quarter < 0.01, "unfitted it plays out in half a second: {at_three_quarters}");
+    let (at_three_quarters, at_one_and_a_quarter) = lasts(&mut worker, 250);
+    assert!(at_three_quarters > 0.4, "fitted it is stretched to a second: {at_three_quarters}");
+    assert!(at_one_and_a_quarter < 0.01, "and then ends: {at_one_and_a_quarter}");
+    worker.command(Command::Disconnect).unwrap();
+    drop(worker);
+    server.stop();
+    let _ = std::fs::remove_dir_all(&base);
 }

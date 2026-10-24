@@ -3,6 +3,8 @@ title: Performance
 description: Clips, scenes, live commands, quantization, and control.
 ---
 
+**Read by nimlive.** Clips, scenes and arrangements are the sequencer's; the server only receives the notes and changes they produce.
+
 The performance layer is built around **clips**. A clip is bound to an instrument and holds **lanes** on a timeline: notes that trigger it, and parameters it automates. You start, stop, mute, solo and transform clips, and a **scene** is a list of clips to do that to several at once. An **arrangement** is a timeline of those commands.
 
 ## Clips

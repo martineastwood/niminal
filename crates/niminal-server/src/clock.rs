@@ -16,7 +16,9 @@ pub struct ClockProbe {
 impl ClockProbe {
     /// The callback is handing the device the buffer that starts at `sample`. Allocates nothing.
     pub fn record(&self, sample: u64) {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_micros() as u64);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_micros() as u64);
         self.wall_micros.store(now, Ordering::Release);
         self.sample.store(sample, Ordering::Release);
     }

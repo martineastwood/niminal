@@ -3,6 +3,8 @@ title: Editor and LSP
 description: VS Code extension, language server, and editing without a server.
 ---
 
+**Read by nimlive.** The extension is an editor around nimlive: it runs the language server, and a private live sequencer, for you.
+
 ## Language server (`nimlive lsp`)
 
 The CLI runs an **LSP server on stdio**. Any editor that can spawn a language server can use it for `.nml` files:
@@ -85,4 +87,4 @@ With MIDI enabled (`niminal.midi`), a control written as `midi.learn` waits for 
 | Live `start` / `stop` / changes | No | Yes |
 | Diagnostics / completion | Yes | Eval diagnostics via extension/REPL |
 
-For command-line workflow (REPL, `send`, render, replay), see [Command line](/reference/cli/) and [Live coding](/guide/live-coding/). For WebSocket messages, subscriptions, and `eval` / `events.send`, see [Sequencer protocol](/reference/protocol/).
+For command-line workflow (REPL, `send`, render, replay), see [Command line](/reference/nimlive/cli/) and [Live coding](/guide/live-coding/). For WebSocket messages, subscriptions, and `eval` / `events.send`, see [Sequencer protocol](/reference/protocol/).

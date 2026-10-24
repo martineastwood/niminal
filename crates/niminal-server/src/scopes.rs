@@ -64,9 +64,9 @@ impl Scopes {
                 .entries
                 .values()
                 .any(|s| Arc::ptr_eq(&s.meter, &old.meter))
-            {
-                old.meter.waveform().enabled.store(false, Ordering::Relaxed);
-            }
+        {
+            old.meter.waveform().enabled.store(false, Ordering::Relaxed);
+        }
     }
     pub fn disconnect(&mut self, client: ClientId) {
         let ids: Vec<_> = self

@@ -884,3 +884,58 @@ fn a_sample_is_played_by_a_clip_not_by_its_own_name() {
     let e = errors(&dir, "tempo 120bpm\ns = sample(\"s.wav\")\ns.start");
     assert!(e.contains("`s` is an instrument, not a clip"), "{e}");
 }
+
+#[test]
+fn wsola_uses_the_audible_channel_of_a_stereo_sample() {
+    let dir = scratch("wsola-stereo");
+    let tone: Vec<f32> = (0..SR / 2)
+        .map(|i| (std::f32::consts::TAU * 997.0 * i as f32 / SR as f32).sin() * 0.8)
+        .collect();
+    write_wav(&dir.join("s.wav"), &[vec![0.0; tone.len()], tone]);
+    let source = |mode| {
+        format!(
+            "config {{ channels: stereo }}\ns = sample(\"s.wav\").root(c4)\ninstr a(freq: hz) {{ s(freq: freq, stretch: 1.7, stretch_mode: {mode}) }}\nclip t {{ instrument: a, notes: [c4] }}\nt.start"
+        )
+    };
+    let granular = play(&dir, &source(0));
+    let aligned = play(&dir, &source(1));
+    assert!(aligned[0].iter().all(|x| x.abs() < 1e-6));
+    let power_error = |channel: &[f32]| {
+        channel[SR / 10..SR / 2]
+            .chunks(SR / 40)
+            .map(|chunk| {
+                let power = chunk.iter().map(|x| x * x).sum::<f32>() / chunk.len() as f32;
+                (power - 0.32).abs()
+            })
+            .sum::<f32>()
+    };
+    assert!(power_error(&aligned[1]) < power_error(&granular[1]) * 0.2);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn detected_attacks_are_played_once_at_native_speed_when_stretched() {
+    let dir = scratch("transient-stretch");
+    let mut audio = vec![0.0; 14400];
+    for start in [0, 4800, 9600] {
+        audio[start..start + 100].fill(0.8);
+    }
+    write_wav(&dir.join("s.wav"), &[audio]);
+    let out = play(
+        &dir,
+        "s = sample(\"s.wav\").root(c4)\ninstr a(freq: hz) { s(freq: freq, stretch: 2, stretch_mode: 2) }\nclip t { instrument: a, notes: [c4] }\nt.start",
+    );
+    // The detector pads an onset slightly before the hit. Allow that timing tolerance,
+    // but each 100-frame attack must keep its shape and occur only once.
+    assert_eq!(out[0].iter().filter(|&&x| x > 0.4).count(), 300);
+    for target in [9600, 19200] {
+        assert_eq!(
+            out[0][target - 120..(target + 120).min(out[0].len())]
+                .iter()
+                .filter(|&&x| x > 0.4)
+                .count(),
+            100
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}

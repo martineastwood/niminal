@@ -3,6 +3,8 @@ title: Syntax
 description: Comments, blocks, bindings, calls and control flow in the orchestra language.
 ---
 
+**Read by both programs.** The syntax is the same in the server's half and in nimlive's.
+
 ## Comments and blocks
 
 - **Comments:** `//` to end of line. A `///` comment above a definition is its documentation.

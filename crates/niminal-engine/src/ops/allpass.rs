@@ -40,7 +40,9 @@ impl Opcode for Allpass {
         self.in_flight = 0;
     }
 
-    fn name(&self) -> &str { "allpass" }
+    fn name(&self) -> &str {
+        "allpass"
+    }
 
     fn ports(&self) -> &[Port] {
         const PORTS: &[Port] = &[
@@ -83,7 +85,12 @@ impl Opcode for Allpass {
         for (i, o) in out.iter_mut().enumerate() {
             let exact = f64::from(inputs[1][i]) * sr;
             let snapped = exact.round();
-            let samples = if (exact - snapped).abs() < 1e-3 { snapped } else { exact }.clamp(1.0, max_samples);
+            let samples = if (exact - snapped).abs() < 1e-3 {
+                snapped
+            } else {
+                exact
+            }
+            .clamp(1.0, max_samples);
             let whole = samples.floor() as usize;
             let frac = (samples - samples.floor()) as f32;
 
@@ -100,7 +107,11 @@ impl Opcode for Allpass {
             self.buf[self.write] = written;
             self.write = (self.write + 1) % len;
             self.in_flight = samples.ceil() as usize + 1;
-            self.quiet_run = if y.abs() < TAIL_LEVEL { self.quiet_run.saturating_add(1) } else { 0 };
+            self.quiet_run = if y.abs() < TAIL_LEVEL {
+                self.quiet_run.saturating_add(1)
+            } else {
+                0
+            };
             *o = y;
         }
     }

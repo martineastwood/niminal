@@ -3,6 +3,8 @@ title: Modules
 description: Split a project across files with use.
 ---
 
+**Read by both programs.** The server and nimlive each follow `use` when they read a file.
+
 A module is a file. `use rig` loads `rig.nml` and adds its definitions to yours.
 
 ```niminal

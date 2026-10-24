@@ -1196,7 +1196,8 @@ impl Kb<'_> {
     fn check_name(&self, name: &Ident) -> Res<()> {
         if matches!(
             name.name.as_str(),
-            "in" | "it" | "note"
+            "in" | "it"
+                | "note"
                 | "clock"
                 | "state"
                 | "pi"

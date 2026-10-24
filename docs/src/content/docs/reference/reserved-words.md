@@ -3,6 +3,8 @@ title: Reserved words
 description: Names that cannot be used as identifiers in niminal.
 ---
 
+**Read by both programs.** These are names the whole language keeps, whichever program reads the file.
+
 None of these can be used as a name.
 
 | Kind | Names |

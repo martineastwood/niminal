@@ -13,9 +13,14 @@ pub struct DcBlock {
 }
 
 impl Opcode for DcBlock {
-    fn reset(&mut self) { self.x1 = 0.0; self.y1 = 0.0; }
+    fn reset(&mut self) {
+        self.x1 = 0.0;
+        self.y1 = 0.0;
+    }
 
-    fn name(&self) -> &str { "dc_block" }
+    fn name(&self) -> &str {
+        "dc_block"
+    }
 
     fn ports(&self) -> &[Port] {
         const PORTS: &[Port] = &[Port::required("x")];

@@ -38,7 +38,10 @@ fn seconds(source: &str, voices: usize, secs: usize) -> f64 {
 #[ignore]
 fn modulation_cost() {
     let cases = [
-        ("static cutoff", "instr a(freq: hz = 110hz) { osc(saw, freq).lpf(cutoff: 1khz, res: 0.3) }"),
+        (
+            "static cutoff",
+            "instr a(freq: hz = 110hz) { osc(saw, freq).lpf(cutoff: 1khz, res: 0.3) }",
+        ),
         (
             "audio-rate lfo",
             "instr a(freq: hz = 110hz) { osc(saw, freq).lpf(cutoff: osc(sine, 0.3hz).range(300hz..3khz), res: 0.3) }",
@@ -76,7 +79,10 @@ fn modulation_cost() {
     ];
     for (name, source) in kernel_cases.into_iter().chain(cases) {
         let t = seconds(source, 16, SECONDS);
-        println!("{name:>24}: {t:6.3}s for 16 voices x {SECONDS}s ({:.1}x realtime per voice)", SECONDS as f64 / t);
+        println!(
+            "{name:>24}: {t:6.3}s for 16 voices x {SECONDS}s ({:.1}x realtime per voice)",
+            SECONDS as f64 / t
+        );
     }
 }
 

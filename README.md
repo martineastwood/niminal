@@ -4,7 +4,7 @@
 
 niminal is an audio server with its own DSP language. It compiles instruments, effects and routing, and plays timestamped events sent to it by any client. It knows nothing of clips, scenes, patterns or tempo.
 
-`nimlive` is the first client: a live-coding sequencer that adds clips, scenes, mini-notation patterns, tempo and quantized changes on top, and a VS Code extension to drive it. A tracker or a richer UI would be other clients of the same API.
+`nimlive` is the first client: a live-coding sequencer that adds clips, scenes, mini-notation patterns, tempo and quantized changes on top, and a VS Code extension to drive it. The [tracker](tracker/) is a second client of the same API.
 
 ```
 crates/      the audio server: engine, DSP language, WebSocket API, `niminal` CLI
@@ -65,14 +65,14 @@ The [VS Code / Cursor extension](editors/vscode/) adds syntax highlighting, diag
 
 The language server (`nimlive lsp`) works without a server for hover, completion, and errors.
 
-## Tracker prototype
+## Tracker
 
-[`tracker/`](tracker/) is an independent Tauri desktop app with a keyboard-driven pattern grid and a CodeMirror instrument/effect editor using the niminal LSP. It supports looping playback, auditioning, a track mixer with effects, pattern selection/copy/paste/undo, and project save/load. See its [README](tracker/README.md) for development and build commands.
+[`tracker/`](tracker/) is an independent Tauri desktop app with a keyboard-driven pattern grid and a CodeMirror instrument/effect editor using the niminal LSP. It supports looping playback, auditioning, a track mixer with effects, pattern selection/copy/paste/undo, and project save/load. See the [tracker manual](https://niminal.dev/reference/tracker/) for how to use it, and its [README](tracker/README.md) for build commands.
 
 ## What you get
 
 - **Live** — WebSocket server, REPL, `send`, and editor integration; quantize changes to musical time. `niminal server` is the audio server (the engine), with the live sequencer as one client of its event API, so other programs can play through it too. Clients own tempo, meter and all musical scheduling.
-- **Frontend API** — Browser, Node and Python clients can own private fx definitions and instances, route and modulate them, stream WAV files, inspect voice lifecycle and DSP reports, view waveform scopes, capture live output and run independent offline exports. See the [engine API](docs/src/content/docs/reference/engine-api.md) and [client examples](clients/examples/).
+- **Frontend API** — Browser, Node and Python clients can own private fx definitions and instances, route and modulate them, stream WAV files, inspect voice lifecycle and DSP reports, view waveform scopes, capture live output and run independent offline exports. See the [engine API](https://niminal.dev/reference/engine-api/) and [client examples](clients/examples/).
 - **Offline** — `nimlive render` renders a piece to audio; `niminal replay` plays a log of timestamped engine events to identical samples.
 - **Musical** — Rational time, mini-notation, clips, scenes, and arrangements; one pattern cycle is one bar.
 - **Routing** — Independent fx instances, private buses and sample-timed connection edits; client-owned mixer models.

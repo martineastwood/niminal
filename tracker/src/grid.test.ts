@@ -694,9 +694,67 @@ it('records MIDI from a sub-column into the correct note column when velocity re
 
 it('records MIDI on the nearest live row without stepping away from playback', () => {
   const { project, grid } = setup(undefined, () => 'tone');
-  grid.selectTrack(1); grid.paint(3, 0.6, Date.now());
-  grid.midiNoteOn(62, 90); grid.midiNoteOn(64, 90);
-  expect(project.patterns[0].notes[1][0].notes[4]).toBe('E-4');
-  expect(project.patterns[0].notes[1][0].notes[5]).toBeNull();
-  grid.paint(null);
+  // Rendering between the two events must not advance this test's playback clock.
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    grid.selectTrack(1); grid.paint(3, 0.6, Date.now());
+    grid.midiNoteOn(62, 90); grid.midiNoteOn(64, 90);
+    expect(project.patterns[0].notes[1][0].notes[4]).toBe('E-4');
+    expect(project.patterns[0].notes[1][0].notes[5]).toBeNull();
+    grid.paint(null);
+  } finally { clock.mockRestore(); }
+});
+
+it('reverses and randomizes the selection, one undo step each, and keeps rests and OFF where they are', () => {
+  const { project, grid, key, click, feedback } = setup();
+  const notes = project.patterns[0].notes[0][0].notes;
+  notes.splice(0, 8, 'C-4', null, 'E-4', 'OFF', 'G-4', null, 'C-5', null);
+  click(0, 0); for (let i = 0; i < 7; i++) key('ArrowDown', { shiftKey: true });
+  grid.reverseSelection();
+  expect(notes.slice(0, 8)).toEqual([null, 'C-5', null, 'G-4', 'OFF', 'E-4', null, 'C-4']);
+  key('z', { ctrlKey: true }); expect(notes.slice(0, 8)).toEqual(['C-4', null, 'E-4', 'OFF', 'G-4', null, 'C-5', null]);
+  grid.random = () => 0.999;
+  grid.randomizeSelection();
+  expect(notes.slice(0, 8)).toEqual(['C-5', null, 'C-5', 'OFF', 'C-5', null, 'C-5', null]);
+  grid.random = () => 0; key('z', { ctrlKey: true }); grid.randomizeSelection();
+  expect(notes.slice(0, 8)).toEqual(['C-4', null, 'C-4', 'OFF', 'C-4', null, 'C-4', null]);
+  // a column with a single value has nothing to vary
+  key('z', { ctrlKey: true }); notes.splice(0, 8, 'C-4', null, null, null, null, null, null, null);
+  grid.randomizeSelection(); expect(feedback).toHaveBeenCalled();
+  grid.recording = false; feedback.mockClear(); grid.reverseSelection(); expect(feedback).toHaveBeenCalledWith(expect.stringContaining('record mode'));
+});
+
+it('randomizes the numbers of a volume column between its lowest and highest', () => {
+  const { project, grid, key, click } = setup();
+  project.tracks[0].show = { vol: true }; grid.render();
+  const vol = project.patterns[0].notes[0][0].vol; vol.splice(0, 3, '20', '60', '100');
+  click(0, 0); key('ArrowRight', { shiftKey: true }); key('ArrowRight', { shiftKey: true }); for (let i = 0; i < 2; i++) key('ArrowDown', { shiftKey: true });
+  grid.random = () => 0.5; grid.randomizeSelection();
+  expect(vol.slice(0, 3)).toEqual(['60', '60', '60']);
+});
+
+it('cuts a whole track to the clipboard and clears it', () => {
+  const { project, grid, click } = setup();
+  const written: string[] = [], real = navigator;
+  vi.stubGlobal('navigator', { clipboard: { writeText: (text: string) => { written.push(text); return Promise.resolve(); } } });
+  project.patterns[0].notes[1][0].notes[2] = 'D-3'; click(5, 1);
+  grid.cutTrack();
+  expect(written[0].split('\n')).toHaveLength(32); expect(written[0].split('\n')[2].split('\t')[0]).toBe('D-3');
+  expect(project.patterns[0].notes[1][0].notes[2]).toBeNull();
+  vi.stubGlobal('navigator', real);
+});
+
+it('enters commands in the Cmd column in capitals and plays the note they act on with them', () => {
+  const { parent, project, grid, audition } = setup();
+  project.tracks[0].show = { cmd: true }; grid.render();
+  const column = project.patterns[0].notes[0][0], cell = (row: number) => parent.querySelector<HTMLElement>(`#cell-${row}-0-0-cmd`)!;
+  const type = (row: number, text: string) => {
+    cell(row).click(); const input = parent.querySelector<HTMLInputElement>('.lane-value')!; input.value = text;
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  };
+  type(0, 'o50'); expect(column.cmd[0]).toBe('O50'); expect(cell(0).textContent).toBe('O50');
+  expect(audition).toHaveBeenLastCalledWith('tone', 'C-4', 0, 'O50');
+  type(3, 'r4'); expect(audition).toHaveBeenLastCalledWith('tone', 'C-4', 0, 'R4'); // the note held above it
+  audition.mockClear(); type(4, 'x9'); expect(column.cmd[4]).toBeNull(); expect(audition).not.toHaveBeenCalled();
+  column.notes[5] = 'OFF'; type(6, 'v'); expect(column.cmd[6]).toBe('V'); expect(audition).not.toHaveBeenCalled(); // nothing is held after an OFF
 });

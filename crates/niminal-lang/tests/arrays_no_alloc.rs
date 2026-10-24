@@ -160,3 +160,30 @@ instr a() { spectral(osc(saw, 220hz)) }";
     assert_eq!(ALLOCATIONS.with(Cell::get), 0);
     assert!(output[0].iter().all(|value| value.is_finite()));
 }
+
+#[test]
+fn wsola_sample_alignment_does_not_allocate_while_processing() {
+    let source = "const wave = harmonics([1, 0.5], size: 4800)\ns = sample(wave).root(440hz).loop(forward)\ninstr a() { s(freq: 440hz, stretch: 1.7, stretch_mode: 2, loop_start: 0.2, loop_end: 0.8) }";
+    let program = niminal_lang::compile(source).unwrap();
+    let graph = &program
+        .instruments
+        .iter()
+        .find(|i| i.name == "a")
+        .unwrap()
+        .graph;
+    let mut voice = Voice::new(graph.clone(), 48_000.0);
+    let mut buses = Buses::new(&[]);
+    let mut output = vec![vec![0.0; block_size()]; 1];
+    let mut audible = false;
+    ALLOCATIONS.with(|count| count.set(0));
+    NODE.with(|node| node.set(true));
+    // Cross several grain boundaries so the correlation search actually runs.
+    for _ in 0..128 {
+        voice.process_blocks(&mut output, block_size(), &mut buses);
+        audible |= output[0].iter().any(|value| value.abs() > 0.01);
+    }
+    NODE.with(|node| node.set(false));
+    assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+    assert!(output[0].iter().all(|value| value.is_finite()));
+    assert!(audible);
+}

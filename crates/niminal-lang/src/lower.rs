@@ -874,6 +874,10 @@ pub(crate) fn compile_sampler(
     let freq = declare(&mut lower, "freq", Unit::Hz, root_hz);
     let pitch = declare(&mut lower, "pitch", Unit::Semitones, 0.0);
     let rate = declare(&mut lower, "rate", Unit::Num, 1.0);
+    let stretch = declare(&mut lower, "stretch", Unit::Num, 1.0);
+    let stretch_mode = declare(&mut lower, "stretch_mode", Unit::Num, 0.0);
+    let loop_start = declare(&mut lower, "loop_start", Unit::Num, 0.0);
+    let loop_end = declare(&mut lower, "loop_end", Unit::Num, 1.0);
     let start = declare(&mut lower, "start", Unit::Time, 0.0);
     // where in the sample to start, as a share of its length (a note's `begin`, set by `chop`)
     let begin = declare(&mut lower, "begin", Unit::Num, 0.0);
@@ -884,6 +888,10 @@ pub(crate) fn compile_sampler(
         ("freq", freq),
         ("pitch", pitch),
         ("rate", rate),
+        ("stretch", stretch),
+        ("stretch_mode", stretch_mode),
+        ("loop_start", loop_start),
+        ("loop_end", loop_end),
         ("start", start),
         ("begin", begin),
     ];
@@ -934,6 +942,42 @@ impl Lower<'_> {
             }
             layouts.entry(channels).or_default().push(i);
         }
+        // One reference per member, shared by all its playback channels. Pick the
+        // loudest channel rather than mixing: anti-phase stereo must not cancel.
+        let references: Vec<_> = members
+            .iter()
+            .map(|member| {
+                member
+                    .channels
+                    .iter()
+                    .map(|channel| {
+                        let energy = channel
+                            .data()
+                            .iter()
+                            .map(|x| f64::from(*x).powi(2))
+                            .sum::<f64>();
+                        (energy, channel)
+                    })
+                    .max_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, channel)| channel.clone())
+            })
+            .collect();
+        let transients: Vec<Arc<[usize]>> = references
+            .iter()
+            .map(|reference| {
+                reference.as_ref().map_or_else(
+                    || Arc::from([]),
+                    |table| {
+                        niminal_engine::ops::detect_transients(
+                            table.data(),
+                            table.sample_rate_or(48_000.0),
+                            usize::MAX,
+                        )
+                        .into()
+                    },
+                )
+            })
+            .collect();
         let mut mix: Option<Sig> = None;
         for (channels, indices) in layouts {
             let mut srcs = Vec::with_capacity(channels);
@@ -942,6 +986,10 @@ impl Lower<'_> {
                 for &i in &indices {
                     let member = &members[i];
                     let mut player = Sampler::new(member.channels[channel].clone(), root_hz, None)
+                        .with_stretch_reference(
+                            references[i].as_ref().expect("sample has channels").clone(),
+                        )
+                        .with_transients(transients[i].clone())
                         .with_speed(member.speed)
                         .with_loop(member.loop_mode)
                         .with_interp(member.interp);
@@ -6432,7 +6480,9 @@ impl Lower<'_> {
 
     /// `x.hz`, `n.ms`, `(-6db).num`...: give a plain value a unit, or take it away.
     fn unit_method(&mut self, name: &Ident, args: &[Arg]) -> Res<Option<Datum>> {
-        if !funcs::UNIT_WORDS.contains(&name.name.as_str()) || !(args.len() == 1 && args[0].receiver) {
+        if !funcs::UNIT_WORDS.contains(&name.name.as_str())
+            || !(args.len() == 1 && args[0].receiver)
+        {
             return Ok(None);
         }
         let value = self.value(&args[0].value)?;
