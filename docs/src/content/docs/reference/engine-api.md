@@ -34,7 +34,7 @@ One batched method for every timed thing a client can do. The whole batch is che
 | `op` | Fields | Meaning |
 | --- | --- | --- |
 | `note` | `target`, `at`, optional `to`, `args`, `dur`, `id`, `tag` | Play a note on a node or instrument. With `to`, play the named instrument into that connection’s collection/fx node. `args` are named parameters as in [Score model](/reference/score-model/). With `dur` and no `id` it is fire-and-forget. With an `id` and no `dur` it is held until an `off`. With both it is held for at most `dur`. |
-| `set` | `id`, `at`, `args`, optional `glide` | Change parameters of a sounding note, or of one that hasn't started yet (it then starts with the value). Any declared parameter will do. With a `glide` the parameter moves in a straight line to its new value. |
+| `set` | `id`, `at`, `args`, optional `glide` | Change parameters of a sounding note, or of one that hasn't started yet (it then starts with the value). Any declared parameter will do. With a `glide`, the instrument’s declared pitch parameter moves evenly in semitones (exponentially in Hz); other parameters move in a straight line. Pitch glides with a nonpositive endpoint use a straight line. |
 | `off` | `id`, `at` | Release a note, so its envelope runs its release stage. An `off` before the note starts makes it a short blip. |
 | `control` | `name`, `at`, `value`, optional `unit`, `glide` | Move a `ctl`. `unit` defaults to the declaration's unit; compatible units are converted. `glide` defaults to the control's own smoothing. |
 

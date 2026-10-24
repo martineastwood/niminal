@@ -59,13 +59,22 @@ pub struct Voice {
     last_frames: usize,
 }
 
-/// A parameter moving in a straight line to `to` over `frames`, `done` of which have passed.
+/// How a parameter moves between its endpoints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GlideCurve {
+    Linear,
+    /// Equal musical intervals per sample; nonpositive endpoints fall back to linear.
+    Pitch,
+}
+
+/// A parameter moving to `to` over `frames`, `done` of which have passed.
 struct Ramp {
     index: usize,
     from: f32,
     to: f32,
     frames: u64,
     done: u64,
+    curve: GlideCurve,
 }
 
 impl Ramp {
@@ -73,9 +82,13 @@ impl Ramp {
         if done >= self.frames {
             self.to
         } else {
-            (f64::from(self.from)
-                + (f64::from(self.to) - f64::from(self.from)) * (done as f64 / self.frames as f64))
-                as f32
+            let fraction = done as f64 / self.frames as f64;
+            let (from, to) = (f64::from(self.from), f64::from(self.to));
+            if self.curve == GlideCurve::Pitch && from > 0.0 && to > 0.0 {
+                (from * (to / from).powf(fraction)) as f32
+            } else {
+                (from + (to - from) * fraction) as f32
+            }
         }
     }
 }
@@ -326,6 +339,7 @@ impl Voice {
                 to: target,
                 frames,
                 done: elapsed.min(frames),
+                curve: GlideCurve::Linear,
             };
             self.slots[index].fill(ramp.at(ramp.done));
             if elapsed < frames {
@@ -374,13 +388,19 @@ impl Voice {
         self.slots[index].fill(value);
     }
 
-    /// Move a parameter to `value` in a straight line over `frames`. A glide is carried out as the voice is
+    /// Move a parameter to `value` over `frames` using `curve`. A glide is carried out as the voice is
     /// processed, so it starts from the first sample after this. Allocates nothing.
-    pub fn set_param_glide(&mut self, index: usize, value: f32, frames: u64) {
+    pub fn set_param_glide(&mut self, index: usize, value: f32, frames: u64, curve: GlideCurve) {
         if index >= self.graph.params.len() {
             return;
         }
         let from = self.current_param(index);
+        // Explicit pitch changes take over from instrument-level portamento.
+        if self.rule.is_some_and(|r| r.pitch_param == Some(index)) {
+            self.glide.now = value;
+            self.glide.target = value;
+            self.glide.left = 0;
+        }
         self.ramps.retain(|r| r.index != index);
         if frames == 0 {
             self.set_param(index, value);
@@ -391,6 +411,7 @@ impl Voice {
                 to: value,
                 frames,
                 done: 0,
+                curve,
             });
         }
     }
@@ -399,6 +420,7 @@ impl Voice {
     fn current_param(&self, index: usize) -> f32 {
         match self.ramps.iter().find(|r| r.index == index) {
             Some(r) => r.at(r.done),
+            None if self.rule.is_some_and(|r| r.pitch_param == Some(index)) => self.glide.now,
             None => self.slots[index][0],
         }
     }
@@ -467,7 +489,9 @@ impl Voice {
 
     /// The pitch the voice is sounding right now, in hz.
     pub fn pitch_now(&self) -> f32 {
-        self.glide.now
+        self.rule
+            .and_then(|r| r.pitch_param)
+            .map_or(self.glide.now, |index| self.current_param(index))
     }
 
     /// Start at `from` and glide to this note's own pitch.
@@ -547,6 +571,8 @@ impl Voice {
         let Some(rule) = self.rule else { return };
         let picked = self.held.as_ref().and_then(|h| h.pick(rule.priority));
         if let Some(pitch) = picked.filter(|p| *p != self.glide.target) {
+            self.glide.now = self.pitch_now();
+            self.ramps.retain(|r| Some(r.index) != rule.pitch_param);
             self.glide.start(pitch, rule.glide, self.sample_rate);
         }
     }
@@ -776,9 +802,15 @@ impl Voice {
                 *sample = ramp.at(ramp.done + n as u64 + 1);
             }
             ramp.done += frames as u64;
+            if self.rule.is_some_and(|r| r.pitch_param == Some(ramp.index)) {
+                self.glide.now = ramp.at(ramp.done);
+                self.glide.target = ramp.to;
+                self.glide.left = 0;
+            }
         }
 
         if let Some(param) = self.rule.and_then(|r| r.pitch_param)
+            && !self.ramps.iter().any(|r| r.index == param)
             && (self.glide.left > 0 || self.glide.now != self.slots[param][0])
         {
             for sample in &mut self.slots[param][..frames] {

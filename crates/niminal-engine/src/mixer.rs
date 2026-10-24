@@ -13,7 +13,7 @@ use std::sync::{
 
 use crate::graph::Graph;
 use crate::opcode::{block_size, blocks};
-use crate::voice::{Voice, VoiceRule};
+use crate::voice::{GlideCurve, Voice, VoiceRule};
 
 /// The most channels any signal path may carry (7.1.4 needs 12).
 pub const MAX_CHANNELS: usize = 16;
@@ -1068,7 +1068,7 @@ impl Mixer {
         let ends = |(s, v): &(u64, Voice)| *s == id.serial || v.holds(id.serial);
         for node in &mut self.nodes {
             if let Some((_, v)) = node.voices.iter_mut().find(|n| ends(n)) {
-                v.set_param_glide(index, value, frames);
+                v.set_param_glide(index, value, frames, GlideCurve::Linear);
                 return;
             }
         }
@@ -1119,12 +1119,19 @@ impl Mixer {
         }
     }
 
-    pub fn set_voice_param_glide(&mut self, id: VoiceId, name: &str, value: f32, frames: u64) {
+    pub fn set_voice_param_glide(
+        &mut self,
+        id: VoiceId,
+        name: &str,
+        value: f32,
+        frames: u64,
+        curve: GlideCurve,
+    ) {
         let ends = |(s, v): &(u64, Voice)| *s == id.serial || v.holds(id.serial);
         for node in &mut self.nodes {
             if let Some((_, voice)) = node.voices.iter_mut().find(|v| ends(v)) {
                 if let Some(index) = voice.param_index(name) {
-                    voice.set_param_glide(index, value, frames);
+                    voice.set_param_glide(index, value, frames, curve);
                 }
                 return;
             }

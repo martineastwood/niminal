@@ -181,6 +181,7 @@ enum Kind {
     },
     /// Move a parameter, by its index, of the notes a key is holding, over `frames`.
     SetParam {
+        curve: niminal_engine::GlideCurve,
         key: u32,
         name: String,
         value: f32,
@@ -232,6 +233,7 @@ fn set_command(program: &Program, set: &super::VoiceSet, at: u64, frames: u64) -
     Some(Command {
         at,
         kind: Kind::SetParam {
+            curve: set.curve,
             key: set.key,
             name: set.name.clone(),
             value: set.value,
@@ -1641,6 +1643,7 @@ impl RealtimeRenderer {
                 }
             }
             Kind::SetParam {
+                curve,
                 key,
                 name,
                 value,
@@ -1648,7 +1651,7 @@ impl RealtimeRenderer {
             } => {
                 for held in self.sounding.held.iter().filter(|h| h.2 == *key) {
                     self.mixer
-                        .set_voice_param_glide(held.1, name, *value, *frames);
+                        .set_voice_param_glide(held.1, name, *value, *frames, *curve);
                 }
             }
             Kind::Note {

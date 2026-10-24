@@ -1311,6 +1311,7 @@ impl Session {
             return;
         };
         let key = entry.key;
+        let pitch = entry.schema.pitch.clone();
         // a note that has not started by then starts with the value
         let waiting = self
             .upcoming
@@ -1328,6 +1329,11 @@ impl Session {
         }
         for (name, _, value) in args {
             let set = VoiceSet {
+                curve: if name == pitch {
+                    niminal_engine::GlideCurve::Pitch
+                } else {
+                    niminal_engine::GlideCurve::Linear
+                },
                 key,
                 name,
                 value,

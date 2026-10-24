@@ -30,11 +30,12 @@ pub use mixer::{
     Profile, Route, Stems, Transfer, VoiceId, execution_order,
 };
 pub use opcode::{
-    Clock, DEFAULT_BLOCK, DEFAULT_CONTROL_STEP, KernelStats, MAX_BLOCK, MAX_INPUTS, MIN_BLOCK, Opcode, Port, ProcessCtx, TAIL_LEVEL,
-    block_size, blocks, control_step, set_block_size, set_control_step,
+    Clock, DEFAULT_BLOCK, DEFAULT_CONTROL_STEP, KernelStats, MAX_BLOCK, MAX_INPUTS, MIN_BLOCK,
+    Opcode, Port, ProcessCtx, TAIL_LEVEL, block_size, blocks, control_step, set_block_size,
+    set_control_step,
 };
 pub use table::{Buffer, Edge, Table};
-pub use voice::{Priority, Voice, VoiceRule};
+pub use voice::{GlideCurve, Priority, Voice, VoiceRule};
 
 /// Stable identity for an fx source across prepared graph replacements.
 pub fn instance_id(name: &str) -> u64 {

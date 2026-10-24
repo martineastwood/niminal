@@ -63,6 +63,7 @@ struct VoiceEntry {
 /// when the change is planned.
 #[derive(Clone)]
 pub(crate) struct VoiceSet {
+    pub curve: niminal_engine::GlideCurve,
     pub key: u32,
     pub name: String,
     pub value: f32,
@@ -1242,7 +1243,7 @@ impl Session {
             }
             for held in self.sounding.held.iter().filter(|h| h.2 == set.key) {
                 self.mixer
-                    .set_voice_param_glide(held.1, &set.name, set.value, set.frames);
+                    .set_voice_param_glide(held.1, &set.name, set.value, set.frames, set.curve);
             }
             self.voice_sets[i].done = true;
         }

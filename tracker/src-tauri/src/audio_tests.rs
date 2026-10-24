@@ -1840,3 +1840,73 @@ fn midi_preview_holds_releases_and_keeps_channels_independent_with_velocity() {
     assert!(worker.midi_keys.is_empty());
     worker.command(Command::Disconnect).unwrap();
 }
+
+#[test]
+fn an_export_is_as_long_as_the_patterns_own_tempo_makes_it() {
+    let engine = Arc::new(Mutex::new(EngineServer::new(Session::new(48000.0, Layout::Stereo))));
+    let server = Server::start(engine, ServerConfig { port: 0, ..ServerConfig::default() }).unwrap();
+    let mut worker = Worker::default();
+    worker.command(Command::Connect { port: server.port(), token: None }).unwrap();
+    worker.command(Command::Apply { id: "tone".into(), source: TONE.into(), kind: Kind::Instr, dir: None }).unwrap();
+    let mut song = test_song(Some("C-4"));
+    // 32 rows at 60 bpm, 4 rows a beat is 8 s; the song's own 125 bpm would make it 3.84 s
+    song.patterns[0].timing = Some(crate::pattern::Timing { bpm: 60.0, rows_per_beat: 4, beats_per_bar: 4, beat_unit: 4, tempo: vec![] });
+    let path = std::env::temp_dir().join(format!("niminal-export-tempo-{}.wav", std::process::id()));
+    worker.command(Command::Export { song, path: path.to_string_lossy().into(), stems: false }).unwrap();
+    let seconds = float_wav(&path).len() as f64 / 2.0 / 48000.0;
+    assert!((8.0..9.5).contains(&seconds), "{seconds} s");
+    let _ = std::fs::remove_file(&path);
+}
+
+
+#[test]
+fn tracker_glides_and_slides_are_even_in_semitones() {
+    for (notes, commands, row, from, to) in [
+        (vec![(0, "A-4"), (4, "A-5")], vec![(4, "G8")], 4, 440.0_f32, 880.0_f32),
+        (vec![(0, "A-5"), (4, "A-4")], vec![(4, "G8")], 4, 880.0, 440.0),
+        (vec![(0, "A-4")], vec![(2, "U12")], 2, 440.0, 880.0),
+        (vec![(0, "A-5")], vec![(2, "D12")], 2, 880.0, 440.0),
+    ] {
+        let (engine, server, mut worker) = engine_worker();
+        worker.command(Command::Apply { id: "tone".into(), source: "instr pitch_probe(freq: hz) { freq.num / 2000 }".into(), kind: Kind::Instr, dir: None }).unwrap();
+        play_song(&mut worker, one_column(10, &notes, &commands));
+        let origin = worker.playback.as_ref().unwrap().origin as usize;
+        let audio = run(&engine, &mut worker, origin + 10 * 5760);
+        let start = origin + row * 5760;
+        let middle = audio[start + 2879] * 2000.0;
+        assert!((middle - (from * to).sqrt()).abs() < 0.01, "musical midpoint: {middle}");
+        assert!((audio[start + 5759] * 2000.0 - to).abs() < 0.01);
+        worker.command(Command::Disconnect).unwrap();
+        drop(worker); server.stop();
+    }
+}
+
+#[test]
+fn a_tempo_ramp_times_every_note_of_an_export_by_the_integral_of_the_tempo() {
+    let (_engine, server, mut worker) = engine_worker();
+    worker.command(Command::Apply { id: "tone".into(), source: "instr click(freq: hz) { osc(sine, freq) * env[1 | 30ms 0] }".into(), kind: Kind::Instr, dir: None }).unwrap();
+    // a short note every 8 rows of a 32-row pattern whose tempo falls from 120 to 60 bpm across it, 4 rows a beat
+    let mut song = one_column(32, &[(0, "C-5"), (1, "OFF"), (8, "C-5"), (9, "OFF"), (16, "C-5"), (17, "OFF"), (24, "C-5"), (25, "OFF")], &[]);
+    let point = |row, value| crate::pattern::EnvelopePoint { row, value };
+    song.patterns[0].timing = Some(crate::pattern::Timing { bpm: 120.0, rows_per_beat: 4, beats_per_bar: 4, beat_unit: 4, tempo: vec![point(0.0, 120.0), point(32.0, 60.0)] });
+    let path = std::env::temp_dir().join(format!("niminal-export-ramp-{}.wav", std::process::id()));
+    worker.command(Command::Export { song, path: path.to_string_lossy().into(), stems: false }).unwrap();
+    let audio = float_wav(&path);
+    let left: Vec<f32> = audio.iter().step_by(2).copied().collect();
+    let mut onsets: Vec<f64> = Vec::new();
+    for (i, s) in left.iter().enumerate() {
+        if s.abs() > 0.05 && onsets.last().is_none_or(|last| i as f64 / 48000.0 - last > 0.3) {
+            onsets.push(i as f64 / 48000.0);
+        }
+    }
+    // seconds from the start to row r: 15 * r * ln(bpm(r) / 120) / (bpm(r) - 120), with bpm(r) = 120 - 60 r / 32
+    let at = |r: f64| { let bpm = 120.0 - 60.0 * r / 32.0; if r == 0.0 { 0.0 } else { 15.0 * r * (bpm / 120.0).ln() / (bpm - 120.0) } };
+    assert_eq!(onsets.len(), 4, "{onsets:?}");
+    for (onset, row) in onsets.iter().zip([0.0, 8.0, 16.0, 24.0]) {
+        assert!(((onset - onsets[0]) - at(row)).abs() < 0.01, "row {row}: {} s from the first, expected {}", onset - onsets[0], at(row));
+    }
+    let _ = std::fs::remove_file(&path);
+    worker.command(Command::Disconnect).unwrap();
+    drop(worker);
+    server.stop();
+}
