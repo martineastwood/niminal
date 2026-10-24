@@ -105,13 +105,16 @@ it('lists what the project gives it again when asked, keeping the selection, and
   expect(root.querySelector('.sb-item[aria-selected=true]')).toBeNull();
 });
 
-it('passes the buttons under the list on with the tab and the selected item, and offers samplers only for instruments', () => {
+it('has no buttons under the instruments, which have a panel of their own, and passes the effects buttons on with the selected item', () => {
   const { root, actions, key, browser } = setup();
   const button = (title: string) => root.querySelector<HTMLButtonElement>(`.sb-tools [aria-label="${title}"]`)!;
-  openAll(root, browser); for (let i = 0; i < 3; i++) key('ArrowDown');
+  expect(root.querySelector<HTMLElement>('.sb-tools')!.hidden).toBe(true);
+  expect(root.querySelector('.sb-tools [aria-label="New sampler from WAV files"]')).toBeNull();
+  browser.show('fx', false); expect(root.querySelector<HTMLElement>('.sb-tools')!.hidden).toBe(false);
+  button('New blank sound').click(); expect(actions.manage).toHaveBeenLastCalledWith('new', 'fx', null);
+  openAll(root, browser); browser.show('fx', false);
+  for (let i = 0; i < 3; i++) key('ArrowDown'); // time, delay, Echo
   button('Edit the code of the selected sound of this project').click();
-  expect(actions.manage).toHaveBeenCalledWith('edit', 'instr', instruments[0]);
-  expect(button('New sampler from WAV files').hidden).toBe(false);
-  browser.show('fx', false); button('New blank sound').click();
-  expect(actions.manage).toHaveBeenLastCalledWith('new', 'fx', null); expect(button('New sampler from WAV files').hidden).toBe(true);
+  expect(actions.manage).toHaveBeenLastCalledWith('edit', 'fx', effects[0]);
 });
+

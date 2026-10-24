@@ -37,7 +37,7 @@ export class SoundBrowser {
   private readonly hint = document.createElement('div');
   private readonly target = document.createElement('div');
   private readonly tabs = new Map<SoundKind, HTMLButtonElement>();
-  private importButton = document.createElement('button');
+  private readonly tools = document.createElement('div');
 
   /** `items` gives what each tab lists, asked again on `refresh` so it follows the project. */
   constructor(private readonly root: HTMLElement, private readonly items: (kind: SoundKind) => BrowserItem[], private readonly actions: SoundBrowserActions, focusGrid: () => void) {
@@ -49,11 +49,10 @@ export class SoundBrowser {
     this.search.oninput = () => { this.query = this.search.value; this.render(); };
     this.list.className = 'sb-list'; this.list.tabIndex = 0; this.list.setAttribute('role', 'listbox');
     this.hint.className = 'sb-hint'; this.target.className = 'sb-target';
-    const tools = document.createElement('div'); tools.className = 'sb-tools';
-    for (const [op, text, title] of [['new', '+', 'New blank sound'], ['duplicate', '⧉', 'Duplicate the selected sound of this project'], ['delete', '−', 'Delete the selected sound of this project'], ['edit', '{}', 'Edit the code of the selected sound of this project'], ['import', '♪', 'New sampler from WAV files']] as const) {
+    const tools = this.tools; tools.className = 'sb-tools';
+    for (const [op, text, title] of [['new', '+', 'New blank sound'], ['duplicate', '⧉', 'Duplicate the selected sound of this project'], ['delete', '−', 'Delete the selected sound of this project'], ['edit', '{}', 'Edit the code of the selected sound of this project']] as const) {
       const button = document.createElement('button'); button.textContent = text; button.title = title; button.setAttribute('aria-label', title);
       button.onclick = () => actions.manage(op, this.kind, this.selected);
-      if (op === 'import') this.importButton = button;
       tools.append(button);
     }
     root.append(bar, this.search, this.list, tools, this.hint, this.target);
@@ -105,7 +104,8 @@ export class SoundBrowser {
 
   private render() {
     for (const [kind, tab] of this.tabs) tab.setAttribute('aria-selected', String(kind === this.kind));
-    this.importButton.hidden = this.kind !== 'instr';
+    // the project's instruments have a panel of their own, with its own buttons
+    this.tools.hidden = this.kind === 'instr';
     const top = this.list.scrollTop;
     this.list.replaceChildren();
     const rows = this.rows();

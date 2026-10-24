@@ -590,6 +590,13 @@ export class PatternGrid {
     if ((event.target as HTMLElement).closest('input, select, textarea')) return;
     if (event.ctrlKey || event.metaKey) {
       const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+      // Option+arrows alone choose the instrument, and Cmd+arrows alone move through the sequence, so
+      // transposing is Cmd/Ctrl+Option+arrows for a semitone and Cmd/Ctrl+Shift+arrows for an octave
+      if ((key === 'ArrowUp' || key === 'ArrowDown') && (event.altKey || event.shiftKey)) {
+        event.preventDefault();
+        if (this.recording && event.altKey !== event.shiftKey) this.transpose((key === 'ArrowUp' ? 1 : -1) * (event.shiftKey ? 12 : 1));
+        return;
+      }
       if (key === 'z') { event.preventDefault(); if (event.shiftKey) this.redo(); else this.undo(); }
       if (key === 'y') { event.preventDefault(); this.redo(); }
       if (key === 'a') { event.preventDefault(); this.anchor = { row: 0, column: 0 }; this.row = this.pattern().rows - 1; this.column = this.lanes.length - 1; this.trackSelected(this.activeTrack); this.render(); }
@@ -598,9 +605,6 @@ export class PatternGrid {
       if (sequence[key]) { event.preventDefault(); this.sequence(sequence[key]); }
       else if (edit[key]) { event.preventDefault(); if (this.recording) edit[key](); }
       return;
-    }
-    if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
-      event.preventDefault(); if (this.recording) this.transpose((event.key === 'ArrowUp' ? 1 : -1) * (event.shiftKey ? 12 : 1)); return;
     }
     if (event.altKey) return;
     const lanes = this.lanes, lane = lanes[this.column];
@@ -623,13 +627,21 @@ export class PatternGrid {
       case 'Backspace': if (!this.recording) return; event.preventDefault(); this.shiftRows(-1); return;
       case 'Delete': if (!this.recording) return; event.preventDefault(); this.clearSelection(); return;
       default: {
+        if (!this.recording) {
+          const note = keyboardNote(event.key, this.octave());
+          if (!note) return;
+          event.preventDefault();
+          const track = Math.min(lane.track, this.project().tracks.length - 1);
+          const instrument = this.currentInstrument() ?? instrumentAt(this.pattern().notes[track]?.[lane.col]?.inst ?? [], this.row);
+          if (instrument) this.audition(instrument, note, track);
+          return;
+        }
         if (lane.fx !== null) {
           if (event.key.toLowerCase() === 'p' && !event.shiftKey) { event.preventDefault(); this.chooseLaneTarget(lane); return; }
-          if (!this.recording) return;
           if (event.key === 'Enter' || event.key.length === 1 && /[0-9+.-]/.test(event.key)) { event.preventDefault(); this.editValue(this.row, this.column, event.key === 'Enter' ? undefined : event.key); } return;
         }
         if (lane.kind !== 'note') {
-          if (!this.recording || event.metaKey || event.ctrlKey || !(event.key === 'Enter' || /^[0-9+-]$/.test(event.key) || lane.kind === 'pan' && /^c$/i.test(event.key))) return;
+          if (!(event.key === 'Enter' || /^[0-9+-]$/.test(event.key) || lane.kind === 'pan' && /^c$/i.test(event.key))) return;
           event.preventDefault(); this.editSub(this.row, this.column, event.key === 'Enter' ? undefined : event.key); return;
         }
         // A ends a note by letting it release, which no piano key uses; the minus key stops it at once
@@ -637,9 +649,8 @@ export class PatternGrid {
         const note = ending ?? keyboardNote(event.key, this.octave()); if (!note) return;
         event.preventDefault();
         const column = this.pattern().notes[lane.track][lane.col], inst = ending ? undefined : this.currentInstrument();
-        const instrument = !ending && (instrumentAt(column.inst, this.row) ?? inst);
+        const instrument = !ending && (inst ?? instrumentAt(column.inst, this.row));
         if (instrument) this.audition(instrument, note, lane.track);
-        if (!this.recording) return;
         // a note is given the chosen instrument's number, which can be edited afterwards
         const instLane = this.lanes.findIndex(other => other.track === lane.track && other.col === lane.col && other.kind === 'inst');
         this.apply([{ row: this.row, track: this.column, before: lane.values[this.row], after: note }, ...(inst ? [{ row: this.row, track: instLane, before: column.inst[this.row], after: inst }] : [])]);

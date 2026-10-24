@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { editorState, connectLanguageServer } from './editor';
 import { MatrixPanel } from './matrix';
 import type { BrowserItem } from './browser';
+import { ProjectPanel, neighbour } from './projectpanel';
 import { SoundBrowser, type SoundKind, type ManageOp } from './soundbrowser';
 import { instrumentPresets, effectPresets, type Preset } from './library';
 import { emptyProject, columnCount, emptyFxLane, blankColumn, type Device, readProject, storageKey, maxReturns, resizePattern, removeTrack, restoreTrack, trackSource, type Definition, type Song, type DeletedTrack } from './project';
@@ -46,7 +47,7 @@ app.innerHTML = `
         <section class="instrument-editor" id="code-panel" hidden><div class="code-workspace"><div id="mixer" aria-label="Track FX controls" hidden></div><div id="code"></div></div></section>
       </div>
     </section>
-    <section id="sound-browser" aria-label="Sound browser"></section>
+    <div id="right-bar"><section id="project-panel" aria-label="Project instruments"></section><section id="sound-browser" aria-label="Sound browser"></section></div>
   </main>
   <footer><span id="status">Starting editor…</span><span class="spacer"></span><span id="audio-status"></span><label>Port <input id="engine-port" type="number" min="1" max="65535" value="7401"></label><input id="engine-token" type="password" placeholder="Token" aria-label="Engine token"><button id="connect">Connect</button><span id="save-status">Local autosave</span></footer>`;
 
@@ -117,7 +118,7 @@ function selectDefinition(definition: Definition, reveal = true, library = false
   renderDefinitions(); renderApplyStatus(); mixerView();
 }
 /** The browser's Project folder lists the definitions, so it follows them. */
-function renderDefinitions() { soundBrowser.refresh(); }
+function renderDefinitions() { soundBrowser.refresh(); projectPanel.refresh(); }
 /** Effect and instrument parameters share one table: definition ids are unique across both. */
 function allParameters() { return { ...audioStatus.instrument_parameters, ...audioStatus.effect_parameters }; }
 function song(): Song {
@@ -171,7 +172,7 @@ function currentDevice(): Device | undefined {
 /** The effect definition the code editor is showing, or null when the track has no effects. */
 function shownEffect() { return fxMode && !element('code').hidden ? selected.id : null; }
 function mixerView() {
-  refreshMix(); refreshMatrix(); browserTarget(); soundBrowser.refresh();
+  refreshMix(); refreshMatrix(); browserTarget(); soundBrowser.refresh(); projectPanel.refresh();
   element('show-fx').setAttribute('aria-pressed', String(fxMode)); element('show-instrument').setAttribute('aria-pressed', String(!fxMode));
   if (fxMode && libraryFx !== null) { element('mixer').hidden = true; return; }
   element('mixer').hidden = false;
@@ -276,7 +277,7 @@ const arrangement = new Arrangement(element('sequence'), () => project, manual =
   grid.render(); deviceTrack = activeStrip(); mixerView(); patternControls();
 }, editedPattern);
 const grid = new PatternGrid(element('grid'), () => project, () => arrangement.pattern, () => Number(element<HTMLInputElement>('octave').value), () => { editedPattern(); mixerView(); },
-  (id, note, track) => { if (audioStatus.connected && !audioStatus.playing) void action(() => audition(id, note, track)); },
+  (id, note, track) => { if (audioStatus.connected) void action(() => audition(id, note, track)); },
   () => { void action(() => togglePlay()); },
   column => { const strip = columnToStrip(project, column); if (deviceTrack !== strip) { const editingFx = fxMode && !element('code-panel').hidden; deviceTrack = strip; if (editingFx) showFx(); else mixerView(); } },
   () => Number(element<HTMLInputElement>('entry-step').value), () => allParameters(), status, (track, lane) => {
@@ -316,11 +317,11 @@ function addEffectToStrip(choice: string) {
   chosenDevice.set(deviceTrack, added.device.id); showFx(); editedPattern(); grid.render();
   if (audioStatus.connected) void action(() => ensureSound(added.definition.id));
 }
-/** What the browser lists: this project's own sounds first (instruments numbered as the Ins column counts them), then the ready-made ones. */
+/** What the browser lists: the project's own effects first, then the ready-made sounds. The project's instruments have their own panel. */
 function browserItems(kind: SoundKind): BrowserItem[] {
-  const own = project.definitions.filter(d => d.kind === kind).map((definition, index) => {
-    const users = kind === 'instr' ? instrumentUsers(project, definition.id).length : effectUsers(project, definition.id).length;
-    return { value: `project:${definition.id}`, name: kind === 'instr' ? `${String(index).padStart(2, '0')}  ${definition.name}` : definition.name, folder: 'Project', description: 'A sound of this project', note: users ? `×${users}` : undefined };
+  const own = kind === 'instr' ? [] : project.definitions.filter(d => d.kind === 'fx').map(definition => {
+    const users = effectUsers(project, definition.id).length;
+    return { value: `project:${definition.id}`, name: definition.name, folder: 'Project', description: 'An effect of this project', note: users ? `×${users}` : undefined };
   });
   return [...own, ...(kind === 'instr' ? instrumentPresets : effectPresets).map(presetItem)];
 }
@@ -350,6 +351,30 @@ const soundBrowser = new SoundBrowser(element('sound-browser'), browserItems, {
   manage: manageSound,
   leave: () => { void action(endPreview); },
 }, () => element('grid').focus());
+const projectInstruments = () => project.definitions.filter(d => d.kind === 'instr');
+/** Makes an instrument the current one, shows its code, and plays a note so it can be heard. */
+function chooseInstrument(definition: Definition) {
+  selectDefinition(definition, false);
+  if (audioStatus.connected) void action(() => audition(definition.id, 'C-3', noteTrack(), 400));
+}
+const projectPanel = new ProjectPanel(element('project-panel'),
+  () => projectInstruments().map(d => { const users = instrumentUsers(project, d.id).length; return { id: d.id, name: d.name, note: users ? `×${users}` : undefined }; }),
+  () => currentInstrument, {
+    choose: id => { const definition = project.definitions.find(d => d.id === id); if (definition) chooseInstrument(definition); },
+    edit: id => { const definition = project.definitions.find(d => d.id === id); if (definition) { selectDefinition(definition); editor.focus(); } },
+    manage: op => manageSound(op, 'instr', { value: `project:${currentInstrument}`, name: '', folder: '' }),
+    leave: () => element('grid').focus(),
+  });
+/** Option+Up and Option+Down: the previous or next instrument of the project, from anywhere but a text box. */
+function stepInstrument(delta: number) {
+  const id = neighbour(projectInstruments().map(d => d.id), currentInstrument, delta), next = projectInstruments().find(d => d.id === id);
+  if (next) chooseInstrument(next);
+}
+document.addEventListener('keydown', event => {
+  if (!event.altKey || event.metaKey || event.ctrlKey || event.shiftKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return;
+  if ((event.target as HTMLElement).closest('input, select, textarea, .cm-editor')) return;
+  event.preventDefault(); event.stopPropagation(); stepInstrument(event.key === 'ArrowDown' ? 1 : -1);
+}, true);
 /** Shows or hides the browser; showing it puts the cursor in its search box. */
 function toggleBrowser(kind?: SoundKind) {
   const section = element('sound-browser');

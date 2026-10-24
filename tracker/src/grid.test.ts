@@ -333,16 +333,16 @@ it('transposes the selected notes by semitones and octaves, leaving OFF and note
   const { project, key, click } = setup(); const notes = project.patterns[0].notes[0][0].notes;
   notes[0] = 'C-4'; notes[1] = 'OFF'; notes[2] = 'B-8'; notes[3] = 'C-0';
   click(0, 0); for (let i = 0; i < 3; i++) key('ArrowDown', { shiftKey: true });
-  key('ArrowUp', { altKey: true }); expect(notes.slice(0, 4)).toEqual(['C#4', 'OFF', 'B-8', 'C#0']);
-  key('ArrowUp', { altKey: true, shiftKey: true }); expect(notes.slice(0, 4)).toEqual(['C#5', 'OFF', 'B-8', 'C#1']);
-  key('ArrowDown', { altKey: true, shiftKey: true }); key('ArrowDown', { altKey: true }); expect(notes.slice(0, 4)).toEqual(['C-4', 'OFF', 'A#7', 'C-0']); // B-8 could not go up, so it only came down
+  key('ArrowUp', { altKey: true, metaKey: true }); expect(notes.slice(0, 4)).toEqual(['C#4', 'OFF', 'B-8', 'C#0']);
+  key('ArrowUp', { metaKey: true, shiftKey: true }); expect(notes.slice(0, 4)).toEqual(['C#5', 'OFF', 'B-8', 'C#1']);
+  key('ArrowDown', { metaKey: true, shiftKey: true }); key('ArrowDown', { altKey: true, metaKey: true }); expect(notes.slice(0, 4)).toEqual(['C-4', 'OFF', 'A#7', 'C-0']); // B-8 could not go up, so it only came down
   key('z', { metaKey: true }); expect(notes[0]).toBe('C#4');
 });
 
 it('only edits with record mode on', () => {
   const { project, key, click, grid } = setup(); const notes = project.patterns[0].notes[0][0].notes; notes[0] = 'C-4';
   grid.recording = false; click(0, 0);
-  for (const [name, options] of [['ArrowUp', { altKey: true }], ['Enter', { metaKey: true }], ['d', { metaKey: true }], ['Insert', {}], ['Backspace', {}]] as const) key(name, options);
+  for (const [name, options] of [['ArrowUp', { altKey: true, metaKey: true }], ['Enter', { metaKey: true }], ['d', { metaKey: true }], ['Insert', {}], ['Backspace', {}]] as const) key(name, options);
   expect(notes.slice(0, 3)).toEqual(['C-4', null, null]);
 });
 
@@ -422,11 +422,11 @@ it('stamps the current instrument\'s number on each note entered in record mode,
   expect(column.notes[0]).toBeNull(); expect(column.inst[0]).toBeNull();
 });
 
-it('plays a note on the instrument set above it in its column when it has none, and shows the instrument column on every track', () => {
+it('previews the selected instrument instead of the pattern instrument, and shows the instrument column on every track', () => {
   const { parent, project, grid, key, audition } = setup(undefined, () => 'bell');
   const column = project.patterns[0].notes[0][0];
   grid.recording = false; grid.selectTrack(0); parent.querySelector<HTMLElement>('#cell-5-0')!.click();
-  key('s'); expect(audition).toHaveBeenLastCalledWith('tone', 'C#4', 0); // row 0 sets tone, nothing below it does
+  key('s'); expect(audition).toHaveBeenLastCalledWith('bell', 'C#4', 0);
   expect(column.inst[5]).toBeNull();
   expect(parent.querySelectorAll('[data-column]:not([id*="-0-0"])').length).toBeGreaterThan(0);
   expect(parent.querySelector('#cell-0-0-0-inst')).not.toBeNull(); expect(parent.querySelector('#cell-0-1-0-inst')).not.toBeNull();
@@ -600,4 +600,28 @@ it('enters OFF with A and a CUT with the minus key, neither with an instrument o
   key('1'); key('`'); expect(column.notes[4]).toBe('D#4'); // the old keys do nothing now: row 4 is still the starter note
   click(6, 0); clipboard(parent, 'paste', 'CUT'); expect(column.notes[6]).toBe('CUT');
   grid.undo(); expect(column.notes[6]).toBeNull();
+});
+
+it('keeps Cmd+arrows for the sequence, and takes Cmd+Shift+arrows and Cmd+Option+arrows for transposing', () => {
+  const sequence = vi.fn(), { key } = setup(sequence);
+  key('ArrowUp', { metaKey: true }); expect(sequence).toHaveBeenLastCalledWith('previous');
+  sequence.mockClear();
+  key('ArrowUp', { metaKey: true, shiftKey: true }); key('ArrowDown', { metaKey: true, altKey: true }); key('ArrowDown', { metaKey: true, altKey: true, shiftKey: true });
+  expect(sequence).not.toHaveBeenCalled();
+});
+
+it('previews from instrument and parameter columns outside record mode without editing or advancing', () => {
+  const { parent, project, grid, key, audition, edited } = setup(undefined, () => 'bell');
+  grid.recording = false;
+  const before = JSON.stringify(project);
+  for (const cell of ['#cell-5-0-0-inst', '#fx-0-0-0']) {
+    parent.querySelector<HTMLElement>(cell)!.click();
+    const cursor = parent.getAttribute('aria-activedescendant');
+    key('s');
+    expect(audition).toHaveBeenLastCalledWith('bell', 'C#4', 0);
+    expect(parent.getAttribute('aria-activedescendant')).toBe(cursor);
+  }
+  expect(audition).toHaveBeenCalledTimes(2);
+  expect(JSON.stringify(project)).toBe(before);
+  expect(edited).not.toHaveBeenCalled();
 });
