@@ -1,5 +1,5 @@
 import type { Definition, Device, Project, Track } from './project';
-import { maxDevices } from './project';
+import { columnLanes, maxDevices } from './project';
 import send from './presets/send.nml?raw';
 import { effectPresets } from './library';
 import { codeNameOf, freeCodeName, renameInSource, slug, uniqueName } from './naming';
@@ -16,6 +16,9 @@ const blank = { name: 'Blank', source: 'fx blank() { out = in }\n' };
 export const master = -1;
 export const returnStrip = (index: number) => -2 - index;
 export const returnIndex = (strip: number) => -2 - strip;
+/** The strip number of a column of the pattern grid (tracks, then the returns, then the master), and the column of a strip. */
+export const columnToStrip = (project: Project, column: number) => column < project.tracks.length ? column : column < project.tracks.length + project.returns.length ? returnStrip(column - project.tracks.length) : master;
+export const stripToColumn = (project: Project, strip: number) => strip >= 0 ? strip : project.tracks.length + (strip === master ? project.returns.length : returnIndex(strip));
 export const stripOf = (project: Project, strip: number): Track => strip >= 0 ? project.tracks[strip] : strip === master ? project.master : project.returns[returnIndex(strip)];
 
 /** A new effect in the project's library, from a preset or blank. Its code is named after it, made unique so copies never collide. */
@@ -68,7 +71,8 @@ export function removeDevice(project: Project, track: number, deviceId: string):
   const chain = stripOf(project, track).fx, index = chain.findIndex(d => d.id === deviceId);
   if (index < 0) return null;
   const [device] = chain.splice(index, 1);
-  if (track >= 0) for (const pattern of project.patterns) for (const lane of pattern.fx[track]) {
+  const column = stripToColumn(project, track);
+  for (const pattern of project.patterns) for (const lane of columnLanes(project, pattern, column)) {
     if (lane.target?.kind === 'effect' && lane.target.device === deviceId && !lane.values.some(v => v !== null) && !lane.envelope?.points.length) lane.target = null;
   }
   return device;

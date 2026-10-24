@@ -28,15 +28,15 @@ export function searchItems(items: BrowserItem[], query: string): BrowserItem[] 
 /**
  * A file browser under `anchor`: folders that open and close, with the presets in them, and a search
  * box that lists the matches from every folder. It closes when something is picked, on a click
- * elsewhere, or on Escape (which puts focus back on the anchor). Returns a function that closes it.
+ * elsewhere, or on Escape (which puts focus back on `returnTo`, the anchor unless given another element). Returns a function that closes it.
  */
-export function openBrowser(anchor: HTMLElement, items: BrowserItem[], pick: (item: BrowserItem) => void): () => void {
+export function openBrowser(anchor: HTMLElement, items: BrowserItem[], pick: (item: BrowserItem) => void, returnTo: HTMLElement = anchor): () => void {
   const panel = document.createElement('div'); panel.className = 'browser'; panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'Browse presets');
   const search = document.createElement('input'); search.type = 'search'; search.placeholder = 'Search'; search.setAttribute('aria-label', 'Search presets');
   const list = document.createElement('div'); list.className = 'browser-list';
   const hint = document.createElement('div'); hint.className = 'browser-hint';
   const outside = (event: Event) => { if (!panel.contains(event.target as Node)) close(); };
-  const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); close(); anchor.focus(); } };
+  const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); close(); returnTo.focus(); } };
   const close = () => { panel.remove(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', escape, true); };
   const entry = (item: BrowserItem, path = '') => {
     const button = document.createElement('button'); button.className = 'browser-item'; button.textContent = item.name; button.title = item.description ?? '';

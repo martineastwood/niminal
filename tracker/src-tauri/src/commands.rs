@@ -43,8 +43,9 @@ pub enum FxTarget {
         device: String,
         parameter: String,
     },
-    /// A parameter of the track's instrument, applied to each note as it starts.
+    /// A parameter of an instrument, given to the track's notes that play it as each one starts.
     Instrument {
+        instrument: String,
         parameter: String,
     },
 }
@@ -83,7 +84,7 @@ impl FxTarget {
     }
 
     /// Detaches the parameter's LFO so a written value takes effect.
-    pub fn unmap(&self, index: usize, track: &Track) -> Option<Value> {
+    pub fn unmap(&self, slot: impl std::fmt::Display, track: &Track) -> Option<Value> {
         let Self::Effect { device, parameter } = self else {
             return None;
         };
@@ -91,14 +92,14 @@ impl FxTarget {
             .modulations
             .get(parameter)
             .filter(|lfo| lfo.enabled)
-            .map(|_| json!({"op":"map", "id":fx_node(index, device), "param":parameter, "source":null}))
+            .map(|_| json!({"op":"map", "id":fx_node(slot, device), "param":parameter, "source":null}))
     }
 }
 
 pub fn edit(
     target: &FxTarget,
     value: &str,
-    index: usize,
+    slot: impl std::fmt::Display,
     track: &Track,
     parameters: &EffectParameters,
 ) -> Result<Value, String> {
@@ -122,13 +123,13 @@ pub fn edit(
         FxTarget::Volume => {
             bounded(-60.0, 6.0)?;
             Ok(
-                json!({"op":"set", "id":format!("track_{index}"), "args":{"level":10.0_f64.powf(value/20.0)}, "glide":0.0}),
+                json!({"op":"set", "id":format!("track_{slot}"), "args":{"level":10.0_f64.powf(value/20.0)}, "glide":0.0}),
             )
         }
         FxTarget::Pan => {
             bounded(-1.0, 1.0)?;
             Ok(
-                json!({"op":"set", "id":format!("track_{index}"), "args":{"balance":value}, "glide":0.0}),
+                json!({"op":"set", "id":format!("track_{slot}"), "args":{"balance":value}, "glide":0.0}),
             )
         }
         FxTarget::Instrument { .. } => Err(format!(
@@ -147,7 +148,7 @@ pub fn edit(
             })?;
             bounded(info.min, info.max)?;
             Ok(
-                json!({"op":"set", "id":fx_node(index, device), "args":{parameter:info.argument(value)}, "glide":0.0}),
+                json!({"op":"set", "id":fx_node(slot, device), "args":{parameter:info.argument(value)}, "glide":0.0}),
             )
         }
     }

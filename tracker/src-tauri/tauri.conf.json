@@ -16,7 +16,9 @@
         "width": 1280,
         "height": 850,
         "minWidth": 800,
-        "minHeight": 600
+        "minHeight": 600,
+        "maximized": true,
+        "label": "main"
       }
     ],
     "security": {

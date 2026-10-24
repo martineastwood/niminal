@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { keyboardNote, transposeNote, setTrackSource, trackSource, newProject, emptyFxLane, blankColumn, makePattern, removeTrack, restoreTrack, readProject, resizePattern } from './project';
+import { emptyProject, keyboardNote, transposeNote, setTrackSource, trackSource, newProject, emptyFxLane, blankColumn, makePattern, removeTrack, restoreTrack, readProject, resizePattern } from './project';
 
 it('round trips source and notes and rejects unsupported project data', () => {
   const project = newProject();
@@ -25,9 +25,9 @@ it('maps the laptop keyboard chromatically without consuming navigation keys', (
 it('rejects invalid assignments and tempo before a project reaches playback', () => {
   const project = newProject();
   project.definitions.push({ id: 'soften', name: 'Filter', kind: 'fx', source: 'fx soften() { out = in }' });
-  project.tracks[0].instrument = 'soften';
+  project.patterns[0].notes[0][0].inst[0] = 'soften';
   expect(() => readProject(JSON.stringify(project))).toThrow();
-  project.tracks[0].instrument = 'tone';
+  project.patterns[0].notes[0][0].inst[0] = 'tone';
   project.bpm = 0;
   expect(() => readProject(JSON.stringify(project))).toThrow();
 });
@@ -104,7 +104,7 @@ it('round trips note columns with OFF and sub-column values and rejects out-of-r
 
 it('keeps instrument parameter values and lanes, and rejects non-numeric values', () => {
   const project = newProject(); project.definitions[0].values = { cutoff: 900 };
-  project.patterns[0].fx[0][0].target = { kind: 'instrument', parameter: 'cutoff' };
+  project.patterns[0].fx[0][0].target = { kind: 'instrument', instrument: 'tone', parameter: 'cutoff' };
   expect(readProject(JSON.stringify(project))).toEqual(project);
   project.definitions[0].values = { cutoff: 'loud' as unknown as number };
   expect(() => readProject(JSON.stringify(project))).toThrow();
@@ -123,20 +123,21 @@ it('keeps a master strip and solo flags, and rejects a master with an instrument
   project.tracks[2].solo = true;
   expect(readProject(JSON.stringify(project))).toEqual(project);
   const bad = (change: (p: typeof project) => void) => { const copy = structuredClone(project); change(copy); expect(() => readProject(JSON.stringify(copy))).toThrow(); };
-  bad(p => { p.master.instrument = 'tone'; }); bad(p => { p.master.volume_db = 20; }); bad(p => { (p.tracks[0] as { solo: unknown }).solo = 'yes'; });
+  bad(p => { p.master.volume_db = 20; }); bad(p => { (p.tracks[0] as { solo: unknown }).solo = 'yes'; });
   bad(p => { p.master.fx[0].definition = 'missing'; }); bad(p => { delete (p as { master?: unknown }).master; });
 });
 
 it('keeps returns, outputs and send devices, and rejects bad routing or too many returns', () => {
   const project = newProject();
-  const verb = { name: 'Verb', instrument: null, fx: [], pan: 0, muted: false, volume_db: 0 };
-  project.returns.push(verb); project.tracks[0].output = { kind: 'return', index: 0 };
+  const verb = { name: 'Verb', fx: [], pan: 0, muted: false, volume_db: 0 };
+  const addReturn = (track: typeof verb) => { project.returns.push(track); for (const p of project.patterns) p.return_fx.push([emptyFxLane(p.rows)]); };
+  addReturn(verb); project.tracks[0].output = { kind: 'return', index: 0 };
   expect(readProject(JSON.stringify(project))).toEqual(project);
   project.definitions.push({ id: 'fx_a', name: 'A', kind: 'fx', source: 'fx fx_a { out = in }' }); const fx = { id: 'd1', definition: 'fx_a', bypass: false, values: {}, modulations: {} };
   const bad = (change: (p: typeof project) => void) => { const copy = structuredClone(project); change(copy); expect(() => readProject(JSON.stringify(copy))).toThrow(); };
   expect(readProject(JSON.stringify({ ...project, tracks: [{ ...project.tracks[0], fx: [{ ...fx, target: 3 }] }, ...project.tracks.slice(1)] }))).toBeTruthy();
   bad(p => { p.tracks[0].output = { kind: 'return', index: 8 }; });
-  const second = { ...verb, name: 'Echo' }; project.returns.push(second);
+  const second = { ...verb, name: 'Echo' }; addReturn(second);
   expect(readProject(JSON.stringify({ ...project, returns: [{ ...verb, output: { kind: 'return', index: 1 }, fx: [{ ...fx, target: 1 }] }, second] }))).toBeTruthy();
   bad(p => { p.returns[1].output = { kind: 'return', index: 0 }; });
   bad(p => { p.returns[0].output = { kind: 'return', index: 0 }; });
@@ -144,10 +145,10 @@ it('keeps returns, outputs and send devices, and rejects bad routing or too many
   bad(p => { p.master.output = { kind: 'none' }; });
   bad(p => { p.tracks[0].fx = [{ ...fx, target: 0, pre: 'yes' as unknown as boolean }]; });
   expect(readProject(JSON.stringify({ ...project, tracks: [{ ...project.tracks[0], fx: [{ ...fx, target: 0, pre: true, mute_source: true }] }, ...project.tracks.slice(1)] }))).toBeTruthy();
-  project.returns.pop();
+  project.returns.pop(); for (const p of project.patterns) p.return_fx.pop();
   bad(p => { p.tracks[0].fx = [{ ...fx, target: 8 }]; });
   bad(p => { p.master.fx = [{ ...fx, target: 0 }]; });
-  project.returns = Array(9).fill(verb);
+  project.returns = Array(9).fill(verb); for (const p of project.patterns) p.return_fx = Array.from({ length: 9 }, () => [emptyFxLane(p.rows)]);
   expect(() => readProject(JSON.stringify(project))).toThrow();
   const { returns: _, ...old } = newProject();
   expect(readProject(JSON.stringify(old)).returns).toEqual([]);
@@ -176,4 +177,34 @@ it("takes a deleted track's matrix cells with it and puts them back, shifting th
   const again = removeTrack(project, 1)!; project.sequence.push(project.patterns[0].id);
   expect(restoreTrack(project, again)).toBe(true);
   expect(project.matrix).toEqual([[], [null, null, { kind: 'mute' }, { kind: 'pattern', id: project.patterns[0].id }]]);
+});
+
+it('keeps parameter lanes for each return and the master, and rejects lanes that do not match the strips', () => {
+  const project = newProject(), verb = { name: 'Verb', fx: [], pan: 0, muted: false, volume_db: 0 };
+  project.returns.push(verb); for (const p of project.patterns) p.return_fx.push([emptyFxLane(p.rows)]);
+  project.patterns[0].master_fx[0].values[2] = '-6'; project.patterns[0].return_fx[0][0].target = { kind: 'pan' };
+  expect(readProject(JSON.stringify(project))).toEqual(project);
+  const bad = (change: (p: typeof project) => void) => { const copy = structuredClone(project); change(copy); expect(() => readProject(JSON.stringify(copy))).toThrow(); };
+  bad(p => { p.patterns[0].return_fx.pop(); }); // a lane list for every return
+  bad(p => { p.patterns[0].master_fx = []; }); bad(p => { p.patterns[0].master_fx = Array.from({ length: 5 }, () => emptyFxLane(32)); });
+  bad(p => { p.patterns[0].master_fx[0].target = { kind: 'instrument', instrument: 'tone', parameter: 'cutoff' }; }); // no notes, no instruments
+  bad(p => { p.patterns[0].return_fx[0][0].values[0] = 'loud'; });
+});
+
+it('gives a new pattern lanes for the returns and the master, and copies them into a variation', () => {
+  const project = newProject(); project.returns.push({ name: 'Verb', fx: [], pan: 0, muted: false, volume_db: 0 });
+  for (const p of project.patterns) p.return_fx.push([emptyFxLane(p.rows)]);
+  const blank = makePattern(project); expect(blank.return_fx).toHaveLength(1); expect(blank.master_fx).toHaveLength(1);
+  project.patterns[0].master_fx[0].values[1] = '-3';
+  const copy = makePattern(project, project.patterns[0]);
+  expect(copy.master_fx[0].values[1]).toBe('-3'); copy.master_fx[0].values[1] = '0'; expect(project.patterns[0].master_fx[0].values[1]).toBe('-3');
+  resizePattern(copy, 40); expect(copy.master_fx[0].values).toHaveLength(40); expect(copy.return_fx[0][0].values).toHaveLength(40);
+});
+
+it('starts a new project with a pattern that has nothing in it, and an instrument ready to play', () => {
+  const project = emptyProject();
+  expect(project.patterns[0].notes.flat().every(column => column.notes.every(n => n === null) && column.inst.every(i => i === null))).toBe(true);
+  expect(project.definitions.some(d => d.kind === 'instr')).toBe(true); expect(project.tracks.map(t => t.name)).toEqual(['Track 01', 'Track 02', 'Track 03', 'Track 04']);
+  expect(readProject(JSON.stringify(project))).toEqual(project);
+  expect(newProject().patterns[0].notes[0][0].notes[0]).toBe('C-4'); // the phrase the tests use is still there
 });

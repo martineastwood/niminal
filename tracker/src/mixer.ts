@@ -1,7 +1,7 @@
 import { builtInEffects, returnIndex, sendPreset, stripOf } from './effects';
 import type { EffectParameters, Definition, Device, Lfo, Parameter, Project, FxTarget } from './project';
 import { maxDevices } from './project';
-import { trackColour } from './grid';
+import { trackColour, masterColour } from './grid';
 import { openBrowser } from './browser';
 /** An instrument's parameters as sliders. Notes start with these values; lanes change them from a row on. */
 export function renderInstrument(parent: HTMLElement, definition: Definition, parameters: EffectParameters, edited: () => void, write: (target: FxTarget, value: number) => void, activeTrack: number) {
@@ -41,9 +41,9 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
   parent.replaceChildren();
   const track = stripOf(project, activeTrack), isMaster = activeTrack < 0, isReturn = activeTrack < -1;
   const refresh = () => renderMixer(parent, project, activeTrack, edited, parameters, write, fx);
-  const output = document.createElement('section'); output.className = 'device-card track-output'; output.style.setProperty('--track-colour', isMaster ? '#d9903f' : trackColour(track, activeTrack));
+  const output = document.createElement('section'); output.className = 'device-card track-output'; output.style.setProperty('--track-colour', isMaster ? masterColour : trackColour(track, activeTrack));
   const heading = document.createElement('div'); heading.className = 'device-heading';
-  const name = document.createElement('strong'); name.textContent = isReturn ? track.name : isMaster ? 'Master' : `${String(activeTrack + 1).padStart(2, '0')} ${track.name}`; heading.append(name); output.append(heading);
+  const name = document.createElement('strong'); name.textContent = isMaster ? 'Master' : track.name; heading.append(name); output.append(heading);
   const volume = slider('Volume', track.volume_db, -60, 6, 'dB', value => { track.volume_db = value; edited(); }, () => write({ kind: 'volume' }, track.volume_db));
   volume.querySelector('input')!.setAttribute('aria-label', `${track.name} volume in dB`); output.append(volume);
   const pan = slider('Pan', track.pan, -1, 1, '', value => { track.pan = value; edited(); }, () => write({ kind: 'pan' }, track.pan));
@@ -109,8 +109,6 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
         const row = slider(parameter.name, value, parameter.min, parameter.max, parameter.unit ?? '', value => { device.values[parameter.name] = value; edited(); }, () => {
           write({ kind: 'effect', device: device.id, parameter: parameter.name }, Math.min(parameter.max, Math.max(parameter.min, device.values[parameter.name] ?? parameter.default)));
         }, toggle);
-        // The master and the returns have no pattern lanes to record into.
-        if (isMaster) { const record = row.querySelector<HTMLButtonElement>('button'); if (record) record.disabled = true; }
         row.querySelector('input')!.setAttribute('aria-label', `${track.name} FX ${parameter.name}`); card.append(row);
         if (lfo) card.append(lfoControls(device, parameter, lfo, edited));
       });

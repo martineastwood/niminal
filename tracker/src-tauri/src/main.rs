@@ -39,6 +39,18 @@ async fn lsp_message(
     .map_err(|e| e.to_string())?
 }
 
+/// Asks a yes or no question in a native dialog.
+#[tauri::command]
+async fn confirm(message: String) -> bool {
+    rfd::AsyncMessageDialog::new()
+        .set_title("niminal tracker")
+        .set_description(message)
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        .await
+        == rfd::MessageDialogResult::Yes
+}
+
 fn app_data(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|e| e.to_string())
 }
@@ -203,6 +215,7 @@ fn main() {
         .manage(audio::Audio::new())
         .invoke_handler(tauri::generate_handler![
             lsp_message,
+            confirm,
             project_dir,
             import_samples,
             open_project,

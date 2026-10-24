@@ -1,10 +1,17 @@
 use super::*;
-use crate::pattern::{Device, FxLane, NoteColumn, Output, Pattern, Track};
+use crate::pattern::{Device, Envelope, EnvelopePoint, FxLane, NoteColumn, Output, Pattern, Track};
 use niminal_lang::Layout;
 use niminal_server::{EngineServer, Session};
 use niminal_ws::{Server, ServerConfig};
 
 const TONE: &str = include_str!("../../src/presets/tone.nml");
+
+/// Gives every pattern parameter lanes for each return the song has now.
+fn sync_lanes(song: &mut Song) {
+    for pattern in &mut song.patterns {
+        pattern.return_fx = vec![vec![FxLane::empty(pattern.rows)]; song.returns.len()];
+    }
+}
 
 fn test_song(note: Option<&str>) -> Song {
     Song {
@@ -13,7 +20,6 @@ fn test_song(note: Option<&str>) -> Song {
         tracks: (0..4)
             .map(|i| Track {
                 name: format!("Track {i}"),
-                instrument: (i == 0).then(|| "tone".into()),
                 ..Track::default()
             })
             .collect(),
@@ -21,15 +27,19 @@ fn test_song(note: Option<&str>) -> Song {
             id: "p0".into(),
             name: "First".into(),
             rows: 32,
+            // only the first track has an instrument set on its notes
             notes: (0..4)
-                .map(|_| {
+                .map(|i| {
                     vec![NoteColumn {
                         notes: vec![note.map(str::to_string); 32],
+                        inst: if i == 0 { vec![Some("tone".into()); 32] } else { vec![] },
                         ..NoteColumn::default()
                     }]
                 })
                 .collect(),
             fx: (0..4).map(|_| vec![FxLane::empty(32)]).collect(),
+            return_fx: vec![],
+            master_fx: vec![FxLane::empty(32)],
         }],
         loop_range: None,
         matrix: vec![],
@@ -515,6 +525,7 @@ fn tracks_send_to_returns_that_have_their_own_effects_level_and_mute() {
         name: "Verb".into(),
         ..Track::default()
     }];
+    sync_lanes(&mut song);
     song.tracks[0].fx = vec![send("pass")];
     worker
         .command(Command::Update { song: song.clone() })
@@ -554,6 +565,7 @@ fn tracks_send_to_returns_that_have_their_own_effects_level_and_mute() {
     // Removing the return silences its sends.
     song.tracks[0].muted = false;
     song.returns.clear();
+    sync_lanes(&mut song);
     worker
         .command(Command::Update { song: song.clone() })
         .unwrap();
@@ -628,6 +640,7 @@ fn outputs_route_tracks_into_returns_and_sends_tap_the_chain_where_they_sit() {
         fx: vec![device("r1", "half", None)],
         ..Track::default()
     }];
+    sync_lanes(&mut song);
     song.tracks[0].output = Output::Return { index: 0 };
     assert!((ratio(&mut worker, &song, 0) - 0.5).abs() < 0.001, "wet only");
     assert!((ratio(&mut worker, &song, 1) - 1.0).abs() < 0.001, "other tracks still reach the master");
@@ -639,6 +652,7 @@ fn outputs_route_tracks_into_returns_and_sends_tap_the_chain_where_they_sit() {
     assert!((ratio(&mut worker, &song, 0) - 0.5).abs() < 0.001, "send only, through the return's effect");
     song.tracks[0].output = Output::Return { index: 0 };
     song.returns.clear();
+    sync_lanes(&mut song);
     assert!(ratio(&mut worker, &song, 0) < 0.001, "no return, no sound");
 
     // A pre-fader send takes the chain's signal at its position and leaves the chain as it was.
@@ -647,6 +661,7 @@ fn outputs_route_tracks_into_returns_and_sends_tap_the_chain_where_they_sit() {
         device
     };
     song.returns = vec![Track::default()];
+    sync_lanes(&mut song);
     song.tracks[0].output = Output::Master;
     song.tracks[0].fx = vec![device("e1", "half", None), pre(device("s1", "pass", Some(0)))];
     let r = ratio(&mut worker, &song, 0);
@@ -679,6 +694,7 @@ fn outputs_route_tracks_into_returns_and_sends_tap_the_chain_where_they_sit() {
 
     // Re-pointing a send keeps it audible; a bypassed send carries nothing.
     song.returns = vec![Track::default(), Track::default()];
+    sync_lanes(&mut song);
     song.tracks[0].fx = vec![pre(device("s1", "pass", Some(0))), device("e1", "half", None)];
     song.tracks[0].fx[0].target = Some(1);
     assert!((ratio(&mut worker, &song, 0) - 1.5).abs() < 0.001);
@@ -740,6 +756,7 @@ fn a_held_note_sounds_until_its_off_and_a_chord_adds_up() {
     held.notes[0] = Some("C-4".into());
     held.notes[2] = Some("OFF".into());
     let mut second = NoteColumn::blank(32);
+    second.inst = vec![Some("tone".into()); 32];
     second.notes[0] = Some("E-4".into());
     second.notes[2] = Some("OFF".into());
     song.patterns[0].notes[0].push(second);
@@ -1036,14 +1053,14 @@ fn song_playback_completes_and_leaves_the_final_release_audible() {
         .unwrap();
     let mut song = test_song(Some("C-4"));
     // Exercise the last supported track: its mixer route must exist too.
-    song.tracks[0].instrument = None;
+    song.patterns[0].notes[0][0].inst.clear();
     song.tracks.resize(16, Track::default());
-    song.tracks[15].instrument = Some("tone".into());
     song.patterns[0]
         .notes
         .resize(16, vec![NoteColumn::blank(32)]);
     song.patterns[0].fx.resize(16, vec![FxLane::empty(32)]);
     song.patterns[0].notes[15][0].notes[0] = Some("C-4".into());
+    song.patterns[0].notes[15][0].inst = vec![Some("tone".into()); 32];
     song.patterns[0].rows = 1;
     let mut variation = song.patterns[0].clone();
     variation.id = "p1".into();
@@ -1375,7 +1392,7 @@ fn left_over_right(compressor_link: Option<f64>) -> f32 {
     worker.command(Command::Apply { id: "tilted".into(), source: tilted.into(), kind: Kind::Instr, dir: None }).unwrap();
     worker.command(Command::Apply { id: "comp".into(), source: source.into(), kind: Kind::Fx, dir: None }).unwrap();
     let mut song = test_song(None);
-    song.tracks[0].instrument = Some("tilted".into());
+    song.patterns[0].notes[0][0].inst.clear(); // the note is played by audition, not from the pattern
     if let Some(link) = compressor_link {
         song.tracks[0].fx = vec![Device {
             id: "c0".into(),
@@ -1575,4 +1592,43 @@ fn graphical_envelopes_render_native_linear_ramps_at_fractional_rows() {
     }
     worker.command(Command::Stop).unwrap();
     worker.command(Command::Disconnect).unwrap();
+}
+
+#[test]
+fn parameter_lanes_on_the_master_and_a_return_change_the_sound() {
+    let engine = Arc::new(Mutex::new(EngineServer::new(Session::new(48000.0, Layout::Mono).without_limiter())));
+    let server = Server::start(engine.clone(), ServerConfig { port: 0, ..ServerConfig::default() }).unwrap();
+    let mut worker = Worker::default();
+    worker.command(Command::Connect { port: server.port(), token: None }).unwrap();
+    for (id, source, kind) in [("tone", "instr flat(freq: hz) { 0.1 }", Kind::Instr), ("pass", "fx pass { out = in }", Kind::Fx)] {
+        worker.command(Command::Apply { id: id.into(), source: source.into(), kind, dir: None }).unwrap();
+    }
+    // the level of what track 0 plays, with the lanes `shape` puts in the song
+    let mut level = |shape: &dyn Fn(&mut Song)| {
+        let mut song = test_song(Some("C-4"));
+        song.returns = vec![Track { name: "Verb".into(), ..Track::default() }];
+        sync_lanes(&mut song);
+        song.patterns[0].return_fx = vec![vec![FxLane::empty(32)]];
+        song.tracks[0].fx = vec![Device { id: "s1".into(), definition: "pass".into(), target: Some(0), ..Device::default() }];
+        shape(&mut song);
+        worker.command(Command::Play { song, mode: Mode::Song, pattern_id: "p0".into(), start_position: 0 }).unwrap();
+        let audio = engine.lock().unwrap().session_mut().process(24000);
+        worker.command(Command::Stop).unwrap();
+        audio[0][8000..20000].iter().map(|s| s.abs()).sum::<f32>() / 12000.0
+    };
+    let plain = level(&|_| {});
+    // the track's own signal plus the same through the send and the return
+    assert!(plain > 0.05, "something sounds: {plain}");
+    // a return's volume lane silences what its send adds
+    let quiet_return = level(&|song| song.patterns[0].return_fx[0][0].values[0] = Some("-60".into()));
+    assert!((quiet_return / plain - 0.5).abs() < 0.01, "the send added half of it, and is now silent: {quiet_return} against {plain}");
+    // the master's volume lane scales everything: 6 dB down is about half
+    let quiet_master = level(&|song| song.patterns[0].master_fx[0].values[0] = Some("-6".into()));
+    assert!((quiet_master / plain - 0.501).abs() < 0.01, "{quiet_master} against {plain}");
+    // an envelope on the master moves it as the rows pass
+    let swept = level(&|song| {
+        let lane = &mut song.patterns[0].master_fx[0];
+        lane.envelope = Some(Envelope { enabled: true, mode: "hold".into(), points: vec![EnvelopePoint { row: 0.0, value: -6.0 }] });
+    });
+    assert!((swept / plain - 0.501).abs() < 0.01, "{swept} against {plain}");
 }

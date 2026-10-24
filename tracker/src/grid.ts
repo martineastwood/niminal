@@ -1,11 +1,13 @@
+import { instrumentsOnTrack } from './instruments';
 import { laneParameter, targetKey, formatValue, parseValue, envelopeValue } from './automation';
-import { keyboardNote, transposeNote, emptyFxLane, blankColumn, subColumns, maxNoteColumns, type FxTarget, type EffectParameters, type Project, type Pattern, type Track, type SubColumn } from './project';
+import { keyboardNote, transposeNote, emptyFxLane, blankColumn, subColumns, maxNoteColumns, columnCount, columnStrip, columnLanes, type FxTarget, type FxLane, type EffectParameters, type Project, type Song, type Pattern, type Track, type SubColumn } from './project';
 import { NoteHistory, parseNotes, type NoteEdit } from './history';
+import { openBrowser } from './browser';
 
 /** What the grid asks of the sequence: move between steps, insert or remove one, or point the step at another pattern. */
 export type SequenceAction = 'previous' | 'next' | 'first' | 'last' | 'new' | 'remove' | 'pattern-previous' | 'pattern-next';
 
-const ROW_WIDTH = 30, NOTE_WIDTH = 44, SUB_WIDTH = 26, LANE_WIDTH = 100;
+const ROW_WIDTH = 30, NOTE_WIDTH = 44, SUB_WIDTH = 26, LANE_WIDTH = 72, MIN_TRACK_WIDTH = 120, MIN_STRIP_WIDTH = 84, MAX_LANES = 4;
 
 /** A column of cells. Note-family lanes have `fx` null; parameter lanes have a `kind` of null. */
 type Kind = 'note' | SubColumn;
@@ -72,7 +74,6 @@ export class PatternGrid {
     private audition: (id: string, note: string, track: number) => void,
     private togglePlay: () => void,
     private trackSelected: (track: number) => void = () => {},
-    private openEffects: (track: number, sameTrack: boolean) => void = () => {},
     private step: () => number = () => 1,
     private parameters: () => EffectParameters = () => ({}),
     private feedback: (text: string) => void = () => {},
@@ -114,7 +115,7 @@ export class PatternGrid {
       for (const [r, values] of rows.entries()) for (const [c, raw] of values.entries()) {
         const row = Math.min(this.row, this.anchor.row) + r, column = Math.min(this.column, this.anchor.column) + c;
         if (row >= this.pattern().rows || column >= lanes.length) continue;
-        if (lanes[column].fx !== null && this.pattern().fx[lanes[column].track][lanes[column].fx!].envelope?.enabled) { this.feedback('Disable Use envelope before pasting row values into this lane.'); return; }
+        if (lanes[column].fx !== null && this.laneAt(lanes[column]).envelope?.enabled) { this.feedback('Disable Use envelope before pasting row values into this lane.'); return; }
         let value = raw;
         if (value !== null) {
           const lane = lanes[column];
@@ -131,19 +132,23 @@ export class PatternGrid {
 
   private get lanes(): Lane[] {
     const pattern = this.pattern();
-    return this.project().tracks.flatMap((t, track): Lane[] => [
-      ...pattern.notes[track].flatMap((column, col): Lane[] => [
+    const project = this.project();
+    return Array.from({ length: columnCount(project) }, (_, track): Lane[] => [
+      // returns and the master have no notes, only parameter lanes
+      ...(track < project.tracks.length ? pattern.notes[track].flatMap((column, col): Lane[] => [
         { track, kind: 'note', col, fx: null, values: column.notes },
-        ...subColumns.filter(kind => shows(t, kind)).map((kind): Lane => ({ track, kind, col, fx: null, values: column[kind] })),
-      ]),
-      ...pattern.fx[track].map((lane, fx): Lane => ({ track, kind: null, col: 0, fx, values: lane.values })),
-    ]);
+        ...subColumns.filter(kind => shows(project.tracks[track], kind)).map((kind): Lane => ({ track, kind, col, fx: null, values: column[kind] })),
+      ]) : []),
+      ...columnLanes(project, pattern, track).map((lane, fx): Lane => ({ track, kind: null, col: 0, fx, values: lane.values })),
+    ]).flat();
   }
+  /** The parameter lane a lane of the grid shows. */
+  private laneAt(lane: Lane): FxLane { return columnLanes(this.project(), this.pattern(), lane.track)[lane.fx!]; }
   private get values() { return this.lanes.map(lane => lane.values); }
   get activeTrack() { return this.lanes[this.column]?.track ?? 0; }
   private get history() {
     const pattern = this.pattern(), id = pattern.id;
-    const signature = JSON.stringify([pattern.fx.map(track => track.map(lane => lane.target)), pattern.notes.map(columns => columns.length), this.project().tracks.map(t => t.show)]);
+    const signature = JSON.stringify([[...pattern.fx, ...pattern.return_fx, pattern.master_fx].map(lanes => lanes.map(lane => lane.target)), pattern.notes.map(columns => columns.length), this.project().tracks.map(t => t.show)]);
     if (this.targetSignatures.get(id) !== signature) this.histories.delete(id);
     this.targetSignatures.set(id, signature);
     if (!this.histories.has(id)) this.histories.set(id, new NoteHistory());
@@ -155,7 +160,7 @@ export class PatternGrid {
   private apply(edits: NoteEdit[]) { if (this.history.apply(this.values, edits)) { this.render(); this.edited(); } }
 
   selectTrack(track: number, render = true) {
-    const index = Math.max(0, Math.min(this.project().tracks.length - 1, track));
+    const index = Math.max(0, Math.min(columnCount(this.project()) - 1, track));
     this.column = this.lanes.findIndex(lane => lane.track === index);
     this.anchor = { row: this.row, column: this.column }; this.trackSelected(index);
     if (render) this.render();
@@ -166,10 +171,12 @@ export class PatternGrid {
     return lane.kind === 'note' && lane.col === 0 ? `cell-${row}-${lane.track}` : `cell-${row}-${lane.track}-${lane.col}-${lane.kind}`;
   }
   private text(lane: Lane, value: string | null) { return lane.kind === 'note' || lane.kind === null ? value ?? '' : subText(lane.kind, value, this.project()); }
-  /** The width of a track: its note columns with their sub-columns, then its parameter lanes. */
+  /** The width of a column: a track's note columns with their sub-columns, then its parameter lanes. */
   private trackWidth(track: number) {
+    const lanes = columnLanes(this.project(), this.pattern(), track).length * LANE_WIDTH;
+    if (track >= this.project().tracks.length) return Math.max(MIN_STRIP_WIDTH, lanes + 2);
     const subs = subColumns.filter(kind => shows(this.project().tracks[track], kind)).length;
-    return Math.max(150, this.pattern().notes[track].length * (NOTE_WIDTH + subs * SUB_WIDTH) + 2 + this.pattern().fx[track].length * LANE_WIDTH);
+    return Math.max(MIN_TRACK_WIDTH, this.pattern().notes[track].length * (NOTE_WIDTH + subs * SUB_WIDTH) + 2 + lanes);
   }
   private selected(row: number, column: number) {
     return row >= Math.min(this.row, this.anchor.row) && row <= Math.max(this.row, this.anchor.row) && column >= Math.min(this.column, this.anchor.column) && column <= Math.max(this.column, this.anchor.column);
@@ -186,22 +193,27 @@ export class PatternGrid {
 
   render() {
     const project = this.project(), pattern = this.pattern(), lanes = this.lanes;
+    // a lane for an instrument that no note on its track uses does nothing, so it is drawn dimmed
+    const onTrack = project.tracks.map((_, track) => instrumentsOnTrack(project, track));
+    const idle = (track: number, fx: number) => { const target = columnLanes(project, pattern, track)[fx].target; return target?.kind === 'instrument' && !onTrack[track]?.has(target.instrument); };
     this.column = Math.min(this.column, lanes.length - 1); this.anchor.column = Math.min(this.anchor.column, lanes.length - 1);
     this.row = Math.min(this.row, pattern.rows - 1); this.anchor.row = Math.min(this.anchor.row, pattern.rows - 1);
     this.parent.replaceChildren();
-    this.parent.style.setProperty('--track-columns', `${ROW_WIDTH}px ${project.tracks.map((_, track) => `${this.trackWidth(track)}px`).join(' ')}`);
+    this.parent.style.setProperty('--track-columns', `${ROW_WIDTH}px ${Array.from({ length: columnCount(project) }, (_, track) => `${this.trackWidth(track)}px`).join(' ')}`);
     const header = document.createElement('div'); header.className = 'grid-row grid-header'; header.setAttribute('role', 'row');
     const label = document.createElement('span'); label.setAttribute('role', 'columnheader'); header.append(label);
-    for (const [index, track] of project.tracks.entries()) {
-      const cell = document.createElement('div'); cell.setAttribute('role', 'columnheader'); cell.className = 'track-header'; cell.dataset.track = String(index);
-      const slot = this.slot(index); if (slot) { cell.dataset.slot = slot.kind; cell.title = slot.text; }
-      cell.style.setProperty('--track-colour', trackColour(track, index)); cell.classList.toggle('selected-track', index === this.activeTrack);
-      const strip = document.createElement('button'); strip.className = 'track-colour'; strip.title = 'Track colour'; strip.setAttribute('aria-label', `${track.name} colour`);
-      strip.onclick = () => this.pickColour(track, strip);
+    for (let index = 0; index < columnCount(project); index++) {
+      // a track, or a return, or the master after them: the last two have parameter lanes but no notes
+      const track = columnStrip(project, index), isTrack = index < project.tracks.length, isMaster = index === columnCount(project) - 1;
+      const cell = document.createElement('div'); cell.setAttribute('role', 'columnheader'); cell.className = isTrack ? 'track-header' : 'track-header strip'; cell.dataset.track = String(index);
+      const slot = isTrack ? this.slot(index) : null; if (slot) { cell.dataset.slot = slot.kind; cell.title = slot.text; }
+      cell.style.setProperty('--track-colour', columnColour(project, index)); cell.classList.toggle('selected-track', index === this.activeTrack);
+      const strip = document.createElement(isTrack ? 'button' : 'div'); strip.className = 'track-colour';
+      if (isTrack) { strip.title = 'Track colour'; strip.setAttribute('aria-label', `${track.name} colour`); strip.onclick = () => this.pickColour(track, strip); }
       const heading = document.createElement('div'); heading.className = 'track-heading';
-      const name = document.createElement('button'); name.className = 'track-name'; name.textContent = `${String(index + 1).padStart(2, '0')} ${track.name}`; name.title = 'Double-click to rename'; name.onclick = () => this.selectTrack(index, false);
-      name.ondblclick = () => {
-        const input = document.createElement('input'); input.className = 'track-rename'; input.value = track.name; input.maxLength = 64; input.setAttribute('aria-label', `Rename track ${index + 1}`);
+      const name = document.createElement('button'); name.className = 'track-name'; name.textContent = track.name; name.title = isMaster ? 'The master: everything is mixed into it' : 'Double-click to rename'; name.onclick = () => this.selectTrack(index, false);
+      if (!isMaster) name.ondblclick = () => {
+        const input = document.createElement('input'); input.className = 'track-rename'; input.value = track.name; input.maxLength = 64; input.setAttribute('aria-label', isTrack ? `Rename track ${index + 1}` : `Rename ${track.name}`);
         let finished = false;
         const finish = (commit: boolean) => {
           if (finished) return; finished = true;
@@ -213,51 +225,42 @@ export class PatternGrid {
         input.onblur = () => finish(true); name.replaceWith(input); input.focus(); input.select();
       };
       const tools = document.createElement('div'); tools.className = 'track-tools';
-      const fxButton = document.createElement('button'); fxButton.textContent = 'FX'; fxButton.title = `Show ${track.name} effects`; fxButton.setAttribute('aria-label', fxButton.title);
-      fxButton.onclick = () => { const same = this.activeTrack === index; this.selectTrack(index); this.openEffects(index, same); }; tools.append(fxButton);
       const mute = document.createElement('button'); mute.textContent = 'M'; mute.title = `Mute ${track.name}`; mute.setAttribute('aria-label', mute.title); mute.setAttribute('aria-pressed', String(track.muted));
-      mute.onclick = () => { track.muted = !track.muted; this.edited(); this.render(); }; tools.append(mute);
-      const more = document.createElement('button'); more.textContent = '⋯'; more.title = `${track.name} note columns`; more.setAttribute('aria-label', `${track.name} columns`);
-      more.className = 'track-more'; more.onclick = () => { this.selectTrack(index, false); this.pickColumns(index, more); }; tools.append(more); heading.append(name, tools);
-      const source = document.createElement('div'); source.className = 'track-source';
+      mute.onclick = () => { track.muted = !track.muted; this.edited(); this.render(); };
+      const solo = document.createElement('button'); solo.textContent = 'S'; solo.title = `Solo ${track.name}`; solo.setAttribute('aria-label', solo.title); solo.setAttribute('aria-pressed', String(!!track.solo));
+      solo.onclick = () => { track.solo = !track.solo; this.edited(); this.render(); };
+      if (!isMaster) tools.append(mute); if (isTrack) tools.append(solo);
+      const more = document.createElement('button'); more.textContent = '⋯'; more.title = isTrack ? `${track.name} note columns and parameter lanes` : `${track.name} parameter lanes`; more.setAttribute('aria-label', `${track.name} columns`);
+      more.className = 'track-more'; more.onclick = () => { this.selectTrack(index, false); this.pickColumns(index, more); }; tools.append(more);
+      // a dot after the name marks a track that has effects
+      const effects = track.fx.length ? [Object.assign(document.createElement('span'), { className: 'has-fx', textContent: '●', title: `${track.fx.length} effect${track.fx.length > 1 ? 's' : ''}` })] : [];
+      heading.append(name, ...effects, tools);
       const columns = document.createElement('div'); columns.className = 'track-columns';
       for (const lane of lanes.filter(lane => lane.track === index && lane.fx === null)) {
         const label = document.createElement('span'); label.textContent = lane.kind === 'note' ? 'Note' : subLabel[lane.kind!];
         label.className = lane.kind === 'note' ? 'col-label' : 'col-label sub-label'; if (lane.kind === 'note' && lane.col > 0) label.classList.add('col-start');
         if (lane.kind !== 'note') label.title = subTitle[lane.kind!]; columns.append(label);
       }
-      for (const [column, lane] of pattern.fx[index].entries()) {
+      for (const [column, lane] of columnLanes(project, pattern, index).entries()) {
         const picker = document.createElement('select'); picker.className = 'lane-target'; picker.setAttribute('aria-label', `${track.name} parameter lane ${column + 1}`);
         picker.add(new Option('—', ''));
-        const choices: FxTarget[] = [{ kind: 'volume' }, { kind: 'pan' }];
-        for (const definition of project.definitions) if (definition.kind === 'instr') for (const p of this.parameters()[definition.id] ?? []) choices.push({ kind: 'instrument', instrument: definition.id, parameter: p.name });
-        for (const device of track.fx) for (const p of this.parameters()[device.definition] ?? []) choices.push({ kind: 'effect', device: device.id, parameter: p.name });
-        for (const target of choices) picker.add(new Option(laneParameter(target, index, project, this.parameters())!.label, targetKey(target)));
-        if (lane.target && !choices.some(t => targetKey(t) === targetKey(lane.target))) picker.add(new Option(`Missing/unapplied parameter: ${lane.target.kind === 'effect' || lane.target.kind === 'instrument' ? lane.target.parameter : 'parameter'}`, targetKey(lane.target)));
+        // short names so the lane stays narrow, grouped under what they belong to; the title has the full one
+        const choices = this.laneChoices(index), groups = new Map<string, HTMLOptGroupElement>();
+        for (const choice of choices) {
+          if (!groups.has(choice.owner)) { const group = document.createElement('optgroup'); group.label = choice.owner; groups.set(choice.owner, group); picker.append(group); }
+          groups.get(choice.owner)!.append(new Option(choice.name, targetKey(choice.target)));
+        }
+        if (lane.target && !choices.some(choice => targetKey(choice.target) === targetKey(lane.target))) picker.add(new Option(`Missing/unapplied parameter: ${lane.target.kind === 'effect' || lane.target.kind === 'instrument' ? lane.target.parameter : 'parameter'}`, targetKey(lane.target)));
         picker.value = targetKey(lane.target); picker.title = laneParameter(lane.target, index, project, this.parameters())?.label ?? 'Connect and Apply effects to expose more parameters';
-        picker.onchange = () => {
-          if (lane.values.some(value => value !== null) || lane.envelope?.points.length) { picker.value = targetKey(lane.target); this.feedback('Clear this lane’s values before choosing a different parameter.'); return; }
-          const target: FxTarget | null = picker.value ? JSON.parse(picker.value) : null;
-          if (target && pattern.fx[index].some(other => other !== lane && targetKey(other.target) === targetKey(target))) { picker.value = targetKey(lane.target); this.feedback('That parameter already has a lane in this track.'); return; }
-          lane.target = target; this.resetHistory(); this.edited(); this.render();
-        };
+        picker.onchange = () => { if (!this.setLaneTarget(index, lane, picker.value ? JSON.parse(picker.value) : null)) picker.value = targetKey(lane.target); };
         const control = document.createElement('div'); control.className = 'lane-heading';
         const graph = document.createElement('button'); graph.textContent = '⌁'; graph.title = `Edit ${picker.title} envelope`; graph.setAttribute('aria-label', `${track.name} lane ${column + 1} automation`); graph.onclick = () => this.openEnvelope(index, column);
+        // lit while the lane is drawn by its envelope
+        if (lane.envelope?.enabled) { graph.classList.add('on'); graph.title += ' (in use)'; }
         control.append(picker, graph); columns.append(control);
+        if (idle(index, column)) { control.classList.add('idle'); picker.title += ' · no note on this track uses this instrument, so it has no effect'; }
       }
-      const adjust = document.createElement('div'); adjust.className = 'fx-column-tools';
-      for (const [delta, text] of [[-1, '−'], [1, '+']] as const) {
-        const button = document.createElement('button'); button.textContent = text; button.title = `${delta > 0 ? 'Add' : 'Hide'} ${track.name} parameter lane`; button.setAttribute('aria-label', button.title);
-        button.disabled = delta < 0 ? pattern.fx[index].length === 1 : pattern.fx[index].length === 4;
-        button.onclick = () => {
-          if (delta > 0) pattern.fx[index].push({ target: null, values: Array(Math.max(...pattern.notes.flat().map(column => column.notes.length))).fill(null) });
-          else if ((pattern.fx[index].at(-1)!.values.some(value => value !== null) || pattern.fx[index].at(-1)!.envelope?.points.length)) { this.feedback('Clear the last parameter lane before hiding it.'); return; }
-          else pattern.fx[index].pop();
-          this.resetHistory(); this.selectTrack(index); this.edited();
-        }; adjust.append(button);
-      }
-      source.append(adjust);
-      cell.append(strip, heading, source, columns); cell.onkeydown = event => event.stopPropagation();
+      cell.append(strip, heading, columns); cell.onkeydown = event => event.stopPropagation();
       cell.onclick = event => { if (!(event.target as HTMLElement).closest('button, select, input')) this.selectTrack(index, false); };
       header.append(cell);
     }
@@ -266,15 +269,16 @@ export class PatternGrid {
       const line = document.createElement('div'); line.className = `grid-row ${row % project.rows_per_beat === 0 ? 'beat' : ''} ${row % (project.rows_per_beat * 4) === 0 ? 'bar' : ''}`; line.setAttribute('role', 'row'); line.dataset.row = String(row);
       const number = document.createElement('span'); number.className = 'row-number'; number.textContent = String(row).padStart(2, '0'); line.append(number);
       let column = 0;
-      for (let track = 0; track < project.tracks.length; track++) {
+      for (let track = 0; track < columnCount(project); track++) {
         const group = document.createElement('div'); group.className = 'track-cells';
         for (const lane of lanes.filter(lane => lane.track === track)) {
           const c = column++, value = lane.values[row], cell = document.createElement('div'); cell.setAttribute('role', 'gridcell');
           cell.className = `${lane.fx !== null ? 'fx-command' : lane.kind === 'note' ? 'note' : 'sub'} ${value ? 'filled' : ''}`; cell.dataset.noteRow = String(row); cell.dataset.column = String(c);
           if (lane.kind === 'note' && lane.col > 0) cell.classList.add('col-start'); if (value === 'OFF') cell.classList.add('off');
-          cell.id = this.id(row, lane); cell.textContent = value === null ? (lane.fx !== null ? '·' : lane.kind === 'note' ? '···' : '··') : lane.fx === null ? this.text(lane, value) : formatValue(value, this.info(lane));
-          if (lane.fx !== null && pattern.fx[track][lane.fx].envelope?.enabled) { const envelope = pattern.fx[track][lane.fx].envelope!; const v = envelopeValue(envelope, row, this.info(lane)?.unit === 'db'); cell.textContent = v === null ? '·' : formatValue(v, this.info(lane)); cell.classList.add('envelope-cell'); }
-          if (lane.fx !== null) { cell.title = `${this.info(lane)?.label ?? 'Choose a parameter above'} · Click to edit; drag ⋮ vertically to adjust. Blank holds the previous value.`; if (value !== null && this.info(lane) && !pattern.fx[track][lane.fx].envelope?.enabled) { const handle = document.createElement('span'); handle.className = 'value-drag'; handle.textContent = '⋮'; handle.title = 'Drag vertically to adjust'; handle.onpointerdown = event => this.dragValue(event, cell, lane, row, c); cell.append(handle); } }
+          if (lane.fx !== null && idle(track, lane.fx)) cell.classList.add('idle');
+          cell.id = this.id(row, lane); cell.textContent = value === null ? (lane.fx !== null ? '·' : lane.kind === 'note' ? '···' : '··') : lane.fx === null ? this.text(lane, value) : formatValue(value, this.info(lane), false, true);
+          if (lane.fx !== null && columnLanes(project, pattern, track)[lane.fx].envelope?.enabled) { const envelope = columnLanes(project, pattern, track)[lane.fx].envelope!; const v = envelopeValue(envelope, row, this.info(lane)?.unit === 'db'); cell.textContent = v === null ? '·' : formatValue(v, this.info(lane), false, true); cell.classList.add('envelope-cell'); }
+          if (lane.fx !== null) { cell.title = `${this.info(lane)?.label ?? 'Choose a parameter above'}${this.info(lane)?.unit ? ` (${this.info(lane)!.unit})` : ''} · Click to edit; drag ⋮ vertically to adjust. Blank holds the previous value. Press P to choose the parameter.`; if (value !== null && this.info(lane) && !columnLanes(project, pattern, track)[lane.fx].envelope?.enabled) { const handle = document.createElement('span'); handle.className = 'value-drag'; handle.textContent = '⋮'; handle.title = 'Drag vertically to adjust'; handle.onpointerdown = event => this.dragValue(event, cell, lane, row, c); cell.append(handle); } }
           cell.onclick = event => {
             if (this.dragged) { this.dragged = false; return; }
             if (!event.shiftKey) this.anchor = { row, column: c };
@@ -350,14 +354,48 @@ export class PatternGrid {
     const reset = document.createElement('button'); reset.className = 'swatch-reset'; reset.textContent = 'Default'; reset.onclick = () => choose(undefined); element.append(reset);
   }
   /** Note columns (shared by every pattern) and which sub-columns the track shows. */
+  /** What a lane on `track` can drive: its volume and pan, its effects' parameters, and those of the instruments it plays (and any a lane already points at). */
+  private laneChoices(track: number): { target: FxTarget; owner: string; name: string }[] {
+    const project = this.project(), strip = columnStrip(project, track);
+    // only a track has notes, so only a track has instruments to automate
+    const listed = new Set(track < project.tracks.length ? [...instrumentsOnTrack(project, track), ...this.pattern().fx[track].flatMap(lane => lane.target?.kind === 'instrument' ? [lane.target.instrument] : [])] : []);
+    const choices: { target: FxTarget; owner: string; name: string }[] = [{ target: { kind: 'volume' }, owner: 'Track', name: 'Vol' }, { target: { kind: 'pan' }, owner: 'Track', name: 'Pan' }];
+    for (const definition of project.definitions) if (definition.kind === 'instr' && listed.has(definition.id)) for (const p of this.parameters()[definition.id] ?? []) choices.push({ target: { kind: 'instrument', instrument: definition.id, parameter: p.name }, owner: definition.name, name: p.name });
+    for (const device of strip.fx) for (const p of this.parameters()[device.definition] ?? []) choices.push({ target: { kind: 'effect', device: device.id, parameter: p.name }, owner: project.definitions.find(d => d.id === device.definition)?.name ?? 'Effect', name: p.name });
+    return choices;
+  }
+  /** Points a lane at a parameter. Says why and returns false if the lane has values to lose or the parameter already has a lane on this track. */
+  private setLaneTarget(track: number, lane: FxLane, target: FxTarget | null): boolean {
+    if (lane.values.some(value => value !== null) || lane.envelope?.points.length) { this.feedback('Clear this lane’s values before choosing a different parameter.'); return false; }
+    if (target && columnLanes(this.project(), this.pattern(), track).some(other => other !== lane && targetKey(other.target) === targetKey(target))) { this.feedback('That parameter already has a lane in this track.'); return false; }
+    lane.target = target; this.resetHistory(); this.edited(); this.render();
+    return true;
+  }
+  /** P on a parameter lane: a list of what it can drive, with a search box, so the choice needs no mouse. */
+  private chooseLaneTarget(lane: Lane) {
+    const anchor = this.parent.querySelectorAll<HTMLElement>(`.track-header[data-track="${lane.track}"] .lane-target`)[lane.fx!];
+    const choices = this.laneChoices(lane.track);
+    openBrowser(anchor, [{ value: '', name: 'No parameter', folder: '' }, ...choices.map(choice => ({ value: targetKey(choice.target), name: choice.name, folder: choice.owner }))], item => {
+      this.setLaneTarget(lane.track, this.laneAt(lane), item.value ? JSON.parse(item.value) : null);
+      this.parent.focus();
+    }, this.parent);
+  }
+  /** Adds a parameter lane to a track in this pattern, or hides its last one if that is empty. Says why and returns false if it cannot. */
+  private changeLanes(index: number, delta: 1 | -1): boolean {
+    const pattern = this.pattern(), lanes = columnLanes(this.project(), pattern, index);
+    if (delta > 0) lanes.push({ target: null, values: Array(Math.max(...pattern.notes.flat().map(column => column.notes.length))).fill(null) });
+    else if (lanes.at(-1)!.values.some(value => value !== null) || lanes.at(-1)!.envelope?.points.length) { this.feedback('Clear the last parameter lane before hiding it.'); return false; }
+    else lanes.pop();
+    return true;
+  }
   private pickColumns(index: number, anchor: HTMLElement) {
     const { element, close } = this.popup(anchor, 'column-choices');
-    const project = this.project(), track = project.tracks[index];
+    const project = this.project(), track = columnStrip(project, index), isTrack = index < project.tracks.length;
     const changed = () => {
       this.resetHistory(); this.edited(); this.render(); close();
       const again = this.parent.querySelector<HTMLElement>(`.track-header[data-track="${index}"] .track-more`); if (again) this.pickColumns(index, again);
     };
-    const count = this.pattern().notes[index].length;
+    const count = isTrack ? this.pattern().notes[index].length : 0;
     const heading = document.createElement('span'); heading.textContent = 'Note columns';
     const fewer = document.createElement('button'); fewer.textContent = '−'; fewer.setAttribute('aria-label', 'Fewer note columns'); fewer.disabled = count <= 1;
     fewer.onclick = () => {
@@ -368,12 +406,23 @@ export class PatternGrid {
     const amount = document.createElement('strong'); amount.textContent = String(count);
     const more = document.createElement('button'); more.textContent = '+'; more.setAttribute('aria-label', 'More note columns'); more.disabled = count >= maxNoteColumns;
     more.onclick = () => { for (const p of project.patterns) p.notes[index].push(blankColumn(Math.max(p.rows, p.notes[index][0].notes.length))); changed(); };
-    element.append(heading, fewer, amount, more);
-    for (const kind of subColumns.filter(kind => kind !== 'inst')) {
+    // a return or the master has no notes, so only a track has note columns and sub-columns to set
+    const line = (...nodes: Node[]) => { const div = document.createElement('div'); div.className = 'choice-row'; div.append(...nodes); return div; };
+    if (isTrack) element.append(line(heading, fewer, amount, more));
+    const lanes = columnLanes(project, this.pattern(), index).length;
+    const laneHeading = document.createElement('span'); laneHeading.textContent = 'Parameter lanes';
+    const fewerLanes = document.createElement('button'); fewerLanes.textContent = '−'; fewerLanes.setAttribute('aria-label', 'Fewer parameter lanes'); fewerLanes.disabled = lanes <= 1;
+    fewerLanes.onclick = () => { if (this.changeLanes(index, -1)) changed(); };
+    const laneCount = document.createElement('strong'); laneCount.textContent = String(lanes);
+    const moreLanes = document.createElement('button'); moreLanes.textContent = '+'; moreLanes.setAttribute('aria-label', 'More parameter lanes'); moreLanes.disabled = lanes >= MAX_LANES;
+    moreLanes.onclick = () => { if (this.changeLanes(index, 1)) changed(); };
+    element.append(line(laneHeading, fewerLanes, laneCount, moreLanes));
+    const checks = document.createElement('div'); checks.className = 'choice-checks'; if (isTrack) element.append(checks);
+    for (const kind of isTrack ? subColumns.filter(kind => kind !== 'inst') : []) {
       const label = document.createElement('label'); label.title = subTitle[kind];
       const box = document.createElement('input'); box.type = 'checkbox'; box.checked = !!track.show?.[kind]; box.setAttribute('aria-label', `Show ${subLabel[kind]} column`);
       box.onchange = () => { track.show = { ...track.show, [kind]: box.checked }; changed(); };
-      label.append(box, { vol: 'Volume', pan: 'Panning', delay: 'Delay' }[kind]); element.append(label);
+      label.append(box, { vol: 'Volume', pan: 'Panning', delay: 'Delay' }[kind]); checks.append(label);
     }
   }
   /** Edits a sub-column cell in place, like a parameter lane: type a number, Enter to save and move down. */
@@ -407,7 +456,7 @@ export class PatternGrid {
     const end = this.parent.querySelector<HTMLElement>(`[data-row="${this.pattern().rows - 1}"]`)?.getBoundingClientRect().bottom;
     // While playing the pattern scrolls past, so the bottom corners stay at the foot of the view.
     const bottom = this.playing !== null || end === undefined ? this.parent.clientHeight : Math.min(this.parent.clientHeight, end - box.top);
-    this.frame.style.cssText = `left:${left}px;width:${right - left}px;top:0;height:${Math.max(0, bottom)}px;--c:${trackColour(this.project().tracks[this.activeTrack], this.activeTrack)};--side:${header.offsetHeight}px`;
+    this.frame.style.cssText = `left:${left}px;width:${right - left}px;top:0;height:${Math.max(0, bottom)}px;--c:${columnColour(this.project(), this.activeTrack)};--side:${header.offsetHeight}px`;
   }
   private setPad(pad: number) { this.pad = pad; for (const spacer of this.parent.querySelectorAll<HTMLElement>('.grid-pad')) spacer.style.height = `${pad}px`; }
   private pads() { const spacer = document.createElement('div'); spacer.className = 'grid-pad'; spacer.style.height = `${this.pad}px`; return spacer; }
@@ -421,7 +470,7 @@ export class PatternGrid {
     for (let row = Math.min(this.row, this.anchor.row); row <= Math.max(this.row, this.anchor.row); row++) {
       const values: string[] = [];
       for (let c = Math.min(this.column, this.anchor.column); c <= Math.max(this.column, this.anchor.column); c++) {
-        const lane = lanes[c], envelope = lane.fx === null ? undefined : this.pattern().fx[lane.track][lane.fx].envelope;
+        const lane = lanes[c], envelope = lane.fx === null ? undefined : this.laneAt(lane).envelope;
         const value = envelope?.enabled ? envelopeValue(envelope, row, this.info(lane)?.unit === 'db') : lane.values[row];
         values.push(value === null ? '---' : lane.fx === null ? this.text(lane, String(value)) : formatValue(value, this.info(lane), true));
       }
@@ -434,7 +483,7 @@ export class PatternGrid {
     return { top: Math.min(this.row, this.anchor.row), bottom: Math.max(this.row, this.anchor.row), left: Math.min(this.column, this.anchor.column), right: Math.max(this.column, this.anchor.column) };
   }
   /** Lanes drawn by a graphical envelope have no cells of their own to edit. */
-  private editable(lane: Lane) { return lane.fx === null || !this.pattern().fx[lane.track][lane.fx].envelope?.enabled; }
+  private editable(lane: Lane) { return lane.fx === null || !this.laneAt(lane).envelope?.enabled; }
   /** Moves the selected notes up or down by `semitones`; OFF and notes that would leave the range stay as they are. */
   private transpose(semitones: number) {
     const { top, bottom, left, right } = this.bounds, lanes = this.lanes, edits: NoteEdit[] = [];
@@ -490,19 +539,19 @@ export class PatternGrid {
   }
   private clearSelection() {
     const edits: NoteEdit[] = [];
-    this.lanes.forEach((lane, column) => { if (lane.fx !== null && this.pattern().fx[lane.track][lane.fx].envelope?.enabled) return; for (let row = 0; row < this.pattern().rows; row++) if (this.selected(row, column)) edits.push({ row, track: column, before: lane.values[row], after: null }); }); this.apply(edits);
+    this.lanes.forEach((lane, column) => { if (lane.fx !== null && this.laneAt(lane).envelope?.enabled) return; for (let row = 0; row < this.pattern().rows; row++) if (this.selected(row, column)) edits.push({ row, track: column, before: lane.values[row], after: null }); }); this.apply(edits);
   }
   private advance() { this.row = (this.row + Math.max(0, Math.min(256, Math.trunc(this.step()) || 0))) % this.pattern().rows; this.anchor = { row: this.row, column: this.column }; }
-  private info(lane: Lane) { return laneParameter(lane.fx === null ? null : this.pattern().fx[lane.track][lane.fx].target, lane.track, this.project(), this.parameters()); }
+  private info(lane: Lane) { return laneParameter(lane.fx === null ? null : this.laneAt(lane).target, lane.track, this.project(), this.parameters()); }
   private editValue(row: number, column: number, initial?: string) {
     const lane = this.lanes[column];
-    if (lane.fx !== null && this.pattern().fx[lane.track][lane.fx].envelope?.enabled) { this.openEnvelope(lane.track, lane.fx); return; }
+    if (lane.fx !== null && this.laneAt(lane).envelope?.enabled) { this.openEnvelope(lane.track, lane.fx); return; }
     const info = this.info(lane), cell = this.parent.querySelector<HTMLElement>(`#${this.id(row, lane)}`);
     if (!info || !cell) { this.feedback('Choose a lane parameter first. Connect and Apply an effect to expose its controls.'); return; }
     const input = document.createElement('input'); input.className = 'lane-value'; input.setAttribute('aria-label', `${info.label} row ${row}`);
-    input.value = initial ?? (lane.values[row] === null ? '' : formatValue(lane.values[row]!, info));
+    input.value = initial ?? (lane.values[row] === null ? '' : formatValue(lane.values[row]!, info, false, true));
     const originalText = input.value;
-    input.placeholder = formatValue(info.default, info); cell.replaceChildren(input); input.focus(); if (initial === undefined) input.select();
+    input.placeholder = formatValue(info.default, info, false, true); cell.replaceChildren(input); input.focus(); if (initial === undefined) input.select();
     let finished = false;
     const finish = (commit: boolean, advance: boolean) => {
       if (finished) return;
@@ -520,15 +569,15 @@ export class PatternGrid {
     event.preventDefault(); event.stopPropagation();
     const handle = event.currentTarget as HTMLElement, before = lane.values[row], start = Number(before ?? info.default), y = event.clientY;
     let value = start; handle.setPointerCapture?.(event.pointerId);
-    handle.onpointermove = move => { value = Math.min(info.max, Math.max(info.min, start + (y - move.clientY) * (info.max - info.min) / (move.shiftKey ? 2000 : 200))); cell.firstChild!.textContent = formatValue(value, info); };
+    handle.onpointermove = move => { value = Math.min(info.max, Math.max(info.min, start + (y - move.clientY) * (info.max - info.min) / (move.shiftKey ? 2000 : 200))); cell.firstChild!.textContent = formatValue(value, info, false, true); };
     const finish = (commit: boolean) => { handle.onpointermove = null; handle.onpointerup = null; handle.onpointercancel = null; if (commit) this.apply([{ row, track: column, before, after: String(Number(value.toPrecision(8))) }]); else this.render(); };
     handle.onpointerup = up => { up.stopPropagation(); finish(true); }; handle.onpointercancel = () => finish(false); handle.onclick = click => click.stopPropagation();
   }
   writeParameter(track: number, target: FxTarget, value: number) {
-    const columns = this.pattern().fx[track]; let fx = columns.findIndex(lane => targetKey(lane.target) === targetKey(target));
+    const columns = columnLanes(this.project(), this.pattern(), track); let fx = columns.findIndex(lane => targetKey(lane.target) === targetKey(target));
     if (fx < 0) {
       fx = columns.findIndex(lane => lane.values.every(value => value === null) && lane.target === null);
-      if (fx < 0 && columns.length < 4) { fx = columns.length; columns.push(emptyFxLane(this.pattern().notes[track][0].notes.length)); }
+      if (fx < 0 && columns.length < 4) { fx = columns.length; columns.push(emptyFxLane(this.pattern().notes[0][0].notes.length)); }
       if (fx < 0) { this.feedback('Add or clear a parameter lane before recording this control (maximum four per track).'); return; }
       columns[fx].target = { ...target }; this.resetHistory();
     }
@@ -562,7 +611,7 @@ export class PatternGrid {
       case 'ArrowDown': this.row = event.shiftKey ? Math.min(this.pattern().rows - 1, this.row + 1) : (this.row + 1) % this.pattern().rows; break;
       case 'ArrowLeft': this.column = event.shiftKey ? Math.max(0, this.column - 1) : (this.column + lanes.length - 1) % lanes.length; break;
       case 'ArrowRight': this.column = event.shiftKey ? Math.min(lanes.length - 1, this.column + 1) : (this.column + 1) % lanes.length; break;
-      case 'Tab': this.selectTrack((this.activeTrack + (event.shiftKey ? this.project().tracks.length - 1 : 1)) % this.project().tracks.length); event.preventDefault(); return;
+      case 'Tab': this.selectTrack((this.activeTrack + (event.shiftKey ? columnCount(this.project()) - 1 : 1)) % columnCount(this.project())); event.preventDefault(); return;
       case 'PageUp': this.row = Math.max(0, this.row - this.project().rows_per_beat * 4); break;
       case 'PageDown': this.row = Math.min(this.pattern().rows - 1, this.row + this.project().rows_per_beat * 4); break;
       case 'Home': case 'F9': this.row = 0; break;
@@ -575,6 +624,7 @@ export class PatternGrid {
       case 'Delete': if (!this.recording) return; event.preventDefault(); this.clearSelection(); return;
       default: {
         if (lane.fx !== null) {
+          if (event.key.toLowerCase() === 'p' && !event.shiftKey) { event.preventDefault(); this.chooseLaneTarget(lane); return; }
           if (!this.recording) return;
           if (event.key === 'Enter' || event.key.length === 1 && /[0-9+.-]/.test(event.key)) { event.preventDefault(); this.editValue(this.row, this.column, event.key === 'Enter' ? undefined : event.key); } return;
         }
@@ -608,6 +658,13 @@ export function instrumentAt(inst: (string | null)[], row: number): string | nul
   return null;
 }
 
-export const trackPalette = ['#c97979', '#d08a5a', '#c6a465', '#a9b966', '#73b48a', '#5fb3a6', '#6db4be', '#829bd1', '#8f8fd8', '#b28bce', '#cc8fb2', '#9aa0a8'];
+/** Saturated colours around the wheel. New tracks take the first eight in turn, so those are kept well apart. */
+export const trackPalette = ['#d8352f', '#e8741c', '#e3b616', '#1fae4f', '#16a89a', '#1f9fd6', '#a352d9', '#d04a88', '#86ac1a', '#5fc8e8', '#6b72dc', '#8d9299'];
 /** A track's own colour if it has one, otherwise a default from its position. */
 export function trackColour(track: Track, index: number) { return track.colour ?? trackPalette[index % 8]; }
+/** The colour of a column of the grid: a track's own, or the fixed colours of the returns and the master. */
+/** The master's colour, wherever it is drawn. */
+export const masterColour = '#f2f4f7';
+export function columnColour(project: Song, column: number) {
+  return column < project.tracks.length ? trackColour(project.tracks[column], column) : column === columnCount(project) - 1 ? masterColour : '#5fa8a0';
+}

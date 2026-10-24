@@ -5,7 +5,6 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Track {
     pub name: String,
-    pub instrument: Option<String>,
     /// The track's effect chain, in signal order.
     #[serde(default)]
     pub fx: Vec<Device>,
@@ -180,7 +179,7 @@ pub const MAX_NOTE_COLUMNS: usize = 8;
 pub struct NoteColumn {
     /// A note such as `C-4`, or `OFF` to end the note that is sounding.
     pub notes: Vec<Option<String>>,
-    /// The instrument to play instead of the track's, by definition id.
+    /// The instrument that plays this row's note and the notes below it, by definition id.
     #[serde(default)]
     pub inst: Vec<Option<String>>,
     /// Level from 0 (silent) to 128 (full).
@@ -238,8 +237,9 @@ impl NoteColumn {
     pub fn note(&self, row: usize) -> Option<&str> {
         Self::text(&self.notes, row)
     }
+    /// The instrument for a note at `row`: the one set on it, or the last one set above it.
     pub fn instrument(&self, row: usize) -> Option<&str> {
-        Self::text(&self.inst, row)
+        (0..=row).rev().find_map(|at| Self::text(&self.inst, at))
     }
     pub fn volume(&self, row: usize) -> Option<u32> {
         Self::text(&self.vol, row).and_then(|v| v.parse().ok())
@@ -264,7 +264,11 @@ pub struct Pattern {
     pub rows: usize,
     /// Note columns, by track.
     pub notes: Vec<Vec<NoteColumn>>,
+    /// Parameter lanes, by track.
     pub fx: Vec<Vec<FxLane>>,
+    /// Parameter lanes of each return, in order. Returns and the master have no notes.
+    pub return_fx: Vec<Vec<FxLane>>,
+    pub master_fx: Vec<FxLane>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -355,18 +359,21 @@ impl Song {
             for column in pattern.notes.iter().flatten() {
                 column.validate(pattern.rows)?;
             }
-            if pattern.fx.len() != self.tracks.len()
-                || pattern.fx.iter().any(|track| {
-                    track.is_empty()
-                        || track.len() > 4
-                        || track.iter().any(|column| {
-                            column.values.len() < pattern.rows || column.values.len() > 256
-                        })
-                })
-            {
-                return Err("Patterns need 1–4 FX columns per track".into());
+            if pattern.fx.len() != self.tracks.len() || pattern.return_fx.len() != self.returns.len() {
+                return Err("Patterns need parameter lanes for every track and return, and the master".into());
             }
-            for lane in pattern.fx.iter().flatten() {
+            let groups = || pattern.fx.iter().chain(&pattern.return_fx).chain([&pattern.master_fx]);
+            if groups().any(|lanes| {
+                lanes.is_empty()
+                    || lanes.len() > 4
+                    || lanes.iter().any(|lane| lane.values.len() < pattern.rows || lane.values.len() > 256)
+            }) {
+                return Err("Patterns need 1–4 parameter lanes per track, return and the master".into());
+            }
+            if pattern.return_fx.iter().flatten().chain(&pattern.master_fx).any(|lane| matches!(lane.target, Some(crate::commands::FxTarget::Instrument { .. }))) {
+                return Err("Returns and the master have no instruments to automate".into());
+            }
+            for lane in groups().flatten() {
                 if lane.envelope.as_ref().is_some_and(|e| !e.valid()) {
                     return Err("Invalid automation envelope".into());
                 }
@@ -463,8 +470,8 @@ pub struct Playback {
     pub next_row: u64,
     pub parameters: crate::commands::EffectParameters,
     pub instrument_parameters: crate::commands::EffectParameters,
-    /// Each track's instrument parameter lanes, as of the last row played.
-    lane_state: Vec<BTreeMap<String, f64>>,
+    /// Each track's instrument parameter lanes, by instrument and parameter, as of the last row played.
+    lane_state: Vec<BTreeMap<(String, String), f64>>,
     pub song: Song,
     pub mode: Mode,
     pub pattern_id: String,
@@ -642,6 +649,112 @@ impl Playback {
         (LOOKAHEAD as f64).max(MIN_HOLD)
     }
 
+    /// The engine edits for one parameter lane at one row of a pattern: a value or the steps of an
+    /// envelope across the row, for the strip named `slot` (a track's number, `r<n>` or `m`).
+    /// `when` is the pattern's rows, the row and the sample it starts at; `out` takes the edits made at
+    /// the start of the row and the timed events for the rest.
+    fn lane_events(
+        &self,
+        slot: &str,
+        strip: &Track,
+        lane: &FxLane,
+        when: (usize, usize, u64),
+        sample_rate: f64,
+        out: (&mut Vec<Value>, &mut Vec<Value>),
+    ) -> Result<(), String> {
+        let (rows, row, at) = when;
+        let (edits, events) = out;
+        if lane
+            .target
+            .as_ref()
+            .is_some_and(|target| !target.available(strip, &self.parameters))
+        {
+            return Ok(());
+        }
+        if let (Some(envelope), Some(target)) = (&lane.envelope, &lane.target)
+            && envelope.enabled
+        {
+            let start = row as f64;
+            let end = start + 1.0;
+            let mut breaks = vec![start];
+            breaks.extend(
+                envelope
+                    .points
+                    .iter()
+                    .filter(|p| p.row > start && p.row < end)
+                    .map(|p| p.row),
+            );
+            breaks.push(end);
+            let db = match target {
+                crate::commands::FxTarget::Volume => true,
+                crate::commands::FxTarget::Effect { .. } => target
+                    .parameter(strip, &self.parameters)
+                    .is_some_and(|p| p.unit.as_deref() == Some("db")),
+                crate::commands::FxTarget::Pan
+                | crate::commands::FxTarget::Instrument { .. } => false,
+            };
+            for pair in breaks.windows(2) {
+                let Some(value) = envelope.value(pair[0], db) else {
+                    continue;
+                };
+                let point_at = at
+                    + ((pair[0] - start) * self.song.row_samples(sample_rate)).round()
+                        as u64;
+                let end_at = at
+                    + ((pair[1] - start) * self.song.row_samples(sample_rate)).round()
+                        as u64;
+                let mut point_edits: Vec<_> =
+                    target.unmap(slot, strip).into_iter().collect();
+                point_edits.push(crate::commands::edit(
+                    target,
+                    &value.to_string(),
+                    slot,
+                    strip,
+                    &self.parameters,
+                )?);
+                events.push(json!({"op":"routing", "at":point_at, "tag":"tracker-pattern", "edits":point_edits}));
+                if envelope.mode == "linear" && end_at > point_at + 1 {
+                    let value = envelope.value(pair[1], db).unwrap();
+                    let mut ramp = crate::commands::edit(
+                        target,
+                        &value.to_string(),
+                        slot,
+                        strip,
+                        &self.parameters,
+                    )?;
+                    ramp["glide"] = json!((end_at - point_at - 1) as f64 / sample_rate);
+                    events.push(json!({"op":"routing", "at":point_at+1, "tag":"tracker-pattern", "edits":[ramp]}));
+                }
+            }
+            if envelope.mode == "hold"
+                && row + 1 == rows
+                && let Some(point) = envelope
+                    .points
+                    .iter()
+                    .find(|p| p.row == rows as f64)
+            {
+                let edit = crate::commands::edit(
+                    target,
+                    &point.value.to_string(),
+                    slot,
+                    strip,
+                    &self.parameters,
+                )?;
+                events.push(json!({"op":"routing", "at":self.row_at(self.next_row+1, sample_rate), "tag":"tracker-pattern", "edits":[edit]}));
+            }
+            return Ok(());
+        }
+        let (Some(target), Some(Some(value))) = (&lane.target, lane.values.get(row))
+        else {
+            return Ok(());
+        };
+        let edit =
+            crate::commands::edit(target, value, slot, strip, &self.parameters)?;
+        edits.extend(target.unmap(slot, strip));
+        edits.push(edit);
+        Ok(())
+    }
+
     // Derive timestamps from one origin, including across pattern boundaries.
     pub fn events_until(
         &mut self,
@@ -671,13 +784,15 @@ impl Playback {
                 };
                 let mut edits = Vec::new();
                 for lane in &pattern.fx[index] {
-                    if let Some(crate::commands::FxTarget::Instrument { parameter }) = &lane.target
+                    if let Some(crate::commands::FxTarget::Instrument {
+                        instrument,
+                        parameter,
+                    }) = &lane.target
                     {
-                        // Remembered until changed, and given to each note as it starts.
-                        let info = track
-                            .instrument
-                            .as_ref()
-                            .and_then(|id| self.instrument_parameters.get(id))
+                        // Remembered until changed, and given to each note of that instrument as it starts.
+                        let info = self
+                            .instrument_parameters
+                            .get(instrument)
                             .and_then(|all| all.iter().find(|p| p.name == *parameter));
                         let value = match &lane.envelope {
                             Some(envelope) if envelope.enabled => envelope.value(
@@ -691,98 +806,18 @@ impl Playback {
                                 .and_then(|v| v.parse().ok()),
                         };
                         if let Some(value) = value {
-                            state[index].insert(parameter.clone(), value);
+                            state[index].insert((instrument.clone(), parameter.clone()), value);
                         }
                         continue;
                     }
-                    if lane
-                        .target
-                        .as_ref()
-                        .is_some_and(|target| !target.available(track, &self.parameters))
-                    {
-                        continue;
-                    }
-                    if let (Some(envelope), Some(target)) = (&lane.envelope, &lane.target)
-                        && envelope.enabled
-                    {
-                        let start = position.row as f64;
-                        let end = start + 1.0;
-                        let mut breaks = vec![start];
-                        breaks.extend(
-                            envelope
-                                .points
-                                .iter()
-                                .filter(|p| p.row > start && p.row < end)
-                                .map(|p| p.row),
-                        );
-                        breaks.push(end);
-                        let db = match target {
-                            crate::commands::FxTarget::Volume => true,
-                            crate::commands::FxTarget::Effect { .. } => target
-                                .parameter(track, &self.parameters)
-                                .is_some_and(|p| p.unit.as_deref() == Some("db")),
-                            crate::commands::FxTarget::Pan
-                            | crate::commands::FxTarget::Instrument { .. } => false,
-                        };
-                        for pair in breaks.windows(2) {
-                            let Some(value) = envelope.value(pair[0], db) else {
-                                continue;
-                            };
-                            let point_at = at
-                                + ((pair[0] - start) * self.song.row_samples(sample_rate)).round()
-                                    as u64;
-                            let end_at = at
-                                + ((pair[1] - start) * self.song.row_samples(sample_rate)).round()
-                                    as u64;
-                            let mut point_edits: Vec<_> =
-                                target.unmap(index, track).into_iter().collect();
-                            point_edits.push(crate::commands::edit(
-                                target,
-                                &value.to_string(),
-                                index,
-                                track,
-                                &self.parameters,
-                            )?);
-                            events.push(json!({"op":"routing", "at":point_at, "tag":"tracker-pattern", "edits":point_edits}));
-                            if envelope.mode == "linear" && end_at > point_at + 1 {
-                                let value = envelope.value(pair[1], db).unwrap();
-                                let mut ramp = crate::commands::edit(
-                                    target,
-                                    &value.to_string(),
-                                    index,
-                                    track,
-                                    &self.parameters,
-                                )?;
-                                ramp["glide"] = json!((end_at - point_at - 1) as f64 / sample_rate);
-                                events.push(json!({"op":"routing", "at":point_at+1, "tag":"tracker-pattern", "edits":[ramp]}));
-                            }
-                        }
-                        if envelope.mode == "hold"
-                            && position.row + 1 == pattern.rows
-                            && let Some(point) = envelope
-                                .points
-                                .iter()
-                                .find(|p| p.row == pattern.rows as f64)
-                        {
-                            let edit = crate::commands::edit(
-                                target,
-                                &point.value.to_string(),
-                                index,
-                                track,
-                                &self.parameters,
-                            )?;
-                            events.push(json!({"op":"routing", "at":self.row_at(self.next_row+1, sample_rate), "tag":"tracker-pattern", "edits":[edit]}));
-                        }
-                        continue;
-                    }
-                    let (Some(target), Some(Some(value))) = (&lane.target, lane.values.get(position.row))
-                    else {
-                        continue;
-                    };
-                    let edit =
-                        crate::commands::edit(target, value, index, track, &self.parameters)?;
-                    edits.extend(target.unmap(index, track));
-                    edits.push(edit);
+                    self.lane_events(
+                        &index.to_string(),
+                        track,
+                        lane,
+                        (pattern.rows, position.row, at),
+                        sample_rate,
+                        (&mut edits, &mut events),
+                    )?;
                 }
                 if !edits.is_empty() {
                     events.push(
@@ -797,16 +832,13 @@ impl Playback {
                         // It ends the note before it; that note was timed to stop here.
                         continue;
                     }
-                    // A note with no instrument to play it is silent, not an error.
-                    let Some(id) = column
-                        .instrument(position.row)
-                        .or(track.instrument.as_deref())
-                    else {
+                    // A note with no instrument set at or above it is silent, not an error.
+                    let Some(id) = column.instrument(position.row) else {
                         continue;
                     };
-                    let target = targets.get(id).ok_or_else(|| {
-                        format!("Apply the instrument assigned to {} first", track.name)
-                    })?;
+                    let target = targets
+                        .get(id)
+                        .ok_or_else(|| format!("Apply the instrument played on {} first", track.name))?;
                     let row_seconds = 60.0 / self.song.bpm / f64::from(self.song.rows_per_beat);
                     let delay = column.delayed(position.row);
                     let hold = self.hold_rows(self.next_row, index, column_index, delay);
@@ -818,7 +850,7 @@ impl Playback {
                         args["pan"] = json!(format!("{:.3}deg", pan_degrees(pan)));
                     }
                     for parameter in self.instrument_parameters.get(id).into_iter().flatten() {
-                        let value = state[index].get(&parameter.name).or_else(|| {
+                        let value = state[index].get(&(id.to_string(), parameter.name.clone())).or_else(|| {
                             self.song
                                 .instrument_values
                                 .get(id)
@@ -832,6 +864,25 @@ impl Playback {
                     events.push(json!({"op":"note", "at":at + (delay * self.song.row_samples(sample_rate)).round() as u64, "target":target, "to":format!("in_{index}"), "tag":"tracker-pattern",
                         "dur":format!("{:.6}sec", hold * row_seconds), "args":args}));
                 }
+            }
+            // returns and the master follow the step's own pattern, whatever the matrix says of the tracks
+            let pattern = position.pattern;
+            let strips = self
+                .song
+                .returns
+                .iter()
+                .zip(&pattern.return_fx)
+                .enumerate()
+                .map(|(r, (strip, lanes))| (format!("r{r}"), strip, lanes))
+                .chain([(crate::mixer::MASTER.to_string(), &self.song.master, &pattern.master_fx)]);
+            let mut edits = Vec::new();
+            for (slot, strip, lanes) in strips {
+                for lane in lanes {
+                    self.lane_events(&slot, strip, lane, (pattern.rows, position.row, at), sample_rate, (&mut edits, &mut events))?;
+                }
+            }
+            if !edits.is_empty() {
+                events.push(json!({"op":"routing", "at":at, "tag":"tracker-pattern", "edits":edits}));
             }
             self.next_row += 1;
         }
@@ -850,7 +901,6 @@ mod tests {
             tracks: (0..4)
                 .map(|i| Track {
                     name: format!("Track {i}"),
-                    instrument: (i == 0).then(|| "tone".into()),
                     ..Track::default()
                 })
                 .collect(),
@@ -861,14 +911,18 @@ mod tests {
                     name: id.into(),
                     rows,
                     notes: (0..4)
-                        .map(|_| {
+                        .map(|track| {
                             vec![NoteColumn {
                                 notes: vec![Some(note.into()); rows],
+                                // only the first track has an instrument, so only it sounds
+                                inst: if track == 0 { vec![Some("tone".into()); rows] } else { vec![] },
                                 ..NoteColumn::default()
                             }]
                         })
                         .collect(),
                     fx: (0..4).map(|_| vec![FxLane::empty(rows)]).collect(),
+                    return_fx: vec![],
+                    master_fx: vec![FxLane::empty(rows)],
                 })
                 .collect(),
             sequence: vec!["a".into(), "b".into(), "a".into()],
@@ -1027,6 +1081,8 @@ mod tests {
             rows,
             notes: vec![columns],
             fx: vec![vec![FxLane::empty(rows)]],
+            return_fx: vec![],
+            master_fx: vec![FxLane::empty(rows)],
         }];
         song.sequence = vec!["a".into()];
         let mut play = Playback::new(0, song, mode, "a".into(), 0).unwrap();
@@ -1039,6 +1095,7 @@ mod tests {
     }
     fn column(rows: usize, cells: &[(usize, &str)]) -> NoteColumn {
         let mut column = NoteColumn::blank(rows);
+        column.inst = vec![Some("tone".into()); rows];
         for (row, note) in cells {
             column.notes[*row] = Some((*note).into());
         }
@@ -1080,7 +1137,7 @@ mod tests {
         first.delay = vec![Some("128".into()), None, None, None];
         first.vol = vec![Some("64".into()), None, Some("0".into()), None];
         first.pan = vec![Some("0".into()), None, Some("128".into()), None];
-        first.inst = vec![None, None, Some("alt".into()), None];
+        first.inst = vec![Some("tone".into()), None, Some("alt".into()), None];
         let events = played(4, vec![first], Mode::Song);
         let row = 6000;
         assert_eq!(events[0]["at"], row / 2, "half a row late");
@@ -1115,12 +1172,60 @@ mod tests {
     }
 
     #[test]
+    fn an_instrument_set_on_a_row_plays_the_notes_below_it_until_another_is_set() {
+        let mut notes = column(4, &[(0, "C-4"), (1, "D-4"), (2, "E-4"), (3, "F-4")]);
+        notes.inst = vec![Some("tone".into()), None, Some("alt".into()), None];
+        let targets: Vec<_> = played(4, vec![notes], Mode::Song)
+            .iter()
+            .map(|e| e["target"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(targets, ["voice", "voice", "other", "other"]);
+        let mut silent = column(4, &[(1, "C-4")]);
+        silent.inst = vec![None; 4];
+        assert!(played(4, vec![silent], Mode::Song).is_empty(), "no instrument set, so nothing plays");
+    }
+
+    #[test]
+    fn a_parameter_lane_reaches_only_the_notes_of_its_own_instrument() {
+        let mut song = song();
+        song.bpm = 120.0;
+        song.tracks.truncate(1);
+        let mut lane = FxLane::empty(4);
+        lane.target = Some(crate::commands::FxTarget::Instrument {
+            instrument: "tone".into(),
+            parameter: "cutoff".into(),
+        });
+        lane.values[1] = Some("500".into());
+        let mut notes = column(4, &[(0, "C-4"), (2, "D-4"), (3, "E-4")]);
+        notes.inst = vec![Some("tone".into()), None, Some("alt".into()), Some("tone".into())];
+        song.patterns = vec![Pattern {
+            id: "a".into(),
+            name: "a".into(),
+            rows: 4,
+            notes: vec![vec![notes]],
+            fx: vec![vec![lane]],
+            return_fx: vec![],
+            master_fx: vec![FxLane::empty(4)],
+        }];
+        song.sequence = vec!["a".into()];
+        let mut play = Playback::new(0, song, Mode::Song, "a".into(), 0).unwrap();
+        let cutoff = crate::commands::Parameter { name: "cutoff".into(), min: 20.0, max: 20000.0, default: 2400.0, unit: Some("hz".into()) };
+        play.instrument_parameters = BTreeMap::from([("tone".into(), vec![cutoff.clone()]), ("alt".into(), vec![cutoff])]);
+        let targets = BTreeMap::from([("tone".into(), "voice".into()), ("alt".into(), "other".into())]);
+        let (events, _) = play.events_until(0, play.row_at(4, 48000.0), 48000.0, &targets).unwrap();
+        let cutoffs: Vec<_> = events.iter().map(|e| e["args"].get("cutoff").and_then(|c| c.as_str()).unwrap_or("-").to_string()).collect();
+        // the lane starts at row 1: the first tone note is before it, the alt note is another instrument's, the last is after it
+        assert_eq!(cutoffs, ["-", "-", "500hz"]);
+    }
+
+    #[test]
     fn instrument_parameters_start_each_note_from_the_base_value_then_the_lane() {
         let mut song = song();
         song.bpm = 120.0;
         song.tracks.truncate(1);
         let mut lane = FxLane::empty(4);
         lane.target = Some(crate::commands::FxTarget::Instrument {
+            instrument: "tone".into(),
             parameter: "cutoff".into(),
         });
         lane.values[2] = Some("500".into());
@@ -1130,6 +1235,8 @@ mod tests {
             rows: 4,
             notes: vec![vec![column(4, &[(0, "C-4"), (2, "D-4"), (3, "E-4")])]],
             fx: vec![vec![lane]],
+            return_fx: vec![],
+            master_fx: vec![FxLane::empty(4)],
         }];
         song.sequence = vec!["a".into()];
         song.instrument_values = BTreeMap::from([(

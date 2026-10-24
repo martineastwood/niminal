@@ -34,7 +34,7 @@ it('shows returns beside the master, with an output choice on every track', () =
   const { parent, project, actions, panel } = setup();
   expect(parent.querySelector('.mix-output')!.children).toHaveLength(2);
   parent.querySelector<HTMLButtonElement>('.mix-add-return')!.click(); expect(actions.addReturn).toHaveBeenCalled();
-  project.returns.push({ name: 'Return A', instrument: null, fx: [], pan: 0, muted: false, volume_db: 0 }, { name: 'Return B', instrument: null, fx: [], pan: 0, muted: false, volume_db: 0 });
+  project.returns.push({ name: 'Return A', fx: [], pan: 0, muted: false, volume_db: 0 }, { name: 'Return B', fx: [], pan: 0, muted: false, volume_db: 0 });
   panel.render();
   expect(parent.querySelectorAll('.mix-strip')).toHaveLength(7);
   const output = parent.querySelector<HTMLSelectElement>('[aria-label="Bass output"]')!; expect([...output.options].map(o => o.text)).toEqual(['Master', 'Return A', 'Return B', 'None']);

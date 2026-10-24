@@ -42,7 +42,7 @@ it('builds a chain from presets, each device with its own copy of the code', () 
 });
 
 it('adds sends to tracks only, targeting the first return, and picks the return on the device', () => {
-  const project = newProject(); project.returns.push({ name: 'Verb', instrument: null, fx: [], pan: 0, muted: false, volume_db: 0 }, { name: 'Echo', instrument: null, fx: [], pan: 0, muted: false, volume_db: 0 });
+  const project = newProject(); project.returns.push({ name: 'Verb', fx: [], pan: 0, muted: false, volume_db: 0 }, { name: 'Echo', fx: [], pan: 0, muted: false, volume_db: 0 });
   const { device, definition } = addDevice(project, 0, 'send')!;
   expect(device.target).toBe(0); expect(definition.source).toContain('amount'); expect(addDevice(project, 0, 'echo')!.device.target).toBeUndefined();
   const parent = document.createElement('div'), fx = actions({ selected: device.id }); document.body.append(parent);

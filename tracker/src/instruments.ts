@@ -47,9 +47,14 @@ export function duplicateInstrument(project: Project, source: Definition): Defin
   return definition;
 }
 
+/** The instruments a track's notes use: those set in any of its note columns, in any pattern. */
+export function instrumentsOnTrack(project: Project, track: number): Set<string> {
+  return new Set(project.patterns.flatMap(p => p.notes[track].flatMap(column => column.inst)).filter((id): id is string => !!id));
+}
+
 /** Who plays an instrument: the tracks with a note column that sets it. */
 export function instrumentUsers(project: Project, id: string) {
-  return project.tracks.filter((_, index) => project.patterns.some(p => p.notes[index].some(column => column.inst.includes(id)))).map(t => t.name);
+  return project.tracks.filter((_, index) => instrumentsOnTrack(project, index).has(id)).map(t => t.name);
 }
 
 /** Removes an instrument no note uses. Returns why not when it cannot. */

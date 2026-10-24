@@ -585,6 +585,25 @@ impl Worker {
         Ok(())
     }
 
+    /// Whether every value a parameter lane holds can be sent to the strip named `slot`.
+    fn check_lane(&self, slot: &str, strip: &Track, lane: &crate::pattern::FxLane) -> Result<(), String> {
+        let parameters = &self.status.effect_parameters;
+        if lane.target.as_ref().is_some_and(|target| !target.available(strip, parameters)) {
+            return Ok(());
+        }
+        if let Some(envelope) = &lane.envelope {
+            for point in &envelope.points {
+                let target = lane.target.as_ref().ok_or("Choose an envelope parameter")?;
+                crate::commands::edit(target, &point.value.to_string(), slot, strip, parameters)?;
+            }
+        }
+        for value in lane.values.iter().flatten() {
+            let target = lane.target.as_ref().ok_or("Choose a lane parameter")?;
+            crate::commands::edit(target, value, slot, strip, parameters)?;
+        }
+        Ok(())
+    }
+
     fn check_assignments(&self, song: &Song) -> Result<(), String> {
         song.validate()?;
         for (strip, name) in song
@@ -602,15 +621,18 @@ impl Worker {
                 return Err(format!("Apply the effects assigned to {name} first"));
             }
         }
-        for (index, track) in song.tracks.iter().enumerate() {
-            if let Some(id) = &track.instrument
-                && !self.status.instruments.contains_key(id)
-            {
-                return Err(format!(
-                    "Apply the instrument assigned to {} first",
-                    track.name
-                ));
+        // returns and the master have parameter lanes too
+        for pattern in &song.patterns {
+            for (r, lanes) in pattern.return_fx.iter().enumerate() {
+                for lane in lanes {
+                    self.check_lane(&format!("r{r}"), &song.returns[r], lane)?;
+                }
             }
+            for lane in &pattern.master_fx {
+                self.check_lane(mixer::MASTER, &song.master, lane)?;
+            }
+        }
+        for (index, track) in song.tracks.iter().enumerate() {
             if track.fx.iter().any(|device| {
                 !self
                     .status
@@ -637,34 +659,7 @@ impl Worker {
                     }
                 }
                 for lane in &pattern.fx[index] {
-                    if lane.target.as_ref().is_some_and(|target| {
-                        !target.available(track, &self.status.effect_parameters)
-                    }) {
-                        continue;
-                    }
-                    if let Some(envelope) = &lane.envelope {
-                        for point in &envelope.points {
-                            let target =
-                                lane.target.as_ref().ok_or("Choose an envelope parameter")?;
-                            crate::commands::edit(
-                                target,
-                                &point.value.to_string(),
-                                index,
-                                track,
-                                &self.status.effect_parameters,
-                            )?;
-                        }
-                    }
-                    for value in lane.values.iter().flatten() {
-                        let target = lane.target.as_ref().ok_or("Choose a lane parameter")?;
-                        crate::commands::edit(
-                            target,
-                            value,
-                            index,
-                            track,
-                            &self.status.effect_parameters,
-                        )?;
-                    }
+                    self.check_lane(&index.to_string(), track, lane)?;
                 }
             }
         }

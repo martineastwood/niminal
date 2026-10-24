@@ -1,4 +1,4 @@
-import type { EffectParameters, Envelope, FxLane, Pattern, Project } from './project';
+import { columnCount, columnLanes, columnStrip, type EffectParameters, type Envelope, type FxLane, type Pattern, type Project } from './project';
 import { envelopeValue, formatValue, laneParameter, parseValue, targetKey } from './automation';
 
 const svgNS = 'http://www.w3.org/2000/svg';
@@ -17,13 +17,16 @@ export class EnvelopeEditor {
   private playRow: number | null = null;
   private dragKey = '';
   private cancelDrag: (() => void) | null = null;
+  private resizer: ResizeObserver | undefined;
 
   constructor(private parent: HTMLElement, private project: () => Project, private pattern: () => Pattern,
     private parameters: () => EffectParameters, private changed: () => void) {}
 
   reset() { this.cancelDrag?.(); this.history.clear(); this.track = this.lane = 0; this.selected = -1; }
-  select(track: number, lane = this.lane) { if (this.dragging) this.cancelDrag?.(); this.track = track; this.lane = Math.min(lane, this.pattern().fx[track].length - 1); this.selected = -1; this.render(); }
-  private get column(): FxLane { return this.pattern().fx[this.track][this.lane]; }
+  select(track: number, lane = this.lane) { if (this.dragging) this.cancelDrag?.(); this.track = track; this.lane = Math.min(lane, this.lanes.length - 1); this.selected = -1; this.render(); }
+  /** The parameter lanes of the selected column: a track's, a return's or the master's. */
+  private get lanes(): FxLane[] { return columnLanes(this.project(), this.pattern(), this.track); }
+  private get column(): FxLane { return this.lanes[this.lane]; }
   private get info() { return laneParameter(this.column.target, this.track, this.project(), this.parameters()); }
   private get envelope() { return this.column.envelope ?? blank(); }
   private get key() { return `${this.pattern().id}:${this.track}:${this.lane}:${targetKey(this.column.target)}`; }
@@ -44,12 +47,12 @@ export class EnvelopeEditor {
 
   render() {
     if (this.dragging) { if (this.key !== this.dragKey) this.cancelDrag?.(); else return; }
-    this.track = Math.min(this.track, this.project().tracks.length - 1); this.lane = Math.min(this.lane, this.pattern().fx[this.track].length - 1);
+    this.track = Math.min(this.track, columnCount(this.project()) - 1); this.lane = Math.min(this.lane, this.lanes.length - 1);
     const info = this.info, envelope = this.envelope;
     this.parent.innerHTML = `<div class="automation-toolbar"><strong data-track-name></strong><select data-lane aria-label="Automation parameter lane"></select><label><input data-enabled type="checkbox"> Use envelope</label><label>Shape <select data-mode aria-label="Envelope shape"><option value="linear">Linear</option><option value="hold">Hold</option></select></label><label>Tool <select data-tool aria-label="Envelope tool"><option value="points">Points</option><option value="draw">Draw</option></select></label><label>Snap <select data-snap aria-label="Envelope snap"><option value="1">Row</option><option value="beat">Beat</option><option value="0.0625">1/16 row</option></select></label><button data-undo>Undo</button><button data-redo>Redo</button><button data-clear>Clear</button></div><div class="automation-graph" tabindex="0" role="group" aria-label="Automation envelope editor"></div><div class="automation-point"><label>Row <input data-row type="number" step="0.0625" min="0" aria-label="Automation point row"></label><label>Value <input data-value aria-label="Automation point value"></label><button data-delete>Delete</button><span data-help></span></div>`;
     const find = <T extends HTMLElement>(selector: string) => this.parent.querySelector<T>(selector)!;
-    find('[data-track-name]').textContent = `${String(this.track + 1).padStart(2, '0')} ${this.project().tracks[this.track].name}`;
-    const lanes = find<HTMLSelectElement>('[data-lane]'); this.pattern().fx[this.track].forEach((lane, i) => lanes.add(new Option(laneParameter(lane.target, this.track, this.project(), this.parameters())?.label ?? 'Choose a lane parameter above', String(i)))); lanes.value = String(this.lane); lanes.onchange = () => this.select(this.track, Number(lanes.value));
+    find('[data-track-name]').textContent = columnStrip(this.project(), this.track).name;
+    const lanes = find<HTMLSelectElement>('[data-lane]'); this.lanes.forEach((lane, i) => lanes.add(new Option(laneParameter(lane.target, this.track, this.project(), this.parameters())?.label ?? 'Choose a lane parameter above', String(i)))); lanes.value = String(this.lane); lanes.onchange = () => this.select(this.track, Number(lanes.value));
     const enabled = find<HTMLInputElement>('[data-enabled]'); enabled.checked = envelope.enabled; enabled.disabled = !info; enabled.onchange = () => this.mutate(e => { e.enabled = enabled.checked; });
     const mode = find<HTMLSelectElement>('[data-mode]'); mode.value = envelope.mode; mode.onchange = () => this.mutate(e => { e.mode = mode.value as Envelope['mode']; });
     const tool = find<HTMLSelectElement>('[data-tool]'); tool.value = this.tool; tool.onchange = () => { this.tool = tool.value; };
@@ -66,21 +69,28 @@ export class EnvelopeEditor {
     find('[data-help]').textContent = info ? '' : 'Choose a parameter in a pattern lane.';
     const area = find('[aria-label="Automation envelope editor"]');
     area.onkeydown = event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); this.undo(event.shiftKey); } else if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); this.removePoint(); } };
-    this.graph = document.createElementNS(svgNS, 'svg'); this.graph.setAttribute('viewBox', '0 0 1000 200'); this.graph.setAttribute('preserveAspectRatio', 'none'); area.append(this.graph);
+    this.graph = document.createElementNS(svgNS, 'svg'); area.append(this.graph);
+    // drawn in real pixels, so text and points keep their shape however the panel is sized
+    this.resizer?.disconnect();
+    if (typeof ResizeObserver !== 'undefined') { this.resizer = new ResizeObserver(() => { if (!this.dragging) this.draw(); }); this.resizer.observe(area); }
     this.graph.onpointerdown = event => this.begin(event);
     this.graph.oncontextmenu = event => { event.preventDefault(); const i = this.nearest(event); if (i >= 0) { this.selected = i; this.removePoint(); } };
     this.draw();
   }
-  private xy(row: number, value: number) { const p = this.info!; return [76 + row / this.pattern().rows * 906, 174 - (value-p.min)/(p.max-p.min || 1)*150]; }
+  /** The graph's size in pixels, or a default before it has been laid out. */
+  private get box() { const rect = this.graph?.getBoundingClientRect(); return { w: rect?.width || 1000, h: rect?.height || 200 }; }
+  /** The plotted area inside the graph: room on the left for the values and below for the rows. */
+  private get plot() { const { w, h } = this.box; return { x0: 76, x1: Math.max(120, w - 18), y0: 24, y1: Math.max(80, h - 26) }; }
+  private xy(row: number, value: number) { const p = this.info!, { x0, x1, y0, y1 } = this.plot; return [x0 + row / this.pattern().rows * (x1 - x0), y1 - (value - p.min) / (p.max - p.min || 1) * (y1 - y0)]; }
   private coordinate(event: PointerEvent | MouseEvent) {
-    const rect = this.graph!.getBoundingClientRect(), p = this.info!;
-    const x = (event.clientX-rect.left)/rect.width*1000, y = (event.clientY-rect.top)/rect.height*200;
-    return { row: Math.max(0,Math.min(this.pattern().rows,Math.round((x-76)/906*this.pattern().rows/this.snap)*this.snap)), value: Math.max(p.min,Math.min(p.max,p.min+(174-y)/150*(p.max-p.min))) };
+    const rect = this.graph!.getBoundingClientRect(), p = this.info!, { x0, x1, y0, y1 } = this.plot;
+    const x = event.clientX - rect.left, y = event.clientY - rect.top;
+    return { row: Math.max(0, Math.min(this.pattern().rows, Math.round((x - x0) / (x1 - x0) * this.pattern().rows / this.snap) * this.snap)), value: Math.max(p.min, Math.min(p.max, p.min + (y1 - y) / (y1 - y0) * (p.max - p.min))) };
   }
   private nearest(event: PointerEvent | MouseEvent) {
     if (!this.info) return -1;
     const rect = this.graph!.getBoundingClientRect();
-    return this.envelope.points.findIndex(p => { const [x,y] = this.xy(p.row,p.value); return Math.hypot(rect.left+x/1000*rect.width-event.clientX, rect.top+y/200*rect.height-event.clientY) < 10; });
+    return this.envelope.points.findIndex(p => { const [x, y] = this.xy(p.row, p.value); return Math.hypot(rect.left + x - event.clientX, rect.top + y - event.clientY) < 10; });
   }
   private begin(event: PointerEvent) {
     if (event.button !== 0 || !this.info || this.info.max <= this.info.min) return;
@@ -100,18 +110,19 @@ export class EnvelopeEditor {
     graph.onpointerup = () => { finish(true); this.parent.querySelector<HTMLElement>('.automation-graph')?.focus(); }; graph.onpointercancel = () => finish(false);
   }
   private draw() {
-    if (!this.graph) return; this.graph.replaceChildren(); const info = this.info;
+    if (!this.graph) return; this.graph.replaceChildren(); const info = this.info, { w, h } = this.box, { x0, x1, y0, y1 } = this.plot;
+    this.graph.setAttribute('viewBox', `0 0 ${w} ${h}`);
     const add = (name: string, attrs: Record<string,string|number>, text?: string) => { const n = document.createElementNS(svgNS,name); for (const [k,v] of Object.entries(attrs)) n.setAttribute(k,String(v)); if (text) n.textContent = text; this.graph!.append(n); return n; };
-    add('rect',{x:76,y:24,width:906,height:150,fill:'#1b2027'});
-    for (let row=0;row<=this.pattern().rows;row+=this.project().rows_per_beat) { const x=76+row/this.pattern().rows*906; add('line',{x1:x,x2:x,y1:24,y2:174,stroke:'#3b424c'}); if (row % Math.max(this.project().rows_per_beat,Math.ceil(this.pattern().rows/16/this.project().rows_per_beat)*this.project().rows_per_beat)===0) add('text',{x,y:194,fill:'#9aa7b7','font-size':10,'text-anchor':'middle'},String(row)); }
+    add('rect',{x:x0,y:y0,width:x1-x0,height:y1-y0,fill:'#1b2027'});
+    for (let row=0;row<=this.pattern().rows;row+=this.project().rows_per_beat) { const x=x0+row/this.pattern().rows*(x1-x0); add('line',{x1:x,x2:x,y1:y0,y2:y1,stroke:'#3b424c'}); if (row % Math.max(this.project().rows_per_beat,Math.ceil(this.pattern().rows/16/this.project().rows_per_beat)*this.project().rows_per_beat)===0) add('text',{x,y:y1+20,fill:'#9aa7b7','font-size':10,'text-anchor':'middle'},String(row)); }
     if (info) {
-      for (let i=0;i<=4;i++) { const v=info.min+(info.max-info.min)*i/4, [,y]=this.xy(0,v); add('line',{x1:76,x2:982,y1:y,y2:y,stroke:'#303741'}); add('text',{x:68,y:y+3,fill:'#a9b4c3','font-size':10,'text-anchor':'end'},formatValue(v,info)); }
+      for (let i=0;i<=4;i++) { const v=info.min+(info.max-info.min)*i/4, [,y]=this.xy(0,v); add('line',{x1:x0,x2:x1,y1:y,y2:y,stroke:'#303741'}); add('text',{x:x0-8,y:y+3,fill:'#a9b4c3','font-size':10,'text-anchor':'end'},formatValue(v,info)); }
       const envelope = this.envelope; let path='';
       for (let step=0;step<=512;step++) { const row=this.pattern().rows*step/512, value=envelopeValue(envelope,row,info.unit==='db'); if(value===null) continue; const [x,y]=this.xy(row,value); path+=`${path?'L':'M'}${x},${y} `; }
       add('path',{d:path,fill:'none',stroke:envelope.enabled?'#e5b47b':'#738293','stroke-width':2,'vector-effect':'non-scaling-stroke'});
       envelope.points.forEach((p,i)=> { if(p.row>this.pattern().rows) return; const [x,y]=this.xy(p.row,p.value); const circle=add('circle',{cx:x,cy:y,r:i===this.selected?5:3.5,fill:i===this.selected?'#fff2c9':'#e5b47b'}); const title=document.createElementNS(svgNS,'title'); title.textContent=`Row ${p.row}: ${formatValue(p.value,info)}`; circle.append(title); });
     }
-    add('line',{'data-playhead':'',x1:76,x2:76,y1:24,y2:174,stroke:'#91c4dd','stroke-width':1}); this.paint(this.playRow);
+    add('line',{'data-playhead':'',x1:x0,x2:x0,y1:y0,y2:y1,stroke:'#91c4dd','stroke-width':1}); this.paint(this.playRow);
   }
-  paint(row: number | null) { this.playRow=row; const line=this.graph?.querySelector<SVGLineElement>('[data-playhead]'); if(!line)return; line.style.display=row===null?'none':''; if(row!==null) { const x=76+row/this.pattern().rows*906; line.setAttribute('x1',String(x)); line.setAttribute('x2',String(x)); } }
+  paint(row: number | null) { this.playRow=row; const line=this.graph?.querySelector<SVGLineElement>('[data-playhead]'); if(!line)return; line.style.display=row===null?'none':''; if(row!==null) { const { x0, x1 } = this.plot, x=x0+row/this.pattern().rows*(x1-x0); line.setAttribute('x1',String(x)); line.setAttribute('x2',String(x)); } }
 }

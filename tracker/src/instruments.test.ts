@@ -37,15 +37,15 @@ it('counts an instrument chosen in an instrument column as played, so it cannot 
   expect(removeInstrument(project, extra.id)).toContain('Drums');
 });
 
-it('only removes an instrument that no track plays, and keeps one instrument', () => {
-  const project = newProject(), extra = addInstrument(project);
+it('only removes an instrument that no note uses, and keeps one instrument', () => {
+  const project = newProject(), extra = addInstrument(project), bass = project.patterns[0].notes[1][0];
   expect(instrumentUsers(project, 'tone')).toEqual(['Lead']);
   expect(removeInstrument(project, 'tone')).toContain('Used by Lead');
-  project.tracks[1].instrument = extra.id;
+  bass.inst[0] = extra.id;
   expect(removeInstrument(project, extra.id)).toContain('Bass');
-  project.tracks[1].instrument = null;
+  bass.inst[0] = null;
   expect(removeInstrument(project, extra.id)).toBeNull();
   expect(project.definitions.some(d => d.id === extra.id)).toBe(false);
-  project.tracks[0].instrument = null;
+  project.patterns[0].notes[0][0].inst.fill(null);
   expect(removeInstrument(project, 'tone')).toBe('Keep at least one instrument');
 });

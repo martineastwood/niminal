@@ -22,6 +22,16 @@ export interface EnvelopePoint { row: number; value: number }
 export interface Envelope { enabled: boolean; mode: 'hold' | 'linear'; points: EnvelopePoint[] }
 export interface FxLane { target: FxTarget | null; values: (string | null)[]; envelope?: Envelope }
 export const emptyFxLane = (rows: number): FxLane => ({ target: { kind: 'volume' }, values: Array(rows).fill(null) });
+export const cloneLane = (lane: FxLane): FxLane => ({ target: lane.target && { ...lane.target }, values: [...lane.values], ...(lane.envelope ? { envelope: structuredClone(lane.envelope) } : {}) });
+/**
+ * The columns of the pattern grid: each track, then each return, then the master. Returns and the master hold only
+ * parameter lanes. A column's number is its place in that order.
+ */
+export const columnCount = (project: Song) => project.tracks.length + project.returns.length + 1;
+/** The track, return or master a column of the grid belongs to. */
+export const columnStrip = (project: Song, column: number): Track => column < project.tracks.length ? project.tracks[column] : column < project.tracks.length + project.returns.length ? project.returns[column - project.tracks.length] : project.master;
+/** The parameter lanes of a column of the grid, in a pattern. */
+export const columnLanes = (project: Song, pattern: Pattern, column: number): FxLane[] => column < project.tracks.length ? pattern.fx[column] : column < project.tracks.length + project.returns.length ? pattern.return_fx[column - project.tracks.length] : pattern.master_fx;
 /**
  * One note column: parallel cells for each row. `notes` hold `C-4` or `OFF`; `inst` an instrument's
  * definition id; `vol` and `pan` a number from 0 to 128 (as text); `delay` from 0 to 255 256ths of a row.
@@ -32,7 +42,11 @@ export const subColumns: SubColumn[] = ['inst', 'vol', 'pan', 'delay'];
 export const maxNoteColumns = 8;
 export const blankColumn = (rows: number): NoteColumn => ({ notes: Array(rows).fill(null), inst: Array(rows).fill(null), vol: Array(rows).fill(null), pan: Array(rows).fill(null), delay: Array(rows).fill(null) });
 export const cloneColumn = (column: NoteColumn): NoteColumn => ({ notes: [...column.notes], inst: [...column.inst], vol: [...column.vol], pan: [...column.pan], delay: [...column.delay] });
-export interface Pattern { id: string; name: string; rows: number; notes: NoteColumn[][]; fx: FxLane[][] }
+export interface Pattern {
+  id: string; name: string; rows: number; notes: NoteColumn[][];
+  /** Parameter lanes by track, then by return, then the master's. Returns and the master have no notes. */
+  fx: FxLane[][]; return_fx: FxLane[][]; master_fx: FxLane[];
+}
 /** Song playback repeats these sequence positions (inclusive) once it reaches them, until stopped. */
 export interface LoopRange { start: number; end: number }
 /** Where one track plays from in one sequence step, when not from the step's own pattern: silent, or another pattern's track. */
@@ -42,21 +56,30 @@ export interface Song { bpm: number; rows_per_beat: number; tracks: Track[]; mas
   matrix?: (TrackSource | null)[][]; instrument_values?: Record<string, Record<string, number>> }
 /** A named group of consecutive sequence steps, from `start` up to the next section's start. It only organises the sequence list. */
 export interface Section { start: number; name: string; collapsed?: boolean }
-export interface Project extends Song { version: 10; id: string; definitions: Definition[]; sections?: Section[] }
-export const storageKey = 'niminal-tracker-project-v10';
+export interface Project extends Song { version: 11; id: string; definitions: Definition[]; sections?: Section[] }
+export const storageKey = 'niminal-tracker-project-v11';
 
+/** A project with a short four-note phrase on the first track, so there is something to play. */
 export function newProject(): Project {
   return {
-    version: 10, id: crypto.randomUUID(), bpm: 125, rows_per_beat: 4,
+    version: 11, id: crypto.randomUUID(), bpm: 125, rows_per_beat: 4,
     definitions: [
       { id: 'tone', name: 'Warm saw', kind: 'instr', source: tone },
     ],
     returns: [],
     master: { name: 'Master', fx: [], pan: 0, muted: false, volume_db: 0 },
     tracks: ['Lead', 'Bass', 'Drums', 'Texture'].map(name => ({ name, fx: [], pan: 0, muted: false, volume_db: 0 })),
-    patterns: [{ fx: Array.from({ length: 4 }, () => [emptyFxLane(32)]), id: 'pattern_00', name: 'First idea', rows: 32, notes: Array.from({ length: 4 }, (_, track) => [{ ...blankColumn(32), notes: Array.from({ length: 32 }, (_, row) => track === 0 && row % 4 === 0 ? ['C-4', 'D#4', 'G-4', 'A#4'][Math.floor(row / 4) % 4] : null), inst: Array.from({ length: 32 }, (_, row) => track === 0 && row % 4 === 0 ? 'tone' : null) }]) }],
+    patterns: [{ fx: Array.from({ length: 4 }, () => [emptyFxLane(32)]), return_fx: [], master_fx: [emptyFxLane(32)], id: 'pattern_00', name: 'First idea', rows: 32, notes: Array.from({ length: 4 }, (_, track) => [{ ...blankColumn(32), notes: Array.from({ length: 32 }, (_, row) => track === 0 && row % 4 === 0 ? ['C-4', 'D#4', 'G-4', 'A#4'][Math.floor(row / 4) % 4] : null), inst: Array.from({ length: 32 }, (_, row) => track === 0 && row % 4 === 0 ? 'tone' : null) }]) }],
     sequence: ['pattern_00'],
   };
+}
+
+/** The project the app starts with: four tracks named Track 01 to Track 04, the first instrument, and a pattern with nothing in it yet. */
+export function emptyProject(): Project {
+  const project = newProject();
+  project.tracks.forEach((track, index) => { track.name = `Track ${String(index + 1).padStart(2, '0')}`; });
+  for (const column of project.patterns[0].notes.flat()) { column.notes.fill(null); column.inst.fill(null); }
+  return project;
 }
 
 export function makePattern(project: Project, source?: Pattern): Pattern {
@@ -64,7 +87,9 @@ export function makePattern(project: Project, source?: Pattern): Pattern {
     id: `pattern_${crypto.randomUUID().replaceAll('-', '_')}`,
     name: source ? `${source.name} variation` : `Pattern ${project.patterns.length.toString().padStart(2, '0')}`,
     rows: source?.rows ?? 32,
-    fx: source ? source.fx.map(track => track.map(column => ({ target: column.target && { ...column.target }, values: [...column.values], ...(column.envelope ? { envelope: structuredClone(column.envelope) } : {}) }))) : Array.from({ length: project.tracks.length }, () => [emptyFxLane(32)]),
+    fx: source ? source.fx.map(lanes => lanes.map(cloneLane)) : Array.from({ length: project.tracks.length }, () => [emptyFxLane(32)]),
+    return_fx: source ? source.return_fx.map(lanes => lanes.map(cloneLane)) : project.returns.map(() => [emptyFxLane(32)]),
+    master_fx: source ? source.master_fx.map(cloneLane) : [emptyFxLane(32)],
     notes: source ? source.notes.map(track => track.map(cloneColumn)) : Array.from({ length: project.tracks.length }, (_, track) => Array.from({ length: project.patterns[0]?.notes[track]?.length ?? 1 }, () => blankColumn(32))),
   };
   project.patterns.push(pattern);
@@ -74,14 +99,14 @@ export function makePattern(project: Project, source?: Pattern): Pattern {
 export function resizePattern(pattern: Pattern, rows: number) {
   pattern.rows = Math.min(256, Math.max(1, Math.trunc(rows) || 1));
   // Retain notes beyond a shortened pattern so increasing its length restores them.
-  const cells = [...pattern.notes.flat().flatMap(c => [c.notes, c.inst, c.vol, c.pan, c.delay]), ...pattern.fx.flat().map(lane => lane.values)];
+  const cells = [...pattern.notes.flat().flatMap(c => [c.notes, c.inst, c.vol, c.pan, c.delay]), ...pattern.fx.flat().map(lane => lane.values), ...pattern.return_fx.flat().map(lane => lane.values), ...pattern.master_fx.map(lane => lane.values)];
   for (const column of cells) while (column.length < pattern.rows) column.push(null);
 }
 
 export function readProject(raw: string): Project {
   const value = JSON.parse(raw);
   if (value && typeof value === 'object') value.returns ??= [];
-  if (value?.version !== 10 || typeof value.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value.id) || !Array.isArray(value.definitions) || value.definitions.length === 0 ||
+  if (value?.version !== 11 || typeof value.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value.id) || !Array.isArray(value.definitions) || value.definitions.length === 0 ||
       !value.definitions.every((d: Definition) => d && typeof d.id === 'string' && /^[a-zA-Z_][\w-]*$/.test(d.id) && typeof d.name === 'string' && typeof d.source === 'string' && ['instr', 'fx'].includes(d.kind) && (d.values === undefined || !!d.values && typeof d.values === 'object' && Object.values(d.values).every(Number.isFinite))) ||
       new Set(value.definitions.map((d: Definition) => d.id)).size !== value.definitions.length ||
       !Number.isFinite(value.bpm) || value.bpm < 20 || value.bpm > 300 ||
@@ -95,14 +120,15 @@ export function readProject(raw: string): Project {
       !value.patterns.every((p: Pattern) => p && typeof p.id === 'string' && /^[a-zA-Z_][\w-]*$/.test(p.id) && typeof p.name === 'string' &&
         Number.isInteger(p.rows) && p.rows >= 1 && p.rows <= 256 && Array.isArray(p.notes) && p.notes.length === value.tracks.length &&
         p.notes.every(track => Array.isArray(track) && track.length >= 1 && track.length <= maxNoteColumns && track.every(column => validColumn(column, p.rows, value.definitions))) &&
-        Array.isArray(p.fx) && p.fx.length === value.tracks.length && p.fx.every(track => Array.isArray(track) && track.length >= 1 && track.length <= 4 && track.every(column => column && validEnvelope(column.envelope) && validTarget(column.target) && Array.isArray(column.values) && column.values.length >= p.rows && column.values.length <= 256 && column.values.every(v => v === null || typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) && (column.target !== null || column.values.every(v => v === null) && !column.envelope?.points.length)))) ||
+        Array.isArray(p.fx) && p.fx.length === value.tracks.length && p.fx.every(lanes => validLanes(lanes, p.rows)) &&
+        Array.isArray(p.return_fx) && p.return_fx.length === value.returns.length && [...p.return_fx, p.master_fx].every(lanes => validLanes(lanes, p.rows) && lanes.every(lane => lane.target?.kind !== 'instrument'))) ||
       new Set(value.patterns.map((p: Pattern) => p.id)).size !== value.patterns.length ||
       !Array.isArray(value.sequence) || value.sequence.length < 1 || value.sequence.length > 1024 ||
       !value.sequence.every((id: unknown) => value.patterns.some((p: Pattern) => p.id === id)) ||
       value.sections !== undefined && !(Array.isArray(value.sections) && value.sections.every((s: Section, i: number) => !!s && Number.isInteger(s.start) && s.start >= 0 && s.start < value.sequence.length && (i === 0 || s.start > value.sections[i - 1].start) && typeof s.name === 'string' && s.name.length <= 60 && (s.collapsed === undefined || typeof s.collapsed === 'boolean'))) ||
       value.matrix !== undefined && !(Array.isArray(value.matrix) && value.matrix.length <= value.sequence.length && value.matrix.every((step: unknown) => Array.isArray(step) && step.length <= value.tracks.length && step.every((s: TrackSource | null) => s === null || !!s && (s.kind === 'mute' || s.kind === 'pattern' && value.patterns.some((p: Pattern) => p.id === s.id))))) ||
       value.loop_range !== undefined && !(Number.isInteger(value.loop_range?.start) && Number.isInteger(value.loop_range.end) && value.loop_range.start >= 0 && value.loop_range.start <= value.loop_range.end && value.loop_range.end < value.sequence.length)) {
-    throw new Error('Not a supported niminal tracker project (expected version 10)');
+    throw new Error('Not a supported niminal tracker project (expected version 11)');
   }
   return value;
 }
@@ -172,13 +198,17 @@ export function restoreTrack(project: Project, deleted: DeletedTrack): boolean {
     const restored = (deleted.notes.get(pattern.id) ?? [blankColumn(pattern.rows)]).map(cloneColumn);
     for (const column of restored) for (const cells of [column.notes, column.inst, column.vol, column.pan, column.delay]) while (cells.length < pattern.rows) cells.push(null);
     pattern.notes.splice(deleted.index, 0, restored);
-    const fx = (deleted.fx.get(pattern.id) ?? [emptyFxLane(pattern.rows)]).map(column => ({ target: column.target && { ...column.target }, values: [...column.values], ...(column.envelope ? { envelope: structuredClone(column.envelope) } : {}) }));
+    const fx = (deleted.fx.get(pattern.id) ?? [emptyFxLane(pattern.rows)]).map(cloneLane);
     for (const column of fx) while (column.values.length < pattern.rows) column.values.push(null);
     pattern.fx.splice(deleted.index, 0, fx);
   }
   return true;
 }
 
+/** One track's, return's or the master's parameter lanes in a pattern of `rows` rows. */
+function validLanes(lanes: FxLane[], rows: number) {
+  return Array.isArray(lanes) && lanes.length >= 1 && lanes.length <= 4 && lanes.every(column => column && validEnvelope(column.envelope) && validTarget(column.target) && Array.isArray(column.values) && column.values.length >= rows && column.values.length <= 256 && column.values.every(v => v === null || typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) && (column.target !== null || column.values.every(v => v === null) && !column.envelope?.points.length));
+}
 export function validTarget(target: FxTarget | null): boolean {
   return target === null || !!target && (target.kind === 'volume' || target.kind === 'pan' || target.kind === 'effect' && validDeviceId(target.device) && typeof target.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(target.parameter) || target.kind === 'instrument' && typeof target.instrument === 'string' && typeof target.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(target.parameter));
 }

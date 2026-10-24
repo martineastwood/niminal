@@ -24,10 +24,18 @@ it('addresses track FX by name and retains missing targets for repair', () => {
   expect(target.parameter).toBe('cutoff');
 });
 
-it('addresses the track\'s instrument parameters by name, and only while it still has them', () => {
+it('addresses an instrument\'s parameters by instrument and name, and only while it still has them', () => {
   const project = newProject(); const parameters = { tone: [{ name: 'cutoff', min: 200, max: 8000, default: 2000, unit: 'hz' }] };
-  const target = { kind: 'instrument' as const, parameter: 'cutoff' };
+  const target = { kind: 'instrument' as const, instrument: 'tone', parameter: 'cutoff' };
   expect(laneParameter(target, 0, project, parameters)?.label).toBe('Warm saw → cutoff');
-  expect(laneParameter(target, 1, project, parameters)).toBeNull();
+  expect(laneParameter(target, 1, project, parameters)?.label).toBe('Warm saw → cutoff');
+  expect(laneParameter({ ...target, instrument: 'other' }, 0, project, parameters)).toBeNull();
   expect(laneParameter(target, 0, project, { tone: [] })).toBeNull();
+});
+
+it('can leave the unit off a dB value, for a lane cell, and keeps it for other units and for the clipboard', () => {
+  const db = { name: 'volume', min: -60, max: 6, default: 0, unit: 'db' }, hz = { name: 'cutoff', min: 20, max: 20000, default: 2000, unit: 'hz' };
+  expect(formatValue('-12', db)).toBe('-12 db'); expect(formatValue('-12', db, false, true)).toBe('-12');
+  expect(formatValue('-47.54', db, false, true)).toBe('-47.5'); expect(formatValue('-12', db, true)).toBe('-12 db');
+  expect(formatValue('1200', hz, false, true)).toBe('1.2 kHz');
 });

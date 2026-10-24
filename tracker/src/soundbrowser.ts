@@ -8,8 +8,8 @@ export type ManageOp = 'new' | 'import' | 'duplicate' | 'delete' | 'edit';
 export interface SoundBrowserActions {
   /** Hears an item: called as the selection moves, after a short pause so scrolling past does not play everything. */
   audition(kind: SoundKind, item: BrowserItem): void;
-  /** Uses an item on the selected track (Enter or double-click). */
-  pick(kind: SoundKind, item: BrowserItem): void;
+  /** Uses an item (Enter or double-click). `replace` (Shift+Enter) loads a ready-made instrument into the current slot instead of adding a slot. */
+  pick(kind: SoundKind, item: BrowserItem, replace: boolean): void;
   /** One of the buttons under the list, with the selected item (if any). */
   manage(op: ManageOp, kind: SoundKind, item: BrowserItem | null): void;
   /** The browser lost focus or was dismissed: stop any preview. */
@@ -18,6 +18,8 @@ export interface SoundBrowserActions {
 
 const pause = 120;
 
+type Row = { folder: string; name: string; depth: number } | { item: BrowserItem; depth: number; path: string };
+
 /**
  * A browser that stays open beside the grid: instruments and effects in folders, a search box, and the
  * arrow keys to move through them. Moving the selection plays the item; Enter adds it to the selected track.
@@ -25,7 +27,9 @@ const pause = 120;
 export class SoundBrowser {
   private kind: SoundKind = 'instr';
   private query = '';
-  private closed = new Set<string>();
+  private open = new Map<string, boolean>();
+  /** The folder the cursor is on, when it is on one rather than on an item. */
+  private folderCursor: string | null = null;
   private selected: BrowserItem | null = null;
   private timer: number | undefined;
   private readonly list = document.createElement('div');
@@ -63,7 +67,7 @@ export class SoundBrowser {
 
   /** Switches tab and puts the cursor in the search box, ready to type or move down. */
   show(kind: SoundKind, focus = true) {
-    this.kind = kind; this.selected = null; this.hint.textContent = ''; this.query = ''; this.search.value = '';
+    this.kind = kind; this.selected = null; this.folderCursor = null; this.hint.textContent = ''; this.query = ''; this.search.value = '';
     this.render();
     if (focus) this.search.focus();
   }
@@ -77,71 +81,87 @@ export class SoundBrowser {
 
   focus() { this.search.focus(); this.search.select(); }
 
-  private visible(): BrowserItem[] {
+  /** The folder `key` (like `/drums/kicks`) is open: all start closed, except the project's own sounds. */
+  private isOpen(key: string) { return this.open.get(key) ?? key === '/Project'; }
+
+  /** What the list shows, top to bottom: folders and the items inside the open ones, or only the matches of a search. */
+  private rows(): Row[] {
     const items = this.items(this.kind);
-    if (this.query.trim()) return searchItems(items, this.query);
-    const flat: BrowserItem[] = [];
-    const walk = (folder: ReturnType<typeof folderTree>, path: string) => {
-      for (const [name, sub] of folder.folders) if (!this.closed.has(`${path}/${name}`)) walk(sub, `${path}/${name}`);
-      flat.push(...folder.items);
+    if (this.query.trim()) return searchItems(items, this.query).map(item => ({ item, depth: 0, path: item.folder }));
+    const rows: Row[] = [];
+    const walk = (folder: ReturnType<typeof folderTree>, path: string, depth: number) => {
+      for (const [name, sub] of folder.folders) {
+        const key = `${path}/${name}`;
+        rows.push({ folder: key, name, depth });
+        if (this.isOpen(key)) walk(sub, key, depth + 1);
+      }
+      for (const item of folder.items) rows.push({ item, depth, path: '' });
     };
-    walk(folderTree(items), '');
-    return flat;
+    walk(folderTree(items), '', 0);
+    return rows;
   }
+
+  private toggle(key: string, open = !this.isOpen(key)) { this.open.set(key, open); this.render(); }
 
   private render() {
     for (const [kind, tab] of this.tabs) tab.setAttribute('aria-selected', String(kind === this.kind));
     this.importButton.hidden = this.kind !== 'instr';
     const top = this.list.scrollTop;
     this.list.replaceChildren();
-    const entry = (item: BrowserItem, path = '') => {
+    const rows = this.rows();
+    if (!rows.length) { const none = document.createElement('div'); none.className = 'sb-none'; none.textContent = 'Nothing matches'; this.list.append(none); }
+    for (const row of rows) {
+      if ('folder' in row) {
+        const open = this.isOpen(row.folder);
+        const head = document.createElement('button'); head.className = 'sb-folder'; head.tabIndex = -1; head.textContent = `${open ? '▾' : '▸'} ${row.name}`;
+        head.setAttribute('aria-selected', String(row.folder === this.folderCursor)); head.style.paddingLeft = `${4 + row.depth * 10}px`;
+        head.onclick = () => { this.folderCursor = row.folder; this.selected = null; this.hint.textContent = ''; this.toggle(row.folder); this.search.focus(); };
+        this.list.append(head);
+        continue;
+      }
+      const { item } = row;
       const button = document.createElement('button'); button.className = 'sb-item'; button.tabIndex = -1; button.setAttribute('role', 'option');
       button.setAttribute('aria-selected', String(item.value === this.selected?.value)); button.textContent = item.name; button.title = item.description ?? '';
-      if (path || item.note) { const where = document.createElement('span'); where.className = 'browser-path'; where.textContent = path || item.note!; button.append(where); }
+      button.style.paddingLeft = `${4 + row.depth * 10}px`;
+      if (row.path || item.note) { const where = document.createElement('span'); where.className = 'browser-path'; where.textContent = row.path || item.note!; button.append(where); }
       button.onclick = () => { this.select(item, true); this.search.focus(); };
-      button.ondblclick = () => this.actions.pick(this.kind, item);
-      return button;
-    };
-    if (this.query.trim()) {
-      const found = searchItems(this.items(this.kind), this.query);
-      if (!found.length) { const none = document.createElement('div'); none.className = 'sb-none'; none.textContent = 'Nothing matches'; this.list.append(none); }
-      for (const item of found) this.list.append(entry(item, item.folder));
-    } else {
-      const draw = (folder: ReturnType<typeof folderTree>, path: string, parent: HTMLElement) => {
-        for (const [name, sub] of folder.folders) {
-          const key = `${path}/${name}`, collapsed = this.closed.has(key);
-          const head = document.createElement('button'); head.className = 'sb-folder'; head.tabIndex = -1; head.textContent = `${collapsed ? '▸' : '▾'} ${name}`;
-          head.onclick = () => { if (collapsed) this.closed.delete(key); else this.closed.add(key); this.render(); };
-          parent.append(head);
-          if (!collapsed) { const inner = document.createElement('div'); inner.className = 'sb-inner'; parent.append(inner); draw(sub, key, inner); }
-        }
-        for (const item of folder.items) parent.append(entry(item));
-      };
-      draw(folderTree(this.items(this.kind)), '', this.list);
+      button.ondblclick = () => this.actions.pick(this.kind, item, false);
+      this.list.append(button);
     }
     this.list.scrollTop = top;
-    this.list.querySelector('.sb-item[aria-selected=true]')?.scrollIntoView({ block: 'nearest' });
+    this.list.querySelector('[aria-selected=true]')?.scrollIntoView({ block: 'nearest' });
   }
 
   private select(item: BrowserItem, immediately = false) {
-    this.selected = item; this.hint.textContent = item.description ?? '';
+    this.selected = item; this.folderCursor = null; this.hint.textContent = item.description ?? '';
     this.render();
     clearTimeout(this.timer);
     this.timer = window.setTimeout(() => this.actions.audition(this.kind, item), immediately ? 0 : pause);
   }
 
+  /** Moves the cursor over folders and items alike; landing on an item plays it, landing on a folder does not. */
   private move(delta: number) {
-    const items = this.visible();
-    if (!items.length) return;
-    const at = this.selected ? items.findIndex(item => item.value === this.selected!.value) : -1;
-    this.select(items[Math.min(items.length - 1, Math.max(0, at + delta))]);
+    const rows = this.rows();
+    if (!rows.length) return;
+    const at = rows.findIndex(row => 'folder' in row ? row.folder === this.folderCursor : row.item.value === this.selected?.value);
+    const row = rows[Math.min(rows.length - 1, Math.max(0, at + delta))];
+    if ('item' in row) { this.select(row.item); return; }
+    clearTimeout(this.timer);
+    this.folderCursor = row.folder; this.selected = null; this.hint.textContent = '';
+    this.render();
   }
 
   private keydown(event: KeyboardEvent, focusGrid: () => void) {
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     if (event.key === 'ArrowDown') { event.preventDefault(); this.move(1); }
     else if (event.key === 'ArrowUp') { event.preventDefault(); this.move(-1); }
-    else if (event.key === 'Enter') { event.preventDefault(); if (this.selected) this.actions.pick(this.kind, this.selected); else this.move(1); }
+    else if (event.key === 'Enter') {
+      event.preventDefault();
+      if (this.folderCursor) this.toggle(this.folderCursor);
+      else if (this.selected) this.actions.pick(this.kind, this.selected, event.shiftKey);
+      else this.move(1);
+    }
+    else if ((event.key === 'ArrowRight' || event.key === 'ArrowLeft') && this.folderCursor && !this.query.trim()) { event.preventDefault(); this.toggle(this.folderCursor, event.key === 'ArrowRight'); }
     else if (event.key === ' ' && this.selected && (event.target as HTMLElement).tagName !== 'INPUT') { event.preventDefault(); this.select(this.selected, true); }
     else if (event.key === 'Escape') { event.preventDefault(); clearTimeout(this.timer); this.actions.leave(); focusGrid(); }
   }

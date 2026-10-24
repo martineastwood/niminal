@@ -1,7 +1,7 @@
 import type { Output, Project, Track } from './project';
 import { stripOf, returnStrip, returnIndex } from './effects';
 import { maxReturns } from './project';
-import { trackColour } from './grid';
+import { trackColour, masterColour } from './grid';
 import { drawScope, meterLevel } from './scope';
 
 export interface MixActions {
@@ -56,8 +56,8 @@ export class MixPanel {
     const add = (index: number) => {
       const track = stripOf(project, index), master = index === -1, ret = index < -1;
       const element = document.createElement('div'); element.className = `mix-strip ${master ? 'master' : ''} ${ret ? 'return' : ''}`; element.dataset.track = String(index);
-      element.style.setProperty('--track-colour', master ? '#d9903f' : ret ? '#5fa8a0' : trackColour(track, index)); element.classList.toggle('selected', index === this.active);
-      const name = document.createElement('button'); name.className = 'mix-name'; name.textContent = master ? 'Master' : ret ? track.name : `${String(index + 1).padStart(2, '0')} ${track.name}`; name.title = track.name;
+      element.style.setProperty('--track-colour', master ? masterColour : ret ? '#5fa8a0' : trackColour(track, index)); element.classList.toggle('selected', index === this.active);
+      const name = document.createElement('button'); name.className = 'mix-name'; name.textContent = master ? 'Master' : track.name; name.title = track.name;
       name.onclick = () => (index < 0 ? this.actions.openFx(index) : this.actions.selectTrack(index));
       const canvas = document.createElement('canvas'); canvas.className = 'mix-scope'; canvas.setAttribute('aria-label', `${track.name} scope`);
       const pan = document.createElement('input'); pan.type = 'range'; pan.min = '-1'; pan.max = '1'; pan.step = '0.01'; pan.value = String(track.pan); pan.className = 'mix-pan'; pan.setAttribute('aria-label', `${track.name} pan`);
@@ -107,7 +107,7 @@ export class MixPanel {
   paint(scopes: Record<string, number[]>) {
     for (const strip of this.strips) {
       const frames = scopes[`s_${strip.track >= 0 ? strip.track : strip.track === -1 ? 'm' : `r${returnIndex(strip.track)}`}`];
-      drawScope(strip.canvas, frames, strip.track === -1 ? '#d9903f' : getComputedStyle(strip.element).getPropertyValue('--track-colour') || '#9fb0bf');
+      drawScope(strip.canvas, frames, strip.track === -1 ? masterColour : getComputedStyle(strip.element).getPropertyValue('--track-colour') || '#9fb0bf');
       strip.meter.style.height = `${meterLevel(frames) * 100}%`;
     }
   }

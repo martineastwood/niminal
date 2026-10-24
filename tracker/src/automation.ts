@@ -1,4 +1,4 @@
-import type { EffectParameters, FxTarget, Parameter, Envelope, Project } from './project';
+import { columnStrip, type EffectParameters, type FxTarget, type Parameter, type Envelope, type Project } from './project';
 
 export interface LaneParameter extends Parameter { label: string }
 export function targetKey(target: FxTarget | null) { return target ? JSON.stringify(target) : ''; }
@@ -11,7 +11,7 @@ export function laneParameter(target: FxTarget | null, track: number, project: P
     if (!parameter) return null;
     return { ...parameter, label: `${project.definitions.find(d => d.id === target.instrument)?.name ?? 'Instrument'} → ${parameter.name}` };
   }
-  const device = project.tracks[track].fx.find(d => d.id === target.device);
+  const device = columnStrip(project, track).fx.find(d => d.id === target.device);
   const parameter = parameters[device?.definition ?? '']?.find(p => p.name === target.parameter);
   if (!device || !parameter) return null;
   const name = project.definitions.find(d => d.id === device.definition)?.name ?? 'Effect';
@@ -19,14 +19,15 @@ export function laneParameter(target: FxTarget | null, track: number, project: P
 }
 function percent(p: Parameter) { return p.unit === '%' || !p.unit && p.min === 0 && p.max === 1; }
 /** Rounds for display; the stored value keeps its precision. `exact` keeps six significant figures, for the clipboard. */
-export function formatValue(value: string | number, p: Parameter | null, exact = false): string {
+/** `bare` leaves the unit off a dB value, for a cell in a lane whose parameter already says what it is. */
+export function formatValue(value: string | number, p: Parameter | null, exact = false, bare = false): string {
   const n = Number(value);
   const round = (x: number, places: number) => String(exact ? Number(x.toPrecision(6)) : Number(x.toFixed(places)));
   if (!p) return round(n, 2);
   if (percent(p)) return `${round(n * 100, 0)}%`;
   if (p.unit === 'hz') return n >= 1000 ? `${round(n / 1000, 2)} kHz` : `${round(n, 0)} Hz`;
   if (p.unit === 'sec') return n >= 0.1 || exact ? `${round(n * 1000, 0)} ms` : `${round(n * 1000, 1)} ms`;
-  return `${round(n, p.unit === 'db' ? 1 : 2)}${p.unit ? ' ' + p.unit : ''}`;
+  return `${round(n, p.unit === 'db' ? 1 : 2)}${p.unit && !(bare && p.unit === 'db') ? ' ' + p.unit : ''}`;
 }
 export function parseValue(text: string, p: Parameter): string | null {
   const match = text.trim().match(/^([-+]?\d*\.?\d+(?:e[-+]?\d+)?)\s*(khz|hz|ms|sec|s|db|%|st|deg)?$/i);
