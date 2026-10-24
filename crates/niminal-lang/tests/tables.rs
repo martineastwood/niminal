@@ -66,3 +66,22 @@ fn a_path_can_hold_constants_and_data_files_are_tables() {
     assert!(errors[0].message.contains("`m`"), "{:?}", errors[0].message);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn sampler_interpolation_options() {
+    ok(r#"
+const wave = harmonics([1], size: 64)
+pad = sample(wave).interp(sinc).loop(forward)
+chops = pad.slices(4).interp(sinc)
+plain = sample(wave).interp(cubic)
+instr a(freq: hz) { pad(freq: freq) }
+"#);
+    let errors = compile("const wave = zeros(64)\npad = sample(wave).interp(linear)\n")
+        .err()
+        .unwrap();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("`interp` is `cubic` or `sinc`"))
+    );
+}

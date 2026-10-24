@@ -74,7 +74,7 @@ pub use phaser::Phaser;
 pub use pitch_shift::PitchShift;
 pub use resonator::Resonator;
 pub use reverb::Reverb;
-pub use sample::{KitSampler, LoopMode, Sampler};
+pub use sample::{KitSampler, LoopMode, SampleInterp, Sampler};
 pub use sample_hold::SampleHold;
 pub use spectral::{SpectralDelay, SpectralFreeze, valid_fft_size};
 pub use tap::{Tap, TapOut};

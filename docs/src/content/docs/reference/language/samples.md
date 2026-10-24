@@ -29,8 +29,11 @@ A sample is a plain binding, and its settings are chained methods: `amen = sampl
 | `.beats(N)` | The loop is N beats long: it is sped up or down to last N beats at the current tempo |
 | `.duration(2sec)` | The same, to a fixed length that ignores the tempo; also available directly in DSP definitions |
 | `.root(c4)` | The note (or frequency) at which the sample plays as recorded |
+| `.interp(sinc)` | Rate-aware windowed sinc playback; `.interp(cubic)` is the faster default |
 | `.loop(forward)` | Loop the sample while a note is held |
 | `.choke(group)` | On a kit sample: starting this sample ends others in the group |
+
+Use `pad = sample("pad.wav").interp(sinc)` for higher-quality pitch and sample-rate conversion. The same setting works on kits and slices, such as `chops = amen.slices(16).interp(sinc)`. Sinc filtering costs more CPU and reduces aliasing when playing faster. Its filter is limited to 512 taps, so suppression decreases at extreme playback rates.
 
 Fitting changes the playback speed (and so the pitch). Time-stretching and slice-fitting are not supported yet.
 

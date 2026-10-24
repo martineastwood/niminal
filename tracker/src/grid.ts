@@ -81,6 +81,8 @@ export class PatternGrid {
     private sequence: (action: SequenceAction) => void = () => {},
     /** The instrument that notes entered now are given: the one chosen in the sound browser. */
     private currentInstrument: () => string | null = () => null,
+    /** The volume (0 to 100) given to notes entered in record mode, or null to leave it unset. */
+    private defaultVelocity: () => number | null = () => null,
   ) {
     this.playhead.className = 'playhead'; this.playhead.hidden = true; this.frame.className = 'track-frame'; this.frame.hidden = true;
     parent.parentElement?.append(this.playhead, this.frame);
@@ -653,7 +655,11 @@ export class PatternGrid {
         if (instrument) this.audition(instrument, note, lane.track);
         // a note is given the chosen instrument's number, which can be edited afterwards
         const instLane = this.lanes.findIndex(other => other.track === lane.track && other.col === lane.col && other.kind === 'inst');
-        this.apply([{ row: this.row, track: this.column, before: lane.values[this.row], after: note }, ...(inst ? [{ row: this.row, track: instLane, before: column.inst[this.row], after: inst }] : [])]);
+        const velocity = ending ? null : this.defaultVelocity(), track = this.project().tracks[lane.track];
+        // a default velocity needs somewhere to go, so the track shows its Vol column
+        if (velocity !== null && track && !track.show?.vol) track.show = { ...track.show, vol: true };
+        const volLane = this.lanes.findIndex(other => other.track === lane.track && other.col === lane.col && other.kind === 'vol');
+        this.apply([{ row: this.row, track: this.column, before: lane.values[this.row], after: note }, ...(inst ? [{ row: this.row, track: instLane, before: column.inst[this.row], after: inst }] : []), ...(velocity !== null && volLane >= 0 ? [{ row: this.row, track: volLane, before: column.vol[this.row], after: String(Math.round(velocity * 1.28)) }] : [])]);
         this.advance(); this.render(); return;
       }
     }

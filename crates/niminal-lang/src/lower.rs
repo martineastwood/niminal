@@ -843,6 +843,7 @@ pub(crate) struct Member {
     /// Playback speed that fits a loop to the tempo; 1 for none.
     pub speed: f64,
     pub loop_mode: LoopMode,
+    pub interp: niminal_engine::ops::SampleInterp,
 }
 
 /// An instrument that plays recorded audio, selecting a kit member once per note.
@@ -942,7 +943,8 @@ impl Lower<'_> {
                     let member = &members[i];
                     let mut player = Sampler::new(member.channels[channel].clone(), root_hz, None)
                         .with_speed(member.speed)
-                        .with_loop(member.loop_mode);
+                        .with_loop(member.loop_mode)
+                        .with_interp(member.interp);
                     if let Some((start, end)) = member.slice {
                         player = player.slice(start, end);
                     }

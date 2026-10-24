@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::opcode::{Opcode, Port, ProcessCtx};
 use crate::table::Table;
@@ -15,6 +15,32 @@ const PORTS: &[Port] = &[
 /// Frames over which a slice fades in and out.
 const SLICE_FADE: f64 = 16.0;
 
+/// Sample playback quality. Cubic is the inexpensive default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SampleInterp {
+    #[default]
+    Cubic,
+    Sinc,
+}
+
+// Sixteen-lobe Blackman-windowed sinc, tabulated off the audio thread.
+const SINC_RADIUS: f64 = 16.0;
+const SINC_DENSITY: f64 = 1024.0;
+static SINC: LazyLock<Vec<f64>> = LazyLock::new(|| {
+    (0..=(SINC_RADIUS * SINC_DENSITY) as usize)
+        .map(|i| {
+            let x = i as f64 / SINC_DENSITY;
+            let sinc = if i == 0 {
+                1.0
+            } else {
+                (std::f64::consts::PI * x).sin() / (std::f64::consts::PI * x)
+            };
+            let phase = std::f64::consts::PI * x / SINC_RADIUS;
+            sinc * (0.42 + 0.5 * phase.cos() + 0.08 * (2.0 * phase).cos())
+        })
+        .collect()
+});
+
 /// How a sample loops when it reaches its end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LoopMode {
@@ -29,7 +55,8 @@ pub enum LoopMode {
 ///
 /// Pitch is `freq / root`, then `pitch` semitones, then `rate`, so a note at
 /// the sample's root plays it as recorded. The sample is read with cubic
-/// interpolation at whatever rate the engine runs. The gate is ignored: a
+/// interpolation by default, or rate-aware windowed sinc when selected.
+/// The gate is ignored: a
 /// sample plays to its end unless the voice is stopped (choked, or panicked),
 /// unless it loops.
 ///
@@ -48,6 +75,7 @@ pub struct Sampler {
     /// A fixed playback speed on top of the pitch, to fit a loop to a tempo.
     speed: f64,
     loop_mode: LoopMode,
+    interp: SampleInterp,
     /// Playback direction: +1 forward, -1 reverse (bidirectional loops).
     direction: f64,
     position: f64,
@@ -66,11 +94,56 @@ impl Sampler {
             range,
             speed: 1.0,
             loop_mode: LoopMode::None,
+            interp: SampleInterp::Cubic,
             direction: 1.0,
             position: 0.0,
             started: false,
             done: false,
             sample_rate: 48_000.0,
+        }
+    }
+
+    pub fn with_interp(mut self, interp: SampleInterp) -> Self {
+        if interp == SampleInterp::Sinc {
+            LazyLock::force(&SINC);
+        }
+        self.interp = interp;
+        self
+    }
+
+    fn read_sinc(&self, step: f64) -> f32 {
+        let cutoff = 1.0 / step.max(1.0);
+        // Bound realtime work at extreme playback rates (up to 512 taps).
+        let radius = (SINC_RADIUS / cutoff).min(255.5);
+        let first = self.range.0 as i64;
+        let len = (self.range.1 - self.range.0) as i64;
+        if len == 0 {
+            return 0.0;
+        }
+        let mut sum = 0.0;
+        let mut weight = 0.0;
+        for i in (self.position - radius).ceil() as i64..=(self.position + radius).floor() as i64 {
+            let x = (i as f64 - self.position).abs() * cutoff * SINC_DENSITY;
+            let k = x as usize;
+            if k + 1 >= SINC.len() {
+                continue;
+            }
+            let w = SINC[k] + (SINC[k + 1] - SINC[k]) * (x - k as f64);
+            let index = match self.loop_mode {
+                LoopMode::None => i,
+                LoopMode::Forward => first + (i - first).rem_euclid(len),
+                LoopMode::Bidirectional => {
+                    let p = (i - first).rem_euclid(2 * len);
+                    first + if p < len { p } else { 2 * len - 1 - p }
+                }
+            };
+            sum += f64::from(self.at(index)) * w;
+            weight += w;
+        }
+        if weight.abs() < 1e-12 {
+            0.0
+        } else {
+            (sum / weight) as f32
         }
     }
 
@@ -185,18 +258,21 @@ impl Opcode for Sampler {
                     }
                 }
             }
-            *y = self.read();
-            if sliced {
-                let edge = (self.position - first).min(last - self.position) / SLICE_FADE;
-                *y *= edge.clamp(0.0, 1.0) as f32;
-            }
             let pitch = f64::from(inputs[1][n]) / 12.0;
             let ratio = f64::from(inputs[0][n]) / f64::from(self.root_hz)
                 * if pitch == 0.0 { 1.0 } else { pitch.exp2() }
                 * f64::from(inputs[2][n])
                 * self.speed;
-            self.position +=
-                self.direction * ratio.max(0.0) * source_rate / f64::from(self.sample_rate);
+            let step = ratio.max(0.0) * source_rate / f64::from(self.sample_rate);
+            *y = match self.interp {
+                SampleInterp::Cubic => self.read(),
+                SampleInterp::Sinc => self.read_sinc(step),
+            };
+            if sliced {
+                let edge = (self.position - first).min(last - self.position) / SLICE_FADE;
+                *y *= edge.clamp(0.0, 1.0) as f32;
+            }
+            self.position += self.direction * step;
         }
     }
 
@@ -298,6 +374,69 @@ mod tests {
         let mut s = Sampler::new(data, 440.0, member);
         s.prepare(48_000.0);
         s
+    }
+
+    #[test]
+    fn sinc_preserves_unity_and_loop_boundaries() {
+        let mut values = vec![9.0; 80];
+        values[20..60].fill(1.0);
+        let data = Arc::new(Table::from_f32(values, Some(48_000.0)));
+        for mode in [LoopMode::Forward, LoopMode::Bidirectional] {
+            let mut s = sampler(data.clone(), None)
+                .slice(20, 60)
+                .with_loop(mode)
+                .with_interp(SampleInterp::Sinc);
+            for pos in [20.0, 20.25, 39.5, 59.75] {
+                s.position = pos;
+                for step in [0.5, 1.0, 2.0, 8.0] {
+                    assert!((s.read_sinc(step) - 1.0).abs() < 1e-6);
+                }
+            }
+        }
+        let mut s = sampler(ramp(100, 48_000.0), None).with_interp(SampleInterp::Sinc);
+        s.position = 40.0;
+        assert!((s.read_sinc(1.0) - 40.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn sinc_preserves_passband_at_fractional_positions() {
+        let data = Arc::new(Table::from_f32(
+            (0..1024)
+                .map(|i| (std::f64::consts::TAU * 0.05 * i as f64).sin() as f32)
+                .collect::<Vec<_>>(),
+            Some(48_000.0),
+        ));
+        let mut s = sampler(data, None).with_interp(SampleInterp::Sinc);
+        for step in [0.5, 1.0, 2.0, 4.0] {
+            for i in 300..400 {
+                s.position = i as f64 + 0.37;
+                let expected = (std::f64::consts::TAU * 0.05 * s.position).sin() as f32;
+                assert!((s.read_sinc(step) - expected).abs() < 0.001);
+            }
+        }
+    }
+
+    #[test]
+    fn sinc_filters_aliases_when_playback_is_faster() {
+        let data = Arc::new(Table::from_f32(
+            (0..4096)
+                .map(|i| (std::f64::consts::TAU * 0.375 * i as f64).sin() as f32)
+                .collect::<Vec<_>>(),
+            Some(48_000.0),
+        ));
+        let mut s = sampler(data, None).with_interp(SampleInterp::Sinc);
+        let freq = [440.0; 256];
+        let pitch = [0.0; 256];
+        let rate = [2.0; 256];
+        let start = [512.25 / 48_000.0; 256];
+        let select = [0.0; 256];
+        let mut out = [0.0; 256];
+        s.process(&ctx(), &[&freq, &pitch, &rate, &start, &select], &mut out);
+        assert!(out.iter().all(|x| x.abs() < 0.001));
+        s.interp = SampleInterp::Cubic;
+        s.reset();
+        s.process(&ctx(), &[&freq, &pitch, &rate, &start, &select], &mut out);
+        assert!(out.iter().any(|x| x.abs() > 0.5));
     }
 
     #[test]

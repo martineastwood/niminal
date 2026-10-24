@@ -10,11 +10,11 @@ vi.stubGlobal('Option', function (text: string, value: string) {
 });
 afterEach(() => document.body.replaceChildren());
 
-function setup(sequence = vi.fn(), current: () => string | null = () => null) {
+function setup(sequence = vi.fn(), current: () => string | null = () => null, velocity: () => number | null = () => null) {
   const feedback = vi.fn();
   const parent = document.createElement('div'); parent.tabIndex = 0; document.body.append(parent);
   const project = newProject(), edited = vi.fn(), audition = vi.fn(), play = vi.fn();
-  const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, edited, audition, play, undefined, undefined, undefined, feedback, undefined, sequence, current);
+  const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, edited, audition, play, undefined, undefined, undefined, feedback, undefined, sequence, current, velocity);
   grid.recording = true;
   grid.render();
   const key = (key: string, options: KeyboardEventInit = {}) => parent.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...options }));
@@ -624,4 +624,12 @@ it('previews from instrument and parameter columns outside record mode without e
   expect(audition).toHaveBeenCalledTimes(2);
   expect(JSON.stringify(project)).toBe(before);
   expect(edited).not.toHaveBeenCalled();
+});
+
+it('gives notes entered in record mode the default velocity, showing the track\'s Vol column', () => {
+  const { project, grid, key } = setup(undefined, () => 'tone', () => 50);
+  const column = project.patterns[0].notes[1][0];
+  grid.selectTrack(1); key('s');
+  expect(project.tracks[1].show?.vol).toBe(true);
+  expect(column.vol.filter(v => v === '64')).toHaveLength(1);
 });

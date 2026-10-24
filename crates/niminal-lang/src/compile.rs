@@ -1252,6 +1252,7 @@ fn slice_members(
             )),
             speed: *speed,
             loop_mode: niminal_engine::ops::LoopMode::None,
+            interp: niminal_engine::ops::SampleInterp::Cubic,
         })
         .collect())
 }
@@ -1308,14 +1309,17 @@ fn compile_sample(
                 }
                 duration = Some(seconds);
             }
-            "loop" => {} // handled by loop_mode_of
+            "loop" | "interp" => {} // validated below
             other => {
                 let mut d =
                     Diagnostic::new(format!("`{other}` isn't an option of a sample"), key.span);
-                d = match closest(other, ["root", "choke", "beats", "duration", "loop"]) {
+                d = match closest(
+                    other,
+                    ["root", "choke", "beats", "duration", "loop", "interp"],
+                ) {
                     Some(c) => d.with_help(format!("did you mean `{c}`?")),
                     None => d.with_help(
-                        "the options are `root`, `choke`, `beats`, `duration` and `loop`",
+                        "the options are `root`, `choke`, `beats`, `duration`, `loop` and `interp`",
                     ),
                 };
                 return Err(d);
@@ -1329,7 +1333,7 @@ fn compile_sample(
         ));
     }
     let file_error = |e: String| Diagnostic::new(e, decl.source_span);
-    let members: Vec<Member> = match (&decl.source, decl.is_kit) {
+    let mut members: Vec<Member> = match (&decl.source, decl.is_kit) {
         (SampleSource::Path(path), true) => samples
             .load_kit(path)
             .map_err(file_error)?
@@ -1340,6 +1344,7 @@ fn compile_sample(
                 slice: None,
                 speed: 1.0,
                 loop_mode: niminal_engine::ops::LoopMode::None,
+                interp: niminal_engine::ops::SampleInterp::Cubic,
             })
             .collect(),
         (SampleSource::Path(path), false) => {
@@ -1362,6 +1367,7 @@ fn compile_sample(
                 slice: None,
                 speed,
                 loop_mode: loop_mode_of(&decl.options)?,
+                interp: niminal_engine::ops::SampleInterp::Cubic,
             }]
         }
         (SampleSource::Slices { sample, count }, _) => {
@@ -1385,6 +1391,7 @@ fn compile_sample(
                 slice: None,
                 speed: 1.0,
                 loop_mode: loop_mode_of(&decl.options)?,
+                interp: niminal_engine::ops::SampleInterp::Cubic,
             }]
         }
         (SampleSource::Table(_), true) => {
@@ -1394,6 +1401,23 @@ fn compile_sample(
             ));
         }
     };
+    for arg in &decl.options {
+        if arg.name.as_ref().is_some_and(|n| n.name == "interp") {
+            let interp = match &arg.value.kind {
+                ExprKind::Name(n) if n == "cubic" => niminal_engine::ops::SampleInterp::Cubic,
+                ExprKind::Name(n) if n == "sinc" => niminal_engine::ops::SampleInterp::Sinc,
+                _ => {
+                    return Err(Diagnostic::new(
+                        "`interp` is `cubic` or `sinc`",
+                        arg.value.span,
+                    ));
+                }
+            };
+            for member in &mut members {
+                member.interp = interp;
+            }
+        }
+    }
     if decl.is_kit {
         for member in &members {
             let name = &member.name;
