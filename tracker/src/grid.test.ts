@@ -633,3 +633,13 @@ it('gives notes entered in record mode the default velocity, showing the track\'
   expect(project.tracks[1].show?.vol).toBe(true);
   expect(column.vol.filter(v => v === '64')).toHaveLength(1);
 });
+
+it('records onto the nearest row while the pattern plays, leaving the cursor on the play position', () => {
+  const { project, grid, key } = setup();
+  const column = project.patterns[0].notes[0][0];
+  grid.selectTrack(0); grid.paint(3, 0.6, Date.now()); // 60% through row 3: the nearest is row 4
+  key('s'); key('ArrowDown');
+  expect(column.notes[4]).toBe('C#4'); expect(column.notes[3]).toBeNull();
+  key('s'); expect(column.notes[4]).toBe('C#4'); // no step, and the cursor cannot be moved off the play row
+  grid.paint(null);
+});

@@ -480,9 +480,10 @@ function toggleConnection() {
   }).finally(() => { connectionPending = null; renderConnectButton(); });
 }
 element('connect').onclick = toggleConnection;
-element('play').onclick = () => { void action(() => togglePlay('pattern')); };
-element('play-song').onclick = () => { void action(() => togglePlay('song')); };
-element('stop').onclick = () => { void action(stopPlayback); };
+// transport buttons hand focus straight back to the grid, so notes can be entered as soon as it plays
+element('play').onclick = () => { element('grid').focus(); void action(() => togglePlay('pattern')); };
+element('play-song').onclick = () => { element('grid').focus(); void action(() => togglePlay('song')); };
+element('stop').onclick = () => { element('grid').focus(); void action(stopPlayback); };
 element('show-instrument').onclick = () => { selectDefinition(project.definitions.find(d => d.id === currentInstrument) ?? project.definitions.find(d => d.kind === 'instr')!); editor.focus(); };
 element('show-fx').onclick = () => { if (deviceTrack < 0 && !stripOf(project, deviceTrack)) deviceTrack = 0; openTrackFx(); };
 element('apply').onclick = () => { const definition = selected; void action(() => applyAndAudition(definition)); };

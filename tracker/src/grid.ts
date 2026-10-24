@@ -312,12 +312,18 @@ export class PatternGrid {
     this.origin = atMs - (row + (phase ?? 0)) * this.rowMs();
     this.animation ||= requestAnimationFrame(this.follow);
   }
+  /** Recording while the pattern plays: the cursor rides the play position and notes land on the nearest row. */
+  private get live() { return this.recording && this.playing !== null; }
+  private nearestRow() { return Math.round((Date.now() - this.origin) / this.rowMs()) % this.pattern().rows; }
   private rowMs() { return 60000 / (this.project().bpm * this.project().rows_per_beat); }
   private follow = () => {
     this.animation = 0;
     if (this.playing === null) return;
     const row = Math.min(Math.max(Math.floor((Date.now() - this.origin) / this.rowMs()), 0), this.pattern().rows - 1);
-    if (row !== this.shown) { this.shown = row; this.followRow(row); }
+    if (row !== this.shown) {
+      this.shown = row; this.followRow(row);
+      if (this.live) { this.row = row; this.anchor = { row, column: this.column }; this.paintSelection(); }
+    }
     this.animation = requestAnimationFrame(this.follow);
   };
   /**
@@ -610,6 +616,8 @@ export class PatternGrid {
     }
     if (event.altKey) return;
     const lanes = this.lanes, lane = lanes[this.column];
+    // the play position owns the cursor's row while recording over playback
+    if (this.live && ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', 'F9', 'F10', 'F11', 'F12'].includes(event.key)) { event.preventDefault(); return; }
     switch (event.key) {
       case ' ': event.preventDefault(); this.togglePlay(); return;
       case 'Escape': event.preventDefault(); this.setRecording(!this.recording); return;
@@ -650,6 +658,7 @@ export class PatternGrid {
         const ending = event.key.toLowerCase() === 'a' ? 'OFF' : event.key === '-' ? 'CUT' : null;
         const note = ending ?? keyboardNote(event.key, this.octave()); if (!note) return;
         event.preventDefault();
+        const live = this.live; if (live) { this.row = this.nearestRow(); this.anchor = { row: this.row, column: this.column }; }
         const column = this.pattern().notes[lane.track][lane.col], inst = ending ? undefined : this.currentInstrument();
         const instrument = !ending && (inst ?? instrumentAt(column.inst, this.row));
         if (instrument) this.audition(instrument, note, lane.track);
@@ -660,7 +669,8 @@ export class PatternGrid {
         if (velocity !== null && track && !track.show?.vol) track.show = { ...track.show, vol: true };
         const volLane = this.lanes.findIndex(other => other.track === lane.track && other.col === lane.col && other.kind === 'vol');
         this.apply([{ row: this.row, track: this.column, before: lane.values[this.row], after: note }, ...(inst ? [{ row: this.row, track: instLane, before: column.inst[this.row], after: inst }] : []), ...(velocity !== null && volLane >= 0 ? [{ row: this.row, track: volLane, before: column.vol[this.row], after: String(Math.round(velocity * 1.28)) }] : [])]);
-        this.advance(); this.render(); return;
+        if (!live) this.advance();
+        this.render(); return;
       }
     }
     if (!event.shiftKey) this.anchor = { row: this.row, column: this.column };
