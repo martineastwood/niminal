@@ -6,6 +6,7 @@ mod buffer;
 mod chorus;
 mod comb;
 mod compress;
+mod fdn;
 mod control;
 mod convolve;
 mod custom;
@@ -42,6 +43,7 @@ pub use buffer::{BufferRead, BufferReadBank, BufferRecord, BufferWrite};
 pub use chorus::Chorus;
 pub use comb::Comb;
 pub use compress::Compressor;
+pub use fdn::Fdn;
 pub use control::Control;
 pub use convolve::{Convolve, IrSpectrum};
 pub use custom::{

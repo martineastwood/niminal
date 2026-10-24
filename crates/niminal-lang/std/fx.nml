@@ -114,26 +114,36 @@ fx tremolo(
 // folder: dynamics
 
 /// Turn loud parts down: above the threshold the level is reduced by the ratio, and makeup brings
-/// the whole signal back up.
+/// the whole signal back up. `knee` rounds the corner at the threshold. `link` is how much the
+/// channels of a stereo sound share one squeeze: at 1 the loudest decides for both, so the image
+/// stays put; at 0 each side is squeezed on its own.
 fx compressor(
   threshold: -60db..0db = -18db,
   ratio: 1..20 = 4,
   attack: 1ms..100ms = 10ms,
   release: 10ms..1sec = 120ms,
-  makeup: 0db..24db = 3db
+  makeup: 0db..24db = 3db,
+  knee: 0db..24db = 6db,
+  link: 0..1 = 1
 ) {
-  out = in.compress(threshold: threshold, ratio: ratio, attack: attack, release: release, makeup: makeup)
+  level = in.map(abs(it))
+  side = level * (1 - link) + level.max * link
+  out = in.compress(threshold: threshold, ratio: ratio, attack: attack, release: release, makeup: makeup, sidechain: side, knee: knee)
 }
 
 // folder: distortion
 
-/// Warm or hard distortion. `drive` is how hard the signal is pushed, `tone` how bright it is.
+/// Warm or hard distortion. `drive` is how hard the signal is pushed, `tone` how bright it is. It runs
+/// at twice the sample rate, so bright sounds pushed hard don't fold harmonics back down as noise.
 fx overdrive(
   drive: 0..1 = 0.4,
   tone: 0..1 = 0.5,
   mix: 0..1 = 1
 ) {
-  out = in.distortion(drive: drive, tone: tone, mix: mix)
+  push = 1 + drive * 12
+  bright = tone
+  wet = mix
+  out = oversample(2) { in.distortion(drive: push, tone: bright, mix: wet) }
 }
 
 /// Lo-fi: fewer bits and a lower sample rate, for grit.

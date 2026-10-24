@@ -13,7 +13,7 @@ type Command =
   | { op: 'play'; song: Song; mode: 'pattern' | 'song'; pattern_id: string; start_position: number }
   | { op: 'update'; song: Song }
   | { op: 'scopes'; strips: boolean }
-  | { op: 'audition'; instrument: string; note: string; track: number };
+  | { op: 'audition'; instrument: string; note: string; track: number; ms?: number };
 
 export let audioStatus: AudioStatus = {
   connected: false, playing: false, row: null, row_phase: null, row_at_ms: 0, pattern_id: null, sequence_position: null, sample_rate: 0,

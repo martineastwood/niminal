@@ -27,7 +27,7 @@ it('builds a chain from presets, each device with its own copy of the code', () 
   expect(a.definition.id).not.toBe(b.definition.id);
   expect(project.tracks[0].fx.map(d => d.id)).toEqual([a.device.id, b.device.id]);
   expect([a.definition.name, b.definition.name]).toEqual(['Echo', 'Echo 2']);
-  expect(a.definition.source).toContain(`fx ${a.definition.id}`); expect(a.definition.source).toContain('in.delay');
+  expect(a.definition.source).toContain('fx echo('); expect(b.definition.source).toContain('fx echo_2('); expect(a.definition.source).toContain('in.delay');
   expect(c.definition.source).toContain('in.chorus');
   expect(moveDevice(project, 0, b.device.id, -1)).toBe(true);
   expect(project.tracks[0].fx.map(d => d.id)).toEqual([b.device.id, a.device.id]);
@@ -100,18 +100,18 @@ it('shows each device as a card whose buttons act on the chain, with only the se
   expect(document.querySelector('.browser')).toBeNull();
 });
 
-it('shows an instrument\'s parameters as sliders that set its values, and records them to a lane only for the track that plays it', () => {
+it('shows an instrument\'s parameters as sliders that set its values, and records them to a lane on a track', () => {
   const project = newProject(), parent = document.createElement('div'), edited = vi.fn(), write = vi.fn(); document.body.append(parent);
   const tone = project.definitions[0];
   const parameters = { tone: [{ name: 'cutoff', min: 200, max: 8000, default: 2000, unit: 'hz' }] };
-  renderInstrument(parent, project, tone, {}, edited, write, 0); expect(parent.textContent).toContain('Apply to expose parameters');
-  renderInstrument(parent, project, tone, parameters, edited, write, 0);
+  renderInstrument(parent, tone, {}, edited, write, 0); expect(parent.textContent).toContain('Apply to expose parameters');
+  renderInstrument(parent, tone, parameters, edited, write, 0);
   const value = parent.querySelector<HTMLInputElement>('[aria-label="cutoff value"]')!;
   expect(value.value).toBe('2000'); value.value = '500'; value.dispatchEvent(new Event('change'));
   expect(tone.values).toEqual({ cutoff: 500 }); expect(edited).toHaveBeenCalledOnce();
   parent.querySelector<HTMLButtonElement>('[aria-label="Write cutoff to pattern"]')!.click();
-  expect(write).toHaveBeenCalledWith({ kind: 'instrument', parameter: 'cutoff' }, 500);
-  renderInstrument(parent, project, tone, parameters, edited, write, 1);
+  expect(write).toHaveBeenCalledWith({ kind: 'instrument', instrument: 'tone', parameter: 'cutoff' }, 500);
+  renderInstrument(parent, tone, parameters, edited, write, -1);
   expect(parent.querySelector<HTMLButtonElement>('[aria-label="Write cutoff to pattern"]')!.disabled).toBe(true);
 });
 
@@ -129,7 +129,7 @@ it('keeps effects in a library that devices on any track, or the master, can reu
   expect(removeEffect(project, delay.id)).toBeNull(); expect(project.definitions.some(d => d.id === delay.id)).toBe(false);
   expect(addDevice(project, 0, 'fx:missing')).toBeNull();
   const copy = duplicateEffect(project, again);
-  expect(copy.name).toBe('Echo 2 copy'); expect(copy.source).toContain(`fx ${copy.id}`); expect(copy.source).not.toContain(again.id);
+  expect(copy.name).toBe('Echo 2 copy'); expect(copy.source).toContain('fx echo_2_copy('); expect(copy.source).not.toContain('fx echo_2(');
   expect(project.definitions.indexOf(copy)).toBe(project.definitions.indexOf(again) + 1);
 });
 
@@ -155,7 +155,7 @@ it('copies an instrument preset into a project under its own name in the code', 
   const project = newProject(), kick = instrumentPresets.find(p => p.id === 'kick')!;
   const first = addInstrumentFromPreset(project, kick), second = addInstrumentFromPreset(project, kick);
   expect([first.name, second.name]).toEqual(['Kick', 'Kick 2']);
-  expect(first.source).toContain(`instr ${first.id}(`); expect(first.source).not.toMatch(/instr kick\(/); expect(first.source).toContain('punch: 0..1 = 0.5');
+  expect(first.source).toContain('instr kick('); expect(second.source).toContain('instr kick_2('); expect(first.source).toContain('punch: 0..1 = 0.5');
   expect(project.definitions.filter(d => d.kind === 'instr').map(d => d.id)).toContain(second.id);
 });
 
@@ -164,10 +164,11 @@ it('copies a drum preset together with the voice it is built on, under names tha
   const project = newProject(), preset = instrumentPresets.find(p => p.id === 'kick_808')!, before = project.definitions.length;
   const first = addInstrumentFromPreset(project, preset), second = addInstrumentFromPreset(project, preset), copy = duplicateInstrument(project, first);
   for (const added of [first, second, copy]) {
-    expect(added.source).toContain(`instr ${added.id}(`); expect(added.source).toContain(`fn ${added.id}_voice(`); expect(added.source).toContain(`${added.id}_voice(\n    freq:`);
+    const code = /^instr (\w+)\(/m.exec(added.source)![1];
+    expect(added.source).toContain(`fn ${code}_voice(`); expect(added.source).toContain(`${code}_voice(\n    freq:`);
     expect(added.source).not.toMatch(/fn drum\b|\bdrum\(/);
   }
   const names = project.definitions.flatMap(d => [...d.source.matchAll(/^(?:instr|fn) (\w+)/gm)].map(m => m[1]));
   expect(new Set(names).size).toBe(names.length); expect(project.definitions.length).toBe(before + 3); expect(names.filter(n => n.endsWith('_voice'))).toHaveLength(3);
-  expect(copy.source).not.toContain(first.id);
+  expect(copy.source).toContain('instr kick_808_copy('); expect(copy.source).not.toContain('instr kick_808(');
 });

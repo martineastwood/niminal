@@ -13,7 +13,7 @@ afterEach(() => document.body.replaceChildren());
 function setup(sequence = vi.fn()) {
   const parent = document.createElement('div'); parent.tabIndex = 0; document.body.append(parent);
   const project = newProject(), edited = vi.fn(), audition = vi.fn(), play = vi.fn();
-  const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, edited, vi.fn(), audition, play, undefined, undefined, undefined, undefined, undefined, undefined, sequence);
+  const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, edited, audition, play, undefined, undefined, undefined, undefined, undefined, undefined, sequence);
   grid.recording = true;
   grid.render();
   const key = (key: string, options: KeyboardEventInit = {}) => parent.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...options }));
@@ -79,7 +79,7 @@ it('keeps note undo history independent for each pattern and supports longer pat
   const second = { id: 'second', name: 'Second', rows: 64, fx: Array.from({ length: 4 }, () => [emptyFxLane(64)]), notes: Array.from({ length: 4 }, () => [blankColumn(64)]) };
   project.patterns.push(second);
   let pattern = project.patterns[0];
-  const grid = new PatternGrid(parent, () => project, () => pattern, () => 4, vi.fn(), vi.fn(), vi.fn(), vi.fn());
+  const grid = new PatternGrid(parent, () => project, () => pattern, () => 4, vi.fn(), vi.fn(), vi.fn());
   grid.recording = true;
   const key = (key: string) => parent.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
   grid.render(); key('s'); // change first pattern's C to C#
@@ -99,7 +99,7 @@ it('opens track devices without entering notes and navigates beyond the starter 
     project.tracks.push({ name: `Track ${i + 1}`, instrument: 'tone', fx: [], pan: 0, volume_db: 0, muted: false });
     project.patterns[0].notes.push([blankColumn(32)]); project.patterns[0].fx.push([emptyFxLane(32)]);
   }
-  const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, vi.fn(), vi.fn(), vi.fn(), vi.fn(), selected, open);
+  const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, vi.fn(), vi.fn(), vi.fn(), selected, open);
   grid.recording = true;
   grid.render();
   parent.querySelector<HTMLButtonElement>('[aria-label="Show Track 8 effects"]')!.click();
@@ -109,7 +109,7 @@ it('opens track devices without entering notes and navigates beyond the starter 
   expect(project.patterns[0].notes[7][0].notes[0]).toBe('C-4');
   parent.querySelector<HTMLButtonElement>('[aria-label="Mute Track 8"]')!.click();
   expect(project.tracks[7].muted).toBe(true);
-  parent.querySelector<HTMLButtonElement>('[aria-label="Edit Track 8 instrument"]')!.click();
+  parent.querySelector<HTMLButtonElement>('[aria-label="Track 8 instrument"]')!.click();
   expect(open).toHaveBeenLastCalledWith(7, 'instrument', true);
   parent.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
   expect(grid.activeTrack).toBe(0); expect(selected).toHaveBeenLastCalledWith(0);
@@ -118,7 +118,7 @@ it('opens track devices without entering notes and navigates beyond the starter 
 it('advances notes by the entry step, wraps, and supports step zero', () => {
   const parent = document.createElement('div'); document.body.append(parent);
   const project = newProject(); let step = 4;
-  const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn(), () => step);
+  const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn(), () => step);
   grid.recording = true;
   grid.render();
   const key = () => parent.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', bubbles: true, cancelable: true }));
@@ -399,13 +399,15 @@ it('asks the sequence to move between steps, add or remove one, and change the p
   }
 });
 
-it('has a presets button on each track that browses for that track and selects it', () => {
-  const { parent, project } = setup(), browse = vi.fn();
-  const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, vi.fn(), vi.fn(), vi.fn(), vi.fn(), undefined, undefined, undefined, undefined, undefined, undefined, undefined, browse);
+it('names each track\'s instrument in its header and opens the instrument when it is clicked', () => {
+  const { parent, project } = setup(), open = vi.fn();
+  const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, vi.fn(), vi.fn(), vi.fn(), undefined, open);
   grid.render();
-  const button = parent.querySelector<HTMLButtonElement>('[aria-label="Lead presets"]')!;
-  button.click();
-  expect(browse).toHaveBeenCalledWith(0, button); expect(grid.activeTrack).toBe(0);
+  const label = (name: string) => parent.querySelector<HTMLButtonElement>(`[aria-label="${name} instrument"]`)!;
+  expect(label('Lead').textContent).toBe('00 Warm saw'); expect(parent.querySelector('select[aria-label="Lead instrument"]')).toBeNull();
+  expect(label('Bass').textContent).toBe('No instrument'); expect(label('Bass').classList.contains('empty')).toBe(true);
+  label('Bass').click();
+  expect(open).toHaveBeenCalledWith(1, 'instrument', false); expect(grid.activeTrack).toBe(1);
 });
 
 it('shades the beats and bars by rows per beat', () => {

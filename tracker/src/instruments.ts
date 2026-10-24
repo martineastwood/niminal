@@ -1,61 +1,58 @@
 import type { Definition, Project } from './project';
 import type { Preset } from './library';
+import { codeNameOf, freeCodeName, renameInSource, slug, uniqueName } from './naming';
 
 const identifier = () => crypto.randomUUID().replaceAll('-', '_');
 
-const synthSource = (id: string) => `/// Describe your instrument here.\ninstr ${id}(freq: hz) {\n  osc(sine, freq) * env[0.15 | 200ms 0]\n}\n`;
+const synthSource = (code: string) => `/// Describe your instrument here.\ninstr ${code}(freq: hz) {\n  osc(sine, freq) * env[0.15 | 200ms 0]\n}\n`;
 
 /** Plays one imported WAV, pitched from its root note. `file` is relative to the project folder. */
-export const samplerSource = (id: string, file: string) => {
-  const sample = id.replace(/^instr_/, 'smp_');
-  return `/// Plays ${file}. Change .root(...) to retune, or add .loop(forward) to sustain it.\n${sample} = sample("${file}").root(c4)\ninstr ${id}(freq: hz) {\n  ${sample}(freq: freq)\n}\n`;
-};
+export const samplerSource = (code: string, file: string) =>
+  `/// Plays ${file}. Change .root(...) to retune, or add .loop(forward) to sustain it.\n${code}_sample = sample("${file}").root(c4)\ninstr ${code}(freq: hz) {\n  ${code}_sample(freq: freq)\n}\n`;
 
-function uniqueName(project: Project, base: string) {
-  const taken = new Set(project.definitions.filter(d => d.kind === 'instr').map(d => d.name));
-  let name = base;
-  for (let n = 2; taken.has(name); n++) name = `${base} ${n}`;
-  return name;
+/** A new instrument called `base` (made unique), whose code is written for the name it ends up with. */
+function create(project: Project, base: string, write: (code: string) => string): Definition {
+  const name = uniqueName(project, 'instr', base), code = freeCodeName(project, slug(name));
+  const definition: Definition = { id: `instr_${identifier()}`, kind: 'instr', name, source: write(code) };
+  project.definitions.push(definition);
+  return definition;
 }
 
-/** A new synth, or a sampler for an imported file. Names inside the code come from the id, so they never collide. */
+/** A new synth, or a sampler for an imported file. */
 export function addInstrument(project: Project, sample?: string): Definition {
-  const id = `instr_${identifier()}`;
   const stem = sample?.split('/').pop()?.replace(/\.wav$/i, '');
-  const definition: Definition = { id, kind: 'instr', name: uniqueName(project, stem ?? 'Synth'), source: sample ? samplerSource(id, sample) : synthSource(id) };
-  project.definitions.push(definition);
-  return definition;
+  return create(project, stem ?? 'Synth', code => sample ? samplerSource(code, sample) : synthSource(code));
 }
 
-/** A copy of one of the instruments that come with niminal, named after its id in the code so it never collides. */
-export function addInstrumentFromPreset(project: Project, preset: Preset): Definition {
-  const id = `instr_${identifier()}`;
-  const source = preset.source.replace(/^instr \w+/m, `instr ${id}`);
-  // a drum preset carries its own copy of the voice it calls, named from the id like the instrument
-  const voice = preset.voice?.replace(/^fn drum\b/m, `fn ${id}_voice`).replace(/^\/\/\/.*\n/gm, '');
-  const definition: Definition = { id, kind: 'instr', name: uniqueName(project, preset.name), source: voice ? `${source.replace(/\bdrum\(/, `${id}_voice(`)}\n${voice}` : source };
-  project.definitions.push(definition);
-  return definition;
+/** The code of a preset under the name `code`; a drum preset carries its own copy of the voice it calls, named from it. */
+export function presetSource(preset: Preset, code: string) {
+  const source = preset.source.replace(/^instr \w+/m, `instr ${code}`);
+  const voice = preset.voice?.replace(/^fn drum\b/m, `fn ${code}_voice`).replace(/^\/\/\/.*\n/gm, '');
+  return voice ? `${source.replace(/\bdrum\(/, `${code}_voice(`)}\n${voice}` : source;
 }
 
-/** A copy with its own instrument name, and its own names for any samples it declares. */
+/** A copy of one of the instruments that come with niminal, under its own name so it never collides. */
+export function addInstrumentFromPreset(project: Project, preset: Preset, name = preset.name): Definition {
+  return create(project, name, code => presetSource(preset, code));
+}
+
+/** A copy with its own names in the code, placed after the original. */
 export function duplicateInstrument(project: Project, source: Definition): Definition {
-  const id = `instr_${identifier()}`, name = /^instr (\w+)/m.exec(source.source)?.[1] ?? source.id;
-  let text = source.source.replace(new RegExp(`\\b${name}(_voice)?\\b`, 'g'), `${id}$1`);
-  [...text.matchAll(/^(\w+)\s*=\s*sample\(/gm)].forEach((match, i) => { text = text.replace(new RegExp(`\\b${match[1]}\\b`, 'g'), `${id.replace(/^instr_/, 'smp_')}_${i}`); });
-  const definition: Definition = { id, kind: 'instr', name: uniqueName(project, `${source.name} copy`), source: text };
+  const name = uniqueName(project, 'instr', `${source.name} copy`), code = freeCodeName(project, slug(name)), old = codeNameOf(source);
+  let text = old ? renameInSource(source.source, old, code) : source.source;
+  // samples bound under names of their own (older projects) get this copy's, since all the code shares one namespace
+  [...text.matchAll(/^(\w+)\s*=\s*sample\(/gm)].filter(match => !match[1].startsWith(`${code}_`)).forEach((match, i) => { text = text.replace(new RegExp(`\\b${match[1]}\\b`, 'g'), `${code}_sample_${i}`); });
+  const definition: Definition = { id: `instr_${identifier()}`, kind: 'instr', name, source: text };
   project.definitions.splice(project.definitions.indexOf(source) + 1, 0, definition);
   return definition;
 }
 
-/** Who plays an instrument: the tracks it is assigned to, and tracks whose instrument columns pick it. */
+/** Who plays an instrument: the tracks with a note column that sets it. */
 export function instrumentUsers(project: Project, id: string) {
-  const names = new Set(project.tracks.filter(t => t.instrument === id).map(t => t.name));
-  project.tracks.forEach((track, index) => { if (project.patterns.some(p => p.notes[index].some(column => column.inst.includes(id)))) names.add(track.name); });
-  return [...names];
+  return project.tracks.filter((_, index) => project.patterns.some(p => p.notes[index].some(column => column.inst.includes(id)))).map(t => t.name);
 }
 
-/** Removes an instrument nobody plays. Returns why not when it cannot. */
+/** Removes an instrument no note uses. Returns why not when it cannot. */
 export function removeInstrument(project: Project, id: string): string | null {
   const users = instrumentUsers(project, id);
   if (users.length) return `Used by ${users.join(', ')}: choose another instrument there first`;

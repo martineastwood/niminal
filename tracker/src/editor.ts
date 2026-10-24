@@ -1,5 +1,5 @@
 import { basicSetup } from 'codemirror';
-import { EditorState } from '@codemirror/state';
+import { EditorState, Prec } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { indentWithTab } from '@codemirror/commands';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
@@ -41,8 +41,10 @@ const colours = syntaxHighlighting(HighlightStyle.define([
   { tag: tags.function(tags.variableName), color: '#8cbce7' },
 ]));
 
-export function editorState(uri: string, source: string, changed: (source: string) => void) {
+/** `apply` runs on Cmd/Ctrl+Enter, which stands in for the editor's own "insert blank line". */
+export function editorState(uri: string, source: string, changed: (source: string) => void, apply: () => void) {
   return EditorState.create({ doc: source, extensions: [
+    Prec.highest(keymap.of([{ key: 'Mod-Enter', run: () => { apply(); return true; } }])),
     basicSetup, niminal, theme, colours, keymap.of([indentWithTab]),
     lsp.plugin(uri, 'niminal'),
     EditorView.updateListener.of(update => { if (update.docChanged) changed(update.state.doc.toString()); }),

@@ -14,10 +14,10 @@ export const maxDevices = 8;
 export const maxReturns = 8;
 /** Where a track's or return's signal goes: the master, a return (a return can only feed a later one), or nowhere, leaving only its sends. */
 export type Output = { kind: 'master' } | { kind: 'return'; index: number } | { kind: 'none' };
-export interface Track { output?: Output; solo?: boolean; colour?: string; show?: Partial<Record<SubColumn, boolean>>; name: string; instrument: string | null; fx: Device[]; muted: boolean; volume_db: number; pan: number }
+export interface Track { output?: Output; solo?: boolean; colour?: string; show?: Partial<Record<SubColumn, boolean>>; name: string; fx: Device[]; muted: boolean; volume_db: number; pan: number }
 export interface Parameter { name: string; min: number; max: number; default: number; unit: string | null }
 export type EffectParameters = Record<string, Parameter[]>;
-export type FxTarget = { kind: 'volume' } | { kind: 'pan' } | { kind: 'effect'; device: string; parameter: string } | { kind: 'instrument'; parameter: string };
+export type FxTarget = { kind: 'volume' } | { kind: 'pan' } | { kind: 'effect'; device: string; parameter: string } | { kind: 'instrument'; instrument: string; parameter: string };
 export interface EnvelopePoint { row: number; value: number }
 export interface Envelope { enabled: boolean; mode: 'hold' | 'linear'; points: EnvelopePoint[] }
 export interface FxLane { target: FxTarget | null; values: (string | null)[]; envelope?: Envelope }
@@ -42,19 +42,19 @@ export interface Song { bpm: number; rows_per_beat: number; tracks: Track[]; mas
   matrix?: (TrackSource | null)[][]; instrument_values?: Record<string, Record<string, number>> }
 /** A named group of consecutive sequence steps, from `start` up to the next section's start. It only organises the sequence list. */
 export interface Section { start: number; name: string; collapsed?: boolean }
-export interface Project extends Song { version: 9; id: string; definitions: Definition[]; sections?: Section[] }
-export const storageKey = 'niminal-tracker-project-v9';
+export interface Project extends Song { version: 10; id: string; definitions: Definition[]; sections?: Section[] }
+export const storageKey = 'niminal-tracker-project-v10';
 
 export function newProject(): Project {
   return {
-    version: 9, id: crypto.randomUUID(), bpm: 125, rows_per_beat: 4,
+    version: 10, id: crypto.randomUUID(), bpm: 125, rows_per_beat: 4,
     definitions: [
       { id: 'tone', name: 'Warm saw', kind: 'instr', source: tone },
     ],
     returns: [],
-    master: { name: 'Master', instrument: null, fx: [], pan: 0, muted: false, volume_db: 0 },
-    tracks: ['Lead', 'Bass', 'Drums', 'Texture'].map((name, track) => ({ name, instrument: track === 0 ? 'tone' : null, fx: [], pan: 0, muted: false, volume_db: 0 })),
-    patterns: [{ fx: Array.from({ length: 4 }, () => [emptyFxLane(32)]), id: 'pattern_00', name: 'First idea', rows: 32, notes: Array.from({ length: 4 }, (_, track) => [{ ...blankColumn(32), notes: Array.from({ length: 32 }, (_, row) => track === 0 && row % 4 === 0 ? ['C-4', 'D#4', 'G-4', 'A#4'][Math.floor(row / 4) % 4] : null) }]) }],
+    master: { name: 'Master', fx: [], pan: 0, muted: false, volume_db: 0 },
+    tracks: ['Lead', 'Bass', 'Drums', 'Texture'].map(name => ({ name, fx: [], pan: 0, muted: false, volume_db: 0 })),
+    patterns: [{ fx: Array.from({ length: 4 }, () => [emptyFxLane(32)]), id: 'pattern_00', name: 'First idea', rows: 32, notes: Array.from({ length: 4 }, (_, track) => [{ ...blankColumn(32), notes: Array.from({ length: 32 }, (_, row) => track === 0 && row % 4 === 0 ? ['C-4', 'D#4', 'G-4', 'A#4'][Math.floor(row / 4) % 4] : null), inst: Array.from({ length: 32 }, (_, row) => track === 0 && row % 4 === 0 ? 'tone' : null) }]) }],
     sequence: ['pattern_00'],
   };
 }
@@ -81,14 +81,14 @@ export function resizePattern(pattern: Pattern, rows: number) {
 export function readProject(raw: string): Project {
   const value = JSON.parse(raw);
   if (value && typeof value === 'object') value.returns ??= [];
-  if (value?.version !== 9 || typeof value.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value.id) || !Array.isArray(value.definitions) || value.definitions.length === 0 ||
+  if (value?.version !== 10 || typeof value.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value.id) || !Array.isArray(value.definitions) || value.definitions.length === 0 ||
       !value.definitions.every((d: Definition) => d && typeof d.id === 'string' && /^[a-zA-Z_][\w-]*$/.test(d.id) && typeof d.name === 'string' && typeof d.source === 'string' && ['instr', 'fx'].includes(d.kind) && (d.values === undefined || !!d.values && typeof d.values === 'object' && Object.values(d.values).every(Number.isFinite))) ||
       new Set(value.definitions.map((d: Definition) => d.id)).size !== value.definitions.length ||
       !Number.isFinite(value.bpm) || value.bpm < 20 || value.bpm > 300 ||
       !Number.isInteger(value.rows_per_beat) || value.rows_per_beat < 1 || value.rows_per_beat > 16 ||
       !Array.isArray(value.tracks) || (value.tracks.length < 1 || value.tracks.length > 16) ||
-      !value.tracks.every((t: Track) => validTrack(t, value.definitions)) || !validTrack(value.master, value.definitions) || value.master.instrument !== null ||
-      !Array.isArray(value.returns) || value.returns.length > maxReturns || !value.returns.every((t: Track) => validTrack(t, value.definitions) && t.instrument === null) ||
+      !value.tracks.every((t: Track) => validTrack(t, value.definitions)) || !validTrack(value.master, value.definitions) ||
+      !Array.isArray(value.returns) || value.returns.length > maxReturns || !value.returns.every((t: Track) => validTrack(t, value.definitions)) ||
       (value.master.output && value.master.output.kind !== 'master' || value.master.fx.some((d: Device) => d.target !== undefined)) ||
       value.returns.some((t: Track, i: number) => t.output?.kind === 'return' && t.output.index <= i || t.fx.some(d => d.target !== undefined && d.target <= i)) ||
       !Array.isArray(value.patterns) || value.patterns.length < 1 || value.patterns.length > 128 ||
@@ -102,7 +102,7 @@ export function readProject(raw: string): Project {
       value.sections !== undefined && !(Array.isArray(value.sections) && value.sections.every((s: Section, i: number) => !!s && Number.isInteger(s.start) && s.start >= 0 && s.start < value.sequence.length && (i === 0 || s.start > value.sections[i - 1].start) && typeof s.name === 'string' && s.name.length <= 60 && (s.collapsed === undefined || typeof s.collapsed === 'boolean'))) ||
       value.matrix !== undefined && !(Array.isArray(value.matrix) && value.matrix.length <= value.sequence.length && value.matrix.every((step: unknown) => Array.isArray(step) && step.length <= value.tracks.length && step.every((s: TrackSource | null) => s === null || !!s && (s.kind === 'mute' || s.kind === 'pattern' && value.patterns.some((p: Pattern) => p.id === s.id))))) ||
       value.loop_range !== undefined && !(Number.isInteger(value.loop_range?.start) && Number.isInteger(value.loop_range.end) && value.loop_range.start >= 0 && value.loop_range.start <= value.loop_range.end && value.loop_range.end < value.sequence.length)) {
-    throw new Error('Not a supported niminal tracker project (expected version 9)');
+    throw new Error('Not a supported niminal tracker project (expected version 10)');
   }
   return value;
 }
@@ -180,7 +180,7 @@ export function restoreTrack(project: Project, deleted: DeletedTrack): boolean {
 }
 
 export function validTarget(target: FxTarget | null): boolean {
-  return target === null || !!target && (target.kind === 'volume' || target.kind === 'pan' || target.kind === 'effect' && validDeviceId(target.device) && typeof target.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(target.parameter) || target.kind === 'instrument' && typeof target.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(target.parameter));
+  return target === null || !!target && (target.kind === 'volume' || target.kind === 'pan' || target.kind === 'effect' && validDeviceId(target.device) && typeof target.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(target.parameter) || target.kind === 'instrument' && typeof target.instrument === 'string' && typeof target.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(target.parameter));
 }
 const integerWithin = (max: number) => (v: unknown) => v === null || typeof v === 'string' && /^\d{1,3}$/.test(v) && Number(v) <= max;
 function validColumn(column: NoteColumn, rows: number, definitions: Definition[]) {
@@ -193,7 +193,6 @@ function validColumn(column: NoteColumn, rows: number, definitions: Definition[]
 function validTrack(t: Track, definitions: Definition[]): boolean {
   return !!(
     t && typeof t.name === 'string' && (t.colour === undefined || /^#[0-9a-f]{6}$/i.test(t.colour)) &&
-    (t.instrument === null || definitions.some((d: Definition) => d.id === t.instrument && d.kind === 'instr')) &&
     Array.isArray(t.fx) && t.fx.length <= maxDevices && t.fx.every((d, i) => !!d && validDeviceId(d.id) && t.fx.findIndex(other => other.id === d.id) === i && typeof d.bypass === 'boolean' && definitions.some((def: Definition) => def.id === d.definition && def.kind === 'fx') && !!d.values && Object.values(d.values).every(Number.isFinite) && !!d.modulations && Object.values(d.modulations).every(validLfo)) &&
     Number.isFinite(t.pan) && t.pan >= -1 && t.pan <= 1 &&
     (t.output === undefined || validOutput(t.output)) && t.fx.every(d => (d.target === undefined || Number.isInteger(d.target) && d.target >= 0 && d.target < maxReturns) && [d.pre, d.mute_source].every(flag => flag === undefined || typeof flag === 'boolean')) &&

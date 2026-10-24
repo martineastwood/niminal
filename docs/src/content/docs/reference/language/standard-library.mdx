@@ -57,7 +57,7 @@ instr tom(freq: hz = 110hz) { (impulse(1hz) * 0.5).drum(freq) }
 
 | Function | What it is |
 | --- | --- |
-| `fdn(x, time: init 2sec, damp: init 5khz, size: init 1)` | A feedback delay network: eight delay lines of mutually prime lengths mixed by a Hadamard matrix. `time` is how long the tail takes to fall by 60db, `damp` the cutoff of the low-pass in each line, and `size` (0.5 to 2) stretches the lines. Mono in, mono out, and wet only: mix it with the dry yourself. |
+| `fdn(x, time: init 2sec, damp: init 5khz, size: init 1)` | A feedback delay network: eight delay lines of mutually prime lengths mixed by a Hadamard matrix. It runs natively (it is the `fdn_reverb` opcode, wrapped here for its names and ranges), at a small fraction of a core. `time` is how long the tail takes to fall by 60db, `damp` the cutoff of the low-pass in each line, and `size` (0.5 to 2) stretches the lines. Mono in, mono out, and wet only: mix it with the dry yourself. |
 
 A tail costs about 3% of one core, so one on a bus is cheap.
 
@@ -107,7 +107,7 @@ Keep a preset's name different from the choice words above (a preset called `wob
 
 ## std/fx
 
-Effects that read `in`: `lowpass`, `highpass`, `bandpass`, `band_cut`, `equalizer`, `echo`, `room_reverb`, `ensemble`, `swirl` (a phaser), `tremolo`, `compressor`, `overdrive`, `lofi` and `ceiling` (a limiter). Each has typed, ranged parameters and, where it makes sense, a `mix`. Like the instruments, each stands alone: read the module for the controls of each one. The tracker lists them under **+ Add effect…** and beside **+** in its effects library.
+Effects that read `in`: `lowpass`, `highpass`, `bandpass`, `band_cut`, `equalizer`, `echo`, `room_reverb`, `ensemble`, `swirl` (a phaser), `tremolo`, `compressor`, `overdrive`, `lofi` and `ceiling` (a limiter). Each has typed, ranged parameters and, where it makes sense, a `mix`. `compressor` has a `knee` and a `link` (at 1 the loudest channel decides the squeeze for all, so a stereo image stays put), `overdrive` runs at twice the sample rate so it doesn't alias, and `ceiling` is a true lookahead limiter: nothing passes the ceiling, whatever the release. Like the instruments, each stands alone: read the module for the controls of each one. The tracker lists them under **+ Add effect…** and beside **+** in its effects library.
 
 ```nml
 use std/fx

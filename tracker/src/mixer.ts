@@ -4,7 +4,7 @@ import { maxDevices } from './project';
 import { trackColour } from './grid';
 import { openBrowser } from './browser';
 /** An instrument's parameters as sliders. Notes start with these values; lanes change them from a row on. */
-export function renderInstrument(parent: HTMLElement, project: Project, definition: Definition, parameters: EffectParameters, edited: () => void, write: (target: FxTarget, value: number) => void, activeTrack: number) {
+export function renderInstrument(parent: HTMLElement, definition: Definition, parameters: EffectParameters, edited: () => void, write: (target: FxTarget, value: number) => void, activeTrack: number) {
   parent.replaceChildren();
   const card = document.createElement('section'); card.className = 'device-card instrument-card';
   const heading = document.createElement('div'); heading.className = 'device-heading';
@@ -17,11 +17,11 @@ export function renderInstrument(parent: HTMLElement, project: Project, definiti
   else for (const parameter of params) {
     const row = slider(parameter.name, definition.values?.[parameter.name] ?? parameter.default, parameter.min, parameter.max, parameter.unit ?? '', value => { (definition.values ??= {})[parameter.name] = value; edited(); }, () => {
       const value = definition.values?.[parameter.name] ?? parameter.default;
-      write({ kind: 'instrument', parameter: parameter.name }, Math.min(parameter.max, Math.max(parameter.min, value)));
+      write({ kind: 'instrument', instrument: definition.id, parameter: parameter.name }, Math.min(parameter.max, Math.max(parameter.min, value)));
     });
     row.querySelector('input')!.setAttribute('aria-label', `${definition.name} ${parameter.name}`);
-    const record = row.querySelector<HTMLButtonElement>('button')!, plays = activeTrack >= 0 && project.tracks[activeTrack].instrument === definition.id;
-    record.disabled = !plays; if (!plays && activeTrack >= 0) record.title = `${project.tracks[activeTrack].name} does not play this instrument`;
+    const record = row.querySelector<HTMLButtonElement>('button')!;
+    record.disabled = activeTrack < 0; if (activeTrack < 0) record.title = 'Only a track has parameter lanes';
     card.append(row);
   }
   parent.append(card);

@@ -7,9 +7,9 @@ export function laneParameter(target: FxTarget | null, track: number, project: P
   if (target.kind === 'volume') return { label: 'Track volume', name: 'volume', min: -60, max: 6, default: 0, unit: 'db' };
   if (target.kind === 'pan') return { label: 'Track pan', name: 'pan', min: -1, max: 1, default: 0, unit: '%' };
   if (target.kind === 'instrument') {
-    const id = project.tracks[track].instrument, parameter = parameters[id ?? '']?.find(p => p.name === target.parameter);
-    if (!id || !parameter) return null;
-    return { ...parameter, label: `${project.definitions.find(d => d.id === id)?.name ?? 'Instrument'} → ${parameter.name}` };
+    const parameter = parameters[target.instrument]?.find(p => p.name === target.parameter);
+    if (!parameter) return null;
+    return { ...parameter, label: `${project.definitions.find(d => d.id === target.instrument)?.name ?? 'Instrument'} → ${parameter.name}` };
   }
   const device = project.tracks[track].fx.find(d => d.id === target.device);
   const parameter = parameters[device?.definition ?? '']?.find(p => p.name === target.parameter);

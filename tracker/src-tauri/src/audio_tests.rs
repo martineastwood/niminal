@@ -81,6 +81,7 @@ fn real_engine_plays_last_good_source_and_stop_cancels_the_loop() {
             instrument: "tone".into(),
             note: "C-4".into(),
             track: 0,
+            ms: 200,
         })
         .unwrap();
     let audio = engine.lock().unwrap().session_mut().process(24000);
@@ -118,6 +119,7 @@ fn real_engine_plays_last_good_source_and_stop_cancels_the_loop() {
             instrument: "tone".into(),
             note: "D#4".into(),
             track: 0,
+            ms: 200,
         })
         .unwrap();
     assert!(
@@ -175,6 +177,7 @@ fn track_effects_gain_and_mute_change_rendered_audio_and_reject_bad_fx_edits() {
                 instrument: "tone".into(),
                 note: "C-4".into(),
                 track: 0,
+            ms: 200,
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -317,6 +320,7 @@ fn each_channel_and_the_master_have_a_scope() {
             instrument: "tone".into(),
             note: "C-4".into(),
             track: 0,
+            ms: 200,
         })
         .unwrap();
     // The engine renders in blocks; scopes reach the client as it renders and the client asks.
@@ -395,6 +399,7 @@ fn the_master_has_its_own_level_and_effects_and_solo_silences_other_tracks() {
                 instrument: "tone".into(),
                 note: "C-4".into(),
                 track,
+            ms: 200,
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -490,6 +495,7 @@ fn tracks_send_to_returns_that_have_their_own_effects_level_and_mute() {
                 instrument: "tone".into(),
                 note: "C-4".into(),
                 track,
+            ms: 200,
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -597,6 +603,7 @@ fn outputs_route_tracks_into_returns_and_sends_tap_the_chain_where_they_sit() {
                 instrument: "tone".into(),
                 note: "C-4".into(),
                 track,
+            ms: 200,
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -886,6 +893,7 @@ fn imported_samples_play_from_the_project_folder() {
             instrument: "level".into(),
             note: "C-4".into(),
             track: 0,
+            ms: 200,
         })
         .unwrap();
     let audio = engine.lock().unwrap().session_mut().process(8000);
@@ -942,6 +950,7 @@ fn device_chain_runs_in_order_and_can_be_edited_while_playing() {
                 instrument: "tone".into(),
                 note: "C-4".into(),
                 track: 0,
+            ms: 200,
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -1138,6 +1147,7 @@ fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
             instrument: "tone".into(),
             note: "C-4".into(),
             track: 0,
+            ms: 200,
         })
         .unwrap();
     let audio = engine.lock().unwrap().session_mut().process(8000);
@@ -1282,7 +1292,7 @@ fn library_instruments_expose_controls_and_sound_on_mono_and_stereo_engines() {
             let id = format!("library_instrument_{index}");
             worker.command(Command::Apply { id: id.clone(), source: (*source).into(), kind: Kind::Instr, dir: None }).unwrap();
             assert!(!worker.sounds[&id].parameters.is_empty(), "{id} exposes its controls");
-            worker.command(Command::Audition { instrument: id, note: "C-3".into(), track: 0 }).unwrap();
+            worker.command(Command::Audition { instrument: id, note: "C-3".into(), track: 0, ms: 200 }).unwrap();
             let audio = engine.lock().unwrap().session_mut().process(24000);
             assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
             assert!(audio.iter().flatten().any(|sample| sample.abs() > 0.001), "silent instrument {index}");
@@ -1313,13 +1323,88 @@ fn library_drum_presets_carry_their_voice_and_sound_on_mono_and_stereo_engines()
             );
             worker.command(Command::Apply { id: id.clone(), source, kind: Kind::Instr, dir: None }).unwrap();
             assert!(!worker.sounds[&id].parameters.is_empty(), "{name} exposes its controls");
-            worker.command(Command::Audition { instrument: id, note: "C-3".into(), track: 0 }).unwrap();
+            worker.command(Command::Audition { instrument: id, note: "C-3".into(), track: 0, ms: 200 }).unwrap();
             let audio = engine.lock().unwrap().session_mut().process(24000);
             assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
             assert!(audio.iter().flatten().any(|sample| sample.abs() > 0.001), "silent drum {name}");
         }
         worker.command(Command::Disconnect).unwrap();
     }
+}
+
+/// The sound of the tone through the library's overdrive with its drive at `drive`.
+fn overdriven_loudness(drive: f64) -> f32 {
+    let source = library_definitions(include_str!("../../../crates/niminal-lang/std/fx.nml"))
+        .into_iter()
+        .find(|b| b.lines().any(|l| l.starts_with("fx overdrive(")))
+        .expect("the overdrive");
+    let engine = Arc::new(Mutex::new(EngineServer::new(Session::new(48000.0, Layout::Mono).without_limiter())));
+    let server = Server::start(engine.clone(), ServerConfig { port: 0, ..ServerConfig::default() }).unwrap();
+    let mut worker = Worker::default();
+    worker.command(Command::Connect { port: server.port(), token: None }).unwrap();
+    worker.command(Command::Apply { id: "tone".into(), source: TONE.into(), kind: Kind::Instr, dir: None }).unwrap();
+    worker.command(Command::Apply { id: "overdrive".into(), source: source.into(), kind: Kind::Fx, dir: None }).unwrap();
+    let mut song = test_song(None);
+    song.tracks[0].fx = vec![Device {
+        id: "d0".into(),
+        definition: "overdrive".into(),
+        values: [("drive".to_string(), drive), ("mix".to_string(), 1.0), ("tone".to_string(), 1.0)].into(),
+        ..Device::default()
+    }];
+    worker.command(Command::Update { song }).unwrap();
+    worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track: 0, ms: 200 }).unwrap();
+    let audio = engine.lock().unwrap().session_mut().process(24000);
+    worker.command(Command::Disconnect).unwrap();
+    let samples: Vec<f32> = audio.iter().flatten().copied().collect();
+    (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+}
+
+/// How much louder the left side is than the right (as a ratio of their loudness) for a stereo sound
+/// that is four times louder on the left, with the library's compressor on its track set to `link`, or
+/// with no compressor at all.
+fn left_over_right(compressor_link: Option<f64>) -> f32 {
+    let source = library_definitions(include_str!("../../../crates/niminal-lang/std/fx.nml"))
+        .into_iter()
+        .find(|b| b.lines().any(|l| l.starts_with("fx compressor(")))
+        .expect("the compressor");
+    let engine = Arc::new(Mutex::new(EngineServer::new(Session::new(48000.0, Layout::Stereo).without_limiter())));
+    let server = Server::start(engine.clone(), ServerConfig { port: 0, ..ServerConfig::default() }).unwrap();
+    let mut worker = Worker::default();
+    worker.command(Command::Connect { port: server.port(), token: None }).unwrap();
+    let tilted = "instr tilted(freq: hz) { [osc(sine, freq) * 0.4, osc(sine, freq) * 0.1] }";
+    worker.command(Command::Apply { id: "tilted".into(), source: tilted.into(), kind: Kind::Instr, dir: None }).unwrap();
+    worker.command(Command::Apply { id: "comp".into(), source: source.into(), kind: Kind::Fx, dir: None }).unwrap();
+    let mut song = test_song(None);
+    song.tracks[0].instrument = Some("tilted".into());
+    if let Some(link) = compressor_link {
+        song.tracks[0].fx = vec![Device {
+            id: "c0".into(),
+            definition: "comp".into(),
+            values: [("threshold".to_string(), -40.0), ("ratio".to_string(), 8.0), ("link".to_string(), link), ("knee".to_string(), 0.0), ("makeup".to_string(), 0.0)].into(),
+            ..Device::default()
+        }];
+    }
+    worker.command(Command::Update { song }).unwrap();
+    worker.command(Command::Audition { instrument: "tilted".into(), note: "C-4".into(), track: 0, ms: 200 }).unwrap();
+    let audio = engine.lock().unwrap().session_mut().process(24000);
+    worker.command(Command::Disconnect).unwrap();
+    let rms = |c: usize| (audio[c][4000..].iter().map(|s| s * s).sum::<f32>() / (audio[c].len() - 4000) as f32).sqrt();
+    rms(0) / rms(1)
+}
+
+#[test]
+fn a_linked_compressor_keeps_the_stereo_image_and_an_unlinked_one_narrows_it() {
+    let (plain, linked, unlinked) = (left_over_right(None), left_over_right(Some(1.0)), left_over_right(Some(0.0)));
+    assert!(plain > 3.0, "the sound is louder on the left: {plain}");
+    assert!((linked / plain - 1.0).abs() < 0.03, "linked: the left stays {plain} times the right, not {linked}");
+    assert!(unlinked < plain * 0.8, "unlinked: each side squeezed on its own, so the difference shrinks: {unlinked} against {plain}");
+}
+
+#[test]
+fn the_overdrive_drive_control_changes_the_sound() {
+    let (soft, hard) = (overdriven_loudness(0.0), overdriven_loudness(1.0));
+    assert!(soft > 0.001 && hard > 0.001, "both are audible: {soft}, {hard}");
+    assert!((hard / soft - 1.0).abs() > 0.1, "drive 0 and drive 1 sound the same: {soft} and {hard}");
 }
 
 #[test]
@@ -1377,6 +1462,7 @@ fn library_effects_expose_controls_and_render_on_mono_and_stereo_engines() {
                     instrument: "tone".into(),
                     note: "C-4".into(),
                     track: 0,
+            ms: 200,
                 })
                 .unwrap();
             let audio = engine.lock().unwrap().session_mut().process(24000);

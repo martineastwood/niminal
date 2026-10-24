@@ -9,7 +9,7 @@ use niminal_engine::Opcode;
 pub use niminal_engine::ops::Wave;
 use niminal_engine::ops::{
     Allpass, Bitcrush, Chorus, Clip, Comb, Compressor, Convolve, DcBlock, Delay, Distortion, Eq,
-    EqMode, FilterMode, FinishWhen, Fn1, Fold, Follow, Formant, Func, Gain, Gate, Impulse,
+    EqMode, Fdn, FilterMode, FinishWhen, Fn1, Fold, Follow, Formant, Func, Gain, Gate, Impulse,
     IrSpectrum, Lag, Limiter, Noise, NoiseColor, Osc, Phaser, PitchShift, Resonator, Reverb,
     SampleHold, SpectralDelay, SpectralFreeze, Svf, Waveshape, Wavetable,
 };
@@ -329,6 +329,17 @@ impl Registry {
                 Build::Builtin(|a| Ok(Box::new(Reverb::for_channel(a.channel)))),
             ),
             OpSpec::new(
+                "fdn_reverb",
+                "A reverb from a feedback delay network of eight lines. `time` is how long the tail takes to fall by 60db, `damp` the cutoff of the low-pass in each line (highs die first, as in a room), and `size` stretches the lines (0.5 to 2). Wet only; the channels of a stereo signal are decorrelated. `std/reverb` wraps it as `fdn`.",
+                vec![
+                    req("x", SIGNAL),
+                    opt("time", Kind::Signal(Unit::Time)),
+                    opt("damp", Kind::Signal(Unit::Hz)),
+                    opt("size", SIGNAL),
+                ],
+                Build::Builtin(|a| Ok(Box::new(Fdn::for_channel(a.channel)))),
+            ),
+            OpSpec::new(
                 "noise",
                 "White noise in -1..1: `noise()`, or `noise() * env[1 5ms 0]` for a click. Each source and each note has its own noise, the same on every run; `seed:` makes it the same for every note.",
                 vec![setting("seed", SIGNAL)],
@@ -342,7 +353,7 @@ impl Registry {
             ),
             OpSpec::new(
                 "compress",
-                "A compressor. `threshold` and `makeup` take db or a plain factor; `ratio`, `attack` and `release` shape the envelope. Pass `sidechain:` to key off another signal (for ducking).",
+                "A compressor. `threshold` and `makeup` take db or a plain factor; `ratio`, `attack` and `release` shape the envelope. `knee` rounds the corner at the threshold over that many db (`knee: 6db`; the default is a hard knee). Pass `sidechain:` to key off another signal (for ducking, or one shared level for both sides of a stereo sound).",
                 vec![
                     req("x", SIGNAL),
                     opt("threshold", Kind::Gain),
@@ -351,6 +362,7 @@ impl Registry {
                     opt("release", Kind::Signal(Unit::Time)),
                     opt("makeup", Kind::Gain),
                     opt("sidechain", SIGNAL),
+                    opt("knee", Kind::Gain),
                 ],
                 Build::Builtin(|_| Ok(Box::new(Compressor::default()))),
             ),

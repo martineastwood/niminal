@@ -69,17 +69,17 @@ export class PatternGrid {
     private pattern: () => Pattern,
     private octave: () => number,
     private edited: () => void,
-    private assigned: (id: string | null) => void,
     private audition: (id: string, note: string, track: number) => void,
     private togglePlay: () => void,
     private trackSelected: (track: number) => void = () => {},
-    private openDevice: (track: number, device: 'instrument' | 'effects', sameTrack: boolean) => void = () => {},
+    private openEffects: (track: number, sameTrack: boolean) => void = () => {},
     private step: () => number = () => 1,
     private parameters: () => EffectParameters = () => ({}),
     private feedback: (text: string) => void = () => {},
     private openEnvelope: (track: number, fx: number) => void = () => {},
     private sequence: (action: SequenceAction) => void = () => {},
-    private browse: (track: number, anchor: HTMLElement) => void = () => {},
+    /** The instrument that notes entered now are given: the one chosen in the sound browser. */
+    private currentInstrument: () => string | null = () => null,
   ) {
     this.playhead.className = 'playhead'; this.playhead.hidden = true; this.frame.className = 'track-frame'; this.frame.hidden = true;
     parent.parentElement?.append(this.playhead, this.frame);
@@ -134,7 +134,7 @@ export class PatternGrid {
     return this.project().tracks.flatMap((t, track): Lane[] => [
       ...pattern.notes[track].flatMap((column, col): Lane[] => [
         { track, kind: 'note', col, fx: null, values: column.notes },
-        ...subColumns.filter(kind => t.show?.[kind]).map((kind): Lane => ({ track, kind, col, fx: null, values: column[kind] })),
+        ...subColumns.filter(kind => shows(t, kind)).map((kind): Lane => ({ track, kind, col, fx: null, values: column[kind] })),
       ]),
       ...pattern.fx[track].map((lane, fx): Lane => ({ track, kind: null, col: 0, fx, values: lane.values })),
     ]);
@@ -168,7 +168,7 @@ export class PatternGrid {
   private text(lane: Lane, value: string | null) { return lane.kind === 'note' || lane.kind === null ? value ?? '' : subText(lane.kind, value, this.project()); }
   /** The width of a track: its note columns with their sub-columns, then its parameter lanes. */
   private trackWidth(track: number) {
-    const subs = subColumns.filter(kind => this.project().tracks[track].show?.[kind]).length;
+    const subs = subColumns.filter(kind => shows(this.project().tracks[track], kind)).length;
     return Math.max(150, this.pattern().notes[track].length * (NOTE_WIDTH + subs * SUB_WIDTH) + 2 + this.pattern().fx[track].length * LANE_WIDTH);
   }
   private selected(row: number, column: number) {
@@ -213,17 +213,13 @@ export class PatternGrid {
         input.onblur = () => finish(true); name.replaceWith(input); input.focus(); input.select();
       };
       const tools = document.createElement('div'); tools.className = 'track-tools';
-      for (const [device, text, label] of [['instrument', '{}', `Edit ${track.name} instrument`], ['effects', 'FX', `Show ${track.name} effects`]] as const) {
-        const button = document.createElement('button'); button.textContent = text; button.title = label; button.setAttribute('aria-label', label);
-        button.onclick = () => { const same = this.activeTrack === index; this.selectTrack(index); this.openDevice(index, device, same); }; tools.append(button);
-      }
+      const fxButton = document.createElement('button'); fxButton.textContent = 'FX'; fxButton.title = `Show ${track.name} effects`; fxButton.setAttribute('aria-label', fxButton.title);
+      fxButton.onclick = () => { const same = this.activeTrack === index; this.selectTrack(index); this.openEffects(index, same); }; tools.append(fxButton);
       const mute = document.createElement('button'); mute.textContent = 'M'; mute.title = `Mute ${track.name}`; mute.setAttribute('aria-label', mute.title); mute.setAttribute('aria-pressed', String(track.muted));
       mute.onclick = () => { track.muted = !track.muted; this.edited(); this.render(); }; tools.append(mute);
       const more = document.createElement('button'); more.textContent = '⋯'; more.title = `${track.name} note columns`; more.setAttribute('aria-label', `${track.name} columns`);
       more.className = 'track-more'; more.onclick = () => { this.selectTrack(index, false); this.pickColumns(index, more); }; tools.append(more); heading.append(name, tools);
-      const select = document.createElement('select'); select.setAttribute('aria-label', `${track.name} instrument`); select.add(new Option('No instrument', ''));
-      for (const definition of project.definitions.filter(d => d.kind === 'instr')) select.add(new Option(definition.name, definition.id));
-      select.value = track.instrument ?? ''; select.onchange = () => { track.instrument = select.value || null; this.assigned(track.instrument); this.edited(); };
+      const source = document.createElement('div'); source.className = 'track-source';
       const columns = document.createElement('div'); columns.className = 'track-columns';
       for (const lane of lanes.filter(lane => lane.track === index && lane.fx === null)) {
         const label = document.createElement('span'); label.textContent = lane.kind === 'note' ? 'Note' : subLabel[lane.kind!];
@@ -234,7 +230,7 @@ export class PatternGrid {
         const picker = document.createElement('select'); picker.className = 'lane-target'; picker.setAttribute('aria-label', `${track.name} parameter lane ${column + 1}`);
         picker.add(new Option('—', ''));
         const choices: FxTarget[] = [{ kind: 'volume' }, { kind: 'pan' }];
-        for (const p of (track.instrument && this.parameters()[track.instrument]) || []) choices.push({ kind: 'instrument', parameter: p.name });
+        for (const definition of project.definitions) if (definition.kind === 'instr') for (const p of this.parameters()[definition.id] ?? []) choices.push({ kind: 'instrument', instrument: definition.id, parameter: p.name });
         for (const device of track.fx) for (const p of this.parameters()[device.definition] ?? []) choices.push({ kind: 'effect', device: device.id, parameter: p.name });
         for (const target of choices) picker.add(new Option(laneParameter(target, index, project, this.parameters())!.label, targetKey(target)));
         if (lane.target && !choices.some(t => targetKey(t) === targetKey(lane.target))) picker.add(new Option(`Missing/unapplied parameter: ${lane.target.kind === 'effect' || lane.target.kind === 'instrument' ? lane.target.parameter : 'parameter'}`, targetKey(lane.target)));
@@ -260,9 +256,7 @@ export class PatternGrid {
           this.resetHistory(); this.selectTrack(index); this.edited();
         }; adjust.append(button);
       }
-      const presets = document.createElement('button'); presets.textContent = '▾'; presets.className = 'track-presets';
-      presets.title = `Choose a ready-made instrument for ${track.name}`; presets.setAttribute('aria-label', `${track.name} presets`); presets.onclick = () => { this.selectTrack(index, false); this.browse(index, presets); };
-      const source = document.createElement('div'); source.className = 'track-source'; source.append(select, presets, adjust);
+      source.append(adjust);
       cell.append(strip, heading, source, columns); cell.onkeydown = event => event.stopPropagation();
       cell.onclick = event => { if (!(event.target as HTMLElement).closest('button, select, input')) this.selectTrack(index, false); };
       header.append(cell);
@@ -375,11 +369,11 @@ export class PatternGrid {
     const more = document.createElement('button'); more.textContent = '+'; more.setAttribute('aria-label', 'More note columns'); more.disabled = count >= maxNoteColumns;
     more.onclick = () => { for (const p of project.patterns) p.notes[index].push(blankColumn(Math.max(p.rows, p.notes[index][0].notes.length))); changed(); };
     element.append(heading, fewer, amount, more);
-    for (const kind of subColumns) {
+    for (const kind of subColumns.filter(kind => kind !== 'inst')) {
       const label = document.createElement('label'); label.title = subTitle[kind];
       const box = document.createElement('input'); box.type = 'checkbox'; box.checked = !!track.show?.[kind]; box.setAttribute('aria-label', `Show ${subLabel[kind]} column`);
       box.onchange = () => { track.show = { ...track.show, [kind]: box.checked }; changed(); };
-      label.append(box, { inst: 'Instrument', vol: 'Volume', pan: 'Panning', delay: 'Delay' }[kind]); element.append(label);
+      label.append(box, { vol: 'Volume', pan: 'Panning', delay: 'Delay' }[kind]); element.append(label);
     }
   }
   /** Edits a sub-column cell in place, like a parameter lane: type a number, Enter to save and move down. */
@@ -591,17 +585,27 @@ export class PatternGrid {
         const off = event.key === '1' || event.key === '`';
         const note = off ? 'OFF' : keyboardNote(event.key, this.octave()); if (!note) return;
         event.preventDefault();
-        const track = this.project().tracks[lane.track];
-        const instrument = this.pattern().notes[lane.track][lane.col].inst[this.row] ?? track.instrument;
-        if (!off && instrument) this.audition(instrument, note, lane.track);
+        const column = this.pattern().notes[lane.track][lane.col], inst = off ? undefined : this.currentInstrument();
+        const instrument = !off && (instrumentAt(column.inst, this.row) ?? inst);
+        if (instrument) this.audition(instrument, note, lane.track);
         if (!this.recording) return;
-        this.apply([{ row: this.row, track: this.column, before: lane.values[this.row], after: note }]);
+        // a note is given the chosen instrument's number, which can be edited afterwards
+        const instLane = this.lanes.findIndex(other => other.track === lane.track && other.col === lane.col && other.kind === 'inst');
+        this.apply([{ row: this.row, track: this.column, before: lane.values[this.row], after: note }, ...(inst ? [{ row: this.row, track: instLane, before: column.inst[this.row], after: inst }] : [])]);
         this.advance(); this.render(); return;
       }
     }
     if (!event.shiftKey) this.anchor = { row: this.row, column: this.column };
     this.trackSelected(this.activeTrack); event.preventDefault(); this.render();
   }
+}
+
+/** Which sub-columns a track draws: the instrument's always, the others when asked for. */
+export const shows = (track: Track, kind: SubColumn) => kind === 'inst' || !!track.show?.[kind];
+/** The instrument playing at `row`: the one set on it, or the last one set above it in the column. */
+export function instrumentAt(inst: (string | null)[], row: number): string | null {
+  for (let at = row; at >= 0; at--) if (inst[at]) return inst[at];
+  return null;
 }
 
 export const trackPalette = ['#c97979', '#d08a5a', '#c6a465', '#a9b966', '#73b48a', '#5fb3a6', '#6db4be', '#829bd1', '#8f8fd8', '#b28bce', '#cc8fb2', '#9aa0a8'];

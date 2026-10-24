@@ -62,12 +62,21 @@ pub enum Command {
         instrument: String,
         note: String,
         track: usize,
+        /// How long the note is held, in milliseconds.
+        #[serde(default = "audition_ms")]
+        ms: u32,
     },
     Stop,
+    /// The tracker is closing: stop the sound and the engine it started.
+    Quit,
     /// Whether the mixer view needs every strip's scope; the master's is always on.
     Scopes {
         strips: bool,
     },
+}
+
+fn audition_ms() -> u32 {
+    300
 }
 
 type Request = (Command, mpsc::Sender<Result<Status, String>>);
@@ -138,6 +147,14 @@ impl Audio {
         }
     }
 
+    /// Stops the sound and the engine this tracker started. Waits for the worker, so call it as the app closes.
+    pub fn quit(&self) {
+        let (reply, response) = mpsc::channel();
+        if self.sender.send((Command::Quit, reply)).is_ok() {
+            let _ = response.recv_timeout(Duration::from_secs(2));
+        }
+    }
+
     pub fn scopes(&self) -> Scopes {
         self.scopes
             .lock()
@@ -166,9 +183,41 @@ struct Worker {
     playback: Option<Playback>,
     mixer_timing: (f64, u32),
     dir: Option<String>,
+    /// The engine this tracker started, if it had to.
+    child: Option<std::process::Child>,
 }
 
+const UNREACHABLE: &str = "can't reach the server";
+
 impl Worker {
+    /// Connects to the engine, starting one first if nothing is listening on a port of this machine.
+    fn connect_or_launch(&mut self, port: u16, token: Option<&str>) -> Result<(Client, Value), String> {
+        let first = Client::connect_as(port, token, "niminal-tracker");
+        let Err(error) = &first else { return first };
+        if token.is_some() || !error.starts_with(UNREACHABLE) {
+            return first;
+        }
+        if self.child.as_mut().is_none_or(|child| !matches!(child.try_wait(), Ok(None))) {
+            self.child = Some(crate::engine::launch(port)?);
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            thread::sleep(Duration::from_millis(100));
+            match Client::connect_as(port, token, "niminal-tracker") {
+                Err(error) if error.starts_with(UNREACHABLE) => {
+                    if self.child.as_mut().is_some_and(|child| !matches!(child.try_wait(), Ok(None))) {
+                        self.child = None;
+                        return Err("The niminal engine stopped as it started. Run `niminal server` in a terminal to see why.".into());
+                    }
+                    if std::time::Instant::now() > deadline {
+                        return Err("The niminal engine did not start in time".into());
+                    }
+                }
+                other => return other,
+            }
+        }
+    }
+
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let result = self
             .client
@@ -314,8 +363,7 @@ impl Worker {
                 self.mixer_returns.clear();
                 self.mixer_master = Track::default();
                 self.status = Status::default();
-                let (client, hello) =
-                    Client::connect_as(port, token.as_deref(), "niminal-tracker")?;
+                let (client, hello) = self.connect_or_launch(port, token.as_deref())?;
                 self.status.sample_rate = hello["sample_rate"]
                     .as_f64()
                     .filter(|rate| *rate > 0.0)
@@ -502,6 +550,7 @@ impl Worker {
                 instrument,
                 note,
                 track,
+                ms,
             } => {
                 if track >= 16 {
                     return Err("Invalid audition track".into());
@@ -512,9 +561,18 @@ impl Worker {
                     .get(&instrument)
                     .ok_or("Apply this instrument before auditioning")?
                     .clone();
-                self.send_events(vec![json!({"op":"note", "at":"now", "target":target, "to":format!("in_{track}"), "dur":"200ms", "args":{"freq":pitch(&note)?}})])?;
+                self.send_events(vec![json!({"op":"note", "at":"now", "target":target, "to":format!("in_{track}"), "dur":format!("{ms}ms"), "args":{"freq":pitch(&note)?}})])?;
             }
             Command::Stop => self.stop()?,
+            Command::Quit => {
+                let result = self.stop();
+                self.client = None;
+                if let Some(mut child) = self.child.take() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                return result;
+            }
             Command::Scopes { strips } => {
                 if self.strip_scopes != strips {
                     self.strip_scopes = strips;

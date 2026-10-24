@@ -16,11 +16,10 @@ fn parameter(
     range: Option<(f64, f64)>,
     initial: f64,
 ) -> Parameter {
-    let default = if unit == niminal_lang::Unit::Db {
-        20.0 * initial.max(0.000001).log10()
-    } else {
-        initial
-    };
+    let to_db = |gain: f64| 20.0 * gain.max(0.000001).log10();
+    let default = if unit == niminal_lang::Unit::Db { to_db(initial) } else { initial };
+    // a declared range is in the engine's units, so a gain in decibels is a plain factor there
+    let range = range.map(|(low, high)| if unit == niminal_lang::Unit::Db { (to_db(low), to_db(high)) } else { (low, high) });
     let (min, max) = range.unwrap_or(match unit {
         niminal_lang::Unit::Hz => (20.0, 20000.0),
         niminal_lang::Unit::Db => (-60.0, 6.0),
@@ -187,5 +186,16 @@ mod parameter_tests {
             (sound.parameters[1].min, sound.parameters[1].max),
             (0.0, 1.0)
         );
+    }
+
+    #[test]
+    fn a_gain_in_decibels_has_its_bounds_in_decibels_too() {
+        let sound = Sound::parse(Kind::Fx, "fx squeeze(threshold: -60db..0db = -18db, makeup: 0db..24db = 3db) { out = in.compress(threshold: threshold, makeup: makeup) }".into()).unwrap();
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+        let (threshold, makeup) = (&sound.parameters[0], &sound.parameters[1]);
+        assert!(near(threshold.min, -60.0) && near(threshold.max, 0.0) && near(threshold.default, -18.0), "{threshold:?}");
+        assert!(near(makeup.min, 0.0) && near(makeup.max, 24.0) && near(makeup.default, 3.0), "{makeup:?}");
+        // so a value in decibels is not squeezed into the bounds of a plain factor
+        assert!(near(threshold.argument(-40.0).as_str().map_or(f64::NAN, |a| a.trim_end_matches("db").parse().unwrap()), -40.0));
     }
 }

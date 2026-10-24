@@ -2,6 +2,7 @@
 
 mod audio;
 mod commands;
+mod engine;
 mod files;
 mod mixer;
 mod modulation;
@@ -14,7 +15,10 @@ use std::{
 };
 
 use serde_json::Value;
-use tauri::Manager;
+use tauri::{
+    Emitter, Manager,
+    menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
+};
 
 #[derive(Default, Clone)]
 struct LanguageServer(Arc<Mutex<niminal_lsp::Server>>);
@@ -118,8 +122,83 @@ async fn save_project(app: tauri::AppHandle, source: String, id: String) -> Resu
     .map_err(|e| e.to_string())?
 }
 
+/// The menu bar. Items send their id to the page as a `menu` event, which does the work, so the
+/// menu and the keyboard run the same code. Cut, copy and paste are the system's: the grid and the
+/// editors both listen for those. Select All is left out because the grid answers Cmd+A itself.
+fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let item = |id: &str, text: &str, keys: Option<&str>| {
+        let builder = MenuItemBuilder::with_id(id, text);
+        match keys {
+            Some(keys) => builder.accelerator(keys).build(app),
+            None => builder.build(app),
+        }
+    };
+    let file = SubmenuBuilder::new(app, "File")
+        .item(&item("new", "New Project", Some("CmdOrCtrl+N"))?)
+        .item(&item("open", "Open…", Some("CmdOrCtrl+O"))?)
+        .item(&item("save", "Save…", Some("CmdOrCtrl+S"))?)
+        .separator()
+        .item(&item("import-samples", "Import Samples…", None)?)
+        .separator()
+        .close_window()
+        .build()?;
+    let edit = SubmenuBuilder::new(app, "Edit")
+        .item(&item("undo", "Undo", Some("CmdOrCtrl+Z"))?)
+        .item(&item("redo", "Redo", Some("CmdOrCtrl+Shift+Z"))?)
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .build()?;
+    let song = SubmenuBuilder::new(app, "Song")
+        .item(&item("play-pattern", "Play Pattern", None)?)
+        .item(&item("play-song", "Play Song", None)?)
+        .item(&item("stop", "Stop", None)?)
+        .separator()
+        .item(&item("add-track", "Add Track", None)?)
+        .item(&item("new-pattern", "New Pattern", None)?)
+        .separator()
+        .item(&item("reconnect", "Restart Engine Connection", None)?)
+        .build()?;
+    let sound = SubmenuBuilder::new(app, "Sound")
+        .item(&item("new-instrument", "New Instrument", None)?)
+        .item(&item("new-effect", "New Effect", None)?)
+        .item(&item("apply", "Apply and Audition (⌘↩ in the editor)", None)?)
+        .separator()
+        .item(&item("browser", "Show Browser", Some("CmdOrCtrl+B"))?)
+        .build()?;
+    let view = SubmenuBuilder::new(app, "View")
+        .item(&item("code", "Show Code", None)?)
+        .item(&item("mixer", "Mixer", None)?)
+        .item(&item("matrix", "Matrix", None)?)
+        .separator()
+        .fullscreen()
+        .build()?;
+    let window = SubmenuBuilder::new(app, "Window").minimize().maximize().build()?;
+    let mut menu = MenuBuilder::new(app);
+    if cfg!(target_os = "macos") {
+        let name = SubmenuBuilder::new(app, "niminal tracker")
+            .about(None)
+            .separator()
+            .services()
+            .separator()
+            .hide()
+            .hide_others()
+            .show_all()
+            .separator()
+            .quit()
+            .build()?;
+        menu = menu.item(&name);
+    }
+    menu.items(&[&file, &edit, &song, &sound, &view, &window]).build()
+}
+
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
+        .menu(menu)
+        .on_menu_event(|app, event| {
+            let _ = app.emit("menu", event.id().as_ref());
+        })
         .manage(LanguageServer::default())
         .manage(audio::Audio::new())
         .invoke_handler(tauri::generate_handler![
@@ -132,8 +211,14 @@ fn main() {
             audio::audio_status,
             audio::audio_scopes
         ])
-        .run(tauri::generate_context!())
-        .expect("could not run niminal tracker");
+        .build(tauri::generate_context!())
+        .expect("could not build niminal tracker");
+    app.run(|app, event| {
+        // an engine the tracker started goes with it
+        if let tauri::RunEvent::Exit = event {
+            app.state::<audio::Audio>().quit();
+        }
+    });
 }
 
 #[cfg(test)]

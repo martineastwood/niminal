@@ -2,6 +2,7 @@ import type { Definition, Device, Project, Track } from './project';
 import { maxDevices } from './project';
 import send from './presets/send.nml?raw';
 import { effectPresets } from './library';
+import { codeNameOf, freeCodeName, renameInSource, slug, uniqueName } from './naming';
 
 /** The effects that come with niminal (`std/fx`), each copied into a project as it is added. */
 export const builtInEffects = effectPresets;
@@ -17,27 +18,20 @@ export const returnStrip = (index: number) => -2 - index;
 export const returnIndex = (strip: number) => -2 - strip;
 export const stripOf = (project: Project, strip: number): Track => strip >= 0 ? project.tracks[strip] : strip === master ? project.master : project.returns[returnIndex(strip)];
 
-const effectName = (project: Project, base: string) => {
-  const taken = new Set(project.definitions.filter(d => d.kind === 'fx').map(d => d.name));
-  let name = base;
-  for (let n = 2; taken.has(name); n++) name = `${base} ${n}`;
-  return name;
-};
-
-/** A new effect in the project's library, from a preset or blank. Its code names itself after its id, so copies never collide. */
+/** A new effect in the project's library, from a preset or blank. Its code is named after it, made unique so copies never collide. */
 export function newEffect(project: Project, presetId = 'blank'): Definition | null {
   const preset = presetId === 'blank' ? blank : presetId === sendPreset.id ? sendPreset : builtInEffects.find(p => p.id === presetId);
   if (!preset) return null;
-  const id = `fx_${crypto.randomUUID().replaceAll('-', '_')}`;
-  const definition: Definition = { id, name: effectName(project, preset.name), kind: 'fx', source: preset.source.replace(/^fx \w+/m, `fx ${id}`) };
+  const name = uniqueName(project, 'fx', preset.name), code = freeCodeName(project, slug(name));
+  const definition: Definition = { id: `fx_${crypto.randomUUID().replaceAll('-', '_')}`, name, kind: 'fx', source: preset.source.replace(/^fx \w+/m, `fx ${code}`) };
   project.definitions.push(definition);
   return definition;
 }
 
 /** A copy with its own name in the code, placed after the original. */
 export function duplicateEffect(project: Project, source: Definition): Definition {
-  const id = `fx_${crypto.randomUUID().replaceAll('-', '_')}`, name = /^fx (\w+)/m.exec(source.source)?.[1] ?? source.id;
-  const definition: Definition = { id, kind: 'fx', name: effectName(project, `${source.name} copy`), source: source.source.replace(new RegExp(`\\b${name}\\b`, 'g'), id) };
+  const name = uniqueName(project, 'fx', `${source.name} copy`), code = freeCodeName(project, slug(name)), old = codeNameOf(source);
+  const definition: Definition = { id: `fx_${crypto.randomUUID().replaceAll('-', '_')}`, kind: 'fx', name, source: old ? renameInSource(source.source, old, code) : source.source };
   project.definitions.splice(project.definitions.indexOf(source) + 1, 0, definition);
   return definition;
 }

@@ -1,5 +1,5 @@
 /** One thing the browser can pick: a preset, or an effect already in the project. */
-export interface BrowserItem { value: string; name: string; folder: string; description?: string }
+export interface BrowserItem { value: string; name: string; folder: string; description?: string; /** Small text at the end of the row, such as how many tracks use it. */ note?: string }
 
 interface Folder { name: string; folders: Map<string, Folder>; items: BrowserItem[] }
 
