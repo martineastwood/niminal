@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { addInstrument, duplicateInstrument, instrumentUsers, removeInstrument, samplerSource } from './instruments';
+import { addInstrument, duplicateInstrument, instrumentUsers, removeInstrument, samplerSource, sliceInstrument } from './instruments';
 import { newProject } from './project';
 
 it('adds synths and samplers with code named after them, so copies never collide', () => {
@@ -48,4 +48,13 @@ it('only removes an instrument that no note uses, and keeps one instrument', () 
   expect(project.definitions.some(d => d.id === extra.id)).toBe(false);
   project.patterns[0].notes[0][0].inst.fill(null);
   expect(removeInstrument(project, 'tone')).toBe('Keep at least one instrument');
+});
+
+it('makes a sliced copy of a sampler, and nothing from an instrument with no sample', () => {
+  const project = newProject(), kick = addInstrument(project, 'samples/kick.wav');
+  const slices = sliceInstrument(project, kick, 16)!;
+  expect(slices.name).toBe('kick slices'); expect(slices.id).not.toBe(kick.id);
+  expect(slices.source).toContain('sample("samples/kick.wav")'); expect(slices.source).toContain('kick_slices_slices = kick_slices_sample.slices(16)');
+  expect(slices.source).toContain('instr kick_slices(freq: hz, sample: num = 0, begin: 0..1 = 0, rate: -4..4 = 1)');
+  expect(sliceInstrument(project, project.definitions[0], 8)).toBeNull();
 });

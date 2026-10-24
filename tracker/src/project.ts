@@ -34,15 +34,57 @@ export const columnStrip = (project: Song, column: number): Track => column < pr
 export const columnLanes = (project: Song, pattern: Pattern, column: number): FxLane[] => column < project.tracks.length ? pattern.fx[column] : column < project.tracks.length + project.returns.length ? pattern.return_fx[column - project.tracks.length] : pattern.master_fx;
 /**
  * One note column: parallel cells for each row. `notes` hold `C-4`, `OFF` (release) or `CUT` (stop at once); `inst` an instrument's
- * definition id; `vol` and `pan` a number from 0 to 128 (as text); `delay` from 0 to 255 256ths of a row.
+ * definition id; `vol` and `pan` a number from 0 to 128 (as text); `delay` from 0 to 255 256ths of a row; `cmd` a letter
+ * and a number such as `G8` (see {@link commandValue}).
  */
-export interface NoteColumn { notes: (string | null)[]; inst: (string | null)[]; vol: (string | null)[]; pan: (string | null)[]; delay: (string | null)[] }
-export type SubColumn = 'inst' | 'vol' | 'pan' | 'delay';
-export const subColumns: SubColumn[] = ['inst', 'vol', 'pan', 'delay'];
+export interface NoteColumn { notes: (string | null)[]; inst: (string | null)[]; vol: (string | null)[]; pan: (string | null)[]; delay: (string | null)[]; cmd: (string | null)[] }
+export type SubColumn = 'inst' | 'vol' | 'pan' | 'delay' | 'cmd';
+export const subColumns: SubColumn[] = ['inst', 'vol', 'pan', 'delay', 'cmd'];
+/**
+ * A command cell's text, or null if it is not one. `O50` starts a sample half way in, `V` plays it backwards, `R4` plays the note
+ * four times in its row, `G8` glides the held note to this one over eight eighths of a row, and `U12` / `D3` slide the held note
+ * up or down that many semitones during the row.
+ */
+export function commandValue(text: string): string | null {
+  const t = text.trim().toUpperCase(), match = /^([ORGUDV])(\d{0,2})$/.exec(t);
+  if (!match) return null;
+  const [, letter, digits] = match, n = Number(digits);
+  const valid = letter === 'V' ? digits === '' : letter === 'R' ? n >= 2 && n <= 32 : letter === 'U' || letter === 'D' ? n >= 1 : digits !== '';
+  return valid ? t : null;
+}
 export const maxNoteColumns = 8;
-export const blankColumn = (rows: number): NoteColumn => ({ notes: Array(rows).fill(null), inst: Array(rows).fill(null), vol: Array(rows).fill(null), pan: Array(rows).fill(null), delay: Array(rows).fill(null) });
-export const cloneColumn = (column: NoteColumn): NoteColumn => ({ notes: [...column.notes], inst: [...column.inst], vol: [...column.vol], pan: [...column.pan], delay: [...column.delay] });
+export const blankColumn = (rows: number): NoteColumn => ({ notes: Array(rows).fill(null), inst: Array(rows).fill(null), vol: Array(rows).fill(null), pan: Array(rows).fill(null), delay: Array(rows).fill(null), cmd: Array(rows).fill(null) });
+export const cloneColumn = (column: NoteColumn): NoteColumn => ({ notes: [...column.notes], inst: [...column.inst], vol: [...column.vol], pan: [...column.pan], delay: [...column.delay], cmd: [...column.cmd] });
+/** BPM counts quarter notes, LPB counts rows per quarter note; meter groups those rows. */
+export interface PatternTiming { bpm: number; rows_per_beat: number; beats_per_bar: number; beat_unit: number; tempo: EnvelopePoint[] }
+export function patternTiming(project: Song, pattern: Pattern): PatternTiming {
+  return pattern.timing ?? { bpm: project.bpm, rows_per_beat: project.rows_per_beat, beats_per_bar: 4, beat_unit: 4, tempo: [] };
+}
+/** Elapsed seconds to a fractional pattern row, integrating linear BPM ramps. */
+export function patternSeconds(t: PatternTiming, row: number): number {
+  let at = 0, seconds = 0;
+  while (at < row) {
+    const before = t.tempo.filter(p => p.row <= at).at(-1), after = t.tempo.find(p => p.row > at);
+    const end = Math.min(row, after?.row ?? row);
+    const bpm = (r: number) => before ? after ? before.value + (after.value - before.value) * (r - before.row) / (after.row - before.row) : before.value : t.bpm;
+    const a = bpm(at), b = bpm(end);
+    seconds += 60 / t.rows_per_beat * (Math.abs(b-a) < 1e-9 ? (end-at)/a : (end-at)*Math.log(b/a)/(b-a));
+    at = end;
+  }
+  return seconds;
+}
+export function patternRow(t: PatternTiming, seconds: number, rows: number): number {
+  let lo = 0, hi = rows;
+  for (let i = 0; i < 24; i++) { const mid = (lo+hi)/2; if (patternSeconds(t, mid) < seconds) lo = mid; else hi = mid; }
+  return (lo+hi)/2;
+}
+export function validTiming(t: PatternTiming, rows: number): boolean {
+  return !!t && Number.isFinite(t.bpm) && t.bpm >= 20 && t.bpm <= 300 && Number.isInteger(t.rows_per_beat) && t.rows_per_beat >= 1 && t.rows_per_beat <= 16 &&
+    Number.isInteger(t.beats_per_bar) && t.beats_per_bar >= 1 && t.beats_per_bar <= 32 && [1, 2, 4, 8, 16].includes(t.beat_unit) && Array.isArray(t.tempo) && t.tempo.length <= 257 &&
+    t.tempo.every((p, i) => !!p && Number.isFinite(p.row) && p.row >= 0 && p.row <= rows && Number.isFinite(p.value) && p.value >= 20 && p.value <= 300 && (i === 0 || p.row > t.tempo[i-1].row));
+}
 export interface Pattern {
+  timing?: PatternTiming;
   id: string; name: string; rows: number; notes: NoteColumn[][];
   /** Parameter lanes by track, then by return, then the master's. Returns and the master have no notes. */
   fx: FxLane[][]; return_fx: FxLane[][]; master_fx: FxLane[];
@@ -87,6 +129,7 @@ export function makePattern(project: Project, source?: Pattern): Pattern {
     id: `pattern_${crypto.randomUUID().replaceAll('-', '_')}`,
     name: source ? `${source.name} variation` : `Pattern ${project.patterns.length.toString().padStart(2, '0')}`,
     rows: source?.rows ?? 32,
+    ...(source?.timing ? { timing: structuredClone(source.timing) } : {}),
     fx: source ? source.fx.map(lanes => lanes.map(cloneLane)) : Array.from({ length: project.tracks.length }, () => [emptyFxLane(32)]),
     return_fx: source ? source.return_fx.map(lanes => lanes.map(cloneLane)) : project.returns.map(() => [emptyFxLane(32)]),
     master_fx: source ? source.master_fx.map(cloneLane) : [emptyFxLane(32)],
@@ -98,14 +141,17 @@ export function makePattern(project: Project, source?: Pattern): Pattern {
 
 export function resizePattern(pattern: Pattern, rows: number) {
   pattern.rows = Math.min(256, Math.max(1, Math.trunc(rows) || 1));
+  if (pattern.timing) pattern.timing.tempo = pattern.timing.tempo.filter(p => p.row <= pattern.rows);
   // Retain notes beyond a shortened pattern so increasing its length restores them.
-  const cells = [...pattern.notes.flat().flatMap(c => [c.notes, c.inst, c.vol, c.pan, c.delay]), ...pattern.fx.flat().map(lane => lane.values), ...pattern.return_fx.flat().map(lane => lane.values), ...pattern.master_fx.map(lane => lane.values)];
+  const cells = [...pattern.notes.flat().flatMap(c => [c.notes, c.inst, c.vol, c.pan, c.delay, c.cmd]), ...pattern.fx.flat().map(lane => lane.values), ...pattern.return_fx.flat().map(lane => lane.values), ...pattern.master_fx.map(lane => lane.values)];
   for (const column of cells) while (column.length < pattern.rows) column.push(null);
 }
 
 export function readProject(raw: string): Project {
   const value = JSON.parse(raw);
   if (value && typeof value === 'object') value.returns ??= [];
+  // projects saved before commands existed have no command cells
+  for (const pattern of Array.isArray(value?.patterns) ? value.patterns : []) for (const column of Array.isArray(pattern?.notes) ? pattern.notes.flat() : []) if (column && typeof column === 'object') column.cmd ??= [];
   if (value?.version !== 11 || typeof value.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value.id) || !Array.isArray(value.definitions) || value.definitions.length === 0 ||
       !value.definitions.every((d: Definition) => d && typeof d.id === 'string' && /^[a-zA-Z_][\w-]*$/.test(d.id) && typeof d.name === 'string' && typeof d.source === 'string' && ['instr', 'fx'].includes(d.kind) && (d.values === undefined || !!d.values && typeof d.values === 'object' && Object.values(d.values).every(Number.isFinite))) ||
       new Set(value.definitions.map((d: Definition) => d.id)).size !== value.definitions.length ||
@@ -118,7 +164,7 @@ export function readProject(raw: string): Project {
       value.returns.some((t: Track, i: number) => t.output?.kind === 'return' && t.output.index <= i || t.fx.some(d => d.target !== undefined && d.target <= i)) ||
       !Array.isArray(value.patterns) || value.patterns.length < 1 || value.patterns.length > 128 ||
       !value.patterns.every((p: Pattern) => p && typeof p.id === 'string' && /^[a-zA-Z_][\w-]*$/.test(p.id) && typeof p.name === 'string' &&
-        Number.isInteger(p.rows) && p.rows >= 1 && p.rows <= 256 && Array.isArray(p.notes) && p.notes.length === value.tracks.length &&
+        Number.isInteger(p.rows) && p.rows >= 1 && p.rows <= 256 && (p.timing === undefined || validTiming(p.timing, p.rows)) && Array.isArray(p.notes) && p.notes.length === value.tracks.length &&
         p.notes.every(track => Array.isArray(track) && track.length >= 1 && track.length <= maxNoteColumns && track.every(column => validColumn(column, p.rows, value.definitions))) &&
         Array.isArray(p.fx) && p.fx.length === value.tracks.length && p.fx.every(lanes => validLanes(lanes, p.rows)) &&
         Array.isArray(p.return_fx) && p.return_fx.length === value.returns.length && [...p.return_fx, p.master_fx].every(lanes => validLanes(lanes, p.rows) && lanes.every(lane => lane.target?.kind !== 'instrument'))) ||
@@ -181,6 +227,29 @@ export function removeTrack(project: Project, index: number): DeletedTrack | nul
   return { index, track: project.tracks.splice(index, 1)[0], matrix, sequence: [...project.sequence], notes: new Map(project.patterns.map(p => [p.id, p.notes.splice(index, 1)[0]])), fx: new Map(project.patterns.map(p => [p.id, p.fx.splice(index, 1)[0]])) };
 }
 
+/**
+ * Adds a copy of a track right after it: its mixer settings and effect chain, and its notes, parameter lanes and
+ * matrix cells in every pattern. Returns the copy's index, or null when the song has no room for another track.
+ */
+export function duplicateTrack(project: Project, index: number): number | null {
+  if (project.tracks.length >= 16 || index < 0 || index >= project.tracks.length) return null;
+  const copy: Track = { ...structuredClone(project.tracks[index]), name: `${project.tracks[index].name} copy`, solo: false };
+  project.tracks.splice(index + 1, 0, copy);
+  for (const pattern of project.patterns) {
+    pattern.notes.splice(index + 1, 0, pattern.notes[index].map(cloneColumn));
+    pattern.fx.splice(index + 1, 0, pattern.fx[index].map(cloneLane));
+  }
+  project.sequence.forEach((_, step) => {
+    const source = trackSource(project, step, index), row = project.matrix?.[step];
+    if (source === null && (!row || row.length <= index + 1)) return;
+    const matrix = project.matrix ??= []; while (matrix.length <= step) matrix.push([]);
+    while (matrix[step].length < index + 1) matrix[step].push(null);
+    matrix[step].splice(index + 1, 0, source && structuredClone(source));
+  });
+  tidyMatrix(project);
+  return index + 1;
+}
+
 export function restoreTrack(project: Project, deleted: DeletedTrack): boolean {
   if (project.tracks.length >= 16) return false;
   project.tracks.splice(deleted.index, 0, deleted.track);
@@ -196,7 +265,7 @@ export function restoreTrack(project: Project, deleted: DeletedTrack): boolean {
   tidyMatrix(project);
   for (const pattern of project.patterns) {
     const restored = (deleted.notes.get(pattern.id) ?? [blankColumn(pattern.rows)]).map(cloneColumn);
-    for (const column of restored) for (const cells of [column.notes, column.inst, column.vol, column.pan, column.delay]) while (cells.length < pattern.rows) cells.push(null);
+    for (const column of restored) for (const cells of [column.notes, column.inst, column.vol, column.pan, column.delay, column.cmd]) while (cells.length < pattern.rows) cells.push(null);
     pattern.notes.splice(deleted.index, 0, restored);
     const fx = (deleted.fx.get(pattern.id) ?? [emptyFxLane(pattern.rows)]).map(cloneLane);
     for (const column of fx) while (column.values.length < pattern.rows) column.values.push(null);
@@ -215,10 +284,10 @@ export function validTarget(target: FxTarget | null): boolean {
 const integerWithin = (max: number) => (v: unknown) => v === null || typeof v === 'string' && /^\d{1,3}$/.test(v) && Number(v) <= max;
 function validColumn(column: NoteColumn, rows: number, definitions: Definition[]) {
   const sized = (cells: unknown, optional: boolean): cells is (string | null)[] => Array.isArray(cells) && cells.length <= 256 && (cells.length >= rows || optional && cells.length === 0);
-  return !!column && sized(column.notes, false) && sized(column.inst, true) && sized(column.vol, true) && sized(column.pan, true) && sized(column.delay, true) &&
+  return !!column && sized(column.notes, false) && sized(column.inst, true) && sized(column.vol, true) && sized(column.pan, true) && sized(column.delay, true) && sized(column.cmd, true) &&
     column.notes.every(n => n === null || typeof n === 'string' && (n === 'OFF' || n === 'CUT' || /^[A-G][#-][0-8]$/.test(n))) &&
     column.inst.every(id => id === null || typeof id === 'string' && definitions.some(d => d.id === id && d.kind === 'instr')) &&
-    column.vol.every(integerWithin(128)) && column.pan.every(integerWithin(128)) && column.delay.every(integerWithin(255));
+    column.vol.every(integerWithin(128)) && column.pan.every(integerWithin(128)) && column.delay.every(integerWithin(255)) && column.cmd.every(c => c === null || commandValue(c) === c);
 }
 function validTrack(t: Track, definitions: Definition[]): boolean {
   return !!(

@@ -71,7 +71,7 @@ pub fn strips<'a>(
 }
 
 /// Whether a track makes no sound: muted, or another track is soloed. The master only has a level.
-fn silent(tracks: &[Track], index: usize) -> bool {
+pub fn silent(tracks: &[Track], index: usize) -> bool {
     tracks[index].muted || tracks.iter().any(|t| t.solo) && !tracks[index].solo
 }
 

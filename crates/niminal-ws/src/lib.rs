@@ -88,7 +88,7 @@ impl Outbox {
 /// The most clients at once, the largest message (source code, mostly) and
 /// how long a new connection has to complete its handshake.
 const MAX_CLIENTS: usize = 16;
-const MAX_MESSAGE: usize = 4 << 20;
+const MAX_MESSAGE: usize = 64 << 20;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 /// Client threads run the compiler, so they get more stack than the default.
 const CLIENT_STACK: usize = 32 << 20;

@@ -7,7 +7,7 @@ use niminal_ws::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::pattern::{Mode, Playback, Song, Track, pitch};
+use crate::pattern::{Mode, Playback, Song, Track, note_args};
 use crate::{
     mixer,
     sound::{Kind, Sound},
@@ -31,6 +31,8 @@ pub struct Status {
     pub effects: BTreeMap<String, String>,
     pub effect_parameters: crate::commands::EffectParameters,
     pub instrument_parameters: crate::commands::EffectParameters,
+    /// The pieces of each sliced sample instrument, by id: its notes pick one, counting up from C-4.
+    pub instrument_slices: BTreeMap<String, usize>,
 }
 
 #[derive(Deserialize)]
@@ -58,6 +60,18 @@ pub enum Command {
     Update {
         song: Song,
     },
+    /// Render the whole song, from its first step, to a WAV file; with `stems`, each track and return
+    /// also gets a file beside it.
+    Export {
+        song: Song,
+        path: String,
+        #[serde(default)]
+        stems: bool,
+    },
+    /// A MIDI key owns one held preview, independent of pattern playback.
+    MidiOn { key: u16, instrument: String, note: String, track: usize, velocity: u8 },
+    /// None releases all MIDI previews; a key releases only its own preview.
+    MidiOff { key: Option<u16> },
     Audition {
         instrument: String,
         note: String,
@@ -178,6 +192,8 @@ struct Worker {
     mixer: Vec<Track>,
     mixer_returns: Vec<Track>,
     mixer_master: Track,
+    midi_keys: std::collections::BTreeSet<u16>,
+    instrument_values: BTreeMap<String, BTreeMap<String, f64>>,
     scopes: Scopes,
     strip_scopes: bool,
     playback: Option<Playback>,
@@ -244,6 +260,7 @@ impl Worker {
                 self.client = None;
                 self.playback = None;
                 self.sounds.clear();
+                self.instrument_values.clear();
                 self.mixer.clear();
                 self.mixer_returns.clear();
                 self.mixer_master = Track::default();
@@ -328,7 +345,19 @@ impl Worker {
             .ok_or("Engine returned an invalid sample clock".into())
     }
 
+    fn release_midi(&mut self, key: Option<u16>) -> Result<(), String> {
+        let keys: Vec<_> = self.midi_keys.iter().copied().filter(|k| key.is_none_or(|key| key == *k)).collect();
+        for key in keys {
+            if self.client.is_some() {
+                self.call("events.cancel", json!({"tag":format!("tracker-midi-{key}"), "from":"now", "release":true}))?;
+            }
+            self.midi_keys.remove(&key);
+        }
+        Ok(())
+    }
+
     fn stop(&mut self) -> Result<(), String> {
+        self.release_midi(None)?;
         self.playback = None;
         self.status.playing = false;
         self.status.row = None;
@@ -393,7 +422,7 @@ impl Worker {
                 kind,
                 dir,
             } => {
-                let sound = Sound::parse(kind, source)?;
+                let sound = Sound::parse(kind, source, dir.as_deref().or(self.dir.as_deref()))?;
                 if self
                     .sounds
                     .iter()
@@ -480,6 +509,11 @@ impl Worker {
                 self.status.instruments = instruments;
                 self.status.effects = effects;
                 self.status.effect_parameters = parameters;
+                self.status.instrument_slices = self
+                    .sounds
+                    .iter()
+                    .filter_map(|(id, sound)| Some((id.clone(), sound.slices?)))
+                    .collect();
                 self.status.instrument_parameters = self
                     .sounds
                     .iter()
@@ -489,6 +523,7 @@ impl Worker {
                 if let Some(playback) = &mut self.playback {
                     playback.parameters = self.status.effect_parameters.clone();
                     playback.instrument_parameters = self.status.instrument_parameters.clone();
+                    playback.instrument_slices = self.status.instrument_slices.clone();
                 }
             }
             Command::Play {
@@ -509,6 +544,7 @@ impl Worker {
                 ))?;
                 playback.parameters = self.status.effect_parameters.clone();
                 playback.instrument_parameters = self.status.instrument_parameters.clone();
+                playback.instrument_slices = self.status.instrument_slices.clone();
                 playback.origin = self.clock()? + (self.status.sample_rate * 0.15).round() as u64;
                 self.send_events(crate::modulation::reset(
                     &playback.song.tracks,
@@ -530,7 +566,7 @@ impl Worker {
                     && !playback.song.same_timeline(&song)
                 {
                     return Err(
-                        "Stop playback before changing the sequence, pattern lengths or tempo"
+                        "Stop playback before changing the sequence, pattern lengths"
                             .into(),
                     );
                 }
@@ -541,11 +577,31 @@ impl Worker {
                     if playback.song.loop_range != song.loop_range {
                         playback.set_loop(song.loop_range, now, sample_rate);
                     }
-                    playback.song = song;
+                    playback.update_song(song);
                     playback.parameters = self.status.effect_parameters.clone();
                     playback.instrument_parameters = self.status.instrument_parameters.clone();
                 }
             }
+            Command::Export { song, path, stems } => self.export(song, &path, stems)?,
+            Command::MidiOn { key, instrument, note, track, velocity } => {
+                if key >= 2048 || track >= self.mixer.len() || !(1..=127).contains(&velocity) {
+                    return Err("Invalid MIDI note, track or velocity".into());
+                }
+                self.release_midi(Some(key))?;
+                let target = self.status.instruments.get(&instrument).ok_or("Apply this instrument before playing MIDI")?.clone();
+                let slices = self.status.instrument_slices.get(&instrument).copied();
+                let Some(mut args) = note_args(&note, slices)? else { return Ok(()); };
+                for parameter in self.status.instrument_parameters.get(&instrument).into_iter().flatten() {
+                    if let Some(value) = self.instrument_values.get(&instrument).and_then(|v| v.get(&parameter.name)) {
+                        args[&parameter.name] = parameter.argument(value.clamp(parameter.min, parameter.max));
+                    }
+                }
+                args["gain"] = json!(format!("{}db", 20.0 * (f64::from(velocity) / 127.0).log10()));
+                let id = crate::pattern::NOTE_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.send_events(vec![json!({"op":"note", "at":"now", "id":id, "tag":format!("tracker-midi-{key}"), "target":target, "to":format!("in_{track}"), "args":args})])?;
+                self.midi_keys.insert(key);
+            }
+            Command::MidiOff { key } => self.release_midi(key)?,
             Command::Audition {
                 instrument,
                 note,
@@ -561,7 +617,11 @@ impl Worker {
                     .get(&instrument)
                     .ok_or("Apply this instrument before auditioning")?
                     .clone();
-                self.send_events(vec![json!({"op":"note", "at":"now", "target":target, "to":format!("in_{track}"), "dur":format!("{ms}ms"), "args":{"freq":pitch(&note)?}})])?;
+                let slices = self.status.instrument_slices.get(&instrument).copied();
+                let Some(args) = note_args(&note, slices)? else {
+                    return Ok(());
+                };
+                self.send_events(vec![json!({"op":"note", "at":"now", "target":target, "to":format!("in_{track}"), "dur":format!("{ms}ms"), "args":args})])?;
             }
             Command::Stop => self.stop()?,
             Command::Quit => {
@@ -681,11 +741,83 @@ impl Worker {
             self.mixer_timing != (song.bpm, song.rows_per_beat),
         )?;
         self.send_events(events)?;
+        self.instrument_values = song.instrument_values.clone();
         self.mixer = song.tracks.clone();
         self.mixer_returns = song.returns.clone();
         self.mixer_master = song.master.clone();
         self.mixer_timing = (song.bpm, song.rows_per_beat);
         Ok(())
+    }
+
+    /// Renders the song in an engine session of its own, faster than it plays, so the live sound is
+    /// untouched. The session is built the way a fresh connection is: strips, definitions, mixer,
+    /// then every note and lane edit of the song, all handed over in one request.
+    fn export(&mut self, mut song: Song, path: &str, stems: bool) -> Result<(), String> {
+        self.check_assignments(&song)?;
+        self.stop()?;
+        song.loop_range = None;
+        let sample_rate = self.status.sample_rate;
+        let origin = (sample_rate * 0.1) as u64;
+        let first = song.sequence.first().ok_or("The song has no steps")?.clone();
+        let mut playback = Playback::new(origin, song.clone(), Mode::Song, first, 0)?;
+        playback.parameters = self.status.effect_parameters.clone();
+        playback.instrument_parameters = self.status.instrument_parameters.clone();
+        playback.instrument_slices = self.status.instrument_slices.clone();
+
+        let source = self.sounds.values().map(|s| s.engine_source.as_str()).collect::<Vec<_>>().join("\n");
+        let fx: Vec<_> = self
+            .sounds
+            .values()
+            .filter_map(|s| s.fx_source.as_ref().map(|body| json!({"op":"fx", "name":s.target, "source":body})))
+            .collect();
+        let mut transaction = json!({"op":"transaction", "at":"now", "source":source, "edits":fx});
+        if let Some(dir) = &self.dir {
+            transaction["dir"] = json!(dir);
+        }
+        let mut events = vec![json!({"op":"routing", "at":"now", "edits":mixer::setup()}), transaction];
+        events.extend(mixer::events(
+            &song.tracks, &song.returns, &song.master, &[], &[], &Track::default(),
+            &self.status.effects, &self.status.effect_parameters, song.bpm, song.rows_per_beat, true,
+        )?);
+        events.extend(mixer::reset(&song.tracks, &song.returns, &song.master, &self.status.effect_parameters));
+        events.extend(crate::modulation::reset(
+            &song.tracks, &song.returns, &song.master, &self.status.effect_parameters, origin,
+        ));
+        let rows: u64 = song
+            .sequence
+            .iter()
+            .filter_map(|id| song.patterns.iter().find(|p| p.id == *id))
+            .map(|p| p.rows as u64)
+            .sum();
+        let frames = playback.row_at(rows, sample_rate);
+        let (notes, _) = playback.events_until(0, frames, sample_rate, &self.status.instruments)?;
+        // the render takes only what happens before its end, so drop the closing edit of a held envelope
+        events.extend(notes.into_iter().filter(|e| e["at"].as_u64().is_none_or(|at| at < frames)));
+
+        let target = std::path::Path::new(path);
+        let mut outputs = vec![json!({"id":"mix", "endpoint":{"kind":"master"}, "path":path})];
+        if stems {
+            let stem = target.with_extension("");
+            let stem = stem.to_string_lossy();
+            let strips = song.tracks.iter().enumerate().filter(|(i, _)| !mixer::silent(&song.tracks, *i)).map(|(i, t)| (i.to_string(), t));
+            let returns = song.returns.iter().enumerate().filter(|(_, t)| !t.muted).map(|(i, t)| (format!("r{i}"), t));
+            for (number, (label, strip)) in strips.chain(returns).enumerate() {
+                let name: String = strip.name.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
+                outputs.push(json!({"id":label, "endpoint":{"kind":"node", "id":format!("tap_{label}")}, "path":format!("{stem}-{:02}-{name}.wav", number + 1)}));
+            }
+        }
+        let job = self.call("render.start", json!({
+            "source":"", "events":events, "frames":frames, "sample_rate":sample_rate as u32, "outputs":outputs,
+        }))?["id"].as_u64().ok_or("The engine did not start the render")?;
+        loop {
+            thread::sleep(Duration::from_millis(50));
+            let state = self.call("jobs.status", json!({"id":job}))?;
+            match state["state"].as_str() {
+                Some("completed") => return Ok(()),
+                Some("running") => {}
+                _ => return Err(format!("Export failed: {}", state["error"].as_str().unwrap_or("the render stopped"))),
+            }
+        }
     }
 
     fn tick(&mut self) -> Result<(), String> {

@@ -1,6 +1,7 @@
+import { patternTiming, patternSeconds, patternRow } from './project';
 import { instrumentsOnTrack } from './instruments';
 import { laneParameter, targetKey, formatValue, parseValue, envelopeValue } from './automation';
-import { keyboardNote, transposeNote, emptyFxLane, blankColumn, subColumns, maxNoteColumns, columnCount, columnStrip, columnLanes, type FxTarget, type FxLane, type EffectParameters, type Project, type Song, type Pattern, type Track, type SubColumn } from './project';
+import { commandValue, keyboardNote, transposeNote, emptyFxLane, blankColumn, subColumns, maxNoteColumns, columnCount, columnStrip, columnLanes, type FxTarget, type FxLane, type EffectParameters, type Project, type Song, type Pattern, type Track, type SubColumn } from './project';
 import { NoteHistory, parseNotes, type NoteEdit } from './history';
 import { openBrowser } from './browser';
 
@@ -12,19 +13,21 @@ const ROW_WIDTH = 30, NOTE_WIDTH = 44, SUB_WIDTH = 26, LANE_WIDTH = 72, MIN_TRAC
 /** A column of cells. Note-family lanes have `fx` null; parameter lanes have a `kind` of null. */
 type Kind = 'note' | SubColumn;
 interface Lane { track: number; kind: Kind | null; col: number; fx: number | null; values: (string | null)[] }
-const subLabel: Record<SubColumn, string> = { inst: 'Ins', vol: 'Vol', pan: 'Pan', delay: 'Dly' };
+const subLabel: Record<SubColumn, string> = { inst: 'Ins', vol: 'Vol', pan: 'Pan', delay: 'Dly', cmd: 'Cmd' };
 const subTitle: Record<SubColumn, string> = {
   inst: 'Instrument for this note: its number in the sidebar list',
   vol: 'Volume for this note, 0 to 100',
   pan: 'Panning for this note, -50 (left) to +50 (right), C for centre',
   delay: 'Delay: how far into the row the note starts, as a percent, 0 to 99',
+  cmd: 'Command: O50 starts a sample half way in, V plays it backwards, R4 plays the note four times in its row, G8 glides the held note to this one over a row, U12 or D3 slides the held note up or down that many semitones',
 };
-const subRange: Record<SubColumn, string> = { inst: 'an instrument number', vol: '0 to 100', pan: '-50 to 50, or C', delay: '0 to 99' };
+const subRange: Record<SubColumn, string> = { inst: 'an instrument number', vol: '0 to 100', pan: '-50 to 50, or C', delay: '0 to 99', cmd: 'a command such as O50, V, R4, G8, U12 or D3' };
 
 // Cells store the engine's whole numbers (volume and pan 0 to 128, delay 0 to 255); these show them as people count.
 /** What a sub-column cell reads as, for display and the clipboard. */
 export function subText(kind: SubColumn, value: string | null, project: Project): string {
   if (value === null) return '';
+  if (kind === 'cmd') return value;
   const n = Number(value);
   if (kind === 'inst') { const index = project.definitions.filter(d => d.kind === 'instr').findIndex(d => d.id === value); return index < 0 ? '??' : String(index).padStart(2, '0'); }
   if (kind === 'vol') return String(Math.round(n * 100 / 128));
@@ -34,6 +37,7 @@ export function subText(kind: SubColumn, value: string | null, project: Project)
 }
 /** The stored value for typed or pasted text, or null when it names nothing. */
 export function subValue(kind: SubColumn, text: string, project: Project): string | null {
+  if (kind === 'cmd') return commandValue(text);
   const t = text.trim().replace(/%$/, '');
   if (kind === 'pan' && /^c$/i.test(t)) return '64';
   if (!/^[+-]?\d{1,3}$/.test(t)) return null;
@@ -45,6 +49,7 @@ export function subValue(kind: SubColumn, text: string, project: Project): strin
 }
 
 export class PatternGrid {
+  projectUndo: ((redo: boolean) => void) | undefined;
   private row = 0;
   private column = 0;
   private anchor = { row: 0, column: 0 };
@@ -147,6 +152,7 @@ export class PatternGrid {
   /** The parameter lane a lane of the grid shows. */
   private laneAt(lane: Lane): FxLane { return columnLanes(this.project(), this.pattern(), lane.track)[lane.fx!]; }
   private get values() { return this.lanes.map(lane => lane.values); }
+  private get barRows() { const t = patternTiming(this.project(), this.pattern()); return Math.max(1, Math.round(t.rows_per_beat * 4 / t.beat_unit * t.beats_per_bar)); }
   get activeTrack() { return this.lanes[this.column]?.track ?? 0; }
   private get history() {
     const pattern = this.pattern(), id = pattern.id;
@@ -157,9 +163,17 @@ export class PatternGrid {
     return this.histories.get(id)!;
   }
   resetHistory() { this.histories.clear(); this.anchor = { row: this.row, column: this.column }; }
-  undo() { if (this.history.undo(this.values)) { this.render(); this.edited(); } }
-  redo() { if (this.history.redo(this.values)) { this.render(); this.edited(); } }
-  private apply(edits: NoteEdit[]) { if (this.history.apply(this.values, edits)) { this.render(); this.edited(); } }
+  undo() { if (this.projectUndo) { this.projectUndo(false); return; } if (this.history.undo(this.values)) { this.render(); this.edited(); } }
+  redo() { if (this.projectUndo) { this.projectUndo(true); return; } if (this.history.redo(this.values)) { this.render(); this.edited(); } }
+  private apply(edits: NoteEdit[]) {
+    if (this.projectUndo) {
+      const changed = edits.filter(e => e.before !== e.after);
+      if (!changed.length) return;
+      const values = this.values;
+      for (const edit of changed) values[edit.track][edit.row] = edit.after;
+      this.render(); this.edited();
+    } else if (this.history.apply(this.values, edits)) { this.render(); this.edited(); }
+  }
 
   selectTrack(track: number, render = true) {
     const index = Math.max(0, Math.min(columnCount(this.project()) - 1, track));
@@ -195,6 +209,7 @@ export class PatternGrid {
 
   render() {
     const project = this.project(), pattern = this.pattern(), lanes = this.lanes;
+    const timing = patternTiming(project, pattern), beatRows = timing.rows_per_beat * 4 / timing.beat_unit;
     // a lane for an instrument that no note on its track uses does nothing, so it is drawn dimmed
     const onTrack = project.tracks.map((_, track) => instrumentsOnTrack(project, track));
     const idle = (track: number, fx: number) => { const target = columnLanes(project, pattern, track)[fx].target; return target?.kind === 'instrument' && !onTrack[track]?.has(target.instrument); };
@@ -268,7 +283,7 @@ export class PatternGrid {
     }
     this.parent.append(header, this.pads());
     for (let row = 0; row < pattern.rows; row++) {
-      const line = document.createElement('div'); line.className = `grid-row ${row % project.rows_per_beat === 0 ? 'beat' : ''} ${row % (project.rows_per_beat * 4) === 0 ? 'bar' : ''}`; line.setAttribute('role', 'row'); line.dataset.row = String(row);
+      const line = document.createElement('div'); line.className = `grid-row ${row % (beatRows) === 0 ? 'beat' : ''} ${row % (beatRows * timing.beats_per_bar) === 0 ? 'bar' : ''}`; line.setAttribute('role', 'row'); line.dataset.row = String(row);
       const number = document.createElement('span'); number.className = 'row-number'; number.textContent = String(row).padStart(2, '0'); line.append(number);
       let column = 0;
       for (let track = 0; track < columnCount(project); track++) {
@@ -309,17 +324,19 @@ export class PatternGrid {
     const was = this.playing; this.playing = row;
     if (row === null) { this.playhead.hidden = true; this.shown = -1; if (this.pad) this.setPad(0); if (was !== null) this.placeFrame(); return; }
     if (was === null) this.placeFrame();
-    this.origin = atMs - (row + (phase ?? 0)) * this.rowMs();
+    const t = patternTiming(this.project(), this.pattern());
+    const start = patternSeconds(t, row), end = patternSeconds(t, row+1);
+    this.origin = atMs - (start + (phase ?? 0) * (end-start)) * 1000;
     this.animation ||= requestAnimationFrame(this.follow);
   }
   /** Recording while the pattern plays: the cursor rides the play position and notes land on the nearest row. */
   private get live() { return this.recording && this.playing !== null; }
-  private nearestRow() { return Math.round((Date.now() - this.origin) / this.rowMs()) % this.pattern().rows; }
-  private rowMs() { return 60000 / (this.project().bpm * this.project().rows_per_beat); }
+  private currentRow() { return patternRow(patternTiming(this.project(), this.pattern()), (Date.now() - this.origin) / 1000, this.pattern().rows); }
+  private nearestRow() { return Math.round(this.currentRow()) % this.pattern().rows; }
   private follow = () => {
     this.animation = 0;
     if (this.playing === null) return;
-    const row = Math.min(Math.max(Math.floor((Date.now() - this.origin) / this.rowMs()), 0), this.pattern().rows - 1);
+    const row = Math.min(Math.max(Math.floor(this.currentRow()), 0), this.pattern().rows - 1);
     if (row !== this.shown) {
       this.shown = row; this.followRow(row);
       if (this.live) { this.row = row; this.anchor = { row, column: this.column }; this.paintSelection(); }
@@ -407,7 +424,7 @@ export class PatternGrid {
     const heading = document.createElement('span'); heading.textContent = 'Note columns';
     const fewer = document.createElement('button'); fewer.textContent = '−'; fewer.setAttribute('aria-label', 'Fewer note columns'); fewer.disabled = count <= 1;
     fewer.onclick = () => {
-      if (project.patterns.some(p => { const last = p.notes[index].at(-1)!; return [last.notes, last.inst, last.vol, last.pan, last.delay].some(cells => cells.some(v => v !== null)); })) { this.feedback('Clear the last note column in every pattern before removing it.'); return; }
+      if (project.patterns.some(p => { const last = p.notes[index].at(-1)!; return [last.notes, last.inst, last.vol, last.pan, last.delay, last.cmd].some(cells => cells.some(v => v !== null)); })) { this.feedback('Clear the last note column in every pattern before removing it.'); return; }
       for (const p of project.patterns) p.notes[index].pop();
       changed();
     };
@@ -430,7 +447,7 @@ export class PatternGrid {
       const label = document.createElement('label'); label.title = subTitle[kind];
       const box = document.createElement('input'); box.type = 'checkbox'; box.checked = !!track.show?.[kind]; box.setAttribute('aria-label', `Show ${subLabel[kind]} column`);
       box.onchange = () => { track.show = { ...track.show, [kind]: box.checked }; changed(); };
-      label.append(box, { vol: 'Volume', pan: 'Panning', delay: 'Delay' }[kind]); checks.append(label);
+      label.append(box, { vol: 'Volume', pan: 'Panning', delay: 'Delay', cmd: 'Command' }[kind]); checks.append(label);
     }
   }
   /** Edits a sub-column cell in place, like a parameter lane: type a number, Enter to save and move down. */
@@ -485,6 +502,12 @@ export class PatternGrid {
       rows.push(values.join('\t'));
     }
     event.clipboardData?.setData('text/plain', rows.join('\n')); event.preventDefault();
+  }
+  /** Selects every row of every column of the track the cursor is in, ready to copy or cut and paste onto another track or pattern. */
+  selectWholeTrack() {
+    const columns = this.lanes.flatMap((lane, index) => lane.track === this.activeTrack ? [index] : []);
+    this.anchor = { row: 0, column: columns[0] }; this.row = this.pattern().rows - 1; this.column = columns[columns.length - 1];
+    this.trackSelected(this.activeTrack); this.render();
   }
   /** The selected rectangle: first and last row and column. */
   private get bounds() {
@@ -594,6 +617,40 @@ export class PatternGrid {
     this.apply([{ row: this.row, track: column, before: columns[fx].values[this.row], after: String(value) }]);
     this.advance(); this.render(); this.parent.focus();
   }
+  /** MIDI uses absolute pitch and hardware velocity, even when the cursor is on a sub-column or lane. */
+  midiNoteOn(number: number, velocity: number) {
+    if (!Number.isInteger(number) || number < 12 || number > 119 || !Number.isInteger(velocity) || velocity < 1 || velocity > 127) return null;
+    const note = transposeNote('C-4', number - 60)!;
+    const selected = this.lanes[this.column];
+    const track = Math.min(selected.track, this.project().tracks.length - 1);
+    const col = selected.track === track ? selected.col : 0;
+    const noteLane = this.lanes.findIndex(l => l.track === track && l.col === col && l.kind === 'note');
+    const column = this.pattern().notes[track][col];
+    const row = this.live ? this.nearestRow() : this.row;
+    const instrument = this.currentInstrument() ?? instrumentAt(column.inst, row);
+    if (this.recording) {
+      this.column = noteLane;
+      this.writeNote(note, velocity / 127 * 100, false);
+    }
+    return { note, track, instrument, velocity };
+  }
+
+  private writeNote(note: string, velocity: number | null, preview = true) {
+    const lane = this.lanes[this.column], ending = note === 'OFF' || note === 'CUT';
+    const live = this.live; if (live) { this.row = this.nearestRow(); this.anchor = { row: this.row, column: this.column }; }
+    const column = this.pattern().notes[lane.track][lane.col], inst = ending ? undefined : this.currentInstrument();
+    const instrument = !ending && (inst ?? instrumentAt(column.inst, this.row));
+    if (instrument && preview) this.audition(instrument, note, lane.track);
+    const track = this.project().tracks[lane.track];
+    if (velocity !== null && !track.show?.vol) track.show = { ...track.show, vol: true };
+    this.column = this.lanes.findIndex(other => other.track === lane.track && other.col === lane.col && other.kind === 'note');
+    const instLane = this.lanes.findIndex(other => other.track === lane.track && other.col === lane.col && other.kind === 'inst');
+    const volLane = this.lanes.findIndex(other => other.track === lane.track && other.col === lane.col && other.kind === 'vol');
+    this.apply([{ row: this.row, track: this.column, before: lane.values[this.row], after: note }, ...(inst ? [{ row: this.row, track: instLane, before: column.inst[this.row], after: inst }] : []), ...(velocity !== null && volLane >= 0 ? [{ row: this.row, track: volLane, before: column.vol[this.row], after: String(Math.round(velocity * 1.28)) }] : [])]);
+    if (!live) this.advance();
+    this.render();
+  }
+
   private keydown(event: KeyboardEvent) {
     if ((event.target as HTMLElement).closest('input, select, textarea')) return;
     if (event.ctrlKey || event.metaKey) {
@@ -607,7 +664,7 @@ export class PatternGrid {
       }
       if (key === 'z') { event.preventDefault(); if (event.shiftKey) this.redo(); else this.undo(); }
       if (key === 'y') { event.preventDefault(); this.redo(); }
-      if (key === 'a') { event.preventDefault(); this.anchor = { row: 0, column: 0 }; this.row = this.pattern().rows - 1; this.column = this.lanes.length - 1; this.trackSelected(this.activeTrack); this.render(); }
+      if (key === 'a') { event.preventDefault(); if (event.shiftKey) this.selectWholeTrack(); else { this.anchor = { row: 0, column: 0 }; this.row = this.pattern().rows - 1; this.column = this.lanes.length - 1; this.trackSelected(this.activeTrack); this.render(); } }
       const sequence: Record<string, SequenceAction> = { ArrowUp: 'previous', ArrowDown: 'next', Home: 'first', End: 'last', ArrowLeft: 'pattern-previous', ArrowRight: 'pattern-next', ...(event.shiftKey ? {} : { Insert: 'new', Delete: 'remove' }) };
       const edit: Record<string, () => void> = { i: () => this.interpolate(), d: () => this.duplicate(), Enter: () => this.shiftRows(1), Backspace: () => this.shiftRows(-1), ...(event.shiftKey ? { Insert: () => this.shiftRows(1, 'column'), Delete: () => this.shiftRows(-1, 'column') } : {}) };
       if (sequence[key]) { event.preventDefault(); this.sequence(sequence[key]); }
@@ -625,8 +682,8 @@ export class PatternGrid {
       case 'ArrowLeft': this.column = event.shiftKey ? Math.max(0, this.column - 1) : (this.column + lanes.length - 1) % lanes.length; break;
       case 'ArrowRight': this.column = event.shiftKey ? Math.min(lanes.length - 1, this.column + 1) : (this.column + 1) % lanes.length; break;
       case 'Tab': this.selectTrack((this.activeTrack + (event.shiftKey ? columnCount(this.project()) - 1 : 1)) % columnCount(this.project())); event.preventDefault(); return;
-      case 'PageUp': this.row = Math.max(0, this.row - this.project().rows_per_beat * 4); break;
-      case 'PageDown': this.row = Math.min(this.pattern().rows - 1, this.row + this.project().rows_per_beat * 4); break;
+      case 'PageUp': this.row = Math.max(0, this.row - this.barRows); break;
+      case 'PageDown': this.row = Math.min(this.pattern().rows - 1, this.row + this.barRows); break;
       case 'Home': case 'F9': this.row = 0; break;
       case 'End': this.row = this.pattern().rows - 1; break;
       case 'F10': this.row = Math.floor(this.pattern().rows / 4); break;
@@ -650,26 +707,14 @@ export class PatternGrid {
           if (event.key === 'Enter' || event.key.length === 1 && /[0-9+.-]/.test(event.key)) { event.preventDefault(); this.editValue(this.row, this.column, event.key === 'Enter' ? undefined : event.key); } return;
         }
         if (lane.kind !== 'note') {
-          if (!(event.key === 'Enter' || /^[0-9+-]$/.test(event.key) || lane.kind === 'pan' && /^c$/i.test(event.key))) return;
+          if (!(event.key === 'Enter' || /^[0-9+-]$/.test(event.key) || lane.kind === 'pan' && /^c$/i.test(event.key) || lane.kind === 'cmd' && /^[orgudv]$/i.test(event.key))) return;
           event.preventDefault(); this.editSub(this.row, this.column, event.key === 'Enter' ? undefined : event.key); return;
         }
         // A ends a note by letting it release, which no piano key uses; the minus key stops it at once
         const ending = event.key.toLowerCase() === 'a' ? 'OFF' : event.key === '-' ? 'CUT' : null;
         const note = ending ?? keyboardNote(event.key, this.octave()); if (!note) return;
         event.preventDefault();
-        const live = this.live; if (live) { this.row = this.nearestRow(); this.anchor = { row: this.row, column: this.column }; }
-        const column = this.pattern().notes[lane.track][lane.col], inst = ending ? undefined : this.currentInstrument();
-        const instrument = !ending && (inst ?? instrumentAt(column.inst, this.row));
-        if (instrument) this.audition(instrument, note, lane.track);
-        // a note is given the chosen instrument's number, which can be edited afterwards
-        const instLane = this.lanes.findIndex(other => other.track === lane.track && other.col === lane.col && other.kind === 'inst');
-        const velocity = ending ? null : this.defaultVelocity(), track = this.project().tracks[lane.track];
-        // a default velocity needs somewhere to go, so the track shows its Vol column
-        if (velocity !== null && track && !track.show?.vol) track.show = { ...track.show, vol: true };
-        const volLane = this.lanes.findIndex(other => other.track === lane.track && other.col === lane.col && other.kind === 'vol');
-        this.apply([{ row: this.row, track: this.column, before: lane.values[this.row], after: note }, ...(inst ? [{ row: this.row, track: instLane, before: column.inst[this.row], after: inst }] : []), ...(velocity !== null && volLane >= 0 ? [{ row: this.row, track: volLane, before: column.vol[this.row], after: String(Math.round(velocity * 1.28)) }] : [])]);
-        if (!live) this.advance();
-        this.render(); return;
+        this.writeNote(note, ending ? null : this.defaultVelocity()); return;
       }
     }
     if (!event.shiftKey) this.anchor = { row: this.row, column: this.column };

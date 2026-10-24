@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::cell::RefCell;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Track {
@@ -191,6 +192,45 @@ pub struct NoteColumn {
     /// How late the note starts, in 256ths of a row.
     #[serde(default)]
     pub delay: Vec<Option<String>>,
+    /// A command for the note, or for the note sounding in this column: see [`NoteCommand`].
+    #[serde(default)]
+    pub cmd: Vec<Option<String>>,
+}
+
+/// What a cell of the command sub-column asks for, written as a letter and a whole number.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum NoteCommand {
+    /// `O50`: start the sample this share of the way in (needs a `begin` parameter).
+    Offset(f64),
+    /// `V`: play the sample backwards (needs a `rate` parameter).
+    Reverse,
+    /// `R4`: play the note this many times in its row.
+    Retrigger(u32),
+    /// `G8`: glide the note that is held in this column to this one, over this many rows (given in eighths).
+    Glide(f64),
+    /// `U12`, `D3`: slide the held note up or down by this many semitones during this row.
+    Slide(f64),
+}
+
+impl NoteCommand {
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut chars = text.chars();
+        let letter = chars.next()?.to_ascii_uppercase();
+        let digits = chars.as_str();
+        if digits.len() > 2 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let n: u32 = digits.parse().unwrap_or(0);
+        match letter {
+            'V' if digits.is_empty() => Some(Self::Reverse),
+            'O' if !digits.is_empty() => Some(Self::Offset(f64::from(n) / 100.0)),
+            'R' if (2..=32).contains(&n) => Some(Self::Retrigger(n)),
+            'G' if !digits.is_empty() => Some(Self::Glide(f64::from(n) / 8.0)),
+            'U' if n > 0 => Some(Self::Slide(f64::from(n))),
+            'D' if n > 0 => Some(Self::Slide(-f64::from(n))),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -212,6 +252,7 @@ impl NoteColumn {
             || !sized(self.vol.len(), true)
             || !sized(self.pan.len(), true)
             || !sized(self.delay.len(), true)
+            || !sized(self.cmd.len(), true)
         {
             return Err("Every note sub-column needs a cell for each row".into());
         }
@@ -228,6 +269,9 @@ impl NoteColumn {
         };
         if !within(&self.vol, 128) || !within(&self.pan, 128) || !within(&self.delay, 255) {
             return Err("Volume and pan run 0–128 and delay 0–255".into());
+        }
+        if self.cmd.iter().flatten().any(|c| NoteCommand::parse(c).is_none()) {
+            return Err("A command is a letter (O, V, R, G, U or D) and a number, such as G8".into());
         }
         Ok(())
     }
@@ -247,6 +291,9 @@ impl NoteColumn {
     pub fn panning(&self, row: usize) -> Option<u32> {
         Self::text(&self.pan, row).and_then(|v| v.parse().ok())
     }
+    pub fn command(&self, row: usize) -> Option<NoteCommand> {
+        Self::text(&self.cmd, row).and_then(NoteCommand::parse)
+    }
     /// The delay as a fraction of a row, from 0 up to just under 1.
     pub fn delayed(&self, row: usize) -> f64 {
         f64::from(
@@ -257,8 +304,53 @@ impl NoteColumn {
     }
 }
 
+/// BPM is quarter notes per minute; LPB is rows per quarter note. Meter only groups rows.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Timing {
+    pub bpm: f64,
+    pub rows_per_beat: u32,
+    pub beats_per_bar: u32,
+    pub beat_unit: u32,
+    /// Linear BPM automation, in pattern rows. Before the first point, use `bpm`.
+    pub tempo: Vec<EnvelopePoint>,
+}
+impl Timing {
+    fn valid(&self, rows: usize) -> bool {
+        self.bpm.is_finite() && (20.0..=300.0).contains(&self.bpm)
+            && (1..=16).contains(&self.rows_per_beat)
+            && (1..=32).contains(&self.beats_per_bar)
+            && [1, 2, 4, 8, 16].contains(&self.beat_unit)
+            && self.tempo.len() <= 257
+            && self.tempo.iter().enumerate().all(|(i, p)| p.row.is_finite()
+                && (0.0..=rows as f64).contains(&p.row) && p.value.is_finite()
+                && (20.0..=300.0).contains(&p.value)
+                && (i == 0 || p.row > self.tempo[i-1].row))
+    }
+    fn bpm_at(&self, row: f64) -> f64 {
+        let Some(before) = self.tempo.iter().rev().find(|p| p.row <= row) else { return self.bpm; };
+        let Some(after) = self.tempo.iter().find(|p| p.row > row) else { return before.value; };
+        before.value + (after.value - before.value) * (row - before.row) / (after.row - before.row)
+    }
+    fn seconds(&self, start: f64, end: f64) -> f64 {
+        let mut at = start;
+        let mut seconds = 0.0;
+        while at < end {
+            let next = self.tempo.iter().find(|p| p.row > at).map_or(end, |p| p.row.min(end));
+            let a = self.bpm_at(at);
+            // A first point after `at` is a step from the base BPM, not a ramp into it.
+            let b = if self.tempo.first().is_some_and(|p| p.row > at) { a } else { self.bpm_at(next) };
+            let area = if (b-a).abs() < 1e-9 { (next-at)/a } else { (next-at) * (b/a).ln() / (b-a) };
+            seconds += 60.0 / f64::from(self.rows_per_beat) * area;
+            at = next;
+        }
+        seconds
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Pattern {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<Timing>,
     pub id: String,
     pub name: String,
     pub rows: usize,
@@ -346,6 +438,7 @@ impl Song {
             if pattern.id.is_empty()
                 || !ids.insert(&pattern.id)
                 || !(1..=256).contains(&pattern.rows)
+                || pattern.timing.as_ref().is_some_and(|t| !t.valid(pattern.rows))
                 || pattern.notes.len() != self.tracks.len()
                 || pattern
                     .notes
@@ -421,8 +514,6 @@ impl Song {
 
     pub fn same_timeline(&self, other: &Self) -> bool {
         self.tracks.len() == other.tracks.len()
-            && self.bpm == other.bpm
-            && self.rows_per_beat == other.rows_per_beat
             && self.sequence == other.sequence
             && self.patterns.iter().all(|p| {
                 other
@@ -433,8 +524,30 @@ impl Song {
     }
 }
 
+/// A change of pitch to a held note: from `delay` rows into row `index`, over `rows` rows, to `midi`.
+struct Bend {
+    index: u64,
+    delay: f64,
+    rows: f64,
+    midi: f64,
+}
+
+/// How long a note is held, in rows from its own row, how it ends, and what happens to its pitch meanwhile.
+struct Hold {
+    rows: f64,
+    cut: bool,
+    bends: Vec<Bend>,
+    /// The glide notes whose sound this note carries on.
+    absorbed: Vec<(u64, usize, usize)>,
+}
+
+/// The frequency of a MIDI note number.
+fn hertz(midi: f64) -> f64 {
+    440.0 * ((midi - 69.0) / 12.0).exp2()
+}
+
 /// Names the notes that a cut has to find again; shared so a new playback never reuses one still sounding.
-static NOTE_IDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+pub static NOTE_IDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// No note is shorter than this many rows, so back-to-back notes with delays still sound.
 const MIN_HOLD: f64 = 0.01;
@@ -461,6 +574,38 @@ pub fn pitch(note: &str) -> Result<String, String> {
     Ok(note.replace('-', "").to_lowercase())
 }
 
+/// A note's place on the keyboard as a MIDI number, with middle C (`C-4`) at 60.
+fn midi(note: &str) -> Option<f64> {
+    let bytes = note.as_bytes();
+    let (letter, mark, octave) = (*bytes.first()?, *bytes.get(1)?, *bytes.get(2)?);
+    let base = match letter {
+        b'C' => 0,
+        b'D' => 2,
+        b'E' => 4,
+        b'F' => 5,
+        b'G' => 7,
+        b'A' => 9,
+        b'B' => 11,
+        _ => return None,
+    };
+    let octave = i32::from(octave.checked_sub(b'0')?);
+    Some(f64::from((octave + 1) * 12 + base + i32::from(mark == b'#')))
+}
+
+/// The arguments that make an instrument play `note`: its pitch, or for a sliced sample (one with
+/// `slices` pieces) the piece at that place on the keyboard counting up from `C-4`, at its recorded
+/// pitch. None when the note has no piece.
+pub fn note_args(note: &str, slices: Option<usize>) -> Result<Option<Value>, String> {
+    let name = pitch(note)?;
+    let Some(count) = slices else {
+        return Ok(Some(json!({"freq": name})));
+    };
+    let piece = midi(note).ok_or_else(|| format!("Invalid tracker note: {note}"))? - 60.0;
+    Ok((0.0..count as f64)
+        .contains(&piece)
+        .then(|| json!({"freq": "c4", "sample": piece as u32})))
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
@@ -469,10 +614,15 @@ pub enum Mode {
 }
 
 pub struct Playback {
+    seconds: RefCell<Vec<f64>>,
     pub origin: u64,
     pub next_row: u64,
     pub parameters: crate::commands::EffectParameters,
     pub instrument_parameters: crate::commands::EffectParameters,
+    /// How many pieces each sliced sample instrument has, by instrument id.
+    pub instrument_slices: BTreeMap<String, usize>,
+    /// Notes (row, track, column) that a glide has taken over, so they start no note of their own.
+    absorbed: BTreeSet<(u64, usize, usize)>,
     /// Each track's instrument parameter lanes, by instrument and parameter, as of the last row played.
     lane_state: Vec<BTreeMap<(String, String), f64>>,
     pub song: Song,
@@ -502,10 +652,13 @@ impl Playback {
             return Err("Select an existing pattern and sequence position".into());
         }
         Ok(Self {
+            seconds: RefCell::new(vec![0.0]),
             origin,
             next_row: 0,
             parameters: BTreeMap::new(),
             instrument_parameters: BTreeMap::new(),
+            instrument_slices: BTreeMap::new(),
+            absorbed: Default::default(),
             lane_state: Vec::new(),
             song,
             mode,
@@ -514,8 +667,44 @@ impl Playback {
         })
     }
 
+    fn row_seconds(&self, index: u64, fraction: f64) -> f64 {
+        if let Some(p) = self.location(index)
+            && let Some(timing) = &p.pattern.timing {
+                return timing.seconds(p.row as f64, p.row as f64 + fraction);
+            }
+        self.song.row_samples(1.0) * fraction
+    }
+
+    fn seconds_at(&self, row: f64) -> f64 {
+        let index = row.floor() as usize;
+        while self.seconds.borrow().len() <= index {
+            let i = self.seconds.borrow().len() - 1;
+            let next = self.seconds.borrow()[i] + self.row_seconds(i as u64, 1.0);
+            self.seconds.borrow_mut().push(next);
+        }
+        self.seconds.borrow()[index] + self.row_seconds(index as u64, row.fract())
+    }
+
     pub fn row_at(&self, index: u64, sample_rate: f64) -> u64 {
-        self.origin + (index as f64 * self.song.row_samples(sample_rate)).round() as u64
+        self.origin + (self.seconds_at(index as f64) * sample_rate).round() as u64
+    }
+
+    fn row_index(&self, sample: u64, sample_rate: f64) -> u64 {
+        let mut hi = self.next_row.max(1);
+        while self.row_at(hi, sample_rate) <= sample { hi *= 2; }
+        let mut lo = 0;
+        while lo + 1 < hi {
+            let mid = lo + (hi-lo)/2;
+            if self.row_at(mid, sample_rate) <= sample { lo = mid; } else { hi = mid; }
+        }
+        lo
+    }
+
+    /// Keep timestamps already submitted to the engine; new timing starts at the next unscheduled row.
+    pub fn update_song(&mut self, song: Song) {
+        self.seconds_at(self.next_row as f64);
+        self.seconds.borrow_mut().truncate(self.next_row as usize + 1);
+        self.song = song;
     }
 
     pub fn location(&self, index: u64) -> Option<Position<'_>> {
@@ -572,7 +761,7 @@ impl Playback {
     /// pattern now sounding, and loops from there.
     pub fn set_loop(&mut self, range: Option<LoopRange>, sample: u64, sample_rate: f64) {
         if self.mode == Mode::Song && sample >= self.origin {
-            let index = ((sample - self.origin) as f64 / self.song.row_samples(sample_rate)).floor() as u64;
+            let index = self.row_index(sample, sample_rate);
             let now = self
                 .location(index)
                 .and_then(|p| Some((p.sequence_position?, p.row as u64)));
@@ -581,8 +770,12 @@ impl Playback {
                 self.origin = self.row_at(start, sample_rate);
                 self.start_position = position;
                 self.next_row = self.next_row.saturating_sub(start);
+                let base = self.seconds.borrow()[start as usize];
+                self.seconds.borrow_mut().drain(..start as usize);
+                for value in self.seconds.borrow_mut().iter_mut() { *value -= base; }
             }
         }
+        self.seconds.borrow_mut().truncate(self.next_row as usize + 1);
         self.song.loop_range = range;
     }
 
@@ -590,8 +783,7 @@ impl Playback {
         if sample < self.origin {
             return None;
         }
-        let index =
-            ((sample - self.origin) as f64 / self.song.row_samples(sample_rate)).floor() as u64;
+        let index = self.row_index(sample, sample_rate);
         self.location(index)
     }
 
@@ -600,7 +792,10 @@ impl Playback {
         if sample < self.origin {
             return None;
         }
-        Some(((sample - self.origin) as f64 / self.song.row_samples(sample_rate)).fract())
+        let index = self.row_index(sample, sample_rate);
+        let start = self.row_at(index, sample_rate);
+        let end = self.row_at(index + 1, sample_rate);
+        Some((sample - start) as f64 / (end - start).max(1) as f64)
     }
 
     pub fn finished(&self, sample: u64, sample_rate: f64) -> bool {
@@ -629,43 +824,72 @@ impl Playback {
         }
     }
 
-    /// How many rows a note started on row `index` (itself `delay` rows late) is held: until
-    /// the column next has a note or an OFF, or until the song or pattern runs out.
-    fn hold_rows(&self, index: u64, track: usize, column: usize, delay: f64) -> (f64, bool) {
+    /// How a note started on row `index` (itself `delay` rows late) is held: until the column next has
+    /// a note or an OFF, or until the song or pattern runs out. `held` is the note's instrument and
+    /// pitch when it can glide: a glide note after it then carries the sound on rather than ending
+    /// it, and a slide command in a row below it bends the pitch.
+    fn hold(&self, index: u64, track: usize, column: usize, delay: f64, held: Option<(&str, f64)>) -> Hold {
         const LOOKAHEAD: u64 = 16384;
-        for ahead in 1..=LOOKAHEAD {
+        let mut hold = Hold { rows: 0.0, cut: false, bends: Vec::new(), absorbed: Vec::new() };
+        let mut current = held.map(|(_, note)| note);
+        let ended = |mut hold: Hold, rows: f64, cut: bool| {
+            hold.rows = (rows - delay).max(MIN_HOLD);
+            hold.cut = cut;
+            hold
+        };
+        for ahead in 0..=LOOKAHEAD {
             let Some(position) = self.location(index + ahead) else {
                 // The song ends here.
-                return ((ahead as f64 - delay).max(MIN_HOLD), false);
+                return ended(hold, ahead as f64, false);
             };
             let Some(pattern) = self.track_pattern(&position, track) else {
                 // The track is muted from here, so the note ends where the mute begins.
-                return ((ahead as f64 - delay).max(MIN_HOLD), false);
+                return ended(hold, ahead as f64, false);
             };
             let Some(next) = pattern.notes[track].get(column) else {
                 continue;
             };
-            if next.note(position.row).is_some() {
-                return ((ahead as f64 + next.delayed(position.row) - delay).max(MIN_HOLD), next.note(position.row) == Some("CUT"));
+            let row = position.row;
+            let command = next.command(row);
+            if ahead > 0
+                && let Some(note) = next.note(row)
+            {
+                let glide = match (command, held, midi(note)) {
+                    (Some(NoteCommand::Glide(rows)), Some((instrument, _)), Some(to)) if next.instrument(row) == Some(instrument) => Some((rows, to)),
+                    _ => None,
+                };
+                let Some((rows, to)) = glide else {
+                    return ended(hold, ahead as f64 + next.delayed(row), note == "CUT");
+                };
+                hold.bends.push(Bend { index: index + ahead, delay: next.delayed(row), rows, midi: to });
+                hold.absorbed.push((index + ahead, track, column));
+                current = Some(to);
+                continue;
+            }
+            if let (Some(NoteCommand::Slide(semitones)), Some(from)) = (command, current) {
+                let to = from + semitones;
+                let begins = if ahead == 0 { delay } else { 0.0 };
+                hold.bends.push(Bend { index: index + ahead, delay: begins, rows: 1.0, midi: to });
+                current = Some(to);
             }
         }
-        ((LOOKAHEAD as f64).max(MIN_HOLD), false)
+        ended(hold, LOOKAHEAD as f64, false)
     }
 
     /// The engine edits for one parameter lane at one row of a pattern: a value or the steps of an
     /// envelope across the row, for the strip named `slot` (a track's number, `r<n>` or `m`).
-    /// `when` is the pattern's rows, the row and the sample it starts at; `out` takes the edits made at
+    /// `when` is the pattern's length and current row; `out` takes the edits made at
     /// the start of the row and the timed events for the rest.
     fn lane_events(
         &self,
         slot: &str,
         strip: &Track,
         lane: &FxLane,
-        when: (usize, usize, u64),
+        when: (usize, usize),
         sample_rate: f64,
         out: (&mut Vec<Value>, &mut Vec<Value>),
     ) -> Result<(), String> {
-        let (rows, row, at) = when;
+        let (rows, row) = when;
         let (edits, events) = out;
         if lane
             .target
@@ -700,12 +924,8 @@ impl Playback {
                 let Some(value) = envelope.value(pair[0], db) else {
                     continue;
                 };
-                let point_at = at
-                    + ((pair[0] - start) * self.song.row_samples(sample_rate)).round()
-                        as u64;
-                let end_at = at
-                    + ((pair[1] - start) * self.song.row_samples(sample_rate)).round()
-                        as u64;
+                let point_at = self.origin + (self.seconds_at(self.next_row as f64 + pair[0] - start) * sample_rate).round() as u64;
+                let end_at = self.origin + (self.seconds_at(self.next_row as f64 + pair[1] - start) * sample_rate).round() as u64;
                 let mut point_edits: Vec<_> =
                     target.unmap(slot, strip).into_iter().collect();
                 point_edits.push(crate::commands::edit(
@@ -770,6 +990,7 @@ impl Playback {
         let mut skipped = 0;
         // Held apart from `self` so rows can be read while it is updated.
         let mut state = std::mem::take(&mut self.lane_state);
+        let mut absorbed = std::mem::take(&mut self.absorbed);
         state.resize_with(self.song.tracks.len(), BTreeMap::new);
         while self.row_at(self.next_row, sample_rate) < horizon {
             let at = self.row_at(self.next_row, sample_rate);
@@ -781,6 +1002,7 @@ impl Playback {
                 self.next_row += 1;
                 continue;
             }
+            events.extend(crate::modulation::timing(&self.song, &self.parameters, self.row_seconds(self.next_row, 1.0), at));
             for (index, track) in self.song.tracks.iter().enumerate() {
                 let Some(pattern) = self.track_pattern(&position, index) else {
                     continue;
@@ -817,7 +1039,7 @@ impl Playback {
                         &index.to_string(),
                         track,
                         lane,
-                        (pattern.rows, position.row, at),
+                        (pattern.rows, position.row),
                         sample_rate,
                         (&mut edits, &mut events),
                     )?;
@@ -835,6 +1057,10 @@ impl Playback {
                         // It ends the note before it; that note was timed to stop here.
                         continue;
                     }
+                    if absorbed.remove(&(self.next_row, index, column_index)) {
+                        // A glide from the note before it carries the sound on.
+                        continue;
+                    }
                     // A note with no instrument set at or above it is silent, not an error.
                     let Some(id) = column.instrument(position.row) else {
                         continue;
@@ -842,10 +1068,14 @@ impl Playback {
                     let target = targets
                         .get(id)
                         .ok_or_else(|| format!("Apply the instrument played on {} first", track.name))?;
-                    let row_seconds = 60.0 / self.song.bpm / f64::from(self.song.rows_per_beat);
                     let delay = column.delayed(position.row);
-                    let (hold, cut) = self.hold_rows(self.next_row, index, column_index, delay);
-                    let mut args = json!({"freq":pitch(note)?});
+                    let slices = self.instrument_slices.get(id).copied();
+                    let Some(mut args) = note_args(note, slices)? else {
+                        continue;
+                    };
+                    let held = if slices.is_some() { None } else { midi(note).map(|m| (id, m)) };
+                    let hold = self.hold(self.next_row, index, column_index, delay, held);
+                    absorbed.extend(hold.absorbed.iter().copied());
                     if let Some(volume) = column.volume(position.row) {
                         args["gain"] = json!(format!("{:.3}db", volume_db(volume)));
                     }
@@ -864,22 +1094,46 @@ impl Playback {
                                 parameter.argument(value.clamp(parameter.min, parameter.max));
                         }
                     }
-                    let started = at + (delay * self.song.row_samples(sample_rate)).round() as u64;
-                    let mut note_event = json!({"op":"note", "at":started, "target":target, "to":format!("in_{index}"), "tag":"tracker-pattern",
-                        "dur":format!("{:.6}sec", hold * row_seconds), "args":args});
-                    // A cut ends the sound where the note ends, with no release: the note is given an id,
-                    // and its gain falls away as the release would begin.
-                    let cut_id = cut.then(|| NOTE_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
-                    if let Some(id) = cut_id {
-                        note_event["id"] = json!(id);
+                    // Offset and reverse need the instrument to have the parameter they set; the rest do not.
+                    let has = |name: &str| self.instrument_parameters.get(id).is_some_and(|all| all.iter().any(|p| p.name == name));
+                    let command = column.command(position.row);
+                    match command {
+                        Some(NoteCommand::Offset(share)) if has("begin") => args["begin"] = json!(share),
+                        Some(NoteCommand::Reverse) if has("rate") => args["rate"] = json!(-1.0),
+                        _ => {}
                     }
-                    events.push(note_event);
-                    if let Some(id) = cut_id {
-                        // the fall takes 2 ms and ends where the note does, since a note that has been released ignores it
-                        let end = started + (hold * self.song.row_samples(sample_rate)).round() as u64;
-                        let fall = (sample_rate * 0.002) as u64;
-                        events.push(json!({"op":"set", "id":id, "at":end.saturating_sub(fall).max(started), "tag":"tracker-pattern",
-                            "args":{"gain":"-120db"}, "glide":"2ms"}));
+                    let hits = match command {
+                        Some(NoteCommand::Retrigger(n)) => n,
+                        _ => 1,
+                    };
+                    for hit in 0..hits {
+                        let last = hit + 1 == hits;
+                        let offset = f64::from(hit) / f64::from(hits);
+                        let rows = if last { hold.rows - offset } else { 1.0 / f64::from(hits) }.max(MIN_HOLD);
+                        let begins = self.origin + (self.seconds_at(self.next_row as f64 + delay + offset) * sample_rate).round() as u64;
+                        let mut note_event = json!({"op":"note", "at":begins, "target":target, "to":format!("in_{index}"), "tag":"tracker-pattern",
+                            "dur":format!("{:.6}sec", self.seconds_at(self.next_row as f64 + delay + offset + rows) - self.seconds_at(self.next_row as f64 + delay + offset)), "args":args});
+                        // A cut ends the sound where the note ends, with no release, and a bend changes its
+                        // pitch while it sounds: either way the note is given an id to find it by.
+                        let named = last && (hold.cut || !hold.bends.is_empty());
+                        let note_id = named.then(|| NOTE_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+                        if let Some(id) = note_id {
+                            note_event["id"] = json!(id);
+                        }
+                        events.push(note_event);
+                        let Some(id) = note_id else { continue };
+                        for bend in &hold.bends {
+                            let from = self.origin + (self.seconds_at(bend.index as f64 + bend.delay) * sample_rate).round() as u64;
+                            events.push(json!({"op":"set", "id":id, "at":from.max(begins + 1), "tag":"tracker-pattern",
+                                "args":{"freq":format!("{:.3}hz", hertz(bend.midi))}, "glide":format!("{:.6}sec", (self.seconds_at(bend.index as f64 + bend.delay + bend.rows) - self.seconds_at(bend.index as f64 + bend.delay)).max(0.001))}));
+                        }
+                        if hold.cut {
+                            // the fall takes 2 ms and ends where the note does, since a note that has been released ignores it
+                            let end = self.origin + (self.seconds_at(self.next_row as f64 + delay + offset + rows) * sample_rate).round() as u64;
+                            let fall = (sample_rate * 0.002) as u64;
+                            events.push(json!({"op":"set", "id":id, "at":end.saturating_sub(fall).max(begins), "tag":"tracker-pattern",
+                                "args":{"gain":"-120db"}, "glide":"2ms"}));
+                        }
                     }
                 }
             }
@@ -896,7 +1150,7 @@ impl Playback {
             let mut edits = Vec::new();
             for (slot, strip, lanes) in strips {
                 for lane in lanes {
-                    self.lane_events(&slot, strip, lane, (pattern.rows, position.row, at), sample_rate, (&mut edits, &mut events))?;
+                    self.lane_events(&slot, strip, lane, (pattern.rows, position.row), sample_rate, (&mut edits, &mut events))?;
                 }
             }
             if !edits.is_empty() {
@@ -905,6 +1159,8 @@ impl Playback {
             self.next_row += 1;
         }
         self.lane_state = state;
+        absorbed.retain(|(row, ..)| *row >= self.next_row);
+        self.absorbed = absorbed;
         Ok((events, skipped))
     }
 }
@@ -925,6 +1181,7 @@ mod tests {
             patterns: [("a", 2, "C-4"), ("b", 3, "D#4")]
                 .into_iter()
                 .map(|(id, rows, note)| Pattern {
+                    timing: None,
                     id: id.into(),
                     name: id.into(),
                     rows,
@@ -965,6 +1222,59 @@ mod tests {
     }
     fn freqs(notes: &[(String, f64)]) -> Vec<&str> {
         notes.iter().map(|(f, _)| f.as_str()).collect()
+    }
+
+    fn timing(bpm: f64) -> Timing {
+        Timing { bpm, rows_per_beat: 4, beats_per_bar: 7, beat_unit: 8, tempo: vec![] }
+    }
+
+    #[test]
+    fn tempo_ramps_integrate_and_pattern_changes_time_notes_across_boundaries() {
+        let mut song = song();
+        song.patterns[0].timing = Some(timing(120.0));
+        song.patterns[1].timing = Some(timing(60.0));
+        song.patterns[0].notes[0][0].notes = vec![Some("C-4".into()), None];
+        song.patterns[1].notes[0][0].notes = vec![None, Some("OFF".into()), None];
+        let mut play = Playback::new(0, song, Mode::Song, "a".into(), 0).unwrap();
+        assert_eq!(play.row_at(2, 48000.0), 12000);
+        assert_eq!(play.row_at(3, 48000.0), 24000);
+        assert_eq!(play.position(18000, 48000.0).unwrap().row, 0);
+        assert!((play.phase(18000, 48000.0).unwrap() - 0.5).abs() < 1e-9);
+        let targets = BTreeMap::from([("tone".into(), "voice".into())]);
+        let (events, _) = play.events_until(0, 1, 48000.0, &targets).unwrap();
+        assert_eq!(events[0]["dur"], "0.500000sec");
+        let mut t = timing(120.0);
+        t.tempo = vec![EnvelopePoint { row: 0.0, value: 120.0 }, EnvelopePoint { row: 4.0, value: 60.0 }];
+        assert!((t.seconds(0.0, 4.0) - 2.0_f64.ln()).abs() < 1e-9);
+        assert!((t.seconds(0.0, 2.5) + t.seconds(2.5, 4.0) - t.seconds(0.0, 4.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn live_tempo_edits_keep_queued_rows_and_retime_future_rows() {
+        let mut song = song(); song.bpm = 120.0;
+        let mut play = Playback::new(0, song.clone(), Mode::Pattern, "a".into(), 0).unwrap();
+        play.next_row = 2;
+        play.row_at(100, 48000.0); // note lookahead can have cached the future
+        song.bpm = 60.0;
+        assert!(play.song.same_timeline(&song));
+        play.update_song(song);
+        assert_eq!(play.row_at(2, 48000.0), 12000);
+        assert_eq!(play.row_at(3, 48000.0), 24000);
+        assert_eq!(play.position(18000, 48000.0).unwrap().row, 0);
+        play.set_loop(None, 18000, 48000.0);
+        assert_eq!(play.row_at(3, 48000.0), 24000);
+    }
+
+    #[test]
+    fn invalid_tempo_points_and_meters_are_rejected() {
+        let mut song = song();
+        let mut t = timing(120.0); t.beat_unit = 3;
+        song.patterns[0].timing = Some(t);
+        assert!(song.validate().is_err());
+        let mut t = timing(120.0);
+        t.tempo = vec![EnvelopePoint { row: 3.0, value: 90.0 }];
+        song.patterns[0].timing = Some(t);
+        assert!(song.validate().is_err());
     }
 
     #[test]
@@ -1090,10 +1400,14 @@ mod tests {
     }
     /// A one-track pattern of `rows` rows with the given cells, played from row 0 at 120 bpm, 4 rows a beat.
     fn played(rows: usize, columns: Vec<NoteColumn>, mode: Mode) -> Vec<Value> {
+        played_with(rows, columns, mode, |_| {})
+    }
+    fn played_with(rows: usize, columns: Vec<NoteColumn>, mode: Mode, setup: impl FnOnce(&mut Playback)) -> Vec<Value> {
         let mut song = song();
         song.bpm = 120.0;
         song.tracks.truncate(1);
         song.patterns = vec![Pattern {
+            timing: None,
             id: "a".into(),
             name: "a".into(),
             rows,
@@ -1104,6 +1418,7 @@ mod tests {
         }];
         song.sequence = vec!["a".into()];
         let mut play = Playback::new(0, song, mode, "a".into(), 0).unwrap();
+        setup(&mut play);
         let targets = BTreeMap::from([
             ("tone".into(), "voice".into()),
             ("alt".into(), "other".into()),
@@ -1203,6 +1518,109 @@ mod tests {
         assert_eq!(set["args"]["gain"], "-120db"); assert_eq!(events.iter().filter(|e| e["op"] == "set").count(), 1);
     }
 
+    fn parameter(name: &str) -> crate::commands::Parameter {
+        crate::commands::Parameter { name: name.into(), min: 0.0, max: 1.0, default: 0.0, unit: None }
+    }
+    fn with_commands(rows: usize, cells: &[(usize, &str)], commands: &[(usize, &str)]) -> NoteColumn {
+        let mut column = column(rows, cells);
+        column.cmd = vec![None; rows];
+        for (row, text) in commands {
+            column.cmd[*row] = Some((*text).into());
+        }
+        column
+    }
+
+    #[test]
+    fn commands_are_a_letter_and_a_number() {
+        use NoteCommand::*;
+        assert_eq!(NoteCommand::parse("O50"), Some(Offset(0.5)));
+        assert_eq!(NoteCommand::parse("v"), Some(Reverse));
+        assert_eq!(NoteCommand::parse("R4"), Some(Retrigger(4)));
+        assert_eq!(NoteCommand::parse("G8"), Some(Glide(1.0)));
+        assert_eq!(NoteCommand::parse("U12"), Some(Slide(12.0)));
+        assert_eq!(NoteCommand::parse("D3"), Some(Slide(-3.0)));
+        for bad in ["", "O", "R1", "R33", "V1", "U0", "G100", "X5", "5", "O5x"] {
+            assert_eq!(NoteCommand::parse(bad), None, "{bad}");
+        }
+        let mut song = song();
+        song.patterns[0].notes[0][0].cmd = vec![Some("Q1".into()), None];
+        assert!(song.validate().is_err());
+        song.patterns[0].notes[0][0].cmd = vec![Some("G8".into()), None];
+        song.validate().unwrap();
+    }
+
+    #[test]
+    fn a_retrigger_plays_the_note_again_within_its_row() {
+        // an eighth of a second a row: four hits are 31.25 ms apart, 1500 samples
+        let events = played(4, vec![with_commands(4, &[(1, "C-4")], &[(1, "R4")])], Mode::Song);
+        let at: Vec<_> = events.iter().filter(|e| e["op"] == "note").map(|e| e["at"].as_u64().unwrap()).collect();
+        assert_eq!(at, [6000, 7500, 9000, 10500]);
+        let held: Vec<_> = events.iter().map(duration).collect();
+        assert!((held[0] - 0.03125).abs() < 1e-5, "{held:?}");
+        assert!((held[3] - (3.0 * 0.125 - 0.09375)).abs() < 1e-5, "the last hit is held as the note would be: {held:?}");
+    }
+
+    #[test]
+    fn offset_and_reverse_reach_only_instruments_that_have_the_parameter() {
+        let cells = [(0, "C-4"), (2, "C-4")];
+        let commands = [(0, "O25"), (2, "V")];
+        let notes = |parameters: &[&str]| {
+            played_with(4, vec![with_commands(4, &cells, &commands)], Mode::Song, |play| {
+                play.instrument_parameters.insert("tone".into(), parameters.iter().map(|p| parameter(p)).collect());
+            })
+        };
+        let events = notes(&["begin", "rate"]);
+        assert_eq!(events[0]["args"]["begin"], 0.25);
+        assert_eq!(events[1]["args"]["rate"], -1.0);
+        let events = notes(&[]);
+        assert!(events[0]["args"].get("begin").is_none() && events[1]["args"].get("rate").is_none());
+    }
+
+    #[test]
+    fn a_sliced_sample_plays_the_piece_for_each_key_from_c4() {
+        let events = played_with(4, vec![column(4, &[(0, "C-4"), (1, "D#4"), (2, "C-3"), (3, "E-4")])], Mode::Song, |play| {
+            play.instrument_slices.insert("tone".into(), 4);
+        });
+        let pieces: Vec<_> = events.iter().map(|e| e["args"]["sample"].as_u64().unwrap()).collect();
+        assert_eq!(pieces, [0, 3], "C-3 is below the first piece and E-4 is past the last");
+        assert_eq!(events[0]["args"]["freq"], "c4");
+        assert_eq!(note_args("C-4", None).unwrap().unwrap()["freq"], "c4");
+    }
+
+    #[test]
+    fn a_glide_carries_the_held_note_to_the_new_pitch_instead_of_starting_one() {
+        // C-4 at row 0, glide to E-4 over one row at row 2, an OFF at row 5
+        let column = with_commands(8, &[(0, "C-4"), (2, "E-4"), (5, "OFF")], &[(2, "G8")]);
+        let events = played(8, vec![column], Mode::Song);
+        let notes: Vec<_> = events.iter().filter(|e| e["op"] == "note").collect();
+        assert_eq!(notes.len(), 1, "the glide starts no note of its own");
+        assert!((duration(notes[0]) - 5.0 * 0.125).abs() < 1e-5, "the first note is held to the OFF");
+        let set = events.iter().find(|e| e["op"] == "set").expect("the glide");
+        assert_eq!(set["id"], notes[0]["id"]);
+        assert_eq!(set["at"], 2 * 6000);
+        assert_eq!(set["args"]["freq"], "329.628hz");
+        assert_eq!(set["glide"], "0.125000sec");
+        // with nothing held, a glide note is just a note
+        let column = with_commands(4, &[(1, "E-4")], &[(1, "G8")]);
+        assert_eq!(played(4, vec![column], Mode::Song).iter().filter(|e| e["op"] == "note").count(), 1);
+        // and a glide to another instrument's note cannot carry the sound on
+        let mut column = with_commands(8, &[(0, "C-4"), (2, "E-4")], &[(2, "G8")]);
+        column.inst[2] = Some("alt".into());
+        assert_eq!(played(8, vec![column], Mode::Song).iter().filter(|e| e["op"] == "note").count(), 2);
+    }
+
+    #[test]
+    fn a_slide_bends_the_held_note_during_its_row() {
+        // U12 a row below the note takes it up an octave; D12 on the row after brings it back
+        let column = with_commands(8, &[(0, "A-4")], &[(2, "U12"), (3, "D12")]);
+        let events = played(8, vec![column], Mode::Song);
+        let sets: Vec<_> = events.iter().filter(|e| e["op"] == "set").collect();
+        assert_eq!(sets.len(), 2);
+        assert_eq!((sets[0]["at"].as_u64(), sets[0]["args"]["freq"].as_str()), (Some(2 * 6000), Some("880.000hz")));
+        assert_eq!((sets[1]["at"].as_u64(), sets[1]["args"]["freq"].as_str()), (Some(3 * 6000), Some("440.000hz")));
+        assert_eq!(sets[0]["glide"], "0.125000sec");
+    }
+
     #[test]
     fn an_instrument_set_on_a_row_plays_the_notes_below_it_until_another_is_set() {
         let mut notes = column(4, &[(0, "C-4"), (1, "D-4"), (2, "E-4"), (3, "F-4")]);
@@ -1231,6 +1649,7 @@ mod tests {
         let mut notes = column(4, &[(0, "C-4"), (2, "D-4"), (3, "E-4")]);
         notes.inst = vec![Some("tone".into()), None, Some("alt".into()), Some("tone".into())];
         song.patterns = vec![Pattern {
+            timing: None,
             id: "a".into(),
             name: "a".into(),
             rows: 4,
@@ -1262,6 +1681,7 @@ mod tests {
         });
         lane.values[2] = Some("500".into());
         song.patterns = vec![Pattern {
+            timing: None,
             id: "a".into(),
             name: "a".into(),
             rows: 4,

@@ -19,7 +19,7 @@ This page describes the live client's **JSON-RPC 2.0** protocol over **WebSocket
 
 Clients share a **chair**: the performance (clips, scenes, mute and solo, what is playing, pending changes) belongs to the chair, not to a connection, and disconnecting a client does not stop playback. A client sits in `main` unless its `hello` names another chair, so by default all clients share one session. Other chairs are seated on demand (up to eight), each over an engine connection of its own, so its definitions, buffers and note ids are private too. See [Chairs](#chairs). A program that wants to send timed events rather than code should talk to the [engine](/reference/engine-api/) instead, or as well.
 
-Limits: up to **16** clients; maximum message size **4 MiB** (large `eval` sources).
+Limits: up to **16** clients; maximum message size **64 MiB** (large `eval` sources, and the events of a long `render.start`).
 
 ## Handshake: `hello`
 

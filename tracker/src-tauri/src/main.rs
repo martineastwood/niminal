@@ -4,6 +4,7 @@ mod audio;
 mod commands;
 mod engine;
 mod files;
+mod midi;
 mod mixer;
 mod modulation;
 mod pattern;
@@ -112,6 +113,17 @@ async fn open_project(app: tauri::AppHandle) -> Result<Option<String>, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Asks where to write an exported WAV; None if the dialog is dismissed.
+#[tauri::command]
+async fn export_path() -> Option<String> {
+    let file = rfd::AsyncFileDialog::new()
+        .add_filter("WAV audio", &["wav"])
+        .set_file_name("untitled.wav")
+        .save_file()
+        .await?;
+    Some(file.path().with_extension("wav").to_string_lossy().into_owned())
+}
+
 /// Saves a project as a folder: `project.json` plus the samples it uses.
 #[tauri::command]
 async fn save_project(app: tauri::AppHandle, source: String, id: String) -> Result<bool, String> {
@@ -152,6 +164,9 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .separator()
         .item(&item("import-samples", "Import Samples…", None)?)
         .separator()
+        .item(&item("export-wav", "Export WAV…", None)?)
+        .item(&item("export-stems", "Export WAV and Track Stems…", None)?)
+        .separator()
         .close_window()
         .build()?;
     let edit = SubmenuBuilder::new(app, "Edit")
@@ -161,6 +176,8 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .cut()
         .copy()
         .paste()
+        .separator()
+        .item(&item("select-track", "Select Track (⇧⌘A)", None)?)
         .build()?;
     let song = SubmenuBuilder::new(app, "Song")
         .item(&item("play-pattern", "Play Pattern", None)?)
@@ -168,6 +185,7 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&item("stop", "Stop", None)?)
         .separator()
         .item(&item("add-track", "Add Track", None)?)
+        .item(&item("duplicate-track", "Duplicate Track", None)?)
         .item(&item("new-pattern", "New Pattern", None)?)
         .separator()
         .item(&item("reconnect", "Restart Engine Connection", None)?)
@@ -213,11 +231,15 @@ fn main() {
         })
         .manage(LanguageServer::default())
         .manage(audio::Audio::new())
+        .manage(midi::Midi::default())
         .invoke_handler(tauri::generate_handler![
+            midi::midi_ports,
+            midi::midi_connect,
             lsp_message,
             confirm,
             project_dir,
             import_samples,
+            export_path,
             open_project,
             save_project,
             audio::audio_command,

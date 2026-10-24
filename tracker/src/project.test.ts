@@ -1,5 +1,6 @@
+import { patternSeconds, patternRow } from './project';
 import { expect, it } from 'vitest';
-import { emptyProject, keyboardNote, transposeNote, setTrackSource, trackSource, newProject, emptyFxLane, blankColumn, makePattern, removeTrack, restoreTrack, readProject, resizePattern } from './project';
+import { emptyProject, keyboardNote, transposeNote, setTrackSource, trackSource, newProject, emptyFxLane, blankColumn, makePattern, removeTrack, restoreTrack, readProject, resizePattern, commandValue, duplicateTrack } from './project';
 
 it('round trips source and notes and rejects unsupported project data', () => {
   const project = newProject();
@@ -207,4 +208,62 @@ it('starts a new project with a pattern that has nothing in it, and an instrumen
   expect(project.definitions.some(d => d.kind === 'instr')).toBe(true); expect(project.tracks.map(t => t.name)).toEqual(['Track 01', 'Track 02', 'Track 03', 'Track 04']);
   expect(readProject(JSON.stringify(project))).toEqual(project);
   expect(newProject().patterns[0].notes[0][0].notes[0]).toBe('C-4'); // the phrase the tests use is still there
+});
+
+it('keeps note commands in the project and accepts older files that have none', () => {
+  expect(commandValue('g8')).toBe('G8'); expect(commandValue(' O50 ')).toBe('O50'); expect(commandValue('V')).toBe('V'); expect(commandValue('R4')).toBe('R4'); expect(commandValue('D12')).toBe('D12');
+  for (const bad of ['', 'G', 'O', 'V1', 'R1', 'R33', 'U0', 'X3', '8', 'G100']) expect(commandValue(bad), bad).toBeNull();
+  const project = newProject();
+  project.patterns[0].notes[0][0].cmd[3] = 'G8';
+  expect(readProject(JSON.stringify(project)).patterns[0].notes[0][0].cmd[3]).toBe('G8');
+  project.patterns[0].notes[0][0].cmd[3] = 'G';
+  expect(() => readProject(JSON.stringify(project))).toThrow();
+  const old = JSON.parse(JSON.stringify(newProject()));
+  for (const column of old.patterns[0].notes.flat()) delete column.cmd;
+  expect(readProject(JSON.stringify(old)).patterns[0].notes[0][0].cmd).toEqual([]);
+  const longer = newProject();
+  resizePattern(longer.patterns[0], 64);
+  expect(longer.patterns[0].notes[0][0].cmd).toHaveLength(64);
+});
+
+it('duplicates a track with its effects, notes, lanes and matrix cells, right after it', () => {
+  const project = newProject();
+  project.tracks[1].fx.push({ id: 'd1', definition: 'x', bypass: false, values: { amount: 2 }, modulations: {} });
+  project.tracks[1].solo = true;
+  project.patterns[0].notes[1][0].notes[3] = 'E-3';
+  project.patterns[0].fx[1][0].values[4] = '-6';
+  setTrackSource(project, 0, 1, { kind: 'mute' });
+  setTrackSource(project, 0, 2, { kind: 'pattern', id: project.patterns[0].id });
+  expect(duplicateTrack(project, 1)).toBe(2);
+  expect(project.tracks.map(t => t.name)).toEqual(['Lead', 'Bass', 'Bass copy', 'Drums', 'Texture']);
+  const copy = project.tracks[2];
+  expect(copy.fx).toEqual(project.tracks[1].fx); expect(copy.fx).not.toBe(project.tracks[1].fx); expect(copy.solo).toBe(false);
+  const [pattern] = project.patterns;
+  expect(pattern.notes[2][0].notes[3]).toBe('E-3'); expect(pattern.notes[2][0]).not.toBe(pattern.notes[1][0]);
+  expect(pattern.fx[2][0].values[4]).toBe('-6'); expect(pattern.notes).toHaveLength(5); expect(pattern.fx).toHaveLength(5);
+  // the later track keeps its cell, and the copy plays the same as the original
+  expect(trackSource(project, 0, 1)).toEqual({ kind: 'mute' }); expect(trackSource(project, 0, 2)).toEqual({ kind: 'mute' });
+  expect(trackSource(project, 0, 3)).toEqual({ kind: 'pattern', id: pattern.id });
+  while (project.tracks.length < 16) duplicateTrack(project, 0);
+  expect(duplicateTrack(project, 0)).toBeNull();
+});
+
+it('roundtrips timing, copies ramps independently, and rejects invalid timing', () => {
+  const project = newProject();
+  project.patterns[0].timing = { bpm: 120, rows_per_beat: 4, beats_per_bar: 7, beat_unit: 8, tempo: [{ row: 0, value: 120 }, { row: 32, value: 60 }] };
+  expect(readProject(JSON.stringify(project))).toEqual(project);
+  const copy = makePattern(project, project.patterns[0]);
+  copy.timing!.tempo[0].value = 90;
+  expect(project.patterns[0].timing.tempo[0].value).toBe(120);
+  for (const timing of [ { ...copy.timing!, bpm: 0 }, { ...copy.timing!, beat_unit: 3 }, { ...copy.timing!, tempo: [{ row: 33, value: 100 }] }, { ...copy.timing!, tempo: [{ row: 2, value: 100 }, { row: 1, value: 100 }] } ]) {
+    copy.timing = timing; expect(() => readProject(JSON.stringify(project))).toThrow();
+  }
+});
+
+it('integrates BPM ramps and locates fractional rows for the playhead', () => {
+  const t = { bpm: 120, rows_per_beat: 4, beats_per_bar: 7, beat_unit: 8, tempo: [{ row: 0, value: 120 }, { row: 4, value: 60 }] };
+  expect(patternSeconds(t, 4)).toBeCloseTo(Math.log(2), 9);
+  expect(patternRow(t, patternSeconds(t, 2.5), 32)).toBeCloseTo(2.5, 5);
+  t.tempo = [{ row: 2, value: 60 }];
+  expect(patternSeconds(t, 4)).toBeCloseTo(0.75, 9);
 });

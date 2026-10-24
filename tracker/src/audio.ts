@@ -12,7 +12,10 @@ type Command =
   | { op: 'apply'; id: string; source: string; kind: 'instr' | 'fx'; dir: string | null }
   | { op: 'play'; song: Song; mode: 'pattern' | 'song'; pattern_id: string; start_position: number }
   | { op: 'update'; song: Song }
+  | { op: 'export'; song: Song; path: string; stems: boolean }
   | { op: 'scopes'; strips: boolean }
+  | { op: 'midi_on'; key: number; instrument: string; note: string; track: number; velocity: number }
+  | { op: 'midi_off'; key: number | null }
   | { op: 'audition'; instrument: string; note: string; track: number; ms?: number };
 
 export let audioStatus: AudioStatus = {

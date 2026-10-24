@@ -227,8 +227,14 @@ impl Opcode for Sampler {
                 let length = (self.range.1 - self.range.0) as f32 / self.source_rate();
                 let begin = inputs.get(5).map_or(0.0, |input| input[0]);
                 let start = inputs[3][0] + begin * length;
-                self.position =
-                    self.range.0 as f64 + f64::from(start.max(0.0)) * f64::from(self.source_rate());
+                let offset = f64::from(start.max(0.0)) * f64::from(self.source_rate());
+                // A negative `rate` as the note starts plays the sample backwards, from its end.
+                if inputs[2][0] < 0.0 {
+                    self.direction = -1.0;
+                    self.position = self.range.1 as f64 - 1.0 - offset;
+                } else {
+                    self.position = self.range.0 as f64 + offset;
+                }
             } else {
                 self.done = true;
             }
@@ -261,7 +267,7 @@ impl Opcode for Sampler {
             let pitch = f64::from(inputs[1][n]) / 12.0;
             let ratio = f64::from(inputs[0][n]) / f64::from(self.root_hz)
                 * if pitch == 0.0 { 1.0 } else { pitch.exp2() }
-                * f64::from(inputs[2][n])
+                * f64::from(inputs[2][n]).abs()
                 * self.speed;
             let step = ratio.max(0.0) * source_rate / f64::from(self.sample_rate);
             *y = match self.interp {
@@ -452,6 +458,23 @@ mod tests {
         s.process(&ctx(), &[&freq, &pitch, &rate, &start, &sample], &mut out);
         assert!((out[0] - 0.0).abs() < 0.01);
         assert!((out[7] - 7.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn a_negative_rate_at_the_start_plays_backwards_from_the_end() {
+        let mut s = sampler(ramp(100, 48_000.0), None);
+        let (freq, pitch, start, sample) = ([440.0f32; 8], [0.0f32; 8], [0.0f32; 8], [0.0f32; 8]);
+        let mut out = [0.0f32; 8];
+        s.process(&ctx(), &[&freq, &pitch, &[-1.0; 8], &start, &sample], &mut out);
+        assert!((out[0] - 99.0).abs() < 0.01 && (out[7] - 92.0).abs() < 0.1, "{out:?}");
+        // an offset counts from the end too, and running out of sample ends the note
+        let mut s = sampler(ramp(100, 48_000.0), None);
+        s.process(&ctx(), &[&freq, &pitch, &[-1.0; 8], &[10.0 / 48_000.0; 8], &sample], &mut out);
+        assert!((out[0] - 89.0).abs() < 0.01, "{out:?}");
+        let mut s = sampler(ramp(10, 48_000.0), None);
+        s.process(&ctx(), &[&freq, &pitch, &[-1.0; 8], &start, &sample], &mut out);
+        s.process(&ctx(), &[&freq, &pitch, &[-1.0; 8], &start, &sample], &mut out);
+        assert!(out[3..].iter().all(|&x| x == 0.0) && !s.is_active(), "{out:?}");
     }
 
     #[test]

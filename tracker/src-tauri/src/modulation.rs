@@ -140,3 +140,13 @@ pub fn reset(
         vec![json!({"op":"routing", "at":at, "tag":"tracker-pattern", "edits":edits})]
     }
 }
+
+/// Keep native oscillator periods aligned with scheduled rows without resetting their phase or maps.
+pub fn timing(song: &crate::pattern::Song, parameters: &EffectParameters, row_seconds: f64, at: u64) -> Vec<Value> {
+    let strips = crate::mixer::strips(&song.tracks, &song.returns, &song.master);
+    let edits: Vec<_> = targets(&strips, parameters).values().map(|target| {
+        let hz = 1.0 / (row_seconds * target.lfo.period);
+        json!({"op":"set", "id":target.source(), "args":{"rate":format!("{hz}hz")}})
+    }).collect();
+    if edits.is_empty() { vec![] } else { vec![json!({"op":"routing", "at":at, "tag":"tracker-pattern", "edits":edits})] }
+}

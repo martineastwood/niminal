@@ -6,9 +6,16 @@ const identifier = () => crypto.randomUUID().replaceAll('-', '_');
 
 const synthSource = (code: string) => `/// Describe your instrument here.\ninstr ${code}(freq: hz) {\n  osc(sine, freq) * env[0.15 | 200ms 0]\n}\n`;
 
+/** The note commands O (start part way in) and V (backwards) set `begin` and `rate`, so a sampler declares them. */
+const samplerParams = 'begin: 0..1 = 0, rate: -4..4 = 1';
+
 /** Plays one imported WAV, pitched from its root note. `file` is relative to the project folder. */
 export const samplerSource = (code: string, file: string) =>
-  `/// Plays ${file}. Change .root(...) to retune, or add .loop(forward) to sustain it.\n${code}_sample = sample("${file}").root(c4)\ninstr ${code}(freq: hz) {\n  ${code}_sample(freq: freq)\n}\n`;
+  `/// Plays ${file}. Change .root(...) to retune, or add .loop(forward) to sustain it.\n${code}_sample = sample("${file}").root(c4)\ninstr ${code}(freq: hz, ${samplerParams}) {\n  ${code}_sample(freq: freq, begin: begin, rate: rate)\n}\n`;
+
+/** Plays `file` cut into `count` equal pieces: each key from C-4 up plays the next piece, at its recorded pitch. */
+export const slicedSource = (code: string, file: string, count: number) =>
+  `/// Plays ${file} in ${count} pieces: C-4 is the first, C#4 the next, and so on.\n${code}_sample = sample("${file}").root(c4)\n${code}_slices = ${code}_sample.slices(${count})\ninstr ${code}(freq: hz, sample: num = 0, ${samplerParams}) {\n  ${code}_slices(sample: sample, begin: begin, rate: rate)\n}\n`;
 
 /** A new instrument called `base` (made unique), whose code is written for the name it ends up with. */
 function create(project: Project, base: string, write: (code: string) => string): Definition {
@@ -22,6 +29,12 @@ function create(project: Project, base: string, write: (code: string) => string)
 export function addInstrument(project: Project, sample?: string): Definition {
   const stem = sample?.split('/').pop()?.replace(/\.wav$/i, '');
   return create(project, stem ?? 'Synth', code => sample ? samplerSource(code, sample) : synthSource(code));
+}
+
+/** A new instrument that plays the sample of a sampler cut into `count` pieces, or null when `source` plays no sample. */
+export function sliceInstrument(project: Project, source: Definition, count: number): Definition | null {
+  const file = /\bsample\("([^"]+)"\)/.exec(source.source)?.[1];
+  return file ? create(project, `${source.name} slices`, code => slicedSource(code, file, count)) : null;
 }
 
 /** The code of a preset under the name `code`; a drum preset carries its own copy of the voice it calls, named from it. */

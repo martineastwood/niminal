@@ -24,6 +24,7 @@ fn test_song(note: Option<&str>) -> Song {
             })
             .collect(),
         patterns: vec![Pattern {
+            timing: None,
             id: "p0".into(),
             name: "First".into(),
             rows: 32,
@@ -109,6 +110,12 @@ fn real_engine_plays_last_good_source_and_stop_cancels_the_loop() {
     let audio = engine.lock().unwrap().session_mut().process(10000);
     assert!(audio[0].iter().any(|sample| sample.abs() > 0.01));
     worker.tick().unwrap();
+    let mut slower = song.clone();
+    slower.bpm = 80.0;
+    slower.rows_per_beat = 3;
+    worker.command(Command::Update { song: slower }).unwrap();
+    assert!(worker.status.playing);
+    assert_eq!(worker.playback.as_ref().unwrap().song.bpm, 80.0);
     worker.command(Command::Stop).unwrap();
     let audio = engine.lock().unwrap().session_mut().process(24000);
     assert!(audio[0][2048..].iter().all(|sample| sample.abs() < 0.00001));
@@ -1658,4 +1665,178 @@ fn a_cut_silences_a_note_at_once_where_an_off_lets_its_release_ring() {
     let (held, cut) = after("CUT");
     assert!(held > 0.05, "the note sounds while it is held: {held}");
     assert!(cut < 0.005, "a CUT stops it with no tail: {cut}");
+}
+
+/// The samples of a WAV the engine wrote: 32-bit floats after an 80-byte header.
+fn float_wav(path: &std::path::Path) -> Vec<f32> {
+    let bytes = std::fs::read(path).unwrap();
+    bytes[80..].chunks(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect()
+}
+
+#[test]
+fn a_song_exports_to_a_wav_with_a_stem_for_each_sounding_track() {
+    let engine = Arc::new(Mutex::new(EngineServer::new(Session::new(48000.0, Layout::Stereo))));
+    let server = Server::start(engine, ServerConfig { port: 0, ..ServerConfig::default() }).unwrap();
+    let mut worker = Worker::default();
+    worker.command(Command::Connect { port: server.port(), token: None }).unwrap();
+    worker.command(Command::Apply { id: "tone".into(), source: TONE.into(), kind: Kind::Instr, dir: None }).unwrap();
+    let mut song = test_song(Some("C-4"));
+    song.tracks[1].name = "Lead 2".into();
+    song.patterns[0].notes[1][0].notes = vec![Some("E-4".into()); 32];
+    song.patterns[0].notes[1][0].inst = vec![Some("tone".into()); 32];
+    song.tracks[1].muted = true;
+    let dir = std::env::temp_dir().join(format!("niminal-export-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("song.wav");
+    worker.command(Command::Export { song, path: path.to_string_lossy().into(), stems: true }).unwrap();
+
+    // 32 rows at 125 bpm, 4 rows a beat is 3.84 s, and the tail of the last note follows
+    let mix = float_wav(&path);
+    assert!(mix.len() >= 2 * (3.84 * 48000.0) as usize, "{} samples", mix.len());
+    assert!(mix.iter().any(|s| s.abs() > 0.01));
+    let stem = float_wav(&dir.join("song-01-Track_0.wav"));
+    assert!(stem.iter().any(|s| s.abs() > 0.01));
+    assert!(!dir.join("song-02-Lead_2.wav").exists(), "a muted track has no stem");
+    assert!(dir.join("song-02-Track_2.wav").exists());
+    assert!(!worker.status.playing);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn engine_worker() -> (Arc<Mutex<EngineServer>>, Server, Worker) {
+    let engine = Arc::new(Mutex::new(EngineServer::new(Session::new(48000.0, Layout::Mono).without_limiter())));
+    let server = Server::start(engine.clone(), ServerConfig { port: 0, ..ServerConfig::default() }).unwrap();
+    let mut worker = Worker::default();
+    worker.command(Command::Connect { port: server.port(), token: None }).unwrap();
+    (engine, server, worker)
+}
+
+/// A song of one pattern with one note column, `rows` rows of 5760 samples.
+fn one_column(rows: usize, cells: &[(usize, &str)], commands: &[(usize, &str)]) -> Song {
+    let mut song = test_song(None);
+    let column = &mut song.patterns[0].notes[0][0];
+    column.inst = vec![Some("tone".into()); 32];
+    column.cmd = vec![None; 32];
+    for (row, note) in cells {
+        column.notes[*row] = Some((*note).into());
+    }
+    for (row, text) in commands {
+        column.cmd[*row] = Some((*text).into());
+    }
+    song.patterns[0].rows = rows;
+    song
+}
+
+/// The first channel of the next `samples` of engine output, scheduling the song as the engine's clock goes.
+fn run(engine: &Arc<Mutex<EngineServer>>, worker: &mut Worker, samples: usize) -> Vec<f32> {
+    let mut audio = Vec::new();
+    while audio.len() < samples {
+        let chunk = engine.lock().unwrap().session_mut().process(2400.min(samples - audio.len()));
+        audio.extend(&chunk[0]);
+        worker.tick().unwrap();
+    }
+    audio
+}
+
+fn play_song(worker: &mut Worker, song: Song) {
+    worker.command(Command::Play { song, mode: Mode::Song, pattern_id: "p0".into(), start_position: 0 }).unwrap();
+}
+
+#[test]
+fn a_glide_bends_the_sounding_pitch_to_the_new_note() {
+    let (engine, server, mut worker) = engine_worker();
+    worker.command(Command::Apply { id: "tone".into(), source: "instr pure(freq: hz) { osc(sine, freq) * 0.2 }".into(), kind: Kind::Instr, dir: None }).unwrap();
+    // C-4 from row 0, gliding to C-5 over a row from row 4, held to the end
+    play_song(&mut worker, one_column(10, &[(0, "C-4"), (4, "C-5")], &[(4, "G8")]));
+    let audio = engine.lock().unwrap().session_mut().process(10 * 5760 + 9000);
+    let start = audio[0].iter().position(|s| s.abs() > 0.001).unwrap_or(0);
+    let crossings = |from: usize, to: usize| audio[0][start + from..start + to].windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f64;
+    let before = crossings(5760, 5760 * 3) / 0.24;
+    let after = crossings(5760 * 6, 5760 * 8) / 0.24;
+    assert!((before / 261.63 - 1.0).abs() < 0.05, "C-4 rings at first: {before} crossings a second");
+    assert!((after / 523.25 - 1.0).abs() < 0.05, "and C-5 once the glide is over: {after}");
+    worker.command(Command::Disconnect).unwrap();
+    drop(worker);
+    server.stop();
+}
+
+/// A mono WAV that ramps from silence to nearly full level over `frames`.
+fn write_ramp(path: &std::path::Path, frames: u32) {
+    write_wav(path, frames, 0);
+    let mut bytes = std::fs::read(path).unwrap();
+    for i in 0..frames as usize {
+        let value = (i as f32 / frames as f32 * 30000.0) as i16;
+        bytes[44 + i * 2..46 + i * 2].copy_from_slice(&value.to_le_bytes());
+    }
+    std::fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn offset_reverse_and_slices_choose_what_part_of_a_sample_plays() {
+    let base = std::env::temp_dir().join(format!("niminal-tracker-slices-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let dir = crate::files::project_dir(&base, "song").unwrap();
+    let ramp = base.join("ramp.wav");
+    write_ramp(&ramp, 4800);
+    let file = crate::files::import_sample(&dir, &ramp).unwrap();
+    let (engine, server, mut worker) = engine_worker();
+    let apply = |worker: &mut Worker, source: String| {
+        worker.command(Command::Apply { id: "tone".into(), source, kind: Kind::Instr, dir: Some(dir.to_string_lossy().into_owned()) })
+    };
+    // a plain sampler gets offset and reverse through the parameters its wrapper declares
+    apply(&mut worker, format!("smp = sample(\"{file}\").root(c4)\ninstr ramp(freq: hz, begin: 0..1 = 0, rate: -4..4 = 1) {{ smp(freq: freq, begin: begin, rate: rate) }}")).unwrap();
+    assert!(worker.status.instrument_parameters["tone"].iter().any(|p| p.name == "begin"));
+    assert!(worker.status.instrument_slices.is_empty());
+    play_song(&mut worker, one_column(12, &[(0, "C-4"), (4, "C-4"), (8, "C-4")], &[(4, "O50"), (8, "V")]));
+    let audio = [run(&engine, &mut worker, 12 * 5760 + 7200)];
+    // playback starts 0.15 s after the clock it was asked at
+    let from = 7200;
+    let first = |row: usize| audio[0][from + row * 5760 + 50..from + row * 5760 + 90].iter().sum::<f32>() / 40.0;
+    let (plain, offset, reversed) = (first(0), first(4), first(8));
+    assert!(plain < 0.1, "the sample starts quietly: {plain}");
+    assert!((offset - 0.45).abs() < 0.1, "O50 starts half way up the ramp: {offset}");
+    assert!(reversed > 0.8, "V starts at the loud end: {reversed}");
+    worker.command(Command::Stop).unwrap();
+
+    // a sliced sample plays the piece for each key; the ramp's fourth quarter is its loudest
+    apply(&mut worker, format!("smp = sample(\"{file}\").root(c4)\nchops = smp.slices(4)\ninstr chop(freq: hz, sample: num = 0, begin: 0..1 = 0, rate: -4..4 = 1) {{ chops(sample: sample, begin: begin, rate: rate) }}")).unwrap();
+    assert_eq!(worker.status.instrument_slices["tone"], 4);
+    assert!(worker.status.instrument_parameters["tone"].iter().all(|p| p.name != "sample"));
+    play_song(&mut worker, one_column(12, &[(0, "C-4"), (4, "D#4"), (8, "E-4")], &[]));
+    let audio = [run(&engine, &mut worker, 12 * 5760 + 7200)];
+    let level = |row: usize| audio[0][from + row * 5760 + 300..from + row * 5760 + 340].iter().sum::<f32>() / 40.0;
+    assert!(level(0) < 0.4, "C-4 is the first piece: {}", level(0));
+    assert!(level(4) > 0.7, "D#4 is the fourth: {}", level(4));
+    assert!(audio[0][from + 8 * 5760..from + 9 * 5760].iter().all(|s| s.abs() < 0.0001), "E-4 is past the last piece");
+    worker.command(Command::Disconnect).unwrap();
+    drop(worker);
+    server.stop();
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn midi_preview_holds_releases_and_keeps_channels_independent_with_velocity() {
+    let engine = Arc::new(Mutex::new(EngineServer::new(Session::new(48000.0, Layout::Mono).without_limiter())));
+    let server = Server::start(engine.clone(), ServerConfig { port: 0, ..ServerConfig::default() }).unwrap();
+    let mut worker = Worker::default();
+    worker.command(Command::Connect { port: server.port(), token: None }).unwrap();
+    worker.command(Command::Apply { id: "tone".into(), source: "instr flat(freq: hz, amp: 0..1 = 0.2) { amp * (1 - note.released) }".into(), kind: Kind::Instr, dir: None }).unwrap();
+    let mut song = test_song(None);
+    song.instrument_values.insert("tone".into(), BTreeMap::from([("amp".into(), 0.1)]));
+    worker.command(Command::Update { song }).unwrap();
+    let level = || {
+        let audio = engine.lock().unwrap().session_mut().process(24000);
+        audio[0][22000..].iter().copied().sum::<f32>() / 2000.0
+    };
+    let on = |key, velocity| Command::MidiOn { key, instrument: "tone".into(), note: "C-4".into(), track: 0, velocity };
+    worker.command(on(60, 127)).unwrap(); assert!((level() - 0.1).abs() < 0.001); // still held after 500ms
+    worker.command(on(188, 64)).unwrap(); assert!((level() - (0.1 + 0.1 * 64.0 / 127.0)).abs() < 0.001);
+    worker.command(Command::MidiOff { key: Some(60) }).unwrap(); assert!((level() - 0.1 * 64.0 / 127.0).abs() < 0.001);
+    // A repeated key replaces its own preview; another channel's same pitch is independent.
+    worker.command(on(188, 127)).unwrap(); assert!((level() - 0.1).abs() < 0.001);
+    worker.command(Command::MidiOff { key: None }).unwrap(); assert!(level().abs() < 0.001);
+    worker.command(Command::MidiOff { key: Some(188) }).unwrap(); // late/duplicate note-off is harmless
+    assert!(worker.command(on(60, 0)).is_err());
+    worker.command(on(60, 127)).unwrap(); worker.command(Command::Stop).unwrap(); assert!(level().abs() < 0.001);
+    assert!(worker.midi_keys.is_empty());
+    worker.command(Command::Disconnect).unwrap();
 }

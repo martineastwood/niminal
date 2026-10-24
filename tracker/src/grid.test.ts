@@ -643,3 +643,60 @@ it('records onto the nearest row while the pattern plays, leaving the cursor on 
   key('s'); expect(column.notes[4]).toBe('C#4'); // no step, and the cursor cannot be moved off the play row
   grid.paint(null);
 });
+
+it('selects every row and column of the cursor\'s track for copying', () => {
+  const { parent, project, key, click } = setup();
+  project.patterns[0].notes[1][0].notes[5] = 'D-3'; project.patterns[0].notes[1][0].inst[5] = 'tone';
+  const columns = (track: number) => 2 + project.patterns[0].fx[track].length;
+  click(7, 0); // somewhere in the Lead track
+  key('A', { metaKey: true, shiftKey: true });
+  const lead = clipboard(parent, 'copy').split('\n');
+  expect(lead).toHaveLength(32); expect(lead[0].split('\t')).toHaveLength(columns(0)); expect(lead.join()).not.toContain('D-3');
+  click(7, 1); // the Bass track
+  key('A', { metaKey: true, shiftKey: true });
+  const bass = clipboard(parent, 'copy').split('\n');
+  expect(bass).toHaveLength(32); expect(bass[5].split('\t')[0]).toBe('D-3');
+  key('a', { metaKey: true });
+  expect(clipboard(parent, 'copy').split('\n')[0].split('\t').length).toBeGreaterThan(columns(0) * 3);
+});
+
+it('enters absolute MIDI pitch, hardware velocity and instrument as one undoable step', () => {
+  const { project, grid, click, audition } = setup(undefined, () => 'tone', () => 1);
+  const column = project.patterns[0].notes[1][0];
+  click(5, 1);
+  expect(grid.midiNoteOn(61, 64)).toEqual({ note: 'C#4', track: 1, instrument: 'tone', velocity: 64 });
+  expect(column.notes[5]).toBe('C#4'); expect(column.inst[5]).toBe('tone'); expect(column.vol[5]).toBe('65');
+  expect(project.tracks[1].show?.vol).toBe(true); expect(audition).not.toHaveBeenCalled(); // native held preview is separate
+  grid.midiNoteOn(72, 127); expect(column.notes[6]).toBe('C-5'); expect(column.vol[6]).toBe('128');
+  grid.undo(); expect(column.notes[6]).toBeNull(); expect(column.vol[6]).toBeNull();
+  grid.redo(); expect(column.notes[6]).toBe('C-5'); expect(column.inst[6]).toBe('tone');
+});
+
+it('previews MIDI without editing when record is off, including from a parameter lane', () => {
+  const { project, grid, parent, edited } = setup(undefined, () => 'tone');
+  grid.setRecording(false); parent.querySelector<HTMLElement>('#fx-4-1-0')!.click();
+  const before = JSON.stringify(project);
+  expect(grid.midiNoteOn(60, 100)).toEqual({ note: 'C-4', track: 1, instrument: 'tone', velocity: 100 });
+  expect(JSON.stringify(project)).toBe(before); expect(edited).not.toHaveBeenCalled();
+  for (const [note, velocity] of [[0, 100], [120, 100], [60, 0], [60, 128], [60.5, 1]]) expect(grid.midiNoteOn(note, velocity)).toBeNull();
+});
+
+it('records MIDI from a sub-column into the correct note column when velocity reveals Vol', () => {
+  const { project, grid, parent } = setup(undefined, () => 'tone');
+  project.patterns[0].notes[0].push(blankColumn(32)); grid.render();
+  parent.querySelector<HTMLElement>('#cell-3-0-1-inst')!.click();
+  grid.midiNoteOn(67, 127);
+  expect(project.patterns[0].notes[0][1].notes[3]).toBe('G-4');
+  expect(project.patterns[0].notes[0][1].inst[3]).toBe('tone');
+  expect(project.patterns[0].notes[0][1].vol[3]).toBe('128');
+  expect(project.patterns[0].notes[0][0].notes[3]).toBeNull();
+});
+
+it('records MIDI on the nearest live row without stepping away from playback', () => {
+  const { project, grid } = setup(undefined, () => 'tone');
+  grid.selectTrack(1); grid.paint(3, 0.6, Date.now());
+  grid.midiNoteOn(62, 90); grid.midiNoteOn(64, 90);
+  expect(project.patterns[0].notes[1][0].notes[4]).toBe('E-4');
+  expect(project.patterns[0].notes[1][0].notes[5]).toBeNull();
+  grid.paint(null);
+});

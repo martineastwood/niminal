@@ -7,7 +7,7 @@ afterEach(() => document.body.replaceChildren());
 function setup(current = 'b') {
   const root = document.createElement('section'); document.body.append(root);
   let chosen: string | null = current, items = [{ id: 'a', name: 'Kick' }, { id: 'b', name: 'Bass', note: '×2' }, { id: 'c', name: 'Pad' }];
-  const actions = { choose: vi.fn((id: string) => { chosen = id; }), edit: vi.fn(), manage: vi.fn(), leave: vi.fn() };
+  const actions = { choose: vi.fn((id: string) => { chosen = id; }), edit: vi.fn(), manage: vi.fn(), slice: vi.fn(), leave: vi.fn() };
   const panel = new ProjectPanel(root, () => items, () => chosen, actions);
   const list = root.querySelector<HTMLElement>('.pp-list')!;
   const key = (name: string, options: KeyboardEventInit = {}) => list.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true, ...options }));
@@ -46,4 +46,10 @@ it('passes its buttons on, and follows the project when it is drawn again', () =
   }
   setItems([{ id: 'b', name: 'Bass renamed' }]); panel.refresh();
   expect(rows().map(r => r.firstChild!.textContent)).toEqual(['00  Bass renamed']); expect(rows()[0].getAttribute('aria-selected')).toBe('true');
+});
+
+it('offers to cut the current sampler into pieces from the scissors button', () => {
+  const { root, actions } = setup();
+  root.querySelector<HTMLButtonElement>('button[aria-label^="New instrument that plays"]')!.click();
+  expect(actions.slice).toHaveBeenCalledWith(expect.any(HTMLButtonElement));
 });

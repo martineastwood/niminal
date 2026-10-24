@@ -357,17 +357,20 @@ fn render(
         )
         .map_err(|e| e.to_string())?;
     }
-    session
-        .send_events(
-            0,
-            vec![Op::Define {
-                source: spec.source,
-                at: At::Now,
-                dir: None,
-                tag: None,
-            }],
-        )
-        .map_err(|p| p[0].message.clone())?;
+    // A render whose definitions arrive as events (say, in a transaction with a `dir`) has no source.
+    if !spec.source.trim().is_empty() {
+        session
+            .send_events(
+                0,
+                vec![Op::Define {
+                    source: spec.source,
+                    at: At::Now,
+                    dir: None,
+                    tag: None,
+                }],
+            )
+            .map_err(|p| p[0].message.clone())?;
+    }
     for event in &spec.events {
         let at = match serde_json::to_value(event).map_err(|e| e.to_string())?["at"].clone() {
             Value::Number(n) => n.as_u64().ok_or("invalid event sample")?,

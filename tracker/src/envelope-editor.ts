@@ -6,6 +6,7 @@ const blank = (): Envelope => ({ enabled: false, mode: 'linear', points: [] });
 type Snapshot = Envelope | undefined;
 
 export class EnvelopeEditor {
+  projectHistory: { undo: (redo: boolean) => void; canUndo: () => boolean; canRedo: () => boolean } | undefined;
   private track = 0;
   private lane = 0;
   private selected = -1;
@@ -33,11 +34,12 @@ export class EnvelopeEditor {
   private get edits() { if (!this.history.has(this.key)) this.history.set(this.key, { past: [], future: [] }); return this.history.get(this.key)!; }
   private snapshot(): Snapshot { return this.column.envelope ? structuredClone(this.column.envelope) : undefined; }
   private commit(before: Snapshot) {
-    if (JSON.stringify(before) !== JSON.stringify(this.column.envelope)) { this.edits.past.push(before); if (this.edits.past.length > 100) this.edits.past.shift(); this.edits.future = []; this.changed(); }
+    if (JSON.stringify(before) !== JSON.stringify(this.column.envelope)) { if (!this.projectHistory) { this.edits.past.push(before); if (this.edits.past.length > 100) this.edits.past.shift(); this.edits.future = []; } this.changed(); }
     this.render();
   }
   private mutate(change: (envelope: Envelope) => void) { const before = this.snapshot(); this.column.envelope ??= blank(); change(this.column.envelope); this.commit(before); }
   private undo(redo = false) {
+    if (this.projectHistory) { this.projectHistory.undo(redo); return; }
     const from = redo ? this.edits.future : this.edits.past, to = redo ? this.edits.past : this.edits.future;
     if (!from.length) return; to.push(this.snapshot()); const restored = from.pop();
     if (restored) this.column.envelope = restored; else delete this.column.envelope;
@@ -57,8 +59,8 @@ export class EnvelopeEditor {
     const mode = find<HTMLSelectElement>('[data-mode]'); mode.value = envelope.mode; mode.onchange = () => this.mutate(e => { e.mode = mode.value as Envelope['mode']; });
     const tool = find<HTMLSelectElement>('[data-tool]'); tool.value = this.tool; tool.onchange = () => { this.tool = tool.value; };
     const snap = find<HTMLSelectElement>('[data-snap]'); snap.value = this.snap === this.project().rows_per_beat && this.snap !== 1 ? 'beat' : String(this.snap); snap.onchange = () => { this.snap = snap.value === 'beat' ? this.project().rows_per_beat : Number(snap.value); };
-    find<HTMLButtonElement>('[data-undo]').disabled = !this.edits.past.length; find('[data-undo]').onclick = () => this.undo();
-    find<HTMLButtonElement>('[data-redo]').disabled = !this.edits.future.length; find('[data-redo]').onclick = () => this.undo(true);
+    find<HTMLButtonElement>('[data-undo]').disabled = !(this.projectHistory?.canUndo() ?? this.edits.past.length); find('[data-undo]').onclick = () => this.undo();
+    find<HTMLButtonElement>('[data-redo]').disabled = !(this.projectHistory?.canRedo() ?? this.edits.future.length); find('[data-redo]').onclick = () => this.undo(true);
     find('[data-clear]').onclick = () => this.mutate(e => { e.points = []; e.enabled = false; this.selected = -1; });
     const point = envelope.points[this.selected]; const row = find<HTMLInputElement>('[data-row]'), value = find<HTMLInputElement>('[data-value]');
     row.max = String(this.pattern().rows); row.disabled = value.disabled = !point || !info;

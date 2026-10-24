@@ -11,6 +11,7 @@ description = "A tracker and instrument editor for niminal"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+midir = "0.11"
 tauri = { version = "2", features = [] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }

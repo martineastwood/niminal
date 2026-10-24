@@ -15,6 +15,8 @@ export interface ProjectPanelActions {
   edit(id: string): void;
   /** The buttons above the list. */
   manage(op: ManageOp): void;
+  /** The scissors button: offers to cut the current sampler into pieces, with a menu under `anchor`. */
+  slice(anchor: HTMLElement): void;
   /** Escape: the cursor goes back to the grid. */
   leave(): void;
 }
@@ -34,6 +36,8 @@ export class ProjectPanel {
       const button = document.createElement('button'); button.textContent = text; button.title = label; button.setAttribute('aria-label', label);
       button.onclick = () => actions.manage(op); tools.append(button);
     }
+    const scissors = document.createElement('button'); scissors.textContent = '✂'; scissors.title = 'New instrument that plays the current sampler cut into pieces'; scissors.setAttribute('aria-label', scissors.title);
+    scissors.onclick = () => actions.slice(scissors); tools.append(scissors);
     heading.append(tools);
     this.list.className = 'pp-list'; this.list.tabIndex = 0; this.list.setAttribute('role', 'listbox'); this.list.setAttribute('aria-label', 'Project instruments');
     this.list.onkeydown = event => this.keydown(event);

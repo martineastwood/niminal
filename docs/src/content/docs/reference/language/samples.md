@@ -104,7 +104,10 @@ Parameters you can set on a hit:
 | --- | --- |
 | `pitch:` or `rate:` or `freq:` | Playback pitch / speed (not more than one of these) |
 | `start:` | Start offset into the file |
+| `begin:` | Start offset as a share of the sample's (or slice's) length, 0 to 1 |
 | `gain:` | Level (as for any instrument) |
+
+A negative `rate:` when the note starts plays the sample backwards from its end (`rate: -1` is the sample reversed at its recorded speed), and `start:` and `begin:` then count back from the end. The direction is fixed as the note starts; the speed can still change afterwards.
 
 Chop a break with a grid — a row per slice, columns are steps. `X` accents, `o` ghosts. A row can take note controls, use mini-notation, or name a drum node so its hits go through that strip:
 

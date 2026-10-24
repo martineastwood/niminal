@@ -49,10 +49,14 @@ pub struct Sound {
     pub target: String,
     pub fx_source: Option<String>,
     pub parameters: Vec<Parameter>,
+    /// For a sliced sample, how many pieces it has: the instrument has a `sample` parameter and the
+    /// source slices one sample into a kit. Notes then pick the piece, from C-4 up.
+    pub slices: Option<usize>,
 }
 
 impl Sound {
-    pub fn parse(kind: Kind, source: String) -> Result<Self, String> {
+    /// `dir` is the project folder, where the files a sampler names are found.
+    pub fn parse(kind: Kind, source: String, dir: Option<&str>) -> Result<Self, String> {
         let definitions = symbols(&source).map_err(|e| e.message)?;
         let wanted = if kind == Kind::Instr {
             SymbolKind::Instrument
@@ -78,6 +82,11 @@ impl Sound {
         if kind == Kind::Instr && !definition.params.iter().any(|param| param.name == "freq") {
             return Err("Tracker instruments currently need a freq: hz parameter".into());
         }
+        let mut kits = definitions.iter().filter(|s| s.kind == SymbolKind::Kit && !s.params.is_empty());
+        let slices = match (kind, kits.next(), kits.next()) {
+            (Kind::Instr, Some(kit), None) if definition.params.iter().any(|p| p.name == "sample") => Some(kit.params.len()),
+            _ => None,
+        };
         let mut parameters = Vec::new();
         if kind == Kind::Fx {
             let program = niminal_lang::compile(&source).map_err(|errors| {
@@ -104,15 +113,21 @@ impl Sound {
                 ));
             }
         }
+        let options = niminal_lang::CompileOptions {
+            samples: dir.map_or_else(niminal_lang::Samples::default, niminal_lang::Samples::new),
+            ..Default::default()
+        };
         if kind == Kind::Instr
             // The compiler can't always load an instrument on its own (a sampler needs its
             // folder), and the engine reports real errors on Apply, so no controls will do.
-            && let Ok(program) = niminal_lang::compile(&source)
+            && let Ok(program) = niminal_lang::compile_with(&source, &options)
             && let Some(instrument) = program.instruments.iter().find(|i| i.name == definition.name)
         {
             for param in &instrument.params {
-                // Pitch, level and position come from the note itself.
-                if matches!(param.name.as_str(), "freq" | "gain" | "pan") || parameters.len() == 15
+                // Pitch, level and position come from the note itself, and so does the piece of a sliced sample.
+                if matches!(param.name.as_str(), "freq" | "gain" | "pan")
+                    || slices.is_some() && param.name == "sample"
+                    || parameters.len() == 15
                 {
                     continue;
                 }
@@ -145,6 +160,7 @@ impl Sound {
             engine_source,
             fx_source,
             parameters,
+            slices,
         })
     }
 }
@@ -157,6 +173,7 @@ mod tests {
         let sound = Sound::parse(
             Kind::Fx,
             "fn soften(x) { x * 0.5 }\nfx low { out = soften(in) }\n".into(),
+            None,
         )
         .unwrap();
         assert_eq!(sound.target, "low");
@@ -171,7 +188,7 @@ mod parameter_tests {
     use super::*;
     #[test]
     fn exposes_typed_fx_parameters_in_signature_order() {
-        let sound = Sound::parse(Kind::Fx, "fx filter(cutoff: hz = 2400hz, resonance: 0..1 = 0.2) { out = in.lpf(cutoff: cutoff, res: resonance) }".into()).unwrap();
+        let sound = Sound::parse(Kind::Fx, "fx filter(cutoff: hz = 2400hz, resonance: 0..1 = 0.2) { out = in.lpf(cutoff: cutoff, res: resonance) }".into(), None).unwrap();
         assert_eq!(
             sound
                 .parameters
@@ -190,7 +207,7 @@ mod parameter_tests {
 
     #[test]
     fn a_gain_in_decibels_has_its_bounds_in_decibels_too() {
-        let sound = Sound::parse(Kind::Fx, "fx squeeze(threshold: -60db..0db = -18db, makeup: 0db..24db = 3db) { out = in.compress(threshold: threshold, makeup: makeup) }".into()).unwrap();
+        let sound = Sound::parse(Kind::Fx, "fx squeeze(threshold: -60db..0db = -18db, makeup: 0db..24db = 3db) { out = in.compress(threshold: threshold, makeup: makeup) }".into(), None).unwrap();
         let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
         let (threshold, makeup) = (&sound.parameters[0], &sound.parameters[1]);
         assert!(near(threshold.min, -60.0) && near(threshold.max, 0.0) && near(threshold.default, -18.0), "{threshold:?}");
