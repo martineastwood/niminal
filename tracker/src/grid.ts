@@ -120,7 +120,7 @@ export class PatternGrid {
         if (value !== null) {
           const lane = lanes[column];
           if (lane.fx !== null) { const info = this.info(lane); value = info ? parseValue(value, info) : null; }
-          else if (lane.kind === 'note') value = /^([A-G][#-][0-8]|OFF)$/.test(value) ? value : null;
+          else if (lane.kind === 'note') value = /^([A-G][#-][0-8]|OFF|CUT)$/.test(value) ? value : null;
           else value = subValue(lane.kind!, value, this.project());
           if (value === null) { this.feedback('Paste needs values in the destination lane’s units and range.'); return; }
         }
@@ -274,7 +274,7 @@ export class PatternGrid {
         for (const lane of lanes.filter(lane => lane.track === track)) {
           const c = column++, value = lane.values[row], cell = document.createElement('div'); cell.setAttribute('role', 'gridcell');
           cell.className = `${lane.fx !== null ? 'fx-command' : lane.kind === 'note' ? 'note' : 'sub'} ${value ? 'filled' : ''}`; cell.dataset.noteRow = String(row); cell.dataset.column = String(c);
-          if (lane.kind === 'note' && lane.col > 0) cell.classList.add('col-start'); if (value === 'OFF') cell.classList.add('off');
+          if (lane.kind === 'note' && lane.col > 0) cell.classList.add('col-start'); if (value === 'OFF') cell.classList.add('off'); if (value === 'CUT') cell.classList.add('cut');
           if (lane.fx !== null && idle(track, lane.fx)) cell.classList.add('idle');
           cell.id = this.id(row, lane); cell.textContent = value === null ? (lane.fx !== null ? '·' : lane.kind === 'note' ? '···' : '··') : lane.fx === null ? this.text(lane, value) : formatValue(value, this.info(lane), false, true);
           if (lane.fx !== null && columnLanes(project, pattern, track)[lane.fx].envelope?.enabled) { const envelope = columnLanes(project, pattern, track)[lane.fx].envelope!; const v = envelopeValue(envelope, row, this.info(lane)?.unit === 'db'); cell.textContent = v === null ? '·' : formatValue(v, this.info(lane), false, true); cell.classList.add('envelope-cell'); }
@@ -484,7 +484,7 @@ export class PatternGrid {
   }
   /** Lanes drawn by a graphical envelope have no cells of their own to edit. */
   private editable(lane: Lane) { return lane.fx === null || !this.laneAt(lane).envelope?.enabled; }
-  /** Moves the selected notes up or down by `semitones`; OFF and notes that would leave the range stay as they are. */
+  /** Moves the selected notes up or down by `semitones`; OFF, CUT and notes that would leave the range stay as they are. */
   private transpose(semitones: number) {
     const { top, bottom, left, right } = this.bounds, lanes = this.lanes, edits: NoteEdit[] = [];
     for (let column = left; column <= right; column++) {
@@ -632,11 +632,12 @@ export class PatternGrid {
           if (!this.recording || event.metaKey || event.ctrlKey || !(event.key === 'Enter' || /^[0-9+-]$/.test(event.key) || lane.kind === 'pan' && /^c$/i.test(event.key))) return;
           event.preventDefault(); this.editSub(this.row, this.column, event.key === 'Enter' ? undefined : event.key); return;
         }
-        const off = event.key === '1' || event.key === '`';
-        const note = off ? 'OFF' : keyboardNote(event.key, this.octave()); if (!note) return;
+        // A ends a note by letting it release, which no piano key uses; the minus key stops it at once
+        const ending = event.key.toLowerCase() === 'a' ? 'OFF' : event.key === '-' ? 'CUT' : null;
+        const note = ending ?? keyboardNote(event.key, this.octave()); if (!note) return;
         event.preventDefault();
-        const column = this.pattern().notes[lane.track][lane.col], inst = off ? undefined : this.currentInstrument();
-        const instrument = !off && (instrumentAt(column.inst, this.row) ?? inst);
+        const column = this.pattern().notes[lane.track][lane.col], inst = ending ? undefined : this.currentInstrument();
+        const instrument = !ending && (instrumentAt(column.inst, this.row) ?? inst);
         if (instrument) this.audition(instrument, note, lane.track);
         if (!this.recording) return;
         // a note is given the chosen instrument's number, which can be edited afterwards

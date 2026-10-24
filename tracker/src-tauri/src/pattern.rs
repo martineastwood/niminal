@@ -177,7 +177,7 @@ pub const MAX_NOTE_COLUMNS: usize = 8;
 /// may be left empty, which reads as blank everywhere.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct NoteColumn {
-    /// A note such as `C-4`, or `OFF` to end the note that is sounding.
+    /// A note such as `C-4`, `OFF` to let the note that is sounding release, or `CUT` to stop it at once.
     pub notes: Vec<Option<String>>,
     /// The instrument that plays this row's note and the notes below it, by definition id.
     #[serde(default)]
@@ -216,7 +216,7 @@ impl NoteColumn {
             return Err("Every note sub-column needs a cell for each row".into());
         }
         for note in self.notes.iter().flatten() {
-            if note != "OFF" {
+            if note != "OFF" && note != "CUT" {
                 pitch(note)?;
             }
         }
@@ -433,6 +433,9 @@ impl Song {
     }
 }
 
+/// Names the notes that a cut has to find again; shared so a new playback never reuses one still sounding.
+static NOTE_IDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// No note is shorter than this many rows, so back-to-back notes with delays still sound.
 const MIN_HOLD: f64 = 0.01;
 
@@ -628,25 +631,25 @@ impl Playback {
 
     /// How many rows a note started on row `index` (itself `delay` rows late) is held: until
     /// the column next has a note or an OFF, or until the song or pattern runs out.
-    fn hold_rows(&self, index: u64, track: usize, column: usize, delay: f64) -> f64 {
+    fn hold_rows(&self, index: u64, track: usize, column: usize, delay: f64) -> (f64, bool) {
         const LOOKAHEAD: u64 = 16384;
         for ahead in 1..=LOOKAHEAD {
             let Some(position) = self.location(index + ahead) else {
                 // The song ends here.
-                return (ahead as f64 - delay).max(MIN_HOLD);
+                return ((ahead as f64 - delay).max(MIN_HOLD), false);
             };
             let Some(pattern) = self.track_pattern(&position, track) else {
                 // The track is muted from here, so the note ends where the mute begins.
-                return (ahead as f64 - delay).max(MIN_HOLD);
+                return ((ahead as f64 - delay).max(MIN_HOLD), false);
             };
             let Some(next) = pattern.notes[track].get(column) else {
                 continue;
             };
             if next.note(position.row).is_some() {
-                return (ahead as f64 + next.delayed(position.row) - delay).max(MIN_HOLD);
+                return ((ahead as f64 + next.delayed(position.row) - delay).max(MIN_HOLD), next.note(position.row) == Some("CUT"));
             }
         }
-        (LOOKAHEAD as f64).max(MIN_HOLD)
+        ((LOOKAHEAD as f64).max(MIN_HOLD), false)
     }
 
     /// The engine edits for one parameter lane at one row of a pattern: a value or the steps of an
@@ -828,7 +831,7 @@ impl Playback {
                     let Some(note) = column.note(position.row) else {
                         continue;
                     };
-                    if note == "OFF" {
+                    if note == "OFF" || note == "CUT" {
                         // It ends the note before it; that note was timed to stop here.
                         continue;
                     }
@@ -841,7 +844,7 @@ impl Playback {
                         .ok_or_else(|| format!("Apply the instrument played on {} first", track.name))?;
                     let row_seconds = 60.0 / self.song.bpm / f64::from(self.song.rows_per_beat);
                     let delay = column.delayed(position.row);
-                    let hold = self.hold_rows(self.next_row, index, column_index, delay);
+                    let (hold, cut) = self.hold_rows(self.next_row, index, column_index, delay);
                     let mut args = json!({"freq":pitch(note)?});
                     if let Some(volume) = column.volume(position.row) {
                         args["gain"] = json!(format!("{:.3}db", volume_db(volume)));
@@ -861,8 +864,23 @@ impl Playback {
                                 parameter.argument(value.clamp(parameter.min, parameter.max));
                         }
                     }
-                    events.push(json!({"op":"note", "at":at + (delay * self.song.row_samples(sample_rate)).round() as u64, "target":target, "to":format!("in_{index}"), "tag":"tracker-pattern",
-                        "dur":format!("{:.6}sec", hold * row_seconds), "args":args}));
+                    let started = at + (delay * self.song.row_samples(sample_rate)).round() as u64;
+                    let mut note_event = json!({"op":"note", "at":started, "target":target, "to":format!("in_{index}"), "tag":"tracker-pattern",
+                        "dur":format!("{:.6}sec", hold * row_seconds), "args":args});
+                    // A cut ends the sound where the note ends, with no release: the note is given an id,
+                    // and its gain falls away as the release would begin.
+                    let cut_id = cut.then(|| NOTE_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+                    if let Some(id) = cut_id {
+                        note_event["id"] = json!(id);
+                    }
+                    events.push(note_event);
+                    if let Some(id) = cut_id {
+                        // the fall takes 2 ms and ends where the note does, since a note that has been released ignores it
+                        let end = started + (hold * self.song.row_samples(sample_rate)).round() as u64;
+                        let fall = (sample_rate * 0.002) as u64;
+                        events.push(json!({"op":"set", "id":id, "at":end.saturating_sub(fall).max(started), "tag":"tracker-pattern",
+                            "args":{"gain":"-120db"}, "glide":"2ms"}));
+                    }
                 }
             }
             // returns and the master follow the step's own pattern, whatever the matrix says of the tracks
@@ -1169,6 +1187,20 @@ mod tests {
         let short = at_zero.iter().find(|e| e["args"]["freq"] == "e4").unwrap();
         assert!((duration(long) - 2.0 * 0.125).abs() < 1e-5);
         assert!((duration(short) - 0.125).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_cut_ends_a_note_like_an_off_and_stops_its_sound_at_once() {
+        let events = played(8, vec![column(8, &[(0, "C-4"), (3, "CUT"), (4, "D-4"), (6, "OFF")])], Mode::Song);
+        let notes: Vec<_> = events.iter().filter(|e| e["op"] == "note").collect();
+        assert_eq!(notes.len(), 2, "a CUT, like an OFF, starts nothing");
+        assert!((duration(notes[0]) - 3.0 * 0.125).abs() < 1e-5, "held to the CUT");
+        assert!((duration(notes[1]) - 2.0 * 0.125).abs() < 1e-5, "held to the OFF");
+        let id = notes[0]["id"].as_u64().expect("a note that is cut has an id to find it by");
+        assert!(notes[1].get("id").is_none(), "a note that is only released needs none");
+        let set = events.iter().find(|e| e["op"] == "set").expect("the cut");
+        assert_eq!(set["id"], id); assert_eq!(set["at"], notes[0]["at"].as_u64().unwrap() + 3 * 6000 - 96); // 2 ms before the note ends
+        assert_eq!(set["args"]["gain"], "-120db"); assert_eq!(events.iter().filter(|e| e["op"] == "set").count(), 1);
     }
 
     #[test]

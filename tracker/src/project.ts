@@ -33,7 +33,7 @@ export const columnStrip = (project: Song, column: number): Track => column < pr
 /** The parameter lanes of a column of the grid, in a pattern. */
 export const columnLanes = (project: Song, pattern: Pattern, column: number): FxLane[] => column < project.tracks.length ? pattern.fx[column] : column < project.tracks.length + project.returns.length ? pattern.return_fx[column - project.tracks.length] : pattern.master_fx;
 /**
- * One note column: parallel cells for each row. `notes` hold `C-4` or `OFF`; `inst` an instrument's
+ * One note column: parallel cells for each row. `notes` hold `C-4`, `OFF` (release) or `CUT` (stop at once); `inst` an instrument's
  * definition id; `vol` and `pan` a number from 0 to 128 (as text); `delay` from 0 to 255 256ths of a row.
  */
 export interface NoteColumn { notes: (string | null)[]; inst: (string | null)[]; vol: (string | null)[]; pan: (string | null)[]; delay: (string | null)[] }
@@ -216,7 +216,7 @@ const integerWithin = (max: number) => (v: unknown) => v === null || typeof v ==
 function validColumn(column: NoteColumn, rows: number, definitions: Definition[]) {
   const sized = (cells: unknown, optional: boolean): cells is (string | null)[] => Array.isArray(cells) && cells.length <= 256 && (cells.length >= rows || optional && cells.length === 0);
   return !!column && sized(column.notes, false) && sized(column.inst, true) && sized(column.vol, true) && sized(column.pan, true) && sized(column.delay, true) &&
-    column.notes.every(n => n === null || typeof n === 'string' && (n === 'OFF' || /^[A-G][#-][0-8]$/.test(n))) &&
+    column.notes.every(n => n === null || typeof n === 'string' && (n === 'OFF' || n === 'CUT' || /^[A-G][#-][0-8]$/.test(n))) &&
     column.inst.every(id => id === null || typeof id === 'string' && definitions.some(d => d.id === id && d.kind === 'instr')) &&
     column.vol.every(integerWithin(128)) && column.pan.every(integerWithin(128)) && column.delay.every(integerWithin(255));
 }

@@ -224,6 +224,7 @@ footer input { height: 16px; font-size: 10px; }
 .sub.filled { color: #9fc4e8; }
 .note.col-start, .sub.col-start { border-left: 1px solid #2c3036; }
 .note.off { color: #d98a8a; }
+.note.cut { color: #f06a6a; font-weight: 700; }
 .track-columns > .col-label { flex: 0 0 44px; }
 .track-columns > .sub-label { flex: 0 0 26px; font-size: 8px; }
 .track-columns > .col-start { border-left: 1px solid var(--line); }

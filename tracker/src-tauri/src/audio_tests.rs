@@ -1632,3 +1632,30 @@ fn parameter_lanes_on_the_master_and_a_return_change_the_sound() {
     });
     assert!((swept / plain - 0.501).abs() < 0.01, "{swept} against {plain}");
 }
+
+#[test]
+fn a_cut_silences_a_note_at_once_where_an_off_lets_its_release_ring() {
+    let engine = Arc::new(Mutex::new(EngineServer::new(Session::new(48000.0, Layout::Mono).without_limiter())));
+    let server = Server::start(engine.clone(), ServerConfig { port: 0, ..ServerConfig::default() }).unwrap();
+    let mut worker = Worker::default();
+    worker.command(Command::Connect { port: server.port(), token: None }).unwrap();
+    let ring = "instr ring(freq: hz) { osc(sine, freq) * env[1 | 2sec 0] * 0.3 }";
+    worker.command(Command::Apply { id: "tone".into(), source: ring.into(), kind: Kind::Instr, dir: None }).unwrap();
+    // 125 bpm, 4 rows a beat: a row is 5760 samples, so the note lasts 11520 samples from a start a little after the Play; look well after the end
+    let mut after = |end: &str| {
+        let mut song = test_song(None);
+        song.patterns[0].notes[0][0].notes[0] = Some("C-4".into());
+        song.patterns[0].notes[0][0].notes[2] = Some(end.into());
+        worker.command(Command::Play { song, mode: Mode::Song, pattern_id: "p0".into(), start_position: 0 }).unwrap();
+        let audio = engine.lock().unwrap().session_mut().process(30000);
+        worker.command(Command::Stop).unwrap();
+        let during = audio[0][4000..10000].iter().map(|s| s.abs()).sum::<f32>() / 6000.0;
+        (during, audio[0][24000..30000].iter().map(|s| s.abs()).sum::<f32>() / 6000.0)
+    };
+    let (held, released) = after("OFF");
+    assert!(held > 0.05, "the note sounds while it is held: {held}");
+    assert!(released > 0.05, "an OFF lets the release ring: {released}");
+    let (held, cut) = after("CUT");
+    assert!(held > 0.05, "the note sounds while it is held: {held}");
+    assert!(cut < 0.005, "a CUT stops it with no tail: {cut}");
+}

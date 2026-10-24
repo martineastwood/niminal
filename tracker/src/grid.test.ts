@@ -274,7 +274,7 @@ it('enters OFF, and plain numbers in the sub-columns, shown as people count them
     cell(row, kind).click(); const input = parent.querySelector<HTMLInputElement>('.lane-value')!; input.value = text;
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
   };
-  click(1, 0); key('1'); expect(column.notes[1]).toBe('OFF'); expect(parent.querySelector('#cell-1-0')!.textContent).toBe('OFF');
+  click(1, 0); key('a'); expect(column.notes[1]).toBe('OFF'); expect(parent.querySelector('#cell-1-0')!.textContent).toBe('OFF');
   type(0, 'vol', '50'); expect(column.vol[0]).toBe('64'); expect(cell(0, 'vol').textContent).toBe('50');
   type(1, 'vol', '100'); expect(column.vol[1]).toBe('128'); type(2, 'vol', '101'); expect(column.vol[2]).toBeNull();
   type(2, 'pan', '-50'); expect(column.pan[2]).toBe('0'); expect(cell(2, 'pan').textContent).toBe('-50');
@@ -417,7 +417,7 @@ it('stamps the current instrument\'s number on each note entered in record mode,
   grid.selectTrack(1); key('s');
   const column = project.patterns[0].notes[1][0];
   expect(column.notes[0]).toBe('C#4'); expect(column.inst[0]).toBe('tone'); expect(audition).toHaveBeenLastCalledWith('tone', 'C#4', 1);
-  key('1'); expect(column.notes[1]).toBe('OFF'); expect(column.inst[1]).toBeNull(); // an OFF has no instrument
+  key('a'); expect(column.notes[1]).toBe('OFF'); expect(column.inst[1]).toBeNull(); // an OFF has no instrument
   grid.undo(); grid.undo();
   expect(column.notes[0]).toBeNull(); expect(column.inst[0]).toBeNull();
 });
@@ -588,4 +588,16 @@ it('lights a lane\'s envelope button while its envelope is in use', () => {
   expect(button().classList.contains('on')).toBe(false); // an envelope that is switched off is not in use
   lane.envelope.enabled = true; grid.render();
   expect(button().classList.contains('on')).toBe(true); expect(button().title).toContain('in use');
+});
+
+
+it('enters OFF with A and a CUT with the minus key, neither with an instrument or a sound, and accepts a pasted CUT', () => {
+  const { parent, project, grid, key, audition, click } = setup(undefined, () => 'tone');
+  const column = project.patterns[0].notes[0][0];
+  click(2, 0); audition.mockClear(); key('A'); key('-'); 
+  expect(column.notes[2]).toBe('OFF'); expect(column.notes[3]).toBe('CUT'); expect(column.inst[2]).toBeNull(); expect(column.inst[3]).toBeNull();
+  expect(audition).not.toHaveBeenCalled(); expect(parent.querySelector('#cell-3-0')!.classList.contains('cut')).toBe(true); expect(parent.querySelector('#cell-3-0')!.textContent).toBe('CUT');
+  key('1'); key('`'); expect(column.notes[4]).toBe('D#4'); // the old keys do nothing now: row 4 is still the starter note
+  click(6, 0); clipboard(parent, 'paste', 'CUT'); expect(column.notes[6]).toBe('CUT');
+  grid.undo(); expect(column.notes[6]).toBeNull();
 });
