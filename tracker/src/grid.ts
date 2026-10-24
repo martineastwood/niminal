@@ -620,7 +620,6 @@ export class PatternGrid {
     if (this.live && ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', 'F9', 'F10', 'F11', 'F12'].includes(event.key)) { event.preventDefault(); return; }
     switch (event.key) {
       case ' ': event.preventDefault(); this.togglePlay(); return;
-      case 'Escape': event.preventDefault(); this.setRecording(!this.recording); return;
       case 'ArrowUp': this.row = event.shiftKey ? Math.max(0, this.row - 1) : (this.row + this.pattern().rows - 1) % this.pattern().rows; break;
       case 'ArrowDown': this.row = event.shiftKey ? Math.min(this.pattern().rows - 1, this.row + 1) : (this.row + 1) % this.pattern().rows; break;
       case 'ArrowLeft': this.column = event.shiftKey ? Math.max(0, this.column - 1) : (this.column + lanes.length - 1) % lanes.length; break;

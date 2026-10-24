@@ -247,9 +247,9 @@ it('only previews notes until record mode is on, and marks the selected track', 
   key('Delete'); parent.querySelector<HTMLElement>('#cell-0-0')!.click();
   expect(edited).not.toHaveBeenCalled();
   const changed = vi.fn(); grid.modeChanged = changed;
-  key('Escape'); expect(grid.recording).toBe(true); expect(changed).toHaveBeenCalledWith(true);
+  grid.setRecording(true); expect(grid.recording).toBe(true); expect(changed).toHaveBeenCalledWith(true);
   key('s'); expect(project.patterns[0].notes[0][0].notes[0]).toBe('C#4');
-  key('Escape'); expect(grid.recording).toBe(false);
+  grid.setRecording(false); expect(grid.recording).toBe(false);
   expect(document.querySelector('.track-frame')).not.toBeNull();
 });
 

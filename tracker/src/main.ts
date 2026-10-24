@@ -449,6 +449,12 @@ function newLibraryEffect(preset = 'blank') {
 }
 grid.modeChanged = on => { element('grid-wrap').classList.toggle('recording', on); element('record').setAttribute('aria-pressed', String(on)); };
 element('record').onclick = () => { grid.setRecording(!grid.recording); element('grid').focus(); };
+// Toggle even when editors or popups consume Escape, while preserving their close/cancel action.
+window.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  event.preventDefault();
+  if (!event.repeat) grid.setRecording(!grid.recording);
+}, true);
 element('undo').onclick = () => { grid.undo(); element('grid').focus(); };
 element('redo').onclick = () => { grid.redo(); element('grid').focus(); };
 function renderApplyStatus() {
