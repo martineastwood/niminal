@@ -1,7 +1,7 @@
 import { patternTiming, patternSeconds, patternRow } from './project';
 import { instrumentsOnTrack } from './instruments';
 import { laneParameter, targetKey, formatValue, parseValue, envelopeValue } from './automation';
-import { commandValue, keyboardNote, noteAt, noteNumber, transposeNote, emptyFxLane, blankColumn, subColumns, maxNoteColumns, columnCount, columnStrip, columnLanes, type FxTarget, type FxLane, type EffectParameters, type Project, type Song, type Pattern, type Track, type SubColumn } from './project';
+import { startValue, pitchValue, retriggerValue, glideRetriggers, keyboardNote, noteAt, noteNumber, transposeNote, emptyFxLane, blankColumn, subColumns, maxNoteColumns, columnCount, columnStrip, columnLanes, type FxTarget, type FxLane, type EffectParameters, type Project, type Song, type Pattern, type Track, type SubColumn } from './project';
 import { NoteHistory, parseNotes, type NoteEdit } from './history';
 import { openBrowser } from './browser';
 
@@ -13,21 +13,23 @@ const ROW_WIDTH = 30, NOTE_WIDTH = 44, SUB_WIDTH = 26, LANE_WIDTH = 72, MIN_TRAC
 /** A column of cells. Note-family lanes have `fx` null; parameter lanes have a `kind` of null. */
 type Kind = 'note' | SubColumn;
 interface Lane { track: number; kind: Kind | null; col: number; fx: number | null; values: (string | null)[] }
-const subLabel: Record<SubColumn, string> = { inst: 'Ins', vol: 'Vol', pan: 'Pan', delay: 'Dly', cmd: 'Cmd' };
+const subLabel: Record<SubColumn, string> = { inst: 'Ins', vol: 'Vol', pan: 'Pan', delay: 'Dly', start: 'Start', pitch: 'Pitch', rtg: 'Rtg' };
 const subTitle: Record<SubColumn, string> = {
   inst: 'Instrument for this note: its number in the sidebar list',
   vol: 'Volume for this note, 0 to 100',
   pan: 'Panning for this note, -50 (left) to +50 (right), C for centre',
   delay: 'Delay: how far into the row the note starts, as a percent, 0 to 99',
-  cmd: 'Command: O50 starts a sample half way in, V plays it backwards, R4 plays the note four times in its row, G8 glides the held note to this one over a row, U12 or D3 slides the held note up or down that many semitones',
+  start: 'Start: where the sample starts and which way it plays. 50 starts half way in, < plays it backwards, 50< does both',
+  pitch: 'Pitch: G8 glides the held note to this one over a row, U12 or D3 slides the held note up or down that many semitones during the row',
+  rtg: 'Retrigger: how many times the note plays in its row, 2 to 32',
 };
-const subRange: Record<SubColumn, string> = { inst: 'an instrument number', vol: '0 to 100', pan: '-50 to 50, or C', delay: '0 to 99', cmd: 'a command such as O50, V, R4, G8, U12 or D3' };
+const subRange: Record<SubColumn, string> = { inst: 'an instrument number', vol: '0 to 100', pan: '-50 to 50, or C', delay: '0 to 99', start: '0 to 99, <, or both such as 50<', pitch: 'G, U or D and a number, such as G8, U12 or D3', rtg: '2 to 32' };
 
 // Cells store the engine's whole numbers (volume and pan 0 to 128, delay 0 to 255); these show them as people count.
 /** What a sub-column cell reads as, for display and the clipboard. */
 export function subText(kind: SubColumn, value: string | null, project: Project): string {
   if (value === null) return '';
-  if (kind === 'cmd') return value;
+  if (kind === 'start' || kind === 'pitch' || kind === 'rtg') return value;
   const n = Number(value);
   if (kind === 'inst') { const index = project.definitions.filter(d => d.kind === 'instr').findIndex(d => d.id === value); return index < 0 ? '??' : String(index).padStart(2, '0'); }
   if (kind === 'vol') return String(Math.round(n * 100 / 128));
@@ -37,7 +39,9 @@ export function subText(kind: SubColumn, value: string | null, project: Project)
 }
 /** The stored value for typed or pasted text, or null when it names nothing. */
 export function subValue(kind: SubColumn, text: string, project: Project): string | null {
-  if (kind === 'cmd') return commandValue(text);
+  if (kind === 'start') return startValue(text);
+  if (kind === 'pitch') return pitchValue(text);
+  if (kind === 'rtg') return retriggerValue(text);
   const t = text.trim().replace(/%$/, '');
   if (kind === 'pan' && /^c$/i.test(t)) return '64';
   if (!/^[+-]?\d{1,3}$/.test(t)) return null;
@@ -76,7 +80,7 @@ export class PatternGrid {
     private pattern: () => Pattern,
     private octave: () => number,
     private edited: () => void,
-    private audition: (id: string, note: string, track: number, command?: string) => void,
+    private audition: (id: string, note: string, track: number, expression?: { start?: string; retrigger?: string }) => void,
     private togglePlay: () => void,
     private trackSelected: (track: number) => void = () => {},
     private step: () => number = () => 1,
@@ -424,7 +428,7 @@ export class PatternGrid {
     const heading = document.createElement('span'); heading.textContent = 'Note columns';
     const fewer = document.createElement('button'); fewer.textContent = '−'; fewer.setAttribute('aria-label', 'Fewer note columns'); fewer.disabled = count <= 1;
     fewer.onclick = () => {
-      if (project.patterns.some(p => { const last = p.notes[index].at(-1)!; return [last.notes, last.inst, last.vol, last.pan, last.delay, last.cmd].some(cells => cells.some(v => v !== null)); })) { this.feedback('Clear the last note column in every pattern before removing it.'); return; }
+      if (project.patterns.some(p => { const last = p.notes[index].at(-1)!; return [last.notes, last.inst, last.vol, last.pan, last.delay, last.start, last.pitch, last.rtg].some(cells => cells.some(v => v !== null)); })) { this.feedback('Clear the last note column in every pattern before removing it.'); return; }
       for (const p of project.patterns) p.notes[index].pop();
       changed();
     };
@@ -447,7 +451,7 @@ export class PatternGrid {
       const label = document.createElement('label'); label.title = subTitle[kind];
       const box = document.createElement('input'); box.type = 'checkbox'; box.checked = !!track.show?.[kind]; box.setAttribute('aria-label', `Show ${subLabel[kind]} column`);
       box.onchange = () => { track.show = { ...track.show, [kind]: box.checked }; changed(); };
-      label.append(box, { vol: 'Volume', pan: 'Panning', delay: 'Delay', cmd: 'Command' }[kind]); checks.append(label);
+      label.append(box, { vol: 'Volume', pan: 'Panning', delay: 'Delay', start: 'Start', pitch: 'Pitch', rtg: 'Retrigger' }[kind]); checks.append(label);
     }
   }
   /** Edits a sub-column cell in place, like a parameter lane: type a number, Enter to save and move down. */
@@ -462,24 +466,27 @@ export class PatternGrid {
       if (finished) return;
       const blank = input.value.trim() === '';
       const value = initial === undefined && input.value === originalText ? lane.values[row] : blank ? null : subValue(kind, input.value, this.project());
+      const notes = this.pattern().notes[lane.track]?.[lane.col];
+      const competing = commit && value !== null && notes && (kind === 'pitch' ? glideRetriggers(value, notes.rtg[row]) : kind === 'rtg' && glideRetriggers(notes.pitch[row], value));
+      if (competing) { this.feedback('A glide and a retrigger cannot share a row: clear one first.'); if (advance) { input.focus(); return; } commit = false; }
       if (commit && !blank && value === null) { this.feedback(kind === 'inst' ? 'No instrument has that number.' : `Enter ${subRange[kind]}.`); if (advance) { input.focus(); return; } commit = false; }
       finished = true;
       if (commit) this.apply([{ row, track: column, before: lane.values[row], after: value }]);
-      if (commit && kind === 'cmd' && value) this.previewCommand(row, lane, value);
+      if (commit && (kind === 'start' || kind === 'rtg') && value) this.previewCommand(row, lane, value);
       if (advance && commit) this.advance(); this.render(); if (advance) this.parent.focus();
     };
     input.onkeydown = event => { event.stopPropagation(); if (event.key === 'Enter' || event.key === 'Escape' || event.key === 'Tab') { event.preventDefault(); finish(event.key !== 'Escape', true); } };
     input.onblur = () => finish(true, false);
   }
   /** Plays the note a command at `row` acts on, with the command: the note in the row, or the one held above it. */
-  private previewCommand(row: number, lane: Lane, command: string) {
+  private previewCommand(row: number, lane: Lane, value: string) {
     const column = this.pattern().notes[lane.track]?.[lane.col]; if (!column) return;
     for (let at = row; at >= 0; at--) {
       const note = column.notes[at];
       if (note === null) continue;
       if (noteNumber(note) === null) return;
       const instrument = instrumentAt(column.inst, at);
-      if (instrument) this.audition(instrument, note, lane.track, command);
+      if (instrument) this.audition(instrument, note, lane.track, lane.kind === 'start' ? { start: value } : { retrigger: value });
       return;
     }
   }
@@ -543,7 +550,7 @@ export class PatternGrid {
     if (!this.recording) { this.feedback('Turn on record mode to edit the selection.'); return; }
     const { top, bottom, left, right } = this.bounds, edits: NoteEdit[] = [];
     for (let column = left; column <= right; column++) {
-      const lane = this.lanes[column]; if (!this.editable(lane) || lane.kind === 'inst' || lane.kind === 'cmd') continue;
+      const lane = this.lanes[column]; if (!this.editable(lane) || lane.kind === 'inst' || lane.kind === 'start' || lane.kind === 'pitch' || lane.kind === 'rtg') continue;
       const number = (value: string | null) => value === null ? null : lane.kind === 'note' ? noteNumber(value) : Number.isFinite(Number(value)) ? Number(value) : null;
       const rows = Array.from({ length: bottom - top + 1 }, (_, i) => top + i).filter(row => number(lane.values[row]) !== null);
       const numbers = rows.map(row => number(lane.values[row])!), low = Math.min(...numbers), high = Math.max(...numbers);
@@ -586,7 +593,7 @@ export class PatternGrid {
     const { top, bottom, left, right } = this.bounds, lanes = this.lanes, edits: NoteEdit[] = [];
     for (let column = left; column <= right; column++) {
       const lane = lanes[column];
-      if (lane.kind === 'note' || lane.kind === 'inst' || !this.editable(lane)) continue;
+      if (lane.kind === 'note' || lane.kind === 'inst' || lane.kind === 'start' || lane.kind === 'pitch' || lane.kind === 'rtg' || !this.editable(lane)) continue;
       const from = Number(lane.values[top]), to = Number(lane.values[bottom]);
       if (lane.values[top] === null || lane.values[bottom] === null || !Number.isFinite(from) || !Number.isFinite(to)) continue;
       for (let row = top + 1; row < bottom; row++) {
@@ -769,7 +776,7 @@ export class PatternGrid {
           if (event.key === 'Enter' || event.key.length === 1 && /[0-9+.-]/.test(event.key)) { event.preventDefault(); this.editValue(this.row, this.column, event.key === 'Enter' ? undefined : event.key); } return;
         }
         if (lane.kind !== 'note') {
-          if (!(event.key === 'Enter' || /^[0-9+-]$/.test(event.key) || lane.kind === 'pan' && /^c$/i.test(event.key) || lane.kind === 'cmd' && /^[orgudv]$/i.test(event.key))) return;
+          if (!(event.key === 'Enter' || /^[0-9+-]$/.test(event.key) || lane.kind === 'pan' && /^c$/i.test(event.key) || lane.kind === 'start' && event.key === '<' || lane.kind === 'pitch' && /^[gud]$/i.test(event.key))) return;
           event.preventDefault(); this.editSub(this.row, this.column, event.key === 'Enter' ? undefined : event.key); return;
         }
         // A ends a note by letting it release, which no piano key uses; the minus key stops it at once

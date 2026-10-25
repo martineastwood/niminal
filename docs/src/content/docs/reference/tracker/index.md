@@ -33,7 +33,7 @@ The right-hand side holds the project's instruments and the sound browser. **Cmd
 
 The **menu bar** has File (New, Open, Save, Import Samples, Import Samples as a Kit, Export WAV, Export WAV and Track Stems), Edit (Undo, Redo, Cut, Copy, Paste), Song, Sound and View. Items do what the matching button or key does.
 
-- [The grid](/reference/tracker/grid/) — notes, columns, the Cmd column, sliced samples
+- [The grid](/reference/tracker/grid/) — notes, columns, start, pitch and retrigger cells, sliced samples
 - [Patterns, the sequence and timing](/reference/tracker/sequence/) — song order, loops, sections, the matrix, tempo
 - [Instruments and effects](/reference/tracker/instruments/) — the project's sounds, the browser, applying code, effect chains
 - [Parameter lanes, LFOs and envelopes](/reference/tracker/automation/) — automation inside a pattern

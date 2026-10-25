@@ -7,7 +7,7 @@ use niminal_ws::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::pattern::{Mode, NoteCommand, Playback, Song, Track, command_args, fit_to_tempo, note_args};
+use crate::pattern::{Mode, Playback, Song, Start, Track, fit_to_tempo, hit_args, note_args, start_args, Retrigger};
 use crate::{
     mixer,
     sound::{Kind, Sound},
@@ -79,9 +79,12 @@ pub enum Command {
         /// How long the note is held, in milliseconds.
         #[serde(default = "audition_ms")]
         ms: u32,
-        /// A note command to hear with it: offset, reverse or retrigger.
+        /// A start (offset or reverse) to hear it with.
         #[serde(default)]
-        command: Option<String>,
+        start: Option<String>,
+        /// A retrigger to hear it with.
+        #[serde(default)]
+        retrigger: Option<String>,
     },
     Stop,
     /// The tracker is closing: stop the sound and the engine it started.
@@ -625,7 +628,8 @@ impl Worker {
                 note,
                 track,
                 ms,
-                command,
+                start,
+                retrigger,
             } => {
                 if track >= 16 {
                     return Err("Invalid audition track".into());
@@ -640,19 +644,17 @@ impl Worker {
                 let Some(mut args) = note_args(&note, slices)? else {
                     return Ok(());
                 };
-                let command = command.as_deref().and_then(NoteCommand::parse);
+                let start = start.as_deref().and_then(Start::parse).unwrap_or_default();
                 fit_to_tempo(&mut args, self.status.instrument_parameters.get(&instrument).map_or(&[], Vec::as_slice), self.mixer_timing.0);
-                command_args(&mut args, command, self.status.instrument_parameters.get(&instrument).map_or(&[], Vec::as_slice));
+                start_args(&mut args, start, self.status.instrument_parameters.get(&instrument).map_or(&[], Vec::as_slice));
                 // a retrigger shares the time between its hits
-                let hits = match command {
-                    Some(NoteCommand::Retrigger(n)) => n,
-                    _ => 1,
-                };
+                let retrigger = retrigger.as_deref().and_then(Retrigger::parse);
+                let hits = retrigger.map_or(1, |r| r.hits);
                 let start = if hits > 1 { self.clock()? + (self.status.sample_rate * 0.02) as u64 } else { 0 };
                 let events = (0..hits)
                     .map(|hit| {
                         let at = if hits > 1 { json!(start + (f64::from(hit) * f64::from(ms) / f64::from(hits) / 1000.0 * self.status.sample_rate) as u64) } else { json!("now") };
-                        json!({"op":"note", "at":at, "target":target, "to":format!("in_{track}"), "dur":format!("{}ms", ms / hits), "args":args})
+                        json!({"op":"note", "at":at, "target":target, "to":format!("in_{track}"), "dur":format!("{}ms", ms / hits), "args":retrigger.map_or_else(|| args.clone(), |r| hit_args(&args, r.gain(hit), self.status.instrument_parameters.get(&instrument).map_or(&[], Vec::as_slice)))})
                     })
                     .collect();
                 self.send_events(events)?;

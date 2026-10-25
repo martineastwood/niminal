@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Track {
@@ -192,45 +192,119 @@ pub struct NoteColumn {
     /// How late the note starts, in 256ths of a row.
     #[serde(default)]
     pub delay: Vec<Option<String>>,
-    /// A command for the note, or for the note sounding in this column: see [`NoteCommand`].
+    /// Where the sample starts and which way it plays, for a new note: see [`Start`].
     #[serde(default)]
-    pub cmd: Vec<Option<String>>,
+    pub start: Vec<Option<String>>,
+    /// A glide, slide or other pitch movement for the note, or for the note sounding in this column: see [`Pitch`].
+    #[serde(default)]
+    pub pitch: Vec<Option<String>>,
+    /// How many times the note plays in its row, and how its level changes: see [`Retrigger`].
+    #[serde(default)]
+    pub rtg: Vec<Option<String>>,
+    /// The percent chance, 0 to 100, that a note plays; blank is certain.
+    #[serde(default)]
+    pub chance: Vec<Option<String>>,
 }
 
-/// What a cell of the command sub-column asks for, written as a letter and a whole number.
+/// Where a new note's sample starts and which way it plays: `50` half way in, `<` backwards, `50<` both.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Start {
+    /// The share of the sample to skip, from 0 up to 0.99.
+    pub offset: Option<f64>,
+    pub reverse: bool,
+}
+
+impl Start {
+    pub fn parse(text: &str) -> Option<Self> {
+        let (digits, reverse) = match text.strip_suffix('<') {
+            Some(digits) => (digits, true),
+            None => (text, false),
+        };
+        if digits.is_empty() {
+            return reverse.then_some(Self { offset: None, reverse });
+        }
+        if digits.len() > 2 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        Some(Self { offset: Some(digits.parse::<f64>().ok()? / 100.0), reverse })
+    }
+}
+
+/// What a cell of the pitch sub-column asks for, written as a letter and a whole number.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum NoteCommand {
-    /// `O50`: start the sample this share of the way in (needs a `begin` parameter).
-    Offset(f64),
-    /// `V`: play the sample backwards (needs a `rate` parameter).
-    Reverse,
-    /// `R4`: play the note this many times in its row.
-    Retrigger(u32),
+pub enum Pitch {
     /// `G8`: glide the note that is held in this column to this one, over this many rows (given in eighths).
     Glide(f64),
     /// `U12`, `D3`: slide the held note up or down by this many semitones during this row.
     Slide(f64),
 }
 
-impl NoteCommand {
+impl Pitch {
     pub fn parse(text: &str) -> Option<Self> {
         let mut chars = text.chars();
-        let letter = chars.next()?.to_ascii_uppercase();
+        let letter = chars.next()?;
         let digits = chars.as_str();
         if digits.len() > 2 || !digits.bytes().all(|b| b.is_ascii_digit()) {
             return None;
         }
         let n: u32 = digits.parse().unwrap_or(0);
         match letter {
-            'V' if digits.is_empty() => Some(Self::Reverse),
-            'O' if !digits.is_empty() => Some(Self::Offset(f64::from(n) / 100.0)),
-            'R' if (2..=32).contains(&n) => Some(Self::Retrigger(n)),
             'G' if !digits.is_empty() => Some(Self::Glide(f64::from(n) / 8.0)),
             'U' if n > 0 => Some(Self::Slide(f64::from(n))),
             'D' if n > 0 => Some(Self::Slide(-f64::from(n))),
             _ => None,
         }
     }
+}
+
+/// A retrigger cell: `4` plays the note four times in its row, `4:-25` with each hit 25% quieter than the one before.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Retrigger {
+    /// How many times the note plays, from 2 to 32.
+    pub hits: u32,
+    /// How each hit's level differs from the one before, from -1 to 1.
+    pub change: f64,
+}
+
+impl Retrigger {
+    pub fn parse(text: &str) -> Option<Self> {
+        let (hits, change) = match text.split_once(':') {
+            Some((hits, change)) => (hits, Some(change)),
+            None => (text, None),
+        };
+        let digits = |text: &str, len: usize| !text.is_empty() && text.len() <= len && text.bytes().all(|b| b.is_ascii_digit());
+        if !digits(hits, 2) {
+            return None;
+        }
+        let change = match change {
+            None => 0,
+            Some(change) => {
+                let (negative, magnitude) = change.strip_prefix('-').map_or((false, change), |m| (true, m));
+                if !digits(magnitude, 3) {
+                    return None;
+                }
+                let n: i32 = magnitude.parse().ok().filter(|n| *n <= 100)?;
+                if negative { -n } else { n }
+            }
+        };
+        let hits: u32 = hits.parse().ok().filter(|n| (2..=32).contains(n))?;
+        Some(Self { hits, change: f64::from(change) / 100.0 })
+    }
+    /// How loud hit `hit` (counting from 0) is against the note's own level. Each hit is the one before
+    /// times `1 + change`; when that grows, the last hit is the note's level and the earlier ones are quieter.
+    pub fn gain(&self, hit: u32) -> f64 {
+        let ratio = 1.0 + self.change;
+        let steps = if self.change > 0.0 { hit as i32 - (self.hits as i32 - 1) } else { hit as i32 };
+        ratio.powi(steps)
+    }
+}
+
+/// The chance cell for a note, 0 to 100 percent.
+pub fn parse_chance(text: &str) -> Option<u32> {
+    if text.is_empty() || text.len() > 3 || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok().filter(|n| *n <= 100)
 }
 
 #[cfg(test)]
@@ -252,7 +326,10 @@ impl NoteColumn {
             || !sized(self.vol.len(), true)
             || !sized(self.pan.len(), true)
             || !sized(self.delay.len(), true)
-            || !sized(self.cmd.len(), true)
+            || !sized(self.start.len(), true)
+            || !sized(self.pitch.len(), true)
+            || !sized(self.rtg.len(), true)
+            || !sized(self.chance.len(), true)
         {
             return Err("Every note sub-column needs a cell for each row".into());
         }
@@ -270,8 +347,20 @@ impl NoteColumn {
         if !within(&self.vol, 128) || !within(&self.pan, 128) || !within(&self.delay, 255) {
             return Err("Volume and pan run 0–128 and delay 0–255".into());
         }
-        if self.cmd.iter().flatten().any(|c| NoteCommand::parse(c).is_none()) {
-            return Err("A command is a letter (O, V, R, G, U or D) and a number, such as G8".into());
+        if self.start.iter().flatten().any(|c| Start::parse(c).is_none()) {
+            return Err("Start is a percentage from 0 to 99, a <, or both, such as 50<".into());
+        }
+        if self.pitch.iter().flatten().any(|c| Pitch::parse(c).is_none()) {
+            return Err("A pitch command is G, U or D and a number, such as G8".into());
+        }
+        if self.rtg.iter().flatten().any(|c| Retrigger::parse(c).is_none()) {
+            return Err("A retrigger is 2 to 32 hits, then optionally : and a change in level from -100 to 100, such as 4:-25".into());
+        }
+        if self.chance.iter().flatten().any(|c| parse_chance(c).is_none()) {
+            return Err("Chance runs from 0 to 100".into());
+        }
+        if (0..rows).any(|row| matches!(self.pitch(row), Some(Pitch::Glide(_))) && self.retrigger(row).is_some()) {
+            return Err("A glide cannot share a row with a retrigger".into());
         }
         Ok(())
     }
@@ -291,8 +380,18 @@ impl NoteColumn {
     pub fn panning(&self, row: usize) -> Option<u32> {
         Self::text(&self.pan, row).and_then(|v| v.parse().ok())
     }
-    pub fn command(&self, row: usize) -> Option<NoteCommand> {
-        Self::text(&self.cmd, row).and_then(NoteCommand::parse)
+    pub fn start(&self, row: usize) -> Start {
+        Self::text(&self.start, row).and_then(Start::parse).unwrap_or_default()
+    }
+    pub fn pitch(&self, row: usize) -> Option<Pitch> {
+        Self::text(&self.pitch, row).and_then(Pitch::parse)
+    }
+    pub fn retrigger(&self, row: usize) -> Option<Retrigger> {
+        Self::text(&self.rtg, row).and_then(Retrigger::parse)
+    }
+    /// The chance, as a percent, that the note in this row plays.
+    pub fn chance(&self, row: usize) -> u32 {
+        Self::text(&self.chance, row).and_then(parse_chance).unwrap_or(100)
     }
     /// The delay as a fraction of a row, from 0 up to just under 1.
     pub fn delayed(&self, row: usize) -> f64 {
@@ -601,15 +700,33 @@ fn midi(note: &str) -> Option<f64> {
     Some(f64::from((octave + 1) * 12 + base + i32::from(mark == b'#')))
 }
 
-/// Sets what an offset or reverse command asks of a note's arguments, when the instrument has the
-/// parameter it needs (`begin` or `rate`); the other commands change the notes, not their arguments.
-pub fn command_args(args: &mut Value, command: Option<NoteCommand>, parameters: &[crate::commands::Parameter]) {
+/// Sets what a note's start asks of its arguments, when the instrument has the parameter it needs
+/// (`begin` for an offset, `rate` for playing backwards).
+pub fn start_args(args: &mut Value, start: Start, parameters: &[crate::commands::Parameter]) {
     let has = |name: &str| parameters.iter().any(|p| p.name == name);
-    match command {
-        Some(NoteCommand::Offset(share)) if has("begin") => args["begin"] = json!(share),
-        Some(NoteCommand::Reverse) if has("rate") => args["rate"] = json!(-1.0),
-        _ => {}
+    if let Some(share) = start.offset.filter(|_| has("begin")) {
+        args["begin"] = json!(share);
     }
+    if start.reverse && has("rate") {
+        args["rate"] = json!(-1.0);
+    }
+}
+
+/// A note's arguments with its level scaled by `gain` (1 leaves them as they are), for one hit of a retrigger.
+/// The level it starts from is the note's own `gain`, or else the instrument's default for one.
+pub fn hit_args(args: &Value, gain: f64, parameters: &[crate::commands::Parameter]) -> Value {
+    let mut args = args.clone();
+    if (gain - 1.0).abs() < 1e-9 {
+        return args;
+    }
+    let db = |linear: f64| 20.0 * linear.max(1e-6).log10();
+    let base = match args.get("gain") {
+        Some(Value::String(text)) => text.strip_suffix("db").and_then(|n| n.parse().ok()),
+        Some(value) => value.as_f64().map(db),
+        None => parameters.iter().find(|p| p.name == "gain").map(|p| if p.unit.as_deref() == Some("db") { p.default } else { db(p.default) }),
+    };
+    args["gain"] = json!(format!("{:.3}db", base.unwrap_or(0.0) + db(gain)));
+    args
 }
 
 /// A sampler with a `from_bpm` plays in time with the song: it is stretched by the tempo its sample was
@@ -658,6 +775,11 @@ pub struct Playback {
     sounding: Vec<Sounding>,
     /// Notes (row, track, column) that a glide has taken over, so they start no note of their own.
     absorbed: BTreeSet<(u64, usize, usize)>,
+    /// The dice rolled for notes that might not play, by row, track and column, kept until the row has
+    /// played so a note's hold, which looks ahead, and the note itself agree. Each roll is a number
+    /// from 0 up to 1, and the note plays when it falls under the chance.
+    rolls: RefCell<BTreeMap<(u64, usize, usize), f64>>,
+    random: Cell<u64>,
     /// Each track's instrument parameter lanes, by instrument and parameter, as of the last row played.
     lane_state: Vec<BTreeMap<(String, String), f64>>,
     pub song: Song,
@@ -694,6 +816,12 @@ impl Playback {
             instrument_parameters: BTreeMap::new(),
             instrument_slices: BTreeMap::new(),
             absorbed: Default::default(),
+            rolls: RefCell::new(BTreeMap::new()),
+            random: Cell::new(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0x9E37_79B9_7F4A_7C15, |d| d.as_nanos() as u64),
+            ),
             sounding: Vec::new(),
             lane_state: Vec::new(),
             song,
@@ -701,6 +829,23 @@ impl Playback {
             pattern_id,
             start_position,
         })
+    }
+
+    /// The next number from 0 up to 1 (splitmix64, seeded from the clock: nothing about the song fixes it).
+    fn roll(&self) -> f64 {
+        let state = self.random.get().wrapping_add(0x9E37_79B9_7F4A_7C15);
+        self.random.set(state);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        ((z ^ (z >> 31)) >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    /// Whether the note in this row, track and column plays, given its chance. A note is rolled for
+    /// once, whichever of its hold or its own row asks first.
+    fn plays(&self, index: u64, track: usize, column: usize, chance: u32) -> bool {
+        chance >= 100
+            || *self.rolls.borrow_mut().entry((index, track, column)).or_insert_with(|| self.roll()) * 100.0 < f64::from(chance)
     }
 
     /// Apply edited sampler loop defaults to held and already queued notes.
@@ -900,12 +1045,16 @@ impl Playback {
                 continue;
             };
             let row = position.row;
-            let command = next.command(row);
+            let command = next.pitch(row);
             if ahead > 0
                 && let Some(note) = next.note(row)
             {
+                if midi(note).is_some() && !self.plays(index + ahead, track, column, next.chance(row)) {
+                    // a note that does not play leaves the sound before it as it was, and so do its commands
+                    continue;
+                }
                 let glide = match (command, held, midi(note)) {
-                    (Some(NoteCommand::Glide(rows)), Some((instrument, _)), Some(to)) if next.instrument(row) == Some(instrument) => Some((rows, to)),
+                    (Some(Pitch::Glide(rows)), Some((instrument, _)), Some(to)) if next.instrument(row) == Some(instrument) => Some((rows, to)),
                     _ => None,
                 };
                 let Some((rows, to)) = glide else {
@@ -916,7 +1065,7 @@ impl Playback {
                 current = Some(to);
                 continue;
             }
-            if let (Some(NoteCommand::Slide(semitones)), Some(from)) = (command, current) {
+            if let (Some(Pitch::Slide(semitones)), Some(from)) = (command, current) {
                 let to = from + semitones;
                 let begins = if ahead == 0 { delay } else { 0.0 };
                 hold.bends.push(Bend { index: index + ahead, delay: begins, rows: 1.0, midi: to });
@@ -1166,6 +1315,9 @@ impl Playback {
                         // A glide from the note before it carries the sound on.
                         continue;
                     }
+                    if !self.plays(self.next_row, index, column_index, column.chance(position.row)) {
+                        continue;
+                    }
                     // A note with no instrument set at or above it is silent, not an error.
                     let Some(id) = column.instrument(position.row) else {
                         continue;
@@ -1199,20 +1351,18 @@ impl Playback {
                                 parameter.argument(value.clamp(parameter.min, parameter.max));
                         }
                     }
-                    let command = column.command(position.row);
                     fit_to_tempo(&mut args, self.instrument_parameters.get(id).map_or(&[], Vec::as_slice), self.bpm_at(self.next_row));
-                    command_args(&mut args, command, self.instrument_parameters.get(id).map_or(&[], Vec::as_slice));
-                    let hits = match command {
-                        Some(NoteCommand::Retrigger(n)) => n,
-                        _ => 1,
-                    };
+                    start_args(&mut args, column.start(position.row), self.instrument_parameters.get(id).map_or(&[], Vec::as_slice));
+                    let retrigger = column.retrigger(position.row);
+                    let hits = retrigger.map_or(1, |r| r.hits);
                     for hit in 0..hits {
+                        let hit_args = retrigger.map_or_else(|| args.clone(), |r| hit_args(&args, r.gain(hit), self.instrument_parameters.get(id).map_or(&[], Vec::as_slice)));
                         let last = hit + 1 == hits;
                         let offset = f64::from(hit) / f64::from(hits);
                         let rows = if last { hold.rows - offset } else { 1.0 / f64::from(hits) }.max(MIN_HOLD);
                         let begins = self.origin + (self.seconds_at(self.next_row as f64 + delay + offset) * sample_rate).round() as u64;
                         let mut note_event = json!({"op":"note", "at":begins, "target":target, "to":format!("in_{index}"), "tag":"tracker-pattern",
-                            "dur":format!("{:.6}sec", self.seconds_at(self.next_row as f64 + delay + offset + rows) - self.seconds_at(self.next_row as f64 + delay + offset)), "args":args});
+                            "dur":format!("{:.6}sec", self.seconds_at(self.next_row as f64 + delay + offset + rows) - self.seconds_at(self.next_row as f64 + delay + offset)), "args":hit_args});
                         // A cut ends the sound where the note ends, with no release, and a bend changes its
                         // pitch while it sounds: either way the note is given an id to find it by.
                         let changes = last && self.listens(index, id);
@@ -1265,6 +1415,7 @@ impl Playback {
         }
         self.lane_state = state;
         absorbed.retain(|(row, ..)| *row >= self.next_row);
+        self.rolls.borrow_mut().retain(|(row, ..), _| *row >= self.next_row);
         self.absorbed = absorbed;
         self.sounding = sounding;
         Ok((events, skipped))
@@ -1629,9 +1780,18 @@ mod tests {
     }
     fn with_commands(rows: usize, cells: &[(usize, &str)], commands: &[(usize, &str)]) -> NoteColumn {
         let mut column = column(rows, cells);
-        column.cmd = vec![None; rows];
+        // the cells are written as O50, V, R4, G8, U12 or D3 and filed in the sub-column each belongs to
+        column.start = vec![None; rows];
+        column.pitch = vec![None; rows];
+        column.rtg = vec![None; rows];
         for (row, text) in commands {
-            column.cmd[*row] = Some((*text).into());
+            let (cells, cell) = match text.as_bytes()[0] {
+                b'O' => (&mut column.start, text[1..].to_string()),
+                b'V' => (&mut column.start, "<".to_string()),
+                b'R' => (&mut column.rtg, text[1..].to_string()),
+                _ => (&mut column.pitch, (*text).to_string()),
+            };
+            cells[*row] = Some(cell);
         }
         column
     }
@@ -1663,21 +1823,33 @@ mod tests {
     }
 
     #[test]
-    fn commands_are_a_letter_and_a_number() {
-        use NoteCommand::*;
-        assert_eq!(NoteCommand::parse("O50"), Some(Offset(0.5)));
-        assert_eq!(NoteCommand::parse("v"), Some(Reverse));
-        assert_eq!(NoteCommand::parse("R4"), Some(Retrigger(4)));
-        assert_eq!(NoteCommand::parse("G8"), Some(Glide(1.0)));
-        assert_eq!(NoteCommand::parse("U12"), Some(Slide(12.0)));
-        assert_eq!(NoteCommand::parse("D3"), Some(Slide(-3.0)));
-        for bad in ["", "O", "R1", "R33", "V1", "U0", "G100", "X5", "5", "O5x"] {
-            assert_eq!(NoteCommand::parse(bad), None, "{bad}");
+    fn start_pitch_and_retrigger_cells_have_their_own_forms() {
+        assert_eq!(Start::parse("50"), Some(Start { offset: Some(0.5), reverse: false }));
+        assert_eq!(Start::parse("<"), Some(Start { offset: None, reverse: true }));
+        assert_eq!(Start::parse("5<"), Some(Start { offset: Some(0.05), reverse: true }));
+        assert_eq!(Pitch::parse("G8"), Some(Pitch::Glide(1.0)));
+        assert_eq!(Pitch::parse("U12"), Some(Pitch::Slide(12.0)));
+        assert_eq!(Pitch::parse("D3"), Some(Pitch::Slide(-3.0)));
+        assert_eq!(Retrigger::parse("4"), Some(Retrigger { hits: 4, change: 0.0 }));
+        assert_eq!(Retrigger::parse("4:-25"), Some(Retrigger { hits: 4, change: -0.25 }));
+        assert_eq!(Retrigger::parse("2:100"), Some(Retrigger { hits: 2, change: 1.0 }));
+        for bad in ["", "100", "5x", "<<", "<5", "-1"] {
+            assert_eq!(Start::parse(bad), None, "{bad}");
+        }
+        for bad in ["", "G", "U0", "G100", "X5", "5", "R4", "g8"] {
+            assert_eq!(Pitch::parse(bad), None, "{bad}");
+        }
+        for bad in ["", "1", "33", "x", "004", "R4", "4:", "4:101", "4:--1", "4:+5", ":5", "4:-"] {
+            assert_eq!(Retrigger::parse(bad), None, "{bad}");
         }
         let mut song = song();
-        song.patterns[0].notes[0][0].cmd = vec![Some("Q1".into()), None];
+        song.patterns[0].notes[0][0].pitch = vec![Some("Q1".into()), None];
         assert!(song.validate().is_err());
-        song.patterns[0].notes[0][0].cmd = vec![Some("G8".into()), None];
+        song.patterns[0].notes[0][0].pitch = vec![Some("G8".into()), None];
+        song.validate().unwrap();
+        song.patterns[0].notes[0][0].rtg = vec![Some("4".into()), None];
+        assert!(song.validate().unwrap_err().contains("glide"), "a glide and a retrigger compete for the row");
+        song.patterns[0].notes[0][0].pitch = vec![Some("U12".into()), None];
         song.validate().unwrap();
     }
 

@@ -93,7 +93,7 @@ fn real_engine_plays_last_good_source_and_stop_cancels_the_loop() {
             note: "C-4".into(),
             track: 0,
             ms: 200,
-            command: None,
+            start: None, retrigger: None,
         })
         .unwrap();
     let audio = engine.lock().unwrap().session_mut().process(24000);
@@ -138,7 +138,7 @@ fn real_engine_plays_last_good_source_and_stop_cancels_the_loop() {
             note: "D#4".into(),
             track: 0,
             ms: 200,
-            command: None,
+            start: None, retrigger: None,
         })
         .unwrap();
     assert!(
@@ -197,7 +197,7 @@ fn track_effects_gain_and_mute_change_rendered_audio_and_reject_bad_fx_edits() {
                 note: "C-4".into(),
                 track: 0,
             ms: 200,
-                command: None,
+                start: None, retrigger: None,
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -343,7 +343,7 @@ fn each_channel_and_the_master_have_a_scope() {
             note: "C-4".into(),
             track: 0,
             ms: 200,
-            command: None,
+            start: None, retrigger: None,
         })
         .unwrap();
     // The engine renders in blocks; scopes reach the client as it renders and the client asks.
@@ -423,7 +423,7 @@ fn the_master_has_its_own_level_and_effects_and_solo_silences_other_tracks() {
                 note: "C-4".into(),
                 track,
             ms: 200,
-                command: None,
+                start: None, retrigger: None,
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -520,7 +520,7 @@ fn tracks_send_to_returns_that_have_their_own_effects_level_and_mute() {
                 note: "C-4".into(),
                 track,
             ms: 200,
-                command: None,
+                start: None, retrigger: None,
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -631,7 +631,7 @@ fn outputs_route_tracks_into_returns_and_sends_tap_the_chain_where_they_sit() {
                 note: "C-4".into(),
                 track,
             ms: 200,
-                command: None,
+                start: None, retrigger: None,
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -927,7 +927,7 @@ fn imported_samples_play_from_the_project_folder() {
             note: "C-4".into(),
             track: 0,
             ms: 200,
-            command: None,
+            start: None, retrigger: None,
         })
         .unwrap();
     let audio = engine.lock().unwrap().session_mut().process(8000);
@@ -985,7 +985,7 @@ fn device_chain_runs_in_order_and_can_be_edited_while_playing() {
                 note: "C-4".into(),
                 track: 0,
             ms: 200,
-                command: None,
+                start: None, retrigger: None,
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -1183,7 +1183,7 @@ fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
             note: "C-4".into(),
             track: 0,
             ms: 200,
-            command: None,
+            start: None, retrigger: None,
         })
         .unwrap();
     let audio = engine.lock().unwrap().session_mut().process(8000);
@@ -1328,7 +1328,7 @@ fn library_instruments_expose_controls_and_sound_on_mono_and_stereo_engines() {
             let id = format!("library_instrument_{index}");
             worker.command(Command::Apply { id: id.clone(), source: (*source).into(), kind: Kind::Instr, dir: None }).unwrap();
             assert!(!worker.sounds[&id].parameters.is_empty(), "{id} exposes its controls");
-            worker.command(Command::Audition { instrument: id, note: "C-3".into(), track: 0, ms: 200, command: None }).unwrap();
+            worker.command(Command::Audition { instrument: id, note: "C-3".into(), track: 0, ms: 200, start: None, retrigger: None }).unwrap();
             let audio = engine.lock().unwrap().session_mut().process(24000);
             assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
             assert!(audio.iter().flatten().any(|sample| sample.abs() > 0.001), "silent instrument {index}");
@@ -1359,7 +1359,7 @@ fn library_drum_presets_carry_their_voice_and_sound_on_mono_and_stereo_engines()
             );
             worker.command(Command::Apply { id: id.clone(), source, kind: Kind::Instr, dir: None }).unwrap();
             assert!(!worker.sounds[&id].parameters.is_empty(), "{name} exposes its controls");
-            worker.command(Command::Audition { instrument: id, note: "C-3".into(), track: 0, ms: 200, command: None }).unwrap();
+            worker.command(Command::Audition { instrument: id, note: "C-3".into(), track: 0, ms: 200, start: None, retrigger: None }).unwrap();
             let audio = engine.lock().unwrap().session_mut().process(24000);
             assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
             assert!(audio.iter().flatten().any(|sample| sample.abs() > 0.001), "silent drum {name}");
@@ -1388,7 +1388,7 @@ fn overdriven_loudness(drive: f64) -> f32 {
         ..Device::default()
     }];
     worker.command(Command::Update { song }).unwrap();
-    worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track: 0, ms: 200, command: None }).unwrap();
+    worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track: 0, ms: 200, start: None, retrigger: None }).unwrap();
     let audio = engine.lock().unwrap().session_mut().process(24000);
     worker.command(Command::Disconnect).unwrap();
     let samples: Vec<f32> = audio.iter().flatten().copied().collect();
@@ -1421,7 +1421,7 @@ fn left_over_right(compressor_link: Option<f64>) -> f32 {
         }];
     }
     worker.command(Command::Update { song }).unwrap();
-    worker.command(Command::Audition { instrument: "tilted".into(), note: "C-4".into(), track: 0, ms: 200, command: None }).unwrap();
+    worker.command(Command::Audition { instrument: "tilted".into(), note: "C-4".into(), track: 0, ms: 200, start: None, retrigger: None }).unwrap();
     let audio = engine.lock().unwrap().session_mut().process(24000);
     worker.command(Command::Disconnect).unwrap();
     let rms = |c: usize| (audio[c][4000..].iter().map(|s| s * s).sum::<f32>() / (audio[c].len() - 4000) as f32).sqrt();
@@ -1499,7 +1499,7 @@ fn library_effects_expose_controls_and_render_on_mono_and_stereo_engines() {
                     note: "C-4".into(),
                     track: 0,
             ms: 200,
-                    command: None,
+                    start: None, retrigger: None,
                 })
                 .unwrap();
             let audio = engine.lock().unwrap().session_mut().process(24000);
@@ -1728,12 +1728,20 @@ fn one_column(rows: usize, cells: &[(usize, &str)], commands: &[(usize, &str)]) 
     let mut song = test_song(None);
     let column = &mut song.patterns[0].notes[0][0];
     column.inst = vec![Some("tone".into()); 32];
-    column.cmd = vec![None; 32];
+    column.start = vec![None; 32];
+    column.pitch = vec![None; 32];
+    column.rtg = vec![None; 32];
     for (row, note) in cells {
         column.notes[*row] = Some((*note).into());
     }
+    // the cells are written as O50, V, R4, G8, U12 or D3 and filed in the sub-column each belongs to
     for (row, text) in commands {
-        column.cmd[*row] = Some((*text).into());
+        match text.as_bytes()[0] {
+            b'O' => column.start[*row] = Some(text[1..].into()),
+            b'V' => column.start[*row] = Some("<".into()),
+            b'R' => column.rtg[*row] = Some(text[1..].into()),
+            _ => column.pitch[*row] = Some((*text).into()),
+        }
     }
     song.patterns[0].rows = rows;
     song
@@ -1811,13 +1819,13 @@ fn offset_reverse_and_slices_choose_what_part_of_a_sample_plays() {
     worker.command(Command::Stop).unwrap();
     // entering a command in the grid plays the note with it
     let heard = |worker: &mut Worker, command: &str| {
-        worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track: 0, ms: 200, command: Some(command.into()) }).unwrap();
+        worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track: 0, ms: 200, start: Some(command.into()), retrigger: None }).unwrap();
         let audio = engine.lock().unwrap().session_mut().process(4800);
         let start = audio[0].iter().position(|s| s.abs() > 0.01).unwrap_or(0);
         audio[0][start + 20..start + 60].iter().sum::<f32>() / 40.0
     };
-    assert!((heard(&mut worker, "O50") - 0.45).abs() < 0.1);
-    assert!(heard(&mut worker, "V") > 0.8);
+    assert!((heard(&mut worker, "50") - 0.45).abs() < 0.1);
+    assert!(heard(&mut worker, "<") > 0.8);
 
     // a sliced sample plays the piece for each key; the ramp's fourth quarter is its loudest
     apply(&mut worker, format!("smp = sample(\"{file}\").root(c4)\nchops = smp.slices(4)\ninstr chop(freq: hz, sample: num = 0, begin: 0..1 = 0, rate: -4..4 = 1) {{ chops(sample: sample, begin: begin, rate: rate) }}")).unwrap();

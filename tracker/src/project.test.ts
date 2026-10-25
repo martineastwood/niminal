@@ -1,6 +1,6 @@
 import { patternSeconds, patternRow } from './project';
 import { expect, it } from 'vitest';
-import { emptyProject, keyboardNote, transposeNote, setTrackSource, trackSource, newProject, emptyFxLane, blankColumn, makePattern, removeTrack, restoreTrack, readProject, resizePattern, commandValue, duplicateTrack } from './project';
+import { emptyProject, keyboardNote, transposeNote, setTrackSource, trackSource, newProject, emptyFxLane, blankColumn, makePattern, removeTrack, restoreTrack, readProject, resizePattern, startValue, pitchValue, retriggerValue, duplicateTrack } from './project';
 
 it('round trips source and notes and rejects unsupported project data', () => {
   const project = newProject();
@@ -210,20 +210,24 @@ it('starts a new project with a pattern that has nothing in it, and an instrumen
   expect(newProject().patterns[0].notes[0][0].notes[0]).toBe('C-4'); // the phrase the tests use is still there
 });
 
-it('keeps note commands in the project and accepts older files that have none', () => {
-  expect(commandValue('g8')).toBe('G8'); expect(commandValue(' O50 ')).toBe('O50'); expect(commandValue('V')).toBe('V'); expect(commandValue('R4')).toBe('R4'); expect(commandValue('D12')).toBe('D12');
-  for (const bad of ['', 'G', 'O', 'V1', 'R1', 'R33', 'U0', 'X3', '8', 'G100']) expect(commandValue(bad), bad).toBeNull();
-  const project = newProject();
-  project.patterns[0].notes[0][0].cmd[3] = 'G8';
-  expect(readProject(JSON.stringify(project)).patterns[0].notes[0][0].cmd[3]).toBe('G8');
-  project.patterns[0].notes[0][0].cmd[3] = 'G';
-  expect(() => readProject(JSON.stringify(project))).toThrow();
-  const old = JSON.parse(JSON.stringify(newProject()));
-  for (const column of old.patterns[0].notes.flat()) delete column.cmd;
-  expect(readProject(JSON.stringify(old)).patterns[0].notes[0][0].cmd).toEqual([]);
+it('keeps start, pitch and retrigger cells in the project and rejects older files', () => {
+  expect(startValue('50')).toBe('50'); expect(startValue(' < ')).toBe('<'); expect(startValue('5<')).toBe('5<');
+  for (const bad of ['', '100', '<5', '5x', 'v']) expect(startValue(bad), bad).toBeNull();
+  expect(pitchValue('g8')).toBe('G8'); expect(pitchValue('D12')).toBe('D12'); expect(pitchValue('u3')).toBe('U3');
+  for (const bad of ['', 'G', 'U0', 'G100', 'X3', '8', 'R4']) expect(pitchValue(bad), bad).toBeNull();
+  expect(retriggerValue('4')).toBe('4'); expect(retriggerValue('32')).toBe('32');
+  for (const bad of ['', '1', '33', 'R4', '-2']) expect(retriggerValue(bad), bad).toBeNull();
+  const project = newProject(), column = project.patterns[0].notes[0][0];
+  column.pitch[3] = 'G8'; column.start[2] = '50<'; column.rtg[4] = '4';
+  const read = readProject(JSON.stringify(project)).patterns[0].notes[0][0];
+  expect([read.pitch[3], read.start[2], read.rtg[4]]).toEqual(['G8', '50<', '4']);
+  column.pitch[3] = 'G'; expect(() => readProject(JSON.stringify(project))).toThrow();
+  column.pitch[3] = 'G8'; column.rtg[3] = '4'; expect(() => readProject(JSON.stringify(project))).toThrow(); // a glide and a retrigger compete
+  column.pitch[3] = 'U12'; readProject(JSON.stringify(project));
+  expect(() => readProject(JSON.stringify({ ...newProject(), version: 11 }))).toThrow(/version 12/);
   const longer = newProject();
   resizePattern(longer.patterns[0], 64);
-  expect(longer.patterns[0].notes[0][0].cmd).toHaveLength(64);
+  for (const cells of [longer.patterns[0].notes[0][0].start, longer.patterns[0].notes[0][0].pitch, longer.patterns[0].notes[0][0].rtg]) expect(cells).toHaveLength(64);
 });
 
 it('duplicates a track with its effects, notes, lanes and matrix cells, right after it', () => {

@@ -34,27 +34,32 @@ export const columnStrip = (project: Song, column: number): Track => column < pr
 export const columnLanes = (project: Song, pattern: Pattern, column: number): FxLane[] => column < project.tracks.length ? pattern.fx[column] : column < project.tracks.length + project.returns.length ? pattern.return_fx[column - project.tracks.length] : pattern.master_fx;
 /**
  * One note column: parallel cells for each row. `notes` hold `C-4`, `OFF` (release) or `CUT` (stop at once); `inst` an instrument's
- * definition id; `vol` and `pan` a number from 0 to 128 (as text); `delay` from 0 to 255 256ths of a row; `cmd` a letter
- * and a number such as `G8` (see {@link commandValue}).
+ * definition id; `vol` and `pan` a number from 0 to 128 (as text); `delay` from 0 to 255 256ths of a row; `start`, `pitch` and
+ * `rtg` are the note's expression (see {@link startValue}, {@link pitchValue} and {@link retriggerValue}).
  */
-export interface NoteColumn { notes: (string | null)[]; inst: (string | null)[]; vol: (string | null)[]; pan: (string | null)[]; delay: (string | null)[]; cmd: (string | null)[] }
-export type SubColumn = 'inst' | 'vol' | 'pan' | 'delay' | 'cmd';
-export const subColumns: SubColumn[] = ['inst', 'vol', 'pan', 'delay', 'cmd'];
-/**
- * A command cell's text, or null if it is not one. `O50` starts a sample half way in, `V` plays it backwards, `R4` plays the note
- * four times in its row, `G8` glides the held note to this one over eight eighths of a row, and `U12` / `D3` slide the held note
- * up or down that many semitones during the row.
- */
-export function commandValue(text: string): string | null {
-  const t = text.trim().toUpperCase(), match = /^([ORGUDV])(\d{0,2})$/.exec(t);
-  if (!match) return null;
-  const [, letter, digits] = match, n = Number(digits);
-  const valid = letter === 'V' ? digits === '' : letter === 'R' ? n >= 2 && n <= 32 : letter === 'U' || letter === 'D' ? n >= 1 : digits !== '';
-  return valid ? t : null;
+export interface NoteColumn { notes: (string | null)[]; inst: (string | null)[]; vol: (string | null)[]; pan: (string | null)[]; delay: (string | null)[]; start: (string | null)[]; pitch: (string | null)[]; rtg: (string | null)[] }
+export type SubColumn = 'inst' | 'vol' | 'pan' | 'delay' | 'start' | 'pitch' | 'rtg';
+export const subColumns: SubColumn[] = ['inst', 'vol', 'pan', 'delay', 'start', 'pitch', 'rtg'];
+/** A start cell's text, or null if it is not one: `50` starts the sample half way in, `<` plays it backwards, `50<` does both. */
+export function startValue(text: string): string | null {
+  const t = text.trim();
+  return /^(\d{1,2})?<?$/.test(t) && t !== '' ? t : null;
 }
+/** A pitch cell's text, or null: `G8` glides the held note to this one over eight eighths of a row, `U12` / `D3` slide it up or down that many semitones during the row. */
+export function pitchValue(text: string): string | null {
+  const t = text.trim().toUpperCase(), n = Number(t.slice(1));
+  return /^([GUD])\d{1,2}$/.test(t) && (t[0] === 'G' || n >= 1) ? t : null;
+}
+/** A retrigger cell's text, or null: the number of times the note plays in its row, 2 to 32. */
+export function retriggerValue(text: string): string | null {
+  const t = text.trim();
+  return /^\d{1,2}$/.test(t) && Number(t) >= 2 && Number(t) <= 32 ? t : null;
+}
+/** Whether a row's pitch and retrigger cells compete: a glide keeps one voice and a retrigger restarts it. */
+export const glideRetriggers = (pitch: string | null | undefined, rtg: string | null | undefined) => !!pitch && !!rtg && pitch[0] === 'G';
 export const maxNoteColumns = 8;
-export const blankColumn = (rows: number): NoteColumn => ({ notes: Array(rows).fill(null), inst: Array(rows).fill(null), vol: Array(rows).fill(null), pan: Array(rows).fill(null), delay: Array(rows).fill(null), cmd: Array(rows).fill(null) });
-export const cloneColumn = (column: NoteColumn): NoteColumn => ({ notes: [...column.notes], inst: [...column.inst], vol: [...column.vol], pan: [...column.pan], delay: [...column.delay], cmd: [...column.cmd] });
+export const blankColumn = (rows: number): NoteColumn => ({ notes: Array(rows).fill(null), inst: Array(rows).fill(null), vol: Array(rows).fill(null), pan: Array(rows).fill(null), delay: Array(rows).fill(null), start: Array(rows).fill(null), pitch: Array(rows).fill(null), rtg: Array(rows).fill(null) });
+export const cloneColumn = (column: NoteColumn): NoteColumn => ({ notes: [...column.notes], inst: [...column.inst], vol: [...column.vol], pan: [...column.pan], delay: [...column.delay], start: [...column.start], pitch: [...column.pitch], rtg: [...column.rtg] });
 /** BPM counts quarter notes, LPB counts rows per quarter note; meter groups those rows. */
 export interface PatternTiming { bpm: number; rows_per_beat: number; beats_per_bar: number; beat_unit: number; tempo: EnvelopePoint[] }
 export function patternTiming(project: Song, pattern: Pattern): PatternTiming {
@@ -98,13 +103,13 @@ export interface Song { bpm: number; rows_per_beat: number; tracks: Track[]; mas
   matrix?: (TrackSource | null)[][]; instrument_values?: Record<string, Record<string, number>> }
 /** A named group of consecutive sequence steps, from `start` up to the next section's start. It only organises the sequence list. */
 export interface Section { start: number; name: string; collapsed?: boolean }
-export interface Project extends Song { version: 11; id: string; definitions: Definition[]; sections?: Section[] }
-export const storageKey = 'niminal-tracker-project-v11';
+export interface Project extends Song { version: 12; id: string; definitions: Definition[]; sections?: Section[] }
+export const storageKey = 'niminal-tracker-project-v12';
 
 /** A project with a short four-note phrase on the first track, so there is something to play. */
 export function newProject(): Project {
   return {
-    version: 11, id: crypto.randomUUID(), bpm: 125, rows_per_beat: 4,
+    version: 12, id: crypto.randomUUID(), bpm: 125, rows_per_beat: 4,
     definitions: [
       { id: 'tone', name: 'Warm saw', kind: 'instr', source: tone },
     ],
@@ -143,16 +148,14 @@ export function resizePattern(pattern: Pattern, rows: number) {
   pattern.rows = Math.min(256, Math.max(1, Math.trunc(rows) || 1));
   if (pattern.timing) pattern.timing.tempo = pattern.timing.tempo.filter(p => p.row <= pattern.rows);
   // Retain notes beyond a shortened pattern so increasing its length restores them.
-  const cells = [...pattern.notes.flat().flatMap(c => [c.notes, c.inst, c.vol, c.pan, c.delay, c.cmd]), ...pattern.fx.flat().map(lane => lane.values), ...pattern.return_fx.flat().map(lane => lane.values), ...pattern.master_fx.map(lane => lane.values)];
+  const cells = [...pattern.notes.flat().flatMap(c => [c.notes, c.inst, c.vol, c.pan, c.delay, c.start, c.pitch, c.rtg]), ...pattern.fx.flat().map(lane => lane.values), ...pattern.return_fx.flat().map(lane => lane.values), ...pattern.master_fx.map(lane => lane.values)];
   for (const column of cells) while (column.length < pattern.rows) column.push(null);
 }
 
 export function readProject(raw: string): Project {
   const value = JSON.parse(raw);
   if (value && typeof value === 'object') value.returns ??= [];
-  // projects saved before commands existed have no command cells
-  for (const pattern of Array.isArray(value?.patterns) ? value.patterns : []) for (const column of Array.isArray(pattern?.notes) ? pattern.notes.flat() : []) if (column && typeof column === 'object') column.cmd ??= [];
-  if (value?.version !== 11 || typeof value.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value.id) || !Array.isArray(value.definitions) || value.definitions.length === 0 ||
+  if (value?.version !== 12 || typeof value.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value.id) || !Array.isArray(value.definitions) || value.definitions.length === 0 ||
       !value.definitions.every((d: Definition) => d && typeof d.id === 'string' && /^[a-zA-Z_][\w-]*$/.test(d.id) && typeof d.name === 'string' && typeof d.source === 'string' && ['instr', 'fx'].includes(d.kind) && (d.values === undefined || !!d.values && typeof d.values === 'object' && Object.values(d.values).every(Number.isFinite)) && (d.hidden === undefined || Array.isArray(d.hidden) && d.hidden.every((name: unknown) => typeof name === 'string'))) ||
       new Set(value.definitions.map((d: Definition) => d.id)).size !== value.definitions.length ||
       !Number.isFinite(value.bpm) || value.bpm < 20 || value.bpm > 300 ||
@@ -174,7 +177,7 @@ export function readProject(raw: string): Project {
       value.sections !== undefined && !(Array.isArray(value.sections) && value.sections.every((s: Section, i: number) => !!s && Number.isInteger(s.start) && s.start >= 0 && s.start < value.sequence.length && (i === 0 || s.start > value.sections[i - 1].start) && typeof s.name === 'string' && s.name.length <= 60 && (s.collapsed === undefined || typeof s.collapsed === 'boolean'))) ||
       value.matrix !== undefined && !(Array.isArray(value.matrix) && value.matrix.length <= value.sequence.length && value.matrix.every((step: unknown) => Array.isArray(step) && step.length <= value.tracks.length && step.every((s: TrackSource | null) => s === null || !!s && (s.kind === 'mute' || s.kind === 'pattern' && value.patterns.some((p: Pattern) => p.id === s.id))))) ||
       value.loop_range !== undefined && !(Number.isInteger(value.loop_range?.start) && Number.isInteger(value.loop_range.end) && value.loop_range.start >= 0 && value.loop_range.start <= value.loop_range.end && value.loop_range.end < value.sequence.length)) {
-    throw new Error('Not a supported niminal tracker project (expected version 11)');
+    throw new Error('Not a supported niminal tracker project (expected version 12)');
   }
   return value;
 }
@@ -272,7 +275,7 @@ export function restoreTrack(project: Project, deleted: DeletedTrack): boolean {
   tidyMatrix(project);
   for (const pattern of project.patterns) {
     const restored = (deleted.notes.get(pattern.id) ?? [blankColumn(pattern.rows)]).map(cloneColumn);
-    for (const column of restored) for (const cells of [column.notes, column.inst, column.vol, column.pan, column.delay, column.cmd]) while (cells.length < pattern.rows) cells.push(null);
+    for (const column of restored) for (const cells of [column.notes, column.inst, column.vol, column.pan, column.delay, column.start, column.pitch, column.rtg]) while (cells.length < pattern.rows) cells.push(null);
     pattern.notes.splice(deleted.index, 0, restored);
     const fx = (deleted.fx.get(pattern.id) ?? [emptyFxLane(pattern.rows)]).map(cloneLane);
     for (const column of fx) while (column.values.length < pattern.rows) column.values.push(null);
@@ -291,10 +294,11 @@ export function validTarget(target: FxTarget | null): boolean {
 const integerWithin = (max: number) => (v: unknown) => v === null || typeof v === 'string' && /^\d{1,3}$/.test(v) && Number(v) <= max;
 function validColumn(column: NoteColumn, rows: number, definitions: Definition[]) {
   const sized = (cells: unknown, optional: boolean): cells is (string | null)[] => Array.isArray(cells) && cells.length <= 256 && (cells.length >= rows || optional && cells.length === 0);
-  return !!column && sized(column.notes, false) && sized(column.inst, true) && sized(column.vol, true) && sized(column.pan, true) && sized(column.delay, true) && sized(column.cmd, true) &&
+  return !!column && sized(column.notes, false) && sized(column.inst, true) && sized(column.vol, true) && sized(column.pan, true) && sized(column.delay, true) && sized(column.start, true) && sized(column.pitch, true) && sized(column.rtg, true) &&
     column.notes.every(n => n === null || typeof n === 'string' && (n === 'OFF' || n === 'CUT' || /^[A-G][#-][0-8]$/.test(n))) &&
     column.inst.every(id => id === null || typeof id === 'string' && definitions.some(d => d.id === id && d.kind === 'instr')) &&
-    column.vol.every(integerWithin(128)) && column.pan.every(integerWithin(128)) && column.delay.every(integerWithin(255)) && column.cmd.every(c => c === null || commandValue(c) === c);
+    column.vol.every(integerWithin(128)) && column.pan.every(integerWithin(128)) && column.delay.every(integerWithin(255)) && column.start.every(c => c === null || startValue(c) === c) && column.pitch.every(c => c === null || pitchValue(c) === c) && column.rtg.every(c => c === null || retriggerValue(c) === c) &&
+    !column.pitch.some((c, row) => glideRetriggers(c, column.rtg[row]));
 }
 function validTrack(t: Track, definitions: Definition[]): boolean {
   return !!(

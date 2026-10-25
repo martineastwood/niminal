@@ -744,17 +744,20 @@ it('cuts a whole track to the clipboard and clears it', () => {
   vi.stubGlobal('navigator', real);
 });
 
-it('enters commands in the Cmd column in capitals and plays the note they act on with them', () => {
+it('enters start, pitch and retrigger cells and plays the note they act on with them', () => {
   const { parent, project, grid, audition } = setup();
-  project.tracks[0].show = { cmd: true }; grid.render();
-  const column = project.patterns[0].notes[0][0], cell = (row: number) => parent.querySelector<HTMLElement>(`#cell-${row}-0-0-cmd`)!;
-  const type = (row: number, text: string) => {
-    cell(row).click(); const input = parent.querySelector<HTMLInputElement>('.lane-value')!; input.value = text;
+  project.tracks[0].show = { start: true, pitch: true, rtg: true }; grid.render();
+  const column = project.patterns[0].notes[0][0], cell = (row: number, kind: string) => parent.querySelector<HTMLElement>(`#cell-${row}-0-0-${kind}`)!;
+  const type = (row: number, kind: string, text: string) => {
+    cell(row, kind).click(); const input = parent.querySelector<HTMLInputElement>('.lane-value')!; input.value = text;
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
   };
-  type(0, 'o50'); expect(column.cmd[0]).toBe('O50'); expect(cell(0).textContent).toBe('O50');
-  expect(audition).toHaveBeenLastCalledWith('tone', 'C-4', 0, 'O50');
-  type(3, 'r4'); expect(audition).toHaveBeenLastCalledWith('tone', 'C-4', 0, 'R4'); // the note held above it
-  audition.mockClear(); type(4, 'x9'); expect(column.cmd[4]).toBeNull(); expect(audition).not.toHaveBeenCalled();
-  column.notes[5] = 'OFF'; type(6, 'v'); expect(column.cmd[6]).toBe('V'); expect(audition).not.toHaveBeenCalled(); // nothing is held after an OFF
+  type(0, 'start', '50<'); expect(column.start[0]).toBe('50<'); expect(cell(0, 'start').textContent).toBe('50<');
+  expect(audition).toHaveBeenLastCalledWith('tone', 'C-4', 0, { start: '50<' });
+  type(3, 'rtg', '4'); expect(column.rtg[3]).toBe('4'); expect(audition).toHaveBeenLastCalledWith('tone', 'C-4', 0, { retrigger: '4' }); // the note held above it
+  audition.mockClear(); type(4, 'pitch', 'x9'); expect(column.pitch[4]).toBeNull(); expect(audition).not.toHaveBeenCalled();
+  type(5, 'pitch', 'g8'); expect(column.pitch[5]).toBe('G8'); expect(audition).not.toHaveBeenCalled();
+  type(5, 'rtg', '4'); expect(column.rtg[5]).toBeNull(); // a glide and a retrigger compete for the row
+  type(3, 'pitch', 'u12'); expect(column.pitch[3]).toBe('U12'); // a slide and a retrigger do not
+  column.notes[7] = 'OFF'; type(7, 'rtg', '2'); expect(column.rtg[7]).toBe('2'); expect(audition).not.toHaveBeenCalled(); // nothing is held after an OFF
 });

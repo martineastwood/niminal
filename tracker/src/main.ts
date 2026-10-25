@@ -286,10 +286,10 @@ function editedPattern() {
     });
   }, 50);
 }
-async function audition(id: string, note: string, track: number, ms = 300, command?: string) {
+async function audition(id: string, note: string, track: number, ms = 300, expression: { start?: string; retrigger?: string } = {}) {
   await ensureSound(id); await ensureAssignments();
   await audioCommand({ op: 'update', song: song() });
-  await audioCommand({ op: 'audition', instrument: id, note, track, ms, command });
+  await audioCommand({ op: 'audition', instrument: id, note, track, ms, ...expression });
 }
 /** Slots in the engine for what the sound browser is playing; they are not part of the project. */
 const previewInstrument = 'preview_instr', previewEffect = 'preview_fx';
@@ -330,7 +330,7 @@ const arrangement = new Arrangement(element('sequence'), () => project, manual =
   grid.render(); deviceTrack = activeStrip(); mixerView(); patternControls();
 }, editedPattern);
 const grid = new PatternGrid(element('grid'), () => project, () => arrangement.pattern, () => Number(element<HTMLInputElement>('octave').value), () => { editedPattern(); mixerView(); },
-  (id, note, track, command) => { if (audioStatus.connected) void action(() => audition(id, note, track, 300, command)); },
+  (id, note, track, expression) => { if (audioStatus.connected) void action(() => audition(id, note, track, 300, expression)); },
   () => { void action(() => togglePlay()); },
   column => { const strip = columnToStrip(project, column); if (deviceTrack !== strip) { const editingFx = fxMode && !element('code-panel').hidden; deviceTrack = strip; if (editingFx) showFx(); else mixerView(); } },
   () => Number(element<HTMLInputElement>('entry-step').value), () => allParameters(), status, (track, lane) => {
