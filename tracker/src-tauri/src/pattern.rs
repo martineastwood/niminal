@@ -204,6 +204,12 @@ pub struct NoteColumn {
     /// The percent chance, 0 to 100, that a note plays; blank is certain.
     #[serde(default)]
     pub chance: Vec<Option<String>>,
+    /// How long a new note sounds before it is released, as a percent of a row, 1 to 99; blank holds it as usual.
+    #[serde(default)]
+    pub len: Vec<Option<String>>,
+    /// A change to the note sounding in this column during this row: see [`parse_fx`].
+    #[serde(default)]
+    pub fx: Vec<Option<String>>,
 }
 
 /// Where a new note's sample starts and which way it plays: `50` half way in, `<` backwards, `50<` both.
@@ -257,6 +263,22 @@ impl Pitch {
     }
 }
 
+/// An effect cell: `V-20` or `V+10` move the level of the note held in the column, by that many percent of full level
+/// (1 to 99) during this row. The result is the change in the level cells' units, 0 to 128.
+pub fn parse_fx(text: &str) -> Option<f64> {
+    let digits = text.strip_prefix('V')?;
+    let sign = match digits.as_bytes().first()? {
+        b'+' => 1.0,
+        b'-' => -1.0,
+        _ => return None,
+    };
+    let digits = &digits[1..];
+    if digits.len() > 2 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse::<u32>().ok().filter(|n| (1..=99).contains(n)).map(|n| sign * f64::from(n) * 1.28)
+}
+
 /// A retrigger cell: `4` plays the note four times in its row, `4:-25` with each hit 25% quieter than the one before.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Retrigger {
@@ -299,6 +321,11 @@ impl Retrigger {
     }
 }
 
+/// The length cell for a note: 1 to 99 percent of a row.
+pub fn parse_len(text: &str) -> Option<u32> {
+    text.parse().ok().filter(|n| (1..=99).contains(n))
+}
+
 /// The chance cell for a note, 0 to 100 percent.
 pub fn parse_chance(text: &str) -> Option<u32> {
     if text.is_empty() || text.len() > 3 || !text.bytes().all(|b| b.is_ascii_digit()) {
@@ -330,6 +357,8 @@ impl NoteColumn {
             || !sized(self.pitch.len(), true)
             || !sized(self.rtg.len(), true)
             || !sized(self.chance.len(), true)
+            || !sized(self.len.len(), true)
+            || !sized(self.fx.len(), true)
         {
             return Err("Every note sub-column needs a cell for each row".into());
         }
@@ -358,6 +387,12 @@ impl NoteColumn {
         }
         if self.chance.iter().flatten().any(|c| parse_chance(c).is_none()) {
             return Err("Chance runs from 0 to 100".into());
+        }
+        if self.len.iter().flatten().any(|c| parse_len(c).is_none()) {
+            return Err("Length runs from 1 to 99 percent of a row".into());
+        }
+        if self.fx.iter().flatten().any(|c| parse_fx(c).is_none()) {
+            return Err("An effect command is V, a + or -, and a number from 1 to 99, such as V-20".into());
         }
         if (0..rows).any(|row| matches!(self.pitch(row), Some(Pitch::Glide(_))) && self.retrigger(row).is_some()) {
             return Err("A glide cannot share a row with a retrigger".into());
@@ -392,6 +427,14 @@ impl NoteColumn {
     /// The chance, as a percent, that the note in this row plays.
     pub fn chance(&self, row: usize) -> u32 {
         Self::text(&self.chance, row).and_then(parse_chance).unwrap_or(100)
+    }
+    /// How far the level of the note held in this column moves during this row, in the volume cells' units.
+    pub fn fx(&self, row: usize) -> Option<f64> {
+        Self::text(&self.fx, row).and_then(parse_fx)
+    }
+    /// The most of a row the note in this row may sound for, if its length is set.
+    pub fn length(&self, row: usize) -> Option<f64> {
+        Self::text(&self.len, row).and_then(parse_len).map(|n| f64::from(n) / 100.0)
     }
     /// The delay as a fraction of a row, from 0 up to just under 1.
     pub fn delayed(&self, row: usize) -> f64 {
@@ -650,11 +693,19 @@ struct Bend {
     midi: f64,
 }
 
+/// A change of level to a held note: from `delay` rows into row `index`, over one row, to `volume` (0 to 128).
+struct Change {
+    index: u64,
+    delay: f64,
+    volume: f64,
+}
+
 /// How long a note is held, in rows from its own row, how it ends, and what happens to its pitch meanwhile.
 struct Hold {
     rows: f64,
     cut: bool,
     bends: Vec<Bend>,
+    changes: Vec<Change>,
     /// The glide notes whose sound this note carries on.
     absorbed: Vec<(u64, usize, usize)>,
 }
@@ -1050,8 +1101,9 @@ impl Playback {
     /// it, and a slide command in a row below it bends the pitch.
     fn hold(&self, index: u64, track: usize, column: usize, delay: f64, held: Option<(&str, f64)>) -> Hold {
         const LOOKAHEAD: u64 = 16384;
-        let mut hold = Hold { rows: 0.0, cut: false, bends: Vec::new(), absorbed: Vec::new() };
+        let mut hold = Hold { rows: 0.0, cut: false, bends: Vec::new(), changes: Vec::new(), absorbed: Vec::new() };
         let mut current = held.map(|(_, note)| note);
+        let mut volume = 128.0;
         let ended = |mut hold: Hold, rows: f64, cut: bool| {
             hold.rows = (rows - delay).max(MIN_HOLD);
             hold.cut = cut;
@@ -1071,6 +1123,9 @@ impl Playback {
             };
             let row = position.row;
             let command = next.pitch(row);
+            if ahead == 0 {
+                volume = next.volume(row).map_or(128.0, f64::from);
+            }
             if ahead > 0
                 && let Some(note) = next.note(row)
             {
@@ -1089,6 +1144,10 @@ impl Playback {
                 hold.absorbed.push((index + ahead, track, column));
                 current = Some(to);
                 continue;
+            }
+            if let Some(change) = next.fx(row) {
+                volume = (volume + change).clamp(0.0, 128.0);
+                hold.changes.push(Change { index: index + ahead, delay: if ahead == 0 { delay } else { 0.0 }, volume });
             }
             if let (Some(Pitch::Slide(semitones)), Some(from)) = (command, current) {
                 let to = from + semitones;
@@ -1384,14 +1443,15 @@ impl Playback {
                         let hit_args = retrigger.map_or_else(|| args.clone(), |r| hit_args(&args, r.gain(hit), self.instrument_parameters.get(id).map_or(&[], Vec::as_slice)));
                         let last = hit + 1 == hits;
                         let offset = f64::from(hit) / f64::from(hits);
-                        let rows = if last { hold.rows - offset } else { 1.0 / f64::from(hits) }.max(MIN_HOLD);
+                        let rows = if last { hold.rows - offset } else { 1.0 / f64::from(hits) };
+                        let rows = column.length(position.row).map_or(rows, |len| rows.min(len / f64::from(hits))).max(MIN_HOLD);
                         let begins = self.origin + (self.seconds_at(self.next_row as f64 + delay + offset) * sample_rate).round() as u64;
                         let mut note_event = json!({"op":"note", "at":begins, "target":target, "to":format!("in_{index}"), "tag":"tracker-pattern",
                             "dur":format!("{:.6}sec", self.seconds_at(self.next_row as f64 + delay + offset + rows) - self.seconds_at(self.next_row as f64 + delay + offset)), "args":hit_args});
                         // A cut ends the sound where the note ends, with no release, and a bend changes its
                         // pitch while it sounds: either way the note is given an id to find it by.
                         let changes = last && self.listens(index, id);
-                        let named = last && (hold.cut || !hold.bends.is_empty()) || changes;
+                        let named = last && (hold.cut || !hold.bends.is_empty() || !hold.changes.is_empty()) || changes;
                         let note_id = named.then(|| NOTE_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
                         if let Some(id) = note_id {
                             note_event["id"] = json!(id);
@@ -1407,6 +1467,12 @@ impl Playback {
                             let from = self.origin + (self.seconds_at(bend.index as f64 + bend.delay) * sample_rate).round() as u64;
                             events.push(json!({"op":"set", "id":id, "at":from.max(begins + 1), "tag":"tracker-pattern",
                                 "args":{"freq":format!("{:.3}hz", hertz(bend.midi))}, "glide":format!("{:.6}sec", (self.seconds_at(bend.index as f64 + bend.delay + bend.rows) - self.seconds_at(bend.index as f64 + bend.delay)).max(0.001))}));
+                        }
+                        for change in &hold.changes {
+                            let from = self.origin + (self.seconds_at(change.index as f64 + change.delay) * sample_rate).round() as u64;
+                            let args = json!({"gain": format!("{:.3}db", volume_db(change.volume.round() as u32))});
+                            events.push(json!({"op":"set", "id":id, "at":from.max(begins + 1), "tag":"tracker-pattern", "args":args,
+                                "glide":format!("{:.6}sec", (self.seconds_at(change.index as f64 + change.delay + 1.0) - self.seconds_at(change.index as f64 + change.delay)).max(0.001))}));
                         }
                         if hold.cut {
                             // the fall takes 2 ms and ends where the note does, since a note that has been released ignores it
@@ -1918,6 +1984,34 @@ mod tests {
         let events = played(2, vec![column], Mode::Song);
         let gain = |i: usize| events[i]["args"]["gain"].as_str().unwrap().trim_end_matches("db").parse::<f64>().unwrap();
         assert!((gain(0) - volume_db(64)).abs() < 0.01 && (gain(1) - volume_db(64) + 20.0 * 2.0_f64.log10()).abs() < 0.01, "{:?}", (gain(0), gain(1)));
+    }
+
+    #[test]
+    fn a_volume_slide_moves_the_held_notes_level_during_its_row() {
+        let mut column = column(6, &[(0, "A-4")]);
+        column.vol = vec![Some("128".into()), None, None, None, None, None];
+        column.fx = vec![None, None, Some("V-50".into()), None, Some("V+25".into()), None];
+        let events = played(6, vec![column], Mode::Song);
+        let sets: Vec<_> = events.iter().filter(|e| e["op"] == "set").collect();
+        assert_eq!(sets.len(), 2, "{sets:?}");
+        assert_eq!(sets[0]["at"].as_u64(), Some(2 * 6000));
+        assert_eq!(sets[0]["args"]["gain"].as_str(), Some(format!("{:.3}db", volume_db(64)).as_str()));
+        assert_eq!(sets[1]["args"]["gain"].as_str(), Some(format!("{:.3}db", volume_db(96)).as_str()));
+        assert_eq!(sets[0]["glide"], "0.125000sec");
+        for bad in ["V", "V50", "V+0", "V+100", "P+5", "V+1x"] {
+            assert!(parse_fx(bad).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_length_releases_the_note_part_way_through_its_row() {
+        let mut shortened = column(4, &[(0, "C-4"), (2, "E-4")]);
+        shortened.len = vec![None, None, Some("50".into()), None];
+        let held: Vec<_> = played(4, vec![shortened], Mode::Song).iter().filter(|e| e["op"] == "note").map(duration).collect();
+        assert!((held[0] - 0.25).abs() < 1e-5 && (held[1] - 0.0625).abs() < 1e-5, "{held:?}");
+        let mut bad = column(2, &[(0, "C-4")]);
+        bad.len = vec![Some("100".into()), None];
+        assert!(bad.validate(2).is_err());
     }
 
     fn chance_column(rows: usize, cells: &[(usize, &str)], chances: &[(usize, &str)]) -> NoteColumn {

@@ -3,8 +3,9 @@ import type { EffectParameters, Definition, Device, Lfo, Parameter, Project, FxT
 import { maxDevices } from './project';
 import { trackColour, masterColour } from './grid';
 import { openBrowser } from './browser';
+import { readLfos, setLfo, lfoShapes, modulatable, type SourceLfo } from './modulation';
 /** An instrument's parameters as sliders. Notes start with these values; lanes change them from a row on. */
-export function renderInstrument(parent: HTMLElement, definition: Definition, parameters: EffectParameters, edited: () => void, write: (target: FxTarget, value: number) => void, activeTrack: number) {
+export function renderInstrument(parent: HTMLElement, definition: Definition, parameters: EffectParameters, edited: () => void, write: (target: FxTarget, value: number) => void, activeTrack: number, changeSource: (source: string) => void) {
   parent.replaceChildren();
   const card = document.createElement('section'); card.className = 'device-card instrument-card';
   const heading = document.createElement('div'); heading.className = 'device-heading';
@@ -12,7 +13,8 @@ export function renderInstrument(parent: HTMLElement, definition: Definition, pa
   const name = document.createElement('strong'); name.textContent = definition.name; heading.append(label, name); card.append(heading);
   const params = parameters[definition.id];
   const note = (text: string) => { const hint = document.createElement('p'); hint.className = 'device-note'; hint.textContent = text; card.append(hint); };
-  const refresh = () => renderInstrument(parent, definition, parameters, edited, write, activeTrack);
+  const refresh = () => renderInstrument(parent, definition, parameters, edited, write, activeTrack, changeSource);
+  const lfos = readLfos(definition.source);
   const hidden = new Set(definition.hidden ?? []);
   const setHidden = () => { if (hidden.size) definition.hidden = [...hidden]; else delete definition.hidden; edited(); refresh(); };
   if (!params) note('Apply to expose parameters');
@@ -28,7 +30,15 @@ export function renderInstrument(parent: HTMLElement, definition: Definition, pa
       row.querySelector('input')!.setAttribute('aria-label', `${definition.name} ${parameter.name}`);
       const record = row.querySelector<HTMLButtonElement>('button')!;
       record.disabled = activeTrack < 0; if (activeTrack < 0) record.title = 'Only a track has parameter lanes';
+      const lfo = lfos[parameter.name];
+      const toggle = button('∿', modulatable(parameter) ? `Toggle ${parameter.name} LFO` : `${parameter.name} is a gain in decibels, which an LFO can't move`, () => {
+        const source = setLfo(definition.source, parameter, lfo ? null : { shape: 'sine', rate: 2, depth: 0.5 });
+        if (source === null) note('This instrument has no code to put an LFO in'); else changeSource(source);
+      });
+      toggle.disabled = !modulatable(parameter); toggle.setAttribute('aria-pressed', String(!!lfo));
+      row.classList.add('with-lfo'); row.append(toggle);
       card.append(row);
+      if (lfo) card.append(sourceLfoControls(definition.source, parameter, lfo, changeSource));
     }
     const count = params.filter(p => hidden.has(p.name)).length;
     if (count) {
@@ -141,6 +151,23 @@ function slider(name: string, initial: number, min: number, max: number, unit: s
   const numeric = document.createElement('span'); numeric.className = 'parameter-numeric'; const suffix = document.createElement('small'); suffix.textContent = unit; numeric.append(value, suffix);
   row.append(label, input, numeric, button('↳', `Write ${name} to pattern`, record)); if (extra) row.append(extra); return row;
 }
+/** The shape, rate and depth of an LFO that the instrument's code carries; each change rewrites the code. */
+function sourceLfoControls(source: string, parameter: Parameter, lfo: SourceLfo, changeSource: (source: string) => void) {
+  const panel = document.createElement('div'); panel.className = 'lfo-controls';
+  const change = (next: SourceLfo) => { const text = setLfo(source, parameter, next); if (text !== null) changeSource(text); };
+  const shape = document.createElement('select'); shape.setAttribute('aria-label', `${parameter.name} LFO shape`);
+  for (const name of lfoShapes) shape.add(new Option(name, name)); shape.value = lfo.shape;
+  shape.onchange = () => change({ ...lfo, shape: shape.value as SourceLfo['shape'] });
+  const field = (name: string, value: number, min: number, max: number, set: (value: number) => SourceLfo) => {
+    const label = document.createElement('label'); label.textContent = name;
+    const input = document.createElement('input'); input.type = 'number'; input.min = String(min); input.max = String(max); input.step = 'any'; input.value = String(value); input.setAttribute('aria-label', `${parameter.name} LFO ${name}`);
+    input.onchange = () => { if (Number.isFinite(input.valueAsNumber)) change(set(Math.min(max, Math.max(min, input.valueAsNumber)))); else input.value = String(value); };
+    label.append(input); return label;
+  };
+  panel.append(shape, field('Hz', lfo.rate, 0.01, 20, rate => ({ ...lfo, rate })), field('Depth %', Math.round(lfo.depth * 100), 1, 100, depth => ({ ...lfo, depth: depth / 100 })));
+  return panel;
+}
+
 function lfoControls(device: Device, parameter: Parameter, lfo: Lfo, edited: () => void) {
   const panel = document.createElement('div'); panel.className = 'lfo-controls';
     const shape = document.createElement('select'); shape.setAttribute('aria-label', `${parameter.name} LFO shape`);

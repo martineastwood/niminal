@@ -833,3 +833,11 @@ it('pastes at the cursor outside record mode, from cells marked by a click', () 
   clipboard(parent, 'paste', copied);
   expect(project.patterns[0].notes[0][0].notes[5]).toBe('C-4');
 });
+
+it('renders with every sub-column shown, new ones included', () => {
+  const { project, grid, parent } = setup();
+  project.tracks[0].show = { vol: true, pan: true, delay: true, start: true, chance: true, pitch: true, rtg: true, len: true, fx: true };
+  for (const track of project.patterns[0].notes) for (const column of track) { delete (column as Partial<typeof column>).len; delete (column as Partial<typeof column>).fx; }
+  grid.render();
+  expect(parent.querySelector('#cell-0-0-0-len')).not.toBeNull(); expect(parent.querySelector('#cell-0-0-0-fx')).not.toBeNull();
+});

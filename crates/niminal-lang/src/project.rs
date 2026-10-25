@@ -32,6 +32,10 @@ const SHARED: [&str; 12] = [
     "def",
 ];
 
+/// Score names bind either a pattern, a clip, or a scene. Re-evaluating one kind as another
+/// replaces the old binding with the same name.
+const PERFORMANCE: [&str; 3] = ["bind", "clip", "scene"];
+
 /// A node may play the instrument of its own name, so the two may share it.
 fn is_instrument_and_node(a: &str, b: &str) -> bool {
     matches!(
@@ -85,6 +89,19 @@ impl Project {
                             || k == kind
                             || !SHARED.contains(&k)
                             || is_instrument_and_node(k, kind)
+                    })
+                };
+                self.entries.retain(keeps);
+                waiting.retain(keeps);
+            }
+            if let Some((kind, name)) = e
+                .key
+                .split_once(':')
+                .filter(|(k, _)| PERFORMANCE.contains(k))
+            {
+                let keeps = |x: &Entry| {
+                    x.key.split_once(':').is_none_or(|(k, n)| {
+                        n != name || !PERFORMANCE.contains(&k) || k == kind
                     })
                 };
                 self.entries.retain(keeps);

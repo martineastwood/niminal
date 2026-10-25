@@ -1,7 +1,7 @@
-import { startValue, chanceValue, pitchValue, retriggerValue, glideRetriggers } from './project';
+import { startValue, chanceValue, pitchValue, retriggerValue, lenValue, fxValue, glideRetriggers } from './project';
 
 /** The sub-columns that hold what a note does, each with a popup editor. */
-export type ExpressionKind = 'start' | 'chance' | 'pitch' | 'rtg';
+export type ExpressionKind = 'start' | 'chance' | 'pitch' | 'rtg' | 'len' | 'fx';
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -21,6 +21,12 @@ export function describe(kind: ExpressionKind, text: string): string | null {
     const n = Number(value.slice(1));
     return value[0] === 'G' ? `Glides the held note to this one over ${n === 8 ? '1 row' : `${n / 8} rows`}` : `Slides the held note ${value[0] === 'U' ? 'up' : 'down'} ${plural(n, 'semitone')} over the row`;
   }
+  if (kind === 'len') {
+    const value = lenValue(text); return value === null ? null : `Sounds for ${value}% of the row, then is released`;
+  }
+  if (kind === 'fx') {
+    const value = fxValue(text); return value === null ? null : `${value[1] === '+' ? 'Raises' : 'Lowers'} the held note's level by ${Number(value.slice(2))}% of full level over the row`;
+  }
   const value = retriggerValue(text); if (value === null) return null;
   const [hits, change = '0'] = value.split(':'), c = Number(change);
   const tail = c === 0 ? '' : c === -100 ? ', then silent' : c < 0 ? `, each ${-c}% quieter than the one before` : `, each ${c}% louder than the one before, ending at the note's level`;
@@ -37,6 +43,11 @@ function fields(kind: ExpressionKind, text: string | null): Field[] {
     { name: 'reverse', label: 'Backwards', hint: 'plays the sample in reverse', type: 'check', value: text?.endsWith('<') ? '1' : '' },
   ];
   if (kind === 'chance') return [{ name: 'chance', label: 'Chance', hint: '% that the note plays, 0–100', type: 'number', value: text ?? '100' }];
+  if (kind === 'len') return [{ name: 'len', label: 'Length', hint: '% of a row the note sounds for, 1–99', type: 'number', value: text ?? '50' }];
+  if (kind === 'fx') return [
+    { name: 'direction', label: 'Level', hint: '', type: 'choice', choices: [['+', 'Louder'], ['-', 'Quieter']], value: text?.[1] ?? '-' },
+    { name: 'amount', label: 'Amount', hint: '% of full level, 1–99', type: 'number', value: text?.slice(2) ?? '20' },
+  ];
   if (kind === 'pitch') return [
     { name: 'type', label: 'Movement', hint: '', type: 'choice', choices: [['G', 'Glide to this note'], ['U', 'Slide up'], ['D', 'Slide down']], value: text?.[0] ?? 'G' },
     { name: 'amount', label: 'Amount', hint: text?.[0] === 'U' || text?.[0] === 'D' ? 'semitones' : 'eighths of a row (8 is one row)', type: 'number', value: text?.slice(1) ?? '8' },
@@ -50,17 +61,21 @@ function fields(kind: ExpressionKind, text: string | null): Field[] {
 function textOf(kind: ExpressionKind, values: Record<string, string>): string {
   if (kind === 'start') return values.offset.trim() + (values.reverse ? '<' : '');
   if (kind === 'chance') return values.chance.trim();
+  if (kind === 'len') return values.len.trim();
+  if (kind === 'fx') return `V${values.direction}${values.amount.trim()}`;
   if (kind === 'pitch') return values.type + values.amount.trim();
   const change = values.change.trim();
   return values.hits.trim() + (change === '' ? '' : `:${change}`);
 }
-const parseText = (kind: ExpressionKind, text: string) => ({ start: startValue, chance: chanceValue, pitch: pitchValue, rtg: retriggerValue })[kind](text);
+const parseText = (kind: ExpressionKind, text: string) => ({ start: startValue, chance: chanceValue, pitch: pitchValue, rtg: retriggerValue, len: lenValue, fx: fxValue })[kind](text);
 const rival = (kind: ExpressionKind) => kind === 'pitch' ? 'retrigger' : 'glide';
 const explanation: Record<ExpressionKind, string> = {
   start: 'Enter an offset from 0 to 99, or tick Backwards.',
   chance: 'Chance is a whole number from 0 to 100.',
   pitch: 'A glide takes 0–99 eighths of a row; a slide takes 1–99 semitones.',
   rtg: 'Hits run from 2 to 32 and the level change from −100 to 100.',
+  len: 'Length is a whole number from 1 to 99.',
+  fx: 'An effect is V, then + or -, then a number from 1 to 99.',
 };
 
 /**
@@ -69,7 +84,7 @@ const explanation: Record<ExpressionKind, string> = {
  * cleared along with this edit. `done` gets the new text (null clears the cell) and whether to clear the other cell.
  */
 export function fillExpressionEditor(panel: HTMLElement, close: () => void, kind: ExpressionKind, current: string | null, other: string | null, canReplace: boolean, done: (value: string | null, clearOther: boolean) => void) {
-  const title = document.createElement('strong'); title.textContent = { start: 'Start', chance: 'Chance', pitch: 'Pitch', rtg: 'Retrigger' }[kind]; panel.append(title);
+  const title = document.createElement('strong'); title.textContent = { start: 'Start', chance: 'Chance', pitch: 'Pitch', rtg: 'Retrigger', len: 'Length', fx: 'Effect' }[kind]; panel.append(title);
   const inputs = new Map<string, HTMLInputElement | HTMLSelectElement>();
   for (const field of fields(kind, current)) {
     const label = document.createElement('label'); label.append(field.label);

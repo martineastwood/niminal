@@ -1,7 +1,7 @@
 import { patternTiming, patternSeconds, patternRow, patternSwing } from './project';
 import { instrumentsOnTrack } from './instruments';
 import { laneParameter, targetKey, formatValue, parseValue, envelopeValue } from './automation';
-import { startValue, chanceValue, pitchValue, retriggerValue, glideRetriggers, keyboardNote, noteAt, noteNumber, transposeNote, emptyFxLane, blankColumn, subColumns, maxNoteColumns, columnCount, columnStrip, columnLanes, type FxTarget, type FxLane, type EffectParameters, type Project, type Song, type Pattern, type Track, type SubColumn } from './project';
+import { startValue, chanceValue, pitchValue, retriggerValue, lenValue, fxValue, glideRetriggers, keyboardNote, noteAt, noteNumber, transposeNote, emptyFxLane, blankColumn, subColumns, maxNoteColumns, columnCount, columnStrip, columnLanes, type FxTarget, type FxLane, type EffectParameters, type Project, type Song, type Pattern, type Track, type SubColumn } from './project';
 import { type ExpressionKind, describe, fillExpressionEditor } from './expression';
 import { NoteHistory, parseNotes, type NoteEdit } from './history';
 import { openBrowser } from './browser';
@@ -14,7 +14,7 @@ const ROW_WIDTH = 30, NOTE_WIDTH = 44, SUB_WIDTH = 26, LANE_WIDTH = 72, MIN_TRAC
 /** A column of cells. Note-family lanes have `fx` null; parameter lanes have a `kind` of null. */
 type Kind = 'note' | SubColumn;
 interface Lane { track: number; kind: Kind | null; col: number; fx: number | null; values: (string | null)[] }
-const subLabel: Record<SubColumn, string> = { inst: 'Ins', vol: 'Vol', pan: 'Pan', delay: 'Dly', start: 'Start', chance: 'Chance', pitch: 'Pitch', rtg: 'Rtg' };
+const subLabel: Record<SubColumn, string> = { inst: 'Ins', vol: 'Vol', pan: 'Pan', delay: 'Dly', start: 'Start', chance: 'Chance', pitch: 'Pitch', rtg: 'Rtg', len: 'Len', fx: 'Fx' };
 const subTitle: Record<SubColumn, string> = {
   inst: 'Instrument for this note: its number in the sidebar list',
   vol: 'Volume for this note, 0 to 100',
@@ -24,14 +24,16 @@ const subTitle: Record<SubColumn, string> = {
   chance: 'Chance: the percent chance, 0 to 100, that this note plays; blank is certain. A note that does not play leaves the one before it sounding',
   pitch: 'Pitch: G8 glides the held note to this one over a row, U12 or D3 slides the held note up or down that many semitones during the row',
   rtg: 'Retrigger: how many times the note plays in its row, 2 to 32; 4:-25 makes each hit 25% quieter than the one before, 4:50 makes each 50% louder',
+  len: 'Length: how long the note sounds before it is released, as a percent of a row, 1 to 99; blank holds it until the next note or OFF',
+  fx: 'Effect: V-20 or V+10 moves the level of the note held in this column by that many percent of full level during the row',
 };
-const subRange: Record<SubColumn, string> = { inst: 'an instrument number', vol: '0 to 100', pan: '-50 to 50, or C', delay: '0 to 99', start: '0 to 99, <, or both such as 50<', chance: '0 to 100', pitch: 'G, U or D and a number, such as G8, U12 or D3', rtg: '2 to 32 hits, then : and a change in level from -100 to 100, such as 4:-25' };
+const subRange: Record<SubColumn, string> = { inst: 'an instrument number', vol: '0 to 100', pan: '-50 to 50, or C', delay: '0 to 99', start: '0 to 99, <, or both such as 50<', chance: '0 to 100', pitch: 'G, U or D and a number, such as G8, U12 or D3', rtg: '2 to 32 hits, then : and a change in level from -100 to 100, such as 4:-25', len: '1 to 99', fx: 'V, then + or -, then 1 to 99, such as V-20' };
 
 // Cells store the engine's whole numbers (volume and pan 0 to 128, delay 0 to 255); these show them as people count.
 /** What a sub-column cell reads as, for display and the clipboard. */
 export function subText(kind: SubColumn, value: string | null, project: Project): string {
   if (value === null) return '';
-  if (kind === 'start' || kind === 'chance' || kind === 'pitch' || kind === 'rtg') return value;
+  if (kind === 'start' || kind === 'chance' || kind === 'pitch' || kind === 'rtg' || kind === 'len' || kind === 'fx') return value;
   const n = Number(value);
   if (kind === 'inst') { const index = project.definitions.filter(d => d.kind === 'instr').findIndex(d => d.id === value); return index < 0 ? '??' : String(index).padStart(2, '0'); }
   if (kind === 'vol') return String(Math.round(n * 100 / 128));
@@ -45,6 +47,8 @@ export function subValue(kind: SubColumn, text: string, project: Project): strin
   if (kind === 'chance') return chanceValue(text);
   if (kind === 'pitch') return pitchValue(text);
   if (kind === 'rtg') return retriggerValue(text);
+  if (kind === 'len') return lenValue(text);
+  if (kind === 'fx') return fxValue(text);
   const t = text.trim().replace(/%$/, '');
   if (kind === 'pan' && /^c$/i.test(t)) return '64';
   if (!/^[+-]?\d{1,3}$/.test(t)) return null;
@@ -56,7 +60,7 @@ export function subValue(kind: SubColumn, text: string, project: Project): strin
 }
 
 /** The sub-columns that hold what a note does rather than a number to sweep: random and interpolated values would make nonsense of them. */
-const expression = (kind: Kind | null) => kind === 'start' || kind === 'chance' || kind === 'pitch' || kind === 'rtg';
+const expression = (kind: Kind | null) => kind === 'start' || kind === 'chance' || kind === 'pitch' || kind === 'rtg' || kind === 'len' || kind === 'fx';
 
 export class PatternGrid {
   projectUndo: ((redo: boolean) => void) | undefined;
@@ -171,7 +175,7 @@ export class PatternGrid {
       // returns and the master have no notes, only parameter lanes
       ...(track < project.tracks.length ? pattern.notes[track].flatMap((column, col): Lane[] => [
         { track, kind: 'note', col, fx: null, values: column.notes },
-        ...subColumns.filter(kind => shows(project.tracks[track], kind)).map((kind): Lane => ({ track, kind, col, fx: null, values: column[kind] })),
+        ...subColumns.filter(kind => shows(project.tracks[track], kind)).map((kind): Lane => ({ track, kind, col, fx: null, values: column[kind] ??= [] })),
       ]) : []),
       ...columnLanes(project, pattern, track).map((lane, fx): Lane => ({ track, kind: null, col: 0, fx, values: lane.values })),
     ]).flat();
@@ -334,7 +338,7 @@ export class PatternGrid {
             if (!event.shiftKey) { if (lane.fx !== null) this.editValue(row, c); else if (lane.kind !== 'note') this.editSub(row, c); }
           };
           if (expression(lane.kind)) {
-            if (value !== null) cell.title = describe(lane.kind as ExpressionKind, value) ?? '';
+            if (value != null) cell.title = describe(lane.kind as ExpressionKind, value) ?? '';
             // the clicks of a double click have opened the cell for typing; the editor takes over from that
             cell.ondblclick = () => { if (this.recording) { (document.activeElement as HTMLElement | null)?.blur(); this.openEditor(row, c); } };
           }
@@ -460,7 +464,7 @@ export class PatternGrid {
     const heading = document.createElement('span'); heading.textContent = 'Note columns';
     const fewer = document.createElement('button'); fewer.textContent = '−'; fewer.setAttribute('aria-label', 'Fewer note columns'); fewer.disabled = count <= 1;
     fewer.onclick = () => {
-      if (project.patterns.some(p => { const last = p.notes[index].at(-1)!; return [last.notes, last.inst, last.vol, last.pan, last.delay, last.start, last.pitch, last.rtg].some(cells => cells.some(v => v !== null)); })) { this.feedback('Clear the last note column in every pattern before removing it.'); return; }
+      if (project.patterns.some(p => { const last = p.notes[index].at(-1)!; return [last.notes, last.inst, last.vol, last.pan, last.delay, last.start, last.pitch, last.rtg, last.len, last.fx].some(cells => cells.some(v => v !== null)); })) { this.feedback('Clear the last note column in every pattern before removing it.'); return; }
       for (const p of project.patterns) p.notes[index].pop();
       changed();
     };
@@ -483,7 +487,7 @@ export class PatternGrid {
       const label = document.createElement('label'); label.title = subTitle[kind];
       const box = document.createElement('input'); box.type = 'checkbox'; box.checked = !!track.show?.[kind]; box.setAttribute('aria-label', `Show ${subLabel[kind]} column`);
       box.onchange = () => { track.show = { ...track.show, [kind]: box.checked }; changed(); };
-      label.append(box, { vol: 'Volume', pan: 'Panning', delay: 'Delay', start: 'Start', chance: 'Chance', pitch: 'Pitch', rtg: 'Retrigger' }[kind]); checks.append(label);
+      label.append(box, { vol: 'Volume', pan: 'Panning', delay: 'Delay', start: 'Start', chance: 'Chance', pitch: 'Pitch', rtg: 'Retrigger', len: 'Length', fx: 'Effect' }[kind]); checks.append(label);
     }
   }
   /** Edits a sub-column cell in place, like a parameter lane: type a number, Enter to save and move down. */

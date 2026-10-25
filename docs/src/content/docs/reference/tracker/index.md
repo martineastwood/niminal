@@ -50,4 +50,4 @@ Edits autosave locally. **Save** writes a project folder (`name.nimtracker/` wit
 
 ## Not there yet
 
-Curved envelope interpolation, an LFO device for instrument parameters (an instrument carries its own and a lane steers it), and automatic loop-point selection.
+Curved envelope interpolation, and automatic loop-point selection.

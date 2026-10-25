@@ -36,6 +36,9 @@ The repo includes examples under `examples/`. Render one to a WAV file:
 nimlive render examples/saw_lead.nml --out saw_lead.wav
 ```
 
+Try [spectral_delay.nml](examples/spectral_delay.nml) for plucks with frequency-dependent echoes:
+it compares ordinary echoes with spread-out harmonics, then plays a short phrase.
+
 Open `saw_lead.nml` to see the language: tempo, instruments with units (`hz`, `db`, `ms`), envelopes, and scored notes.
 
 ## Live coding

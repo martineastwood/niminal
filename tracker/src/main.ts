@@ -218,7 +218,7 @@ function mixerView() {
   element('mixer').hidden = false;
   if (fxMode && !element('code-panel').hidden && shownEffect() !== (currentDevice()?.definition ?? null)) { showFx(); return; }
   envelopeEditor?.select(stripToColumn(project, deviceTrack));
-  if (!fxMode) { renderInstrument(element('mixer'), selected, allParameters(), editedPattern, (target, value) => grid.writeParameter(stripToColumn(project, deviceTrack), target, value), deviceTrack); return; }
+  if (!fxMode) { renderInstrument(element('mixer'), selected, allParameters(), editedPattern, (target, value) => grid.writeParameter(stripToColumn(project, deviceTrack), target, value), deviceTrack, changeSelectedSource); return; }
   const device = currentDevice();
   renderMixer(element('mixer'), project, deviceTrack, () => { editedPattern(); grid.render(); }, allParameters(), (target, value) => grid.writeParameter(stripToColumn(project, deviceTrack), target, value), {
     selected: device?.id ?? null,
@@ -389,6 +389,12 @@ function loadPresetIntoSlot(definition: Definition, preset: Preset) {
   else selectDefinition(definition, false);
   renderDefinitions(); grid.render(); mixerView(); save();
   if (audioStatus.connected) void action(() => applyAndAudition(definition));
+}
+/** Replaces the code of the instrument being edited, as typing would, and applies it so the change is heard. */
+function changeSelectedSource(source: string) {
+  editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: source } });
+  if (audioStatus.connected) void action(() => applyAndAudition(selected));
+  else mixerView();
 }
 /** Makes an instrument from a preset and chooses it, so the notes entered next use it. */
 function useInstrumentPreset(preset: Preset) {

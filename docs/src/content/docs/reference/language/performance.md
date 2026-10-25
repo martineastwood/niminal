@@ -28,6 +28,7 @@ Start, stop, mute, solo and transform a clip by its name. The commands are writt
 - **Starting a clip that is already playing does nothing.** It carries on. To begin again, `stop` it and `start` it.
 - **A clip has an instrument.** A clip without one can exist, but it plays nothing, and the language server says so. There is no way to play an instrument by naming it: declare a clip that plays it.
 - **A clip can be made from another**, keeping its instrument and lanes and applying a change: `clip bass_chorus = bass.transpose(+5st)`. It is a clip of its own, with its own mute and solo.
+- **Re-evaluating a definition replaces it by name.** Patterns, clips and scenes share a name space, so changing `clip beat` to `scene beat` replaces the old definition. Use `new` when you want to clear the whole live session.
 - **Mute and solo belong to the clip** and stay until you `unmute` or `unsolo` it: `stop`, `start`, `hush`, `panic` and starting a scene do not clear them. `reset` and `new` do. The editor shows them in the status bar (`SOLO bass · 2 muted`) so a clip that has gone quiet is easy to find.
 - Voice limits belong to instruments and are counted separately for each clip.
 

@@ -54,6 +54,17 @@ Use **∿ LFO** beside a parameter to add or remove modulation. Choose sine, tri
 
 The LFOs run in the engine, so they keep going while you audition with playback stopped; **▶** restarts them in phase with the song. A row value targeting an LFO-controlled parameter disconnects that mapping and takes control until Play resets it or the LFO is toggled off and on. Other parameters keep modulating.
 
+### LFOs on instrument parameters
+
+The **∿** beside an instrument slider gives that parameter an LFO of its own, per note. It swings the parameter around the slider's value: pick the shape, the rate in Hz and the depth as a percent of the parameter's range (100% sweeps all of it). It works by writing two lines at the top of the instrument's code, a `// mod` comment that records the settings and the line it describes:
+
+```nml
+// mod cutoff: tri 2hz 50%
+cutoff = (cutoff + lfo(2hz, shape: tri) * 1900hz).clamp(200hz..4khz)
+```
+
+The code is applied at once, so you hear it, and every note runs its own LFO from the start of the note. You can edit or delete the lines by hand; the **∿** reads the comment back. Parameters in decibels can't be modulated this way, and the rate is in Hz rather than rows, so it doesn't follow tempo changes.
+
 ## Envelopes
 
 Click **⌁** beside a lane header to open the envelope editor in the dock's **Automation** tab. Choose a track and one of its named parameter lanes. **Use envelope** switches that lane between its saved row values and the envelope; both are retained in the project. The active envelope is shown in blue in the pattern grid, where clicking those cells opens the envelope editor. A slider's **↳** switches the matching lane back to row values.

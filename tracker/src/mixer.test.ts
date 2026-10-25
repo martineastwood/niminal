@@ -104,14 +104,14 @@ it('shows an instrument\'s parameters as sliders that set its values, and record
   const project = newProject(), parent = document.createElement('div'), edited = vi.fn(), write = vi.fn(); document.body.append(parent);
   const tone = project.definitions[0];
   const parameters = { tone: [{ name: 'cutoff', min: 200, max: 8000, default: 2000, unit: 'hz' }] };
-  renderInstrument(parent, tone, {}, edited, write, 0); expect(parent.textContent).toContain('Apply to expose parameters');
-  renderInstrument(parent, tone, parameters, edited, write, 0);
+  renderInstrument(parent, tone, {}, edited, write, 0, vi.fn()); expect(parent.textContent).toContain('Apply to expose parameters');
+  renderInstrument(parent, tone, parameters, edited, write, 0, vi.fn());
   const value = parent.querySelector<HTMLInputElement>('[aria-label="cutoff value"]')!;
   expect(value.value).toBe('2000'); value.value = '500'; value.dispatchEvent(new Event('change'));
   expect(tone.values).toEqual({ cutoff: 500 }); expect(edited).toHaveBeenCalledOnce();
   parent.querySelector<HTMLButtonElement>('[aria-label="Write cutoff to pattern"]')!.click();
   expect(write).toHaveBeenCalledWith({ kind: 'instrument', instrument: 'tone', parameter: 'cutoff' }, 500);
-  renderInstrument(parent, tone, parameters, edited, write, -1);
+  renderInstrument(parent, tone, parameters, edited, write, -1, vi.fn());
   expect(parent.querySelector<HTMLButtonElement>('[aria-label="Write cutoff to pattern"]')!.disabled).toBe(true);
 });
 
@@ -119,7 +119,7 @@ it('hides an instrument slider on request, and brings all of them back', () => {
   const project = newProject(), parent = document.createElement('div'), edited = vi.fn(); document.body.append(parent);
   const tone = project.definitions[0];
   const parameters = { tone: [{ name: 'cutoff', min: 200, max: 8000, default: 2000, unit: 'hz' }, { name: 'amp', min: 0, max: 1, default: 0.5, unit: null }] };
-  renderInstrument(parent, tone, parameters, edited, vi.fn(), 0);
+  renderInstrument(parent, tone, parameters, edited, vi.fn(), 0, vi.fn());
   parent.querySelector<HTMLButtonElement>('[aria-label="Hide cutoff"]')!.click();
   expect(tone.hidden).toEqual(['cutoff']); expect(edited).toHaveBeenCalledOnce();
   expect(parent.querySelector('[aria-label="cutoff value"]')).toBeNull(); expect(parent.querySelector('[aria-label="amp value"]')).not.toBeNull();
@@ -184,4 +184,21 @@ it('copies a drum preset together with the voice it is built on, under names tha
   const names = project.definitions.flatMap(d => [...d.source.matchAll(/^(?:instr|fn) (\w+)/gm)].map(m => m[1]));
   expect(new Set(names).size).toBe(names.length); expect(project.definitions.length).toBe(before + 3); expect(names.filter(n => n.endsWith('_voice'))).toHaveLength(3);
   expect(copy.source).toContain('instr kick_808_copy('); expect(copy.source).not.toContain('instr kick_808(');
+});
+
+it('adds, edits and removes an LFO on an instrument parameter by rewriting its code', () => {
+  const project = newProject(), parent = document.createElement('div'); document.body.append(parent);
+  const tone = project.definitions[0], changed = vi.fn();
+  const parameters = { tone: [{ name: 'amp', min: 0, max: 1, default: 0.15, unit: null }, { name: 'level', min: -60, max: 6, default: 0, unit: 'db' }] };
+  renderInstrument(parent, tone, parameters, vi.fn(), vi.fn(), 0, changed);
+  expect(parent.querySelector<HTMLButtonElement>('[aria-label="level is a gain in decibels, which an LFO can\'t move"]')!.disabled).toBe(true);
+  parent.querySelector<HTMLButtonElement>('[aria-label="Toggle amp LFO"]')!.click();
+  const written = changed.mock.calls[0][0] as string;
+  expect(written).toContain('// mod amp: sine 2hz 50%'); expect(written).toContain('amp = (amp + lfo(2hz, shape: sine) * 0.25).clamp(0..1)');
+  tone.source = written; renderInstrument(parent, tone, parameters, vi.fn(), vi.fn(), 0, changed);
+  expect(parent.querySelector('.lfo-controls')).not.toBeNull();
+  const depth = parent.querySelector<HTMLInputElement>('[aria-label="amp LFO Depth %"]')!; depth.value = '100'; depth.dispatchEvent(new Event('change'));
+  expect(changed.mock.calls[1][0]).toContain('// mod amp: sine 2hz 100%');
+  parent.querySelector<HTMLButtonElement>('[aria-label="Toggle amp LFO"]')!.click();
+  expect(changed.mock.calls[2][0]).not.toContain('mod amp');
 });

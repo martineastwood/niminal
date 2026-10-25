@@ -1,6 +1,6 @@
 import { patternSeconds, patternRow } from './project';
 import { expect, it } from 'vitest';
-import { emptyProject, keyboardNote, transposeNote, setTrackSource, trackSource, newProject, emptyFxLane, blankColumn, makePattern, removeTrack, restoreTrack, readProject, resizePattern, patternSwing, startValue, chanceValue, pitchValue, retriggerValue, duplicateTrack } from './project';
+import { emptyProject, keyboardNote, transposeNote, setTrackSource, trackSource, newProject, emptyFxLane, blankColumn, makePattern, removeTrack, restoreTrack, readProject, resizePattern, patternSwing, startValue, chanceValue, pitchValue, retriggerValue, lenValue, fxValue, duplicateTrack } from './project';
 
 it('round trips source and notes and rejects unsupported project data', () => {
   const project = newProject();
@@ -291,4 +291,18 @@ it('swings pairs of rows without changing how long a pair lasts, and reads swing
   expect(readProject(JSON.stringify(project)).patterns[0].swing).toBe(0);
   project.swing = 76; expect(() => readProject(JSON.stringify(project))).toThrow();
   project.swing = 50; project.patterns[0].swing = -1; expect(() => readProject(JSON.stringify(project))).toThrow();
+});
+
+it('reads a length cell as 1 to 99 percent of a row, and fills one in for an older project', () => {
+  expect(lenValue(' 50 ')).toBe('50'); expect(lenValue('05')).toBe('5');
+  for (const bad of ['', '0', '100', '-1', '5%', '5.5']) expect(lenValue(bad), bad).toBeNull();
+  const project = newProject();
+  const old = JSON.parse(JSON.stringify(project));
+  for (const track of old.patterns[0].notes) for (const column of track) delete column.len;
+  expect(readProject(JSON.stringify(old)).patterns[0].notes[0][0].len).toEqual(Array(project.patterns[0].rows).fill(null));
+});
+
+it('reads an effect cell as a signed volume change of 1 to 99 percent', () => {
+  expect(fxValue(' v-20 ')).toBe('V-20'); expect(fxValue('V+5')).toBe('V+5');
+  for (const bad of ['', 'V', 'V20', 'V+0', 'V+100', 'P+5', 'V+1.5']) expect(fxValue(bad), bad).toBeNull();
 });

@@ -27,7 +27,7 @@ There is no fixed note length, so leave a gap with OFF for staccato. A looped pa
 
 ## Note columns and sub-columns
 
-The **⋯** button in a track header adds up to eight note columns (for chords; shared by every pattern) and shows or hides the **Vol**, **Pan**, **Dly**, **Start**, **Chance**, **Pitch** and **Rtg** sub-columns beside each note (the menu calls them **Volume**, **Panning**, **Delay**, **Start**, **Chance**, **Pitch** and **Retrigger**).
+The **⋯** button in a track header adds up to eight note columns (for chords; shared by every pattern) and shows or hides the **Vol**, **Pan**, **Dly**, **Start**, **Chance**, **Pitch**, **Rtg**, **Len** and **Fx** sub-columns beside each note (the menu calls them **Volume**, **Panning**, **Delay**, **Start**, **Chance**, **Pitch**, **Retrigger**, **Length** and **Effect**).
 
 The **Ins** column is always there: it holds the number of the instrument that plays the note. They take plain numbers, edited like a parameter lane (click a cell or just type a digit, then Enter to save and move down):
 
@@ -41,6 +41,8 @@ The **Ins** column is always there: it holds the number of the instrument that p
 | **Chance** | The percent chance, 0–100, that the note plays. Blank always plays. See [Chance](#chance). |
 | **Pitch** | A glide or slide: `G8`, `U12` or `D3`. |
 | **Rtg** | How many times the note plays in its row, 2–32, optionally with a change in level per hit, such as `4:-25`. |
+| **Len** | How long a new note sounds before it is released, 1–99 percent of a row, for staccato notes. Blank holds the note until the next note or **OFF**. |
+| **Fx** | A change to the note held in the column during this row. `V-20` makes it 20% of full level quieter, `V+10` 10% louder (1–99); the level glides over the row, starting from the note's **Vol**. Pan slides are not there yet. |
 
 Hidden sub-columns still play.
 

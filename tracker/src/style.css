@@ -359,3 +359,5 @@ footer input { height: 16px; font-size: 10px; }
 .expression-preview { min-height: 14px; color: var(--accent-text); font-size: 10px; }
 .expression-problem { min-height: 12px; color: #e0705a; font-size: 10px; }
 .expression-buttons { display: flex; gap: 4px; justify-content: flex-end; }
+
+.parameter-row.with-lfo { grid-template-columns: 62px minmax(40px, 1fr) 70px 18px 18px 18px; }
