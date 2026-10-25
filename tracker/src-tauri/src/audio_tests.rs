@@ -2047,3 +2047,35 @@ fn a_sampler_fitted_to_the_tempo_lasts_as_long_as_the_song_tempo_makes_it() {
     server.stop();
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[test]
+fn loop_edits_reach_held_pattern_and_midi_notes_without_retriggering() {
+    let base = std::env::temp_dir().join(format!("niminal-tracker-live-loops-{}", std::process::id()));
+    std::fs::create_dir_all(&base).unwrap();
+    let file = base.join("ramp.wav");
+    write_ramp(&file, 4800);
+    let (engine, server, mut worker) = engine_worker();
+    let apply = |worker: &mut Worker, start: f64, end: f64| {
+        worker.command(Command::Apply {
+            id: "tone".into(), kind: Kind::Instr, dir: None,
+            source: format!("s = sample(\"{}\").root(c4).loop(forward)\ninstr live_loop(freq: hz, loop_start: 0..1 = {start}, loop_end: 0..1 = {end}, loop_crossfade: sec = 1ms) {{ s(freq: freq, loop_start: loop_start, loop_end: loop_end, loop_crossfade: loop_crossfade) * env[1 | 1ms 0] }}", file.display()),
+        }).unwrap();
+    };
+    for midi in [false, true] {
+        apply(&mut worker, 0.1, 0.3);
+        if midi {
+            worker.command(Command::MidiOn { key: 60, instrument: "tone".into(), note: "C-4".into(), track: 0, velocity: 127 }).unwrap();
+        } else {
+            play_song(&mut worker, one_column(32, &[(0, "C-4")], &[]));
+        }
+        let before = run(&engine, &mut worker, 14000);
+        let level = |audio: &[f32]| audio[audio.len()-1000..].iter().sum::<f32>() / 1000.0;
+        assert!(level(&before) < 0.35, "initial loop: {}", level(&before));
+        apply(&mut worker, 0.7, 0.9);
+        let after = run(&engine, &mut worker, 6000);
+        assert!(level(&after) > 0.6, "held note must use edited loop, midi={midi}: {}", level(&after));
+        worker.command(Command::Stop).unwrap();
+    }
+    drop(worker); drop(server); drop(engine);
+    std::fs::remove_dir_all(base).unwrap();
+}

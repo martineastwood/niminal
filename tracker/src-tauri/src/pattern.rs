@@ -527,6 +527,7 @@ impl Song {
 /// A note that an instrument-parameter lane can still change: it has an id, and sounds until `until`.
 struct Sounding {
     id: u64,
+    begins: u64,
     track: usize,
     instrument: String,
     until: u64,
@@ -700,6 +701,12 @@ impl Playback {
             pattern_id,
             start_position,
         })
+    }
+
+    /// Apply edited sampler loop defaults to held and already queued notes.
+    pub fn loop_edits(&self, instrument: &str, args: &Value, now: u64) -> Vec<Value> {
+        self.sounding.iter().filter(|note| note.instrument == instrument && note.until > now)
+            .map(|note| json!({"op":"set", "id":note.id, "at":now.max(note.begins + 1), "tag":"tracker-pattern", "args":args})).collect()
     }
 
     /// The tempo in beats a minute at row `index`.
@@ -922,7 +929,7 @@ impl Playback {
     /// Whether any pattern has a lane on `track` for a parameter of `instrument`, so its notes are named
     /// and can be changed while they sound.
     fn listens(&self, track: usize, instrument: &str) -> bool {
-        self.song.patterns.iter().any(|p| {
+        self.instrument_parameters.get(instrument).is_some_and(|params| params.iter().any(|p| p.name == "loop_start")) || self.song.patterns.iter().any(|p| {
             p.fx.get(track).is_some_and(|lanes| {
                 lanes.iter().any(|l| matches!(&l.target, Some(crate::commands::FxTarget::Instrument { instrument: i, .. }) if i == instrument))
             })
@@ -1218,7 +1225,7 @@ impl Playback {
                         let Some(note_id) = note_id else { continue };
                         let end = self.origin + (self.seconds_at(self.next_row as f64 + delay + offset + rows) * sample_rate).round() as u64;
                         if changes {
-                            sounding.push(Sounding { id: note_id, track: index, instrument: id.to_string(), until: end });
+                            sounding.push(Sounding { id: note_id, begins, track: index, instrument: id.to_string(), until: end });
                         }
                         let id = note_id;
                         for bend in &hold.bends {

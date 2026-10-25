@@ -24,3 +24,15 @@ it('rejects invalid bounds and leaves other sample methods intact', () => {
   expect(writeLoop(source, { mode: 'forward', start: 0, end: 0.5 })).toContain('.root(c4).interp(sinc).loop(forward)');
   expect(readLoop(slicedSource('chops', 'break.wav', 4)).mode).toBe('none');
 });
+
+it('round trips crossfade milliseconds and rejects invalid durations', () => {
+  const original = samplerSource('pad', 'pad.wav');
+  const loop = { mode: 'forward' as const, start: 0.2, end: 0.8, crossfade: 12.5 };
+  const source = writeLoop(original, loop);
+  expect(readLoop(source)).toEqual(loop);
+  expect(source).toContain('loop_crossfade: sec = 12.5ms');
+  expect(source).toContain('loop_crossfade: loop_crossfade');
+  expect(writeLoop(source, loop)).toBe(source);
+  expect(writeLoop(source, { ...loop, crossfade: -1 })).toBe(source);
+  expect(writeLoop(source, { ...loop, crossfade: NaN })).toBe(source);
+});

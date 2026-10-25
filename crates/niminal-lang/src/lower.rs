@@ -878,6 +878,7 @@ pub(crate) fn compile_sampler(
     let stretch_mode = declare(&mut lower, "stretch_mode", Unit::Num, 0.0);
     let loop_start = declare(&mut lower, "loop_start", Unit::Num, 0.0);
     let loop_end = declare(&mut lower, "loop_end", Unit::Num, 1.0);
+    let loop_crossfade = declare(&mut lower, "loop_crossfade", Unit::Time, 0.0);
     let start = declare(&mut lower, "start", Unit::Time, 0.0);
     // where in the sample to start, as a share of its length (a note's `begin`, set by `chop`)
     let begin = declare(&mut lower, "begin", Unit::Num, 0.0);
@@ -892,6 +893,7 @@ pub(crate) fn compile_sampler(
         ("stretch_mode", stretch_mode),
         ("loop_start", loop_start),
         ("loop_end", loop_end),
+        ("loop_crossfade", loop_crossfade),
         ("start", start),
         ("begin", begin),
     ];

@@ -132,8 +132,13 @@ it('sets and drags sustain loop points on whole samples without creating slices'
   const mode = root.querySelector<HTMLSelectElement>('[aria-label="Sample loop mode"]')!;
   const start = root.querySelector<HTMLInputElement>('[aria-label="Loop start percent"]')!;
   const end = root.querySelector<HTMLInputElement>('[aria-label="Loop end percent"]')!;
+  const crossfade = root.querySelector<HTMLInputElement>('[aria-label="Loop crossfade milliseconds"]')!;
+  expect(crossfade.disabled).toBe(true);
   expect(mode.disabled).toBe(false); expect(start.disabled).toBe(true);
   mode.value = 'forward'; mode.dispatchEvent(new Event('change'));
+  expect(crossfade.disabled).toBe(false);
+  crossfade.value = '12.5'; crossfade.dispatchEvent(new Event('change'));
+  expect(definition.source).toContain('loop_crossfade: sec = 12.5ms');
   start.value = '20'; start.dispatchEvent(new Event('change'));
   end.value = '80'; end.dispatchEvent(new Event('change'));
   expect(definition.source).toContain('.loop(forward)');
@@ -143,7 +148,7 @@ it('sets and drags sustain loop points on whole samples without creating slices'
   actions.edit.mockClear(); mouse('pointerdown', 200); mouse('pointermove', 300);
   expect(actions.edit).not.toHaveBeenCalled(); mouse('pointerup', 300);
   expect(actions.edit).toHaveBeenCalledOnce(); expect(definition.source).toContain('loop_start: 0..1 = 0.3');
-  await panel.refresh(); expect(start.value).toBe('30'); expect(end.value).toBe('80');
+  await panel.refresh(); expect(start.value).toBe('30'); expect(end.value).toBe('80'); expect(crossfade.value).toBe('12.5');
   start.value = '90'; start.dispatchEvent(new Event('change'));
   expect(definition.source).toContain('loop_start: 0..1 = 0.3');
   mode.value = 'none'; mode.dispatchEvent(new Event('change'));

@@ -60,7 +60,8 @@ controls. Neither consumes a command slot or an automation lane.
 Copy/paste uses tab-separated cells. Command text is canonical and decimal, with
 no hexadecimal values. A paste that contains malformed or conflicting commands
 is rejected as one transaction with an explanation. Paste retains existing
-clipping at pattern bounds, but warns when nonempty cells would be clipped.
+clipping at pattern bounds. When nonempty cells would be clipped it asks for
+confirmation before applying, as one undo operation.
 
 ## Command vocabulary
 
@@ -72,12 +73,16 @@ forms; these are niminal syntax, not Renoise command codes.
 | `O50` | Offset, 0–99% | Existing sample offset. |
 | `V` | Reverse | Existing reverse playback. |
 | `R4` | Hits, 2–32; change per hit, −100 to +100% | Existing retrigger count, with optional dynamics. |
-| `R4:-25` | Same | Four hits; each successive hit has 75% of the previous hit's gain. |
+| `R4:-25` | Same | Four hits; each successive hit has 75% of the previous hit's gain. Positive changes are clamped so no hit exceeds the first hit's gain. |
 | `G8` | Duration, in eighths of a row | Existing glide to the row's note. |
 | `U12`, `D3` | Semitones | Existing upward/downward slide over the row. |
 | `A4,7:1` | Two offsets, −24 to +24 semitones; step length, 1–32 eighths of a row | Cycle original pitch, first offset, second offset. |
-| `B4:25` | Period, 1–64 rows; depth, 0–200 cents | Vibrato: sine pitch movement around the base pitch. |
-| `T1:50` | Period, 1–64 rows; depth, 0–100% | Tremolo: sine gain movement from full gain to the chosen attenuation. |
+| `B4:25` | Period, 1–64 rows; depth, 0–200 cents | Vibrato: sine pitch movement around the base pitch. Depth 0 ends it. |
+| `T1:50` | Period, 1–64 rows; depth, 0–100% | Tremolo: sine gain movement from full gain to the chosen attenuation. Depth 0 ends it. |
+
+All command values are decimal, as the existing commands already are. `G`
+keeps its current meaning: the glide lasts the given number of eighths of a row
+and may therefore span several rows (`G16` is two rows).
 
 For example, `A4,7:1` cycles C/E/G when applied to C, changing pitch every
 eighth of a row. `B4:25` has a four-row cycle with ±25-cent depth. `T1:50`
@@ -85,11 +90,13 @@ cycles between full gain and half gain over one row. Vibrato starts at zero
 pitch displacement, rising; tremolo starts at full gain. Arpeggio starts at the
 original pitch. Phases reset when their command is issued.
 
-Blank command cells do not repeat earlier commands implicitly. Retrigger and
-slides act over their own row. Arpeggio, vibrato and tremolo remain active until
-the end of that row, or until the voice ends, whichever comes first; their
-movement returns to neutral at the row boundary. Repeat the command on later
-rows to continue it. Phase continuity across repeated rows is outside this scope.
+Blank command cells do not repeat earlier commands implicitly. Retrigger,
+arpeggio and slides act over their own row; arpeggio movement returns to
+neutral at the row boundary, so repeat it on later rows to continue it.
+Vibrato and tremolo persist, with continuous phase, until the column's next
+note, OFF or CUT, the voice ending, or a later `B` or `T` of the same type in
+that column (depth 0 ends it without replacing it). A new `B` or `T` restarts
+the phase.
 
 Pitch commands on a row without a new note target its column's held voice.
 Retrigger without a new note uses the held voice's instrument, pitch and sample
@@ -112,8 +119,11 @@ Resolve each row into these independent properties:
 4. Add arpeggio offsets and vibrato to that base pitch in semitone space.
 5. Expand retriggers and apply their gain changes; tremolo multiplies voice gain.
 
-Each retrigger starts with the same offset and direction. Pitch and tremolo
-phases follow the original row timeline and do not reset at each retrigger.
+Each retrigger starts with the same offset and direction, and chokes the
+previous hit, so a retrigger group is one sounding voice at a time and
+modulation addresses that group. Slides, arpeggio, vibrato and tremolo follow
+the original row timeline, not each hit's own start, and do not reset at each
+retrigger.
 Retriggers are evenly spaced within the interval from the delayed note start to
 the end of its row. The final hit holds according to existing note/OFF rules.
 Existing behavior for an unmodified R command must be covered by regression tests.
@@ -141,8 +151,15 @@ that will not actually trigger.
 
 Use a saved unsigned 32-bit song seed. Resolve each roll from that seed and the
 logical playback occurrence: sequence position, loop iteration, pattern row,
-track and note column. Use a fixed, documented integer mixing algorithm and
-test vectors, implemented identically wherever probability is evaluated.
+track and note column. Tracks and note columns carry a stable saved id, so
+adding, removing or reordering them does not change other columns' rolls.
+Loop iteration counts passes of the canonical traversal from song start, so
+starting inside a loop uses that position's canonical iteration number. Use a
+fixed integer mixing algorithm (a 32-bit murmur3-style finalizer over the
+occurrence fields), documented with test vectors and implemented identically
+in TypeScript (`Math.imul`, `>>> 0`) and Rust wherever probability is evaluated.
+Chance exists only on pitched notes, so rows with only a held-voice command
+(such as a bare `R`) are never probabilistic.
 Audio blocks, scheduler lookahead and UI timing must not affect the result.
 
 Restarting the same playback range repeats its outcomes. Successive loop
@@ -175,14 +192,16 @@ the swung row. Tempo ramps retain their existing row-space definition; swing
 redistributes their integrated row durations.
 
 The timing panel explains that swing acts on rows: LPB determines the musical
-subdivision being swung. Manual note delays are applied within the resulting
-row and remain intact when swing is turned off. Live changes affect only events
+subdivision being swung. Manual note delays are a fraction of the row, applied
+within the resulting swung row, and remain intact when swing is turned off.
+A matrix alias plays with the swing of its destination sequence position. Live changes affect only events
 beyond the existing scheduling lookahead, following current timing-edit rules.
 
 ## Persistence and implementation boundaries
 
-Replace the single command array with `commands: (Command | null)[][]`, indexed
-by slot then row. Command is a small tagged union with numeric fields, not an
+Replace the single command array with `commands: (Command | null)[][][]` per
+track, indexed by note column, then slot, then row. Only the last slot can be
+removed. Command is a small tagged union with numeric fields, not an
 unparsed string or an extensible command framework. Use one parser/formatter at
 the text boundary. Chance is a parallel nullable integer array. Keep layout
 settings on the track, and timing overrides with pattern timing.
@@ -193,6 +212,8 @@ Validate ranges, array dimensions, conflicts and finite numeric values on both
 the TypeScript and Rust boundaries.
 
 Extend the existing scheduler rather than introducing another sequencer.
+Per-voice modulation must address a retrigger group as one unit; settle this
+engine primitive before starting stage 4.
 Resolve probability before voice-duration lookahead. Schedule pitch/gain
 modulation through native engine controls; never generate modulation using UI
 timers or change a shared track parameter to imitate per-note expression.
@@ -222,12 +243,17 @@ picker. Update the tracker manual as each stage ships.
 - Probability preserves held voices across failed triggers, varies by loop
   occurrence and reproduces across transport restarts and scheduler chunk sizes.
 - Export mix and stems use identical probability decisions.
+- Chord columns roll chance independently, and rolls are unchanged when other
+  columns or tracks are added, removed or reordered.
+- Retrigger plus tremolo or vibrato keeps one continuous phase across hits.
+- Vibrato and tremolo continue across rows until replaced, ended or the voice
+  ends, with no jump at row boundaries.
 - At constant tempo, 0% swing preserves timing and 50% gives a 3:1 row ratio;
   tempo ramps preserve pair durations, and odd final rows remain unchanged.
 - Delays, releases, automation, commands and export agree at swung boundaries,
   including pattern changes and matrix aliases.
-- Native modulation affects only the intended voice, cleans up at row/voice
-  end, and behaves identically in live playback and offline rendering.
+- Native modulation affects only the intended voice, cleans up at its end
+  (row for arpeggio, voice end or replacement for vibrato and tremolo), and behaves identically in live playback and offline rendering.
 - Existing O/V/R/G/U/D behavior and block-editing workflows remain covered by
   meaningful scheduler/audio and grid tests.
 

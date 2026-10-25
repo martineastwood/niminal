@@ -195,7 +195,7 @@ struct Worker {
     mixer: Vec<Track>,
     mixer_returns: Vec<Track>,
     mixer_master: Track,
-    midi_keys: std::collections::BTreeSet<u16>,
+    midi_keys: BTreeMap<u16, (String, u64)>,
     instrument_values: BTreeMap<String, BTreeMap<String, f64>>,
     scopes: Scopes,
     strip_scopes: bool,
@@ -349,7 +349,7 @@ impl Worker {
     }
 
     fn release_midi(&mut self, key: Option<u16>) -> Result<(), String> {
-        let keys: Vec<_> = self.midi_keys.iter().copied().filter(|k| key.is_none_or(|key| key == *k)).collect();
+        let keys: Vec<_> = self.midi_keys.keys().copied().filter(|k| key.is_none_or(|key| key == *k)).collect();
         for key in keys {
             if self.client.is_some() {
                 self.call("events.cancel", json!({"tag":format!("tracker-midi-{key}"), "from":"now", "release":true}))?;
@@ -437,7 +437,11 @@ impl Worker {
                     ));
                 }
                 let mut sounds = self.sounds.clone();
-                sounds.insert(id, sound);
+                let loop_args: serde_json::Map<String, Value> = sound.parameters.iter()
+                    .filter(|parameter| matches!(parameter.name.as_str(), "loop_start" | "loop_end" | "loop_crossfade"))
+                    .filter(|parameter| self.sounds.get(&id).is_some_and(|old| old.parameters.iter().any(|p| p.name == parameter.name && p.default != parameter.default)))
+                    .map(|parameter| (parameter.name.clone(), parameter.argument(parameter.default))).collect();
+                sounds.insert(id.clone(), sound);
                 let source = sounds
                     .values()
                     .map(|s| s.engine_source.as_str())
@@ -507,7 +511,17 @@ impl Worker {
                 if let Some(dir) = &self.dir {
                     transaction["dir"] = json!(dir);
                 }
-                self.send_events(vec![transaction])?;
+                let mut events = vec![transaction];
+                if !loop_args.is_empty() {
+                    let args = Value::Object(loop_args);
+                    let now = self.clock()?;
+                    if let Some(playback) = &self.playback {
+                        events.extend(playback.loop_edits(&id, &args, now));
+                    }
+                    events.extend(self.midi_keys.values().filter(|(instrument, _)| instrument == &id)
+                        .map(|(_, voice)| json!({"op":"set", "id":voice, "at":"now", "args":args})));
+                }
+                self.send_events(events)?;
                 self.sounds = sounds;
                 self.status.instruments = instruments;
                 self.status.effects = effects;
@@ -603,7 +617,7 @@ impl Worker {
                 args["gain"] = json!(format!("{}db", 20.0 * (f64::from(velocity) / 127.0).log10()));
                 let id = crate::pattern::NOTE_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 self.send_events(vec![json!({"op":"note", "at":"now", "id":id, "tag":format!("tracker-midi-{key}"), "target":target, "to":format!("in_{track}"), "args":args})])?;
-                self.midi_keys.insert(key);
+                self.midi_keys.insert(key, (instrument, id));
             }
             Command::MidiOff { key } => self.release_midi(key)?,
             Command::Audition {

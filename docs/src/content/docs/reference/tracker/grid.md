@@ -1,6 +1,6 @@
 ---
 title: The grid
-description: Entering notes, note columns, note commands, and sliced samples in the tracker.
+description: Entering notes, note columns, the Cmd column, and sliced samples in the tracker.
 ---
 
 The grid is where you write notes: one row per step in time, one column per track. Rows are grouped by the meter into bars; **Page Up / Page Down** move by a bar, **Home / End** go to the first and last row.
@@ -25,7 +25,7 @@ There is no fixed note length, so leave a gap with OFF for staccato. A looped pa
 
 ## Note columns and sub-columns
 
-The **⋯** button in a track header adds up to eight note columns (for chords; shared by every pattern) and shows or hides the **Vol**, **Pan**, **Dly** and **Cmd** sub-columns beside each note.
+The **⋯** button in a track header adds up to eight note columns (for chords; shared by every pattern) and shows or hides the **Vol**, **Pan**, **Dly** and **Cmd** sub-columns beside each note (the menu calls them **Volume**, **Panning**, **Delay** and **Command**).
 
 The **Ins** column is always there: it holds the number of the instrument that plays the note. They take plain numbers, edited like a parameter lane (click a cell or just type a digit, then Enter to save and move down):
 
@@ -35,23 +35,31 @@ The **Ins** column is always there: it holds the number of the instrument that p
 | **Vol** | 0–100. |
 | **Pan** | −50 (left) to +50 (right), or `C` for centre. |
 | **Dly** | Starts the note that many percent of a row late, 0–99. |
-| **Cmd** | A command letter and a whole number, described below. |
+| **Cmd** | A command: a letter and a number, such as `O50` or `G8`. See [the Cmd column](#the-cmd-column). |
 
 Hidden sub-columns still play.
 
-## Note commands
+## The Cmd column
 
-The **Cmd** sub-column (show it from **⋯**) takes a letter and a whole number, so sampler tricks and pitch moves need no other column. A command acts on the note in its own row, or, for the slides, on the note held in that column. The instrument must have the parameter a command sets; a command it cannot use is ignored.
+The **Cmd** sub-column — the **Command** checkbox in **⋯** — sits to the right of **Dly** beside every note column, so each of a track's note columns has one of its own. Returns and the master hold no notes, so they have none. A hidden Cmd column still plays.
 
-| Command | Effect |
-| --- | --- |
-| **O50** | Starts the sample that percent of the way in (0–99; the instrument's `begin`). |
-| **V** | Plays it backwards (`rate` of −1). Samplers made by **♪** import or the scissors have both. |
-| **R4** | Plays the note four times within its row (2–32), like a stutter. The last hit is held as the note would be. |
-| **G8** | Glides: instead of starting a new note, the note held in the column slides to this note's pitch over eight eighths of a row (**G16** takes two rows, **G4** half a row). The sound carries on unbroken, pitch moving evenly in semitones (equal frequency ratios over equal time), so it is a portamento on any instrument. A glide with no note held, or one that follows another instrument's note, is an ordinary note. |
-| **U12**, **D3** | On a row below a held note (with no note of their own), slide it up or down that many semitones at a constant musical rate during that row. Repeat them down the column for a longer slide. |
+A cell takes one letter and a whole number, **O**, **R**, **G**, **U**, **D** or **V**, with nothing between them:
 
-Commands are written as `G8` and pasted and copied that way. Entering a command plays the note it acts on (the one in its row, or held above it) with **O**, **V** or **R** applied; the glides and slides are heard in the pattern.
+| Command | What it does | Accepted |
+| --- | --- | --- |
+| **O** | Starts the sample that percent of the way in (the instrument's `begin`). | `O0`–`O99` |
+| **V** | Plays it backwards (`rate` of −1). Takes no number. | `V` |
+| **R** | Plays the note that many times within its row, like a stutter. The last hit is held as the note would be. | `R2`–`R32` |
+| **G** | Glides: instead of starting a new note, the note held in the column slides to this row's pitch over that many eighths of a row (**G8** is one row, **G16** two, **G4** half). The sound carries on unbroken, pitch moving evenly in semitones (equal frequency ratios over equal time), so it is a portamento on any instrument. With nothing held, or after another instrument's note, it is an ordinary note. | `G0`–`G99` |
+| **U**, **D** | Slides the note held in the column up or down that many semitones during this row, at a constant musical rate. Repeat down the column for a longer slide. | `U1`–`U99`, `D1`–`D99` |
+
+Enter and edit it like any other cell: click it or just start typing, **Enter** to save and move down by **Step**, **Escape** to cancel, and clearing the cell removes the command. Lower case is tidied to upper case, so `o50` becomes `O50`; an entry that names no command is refused, with a hint saying what a command looks like, and the cell keeps what it had.
+
+A command acts on the note in its own row, or on the note held above it in the same column. An **OFF** or a **CUT** ends that hold, so a slide below one has nothing to move. **O**, **V** and **R** need a note in their own row to start something. Whatever a command needs, the instrument has to have the parameter it sets: a command it cannot use is ignored, and nothing else about the row changes. Samplers made by **♪** import or the scissors have `begin` and `rate`, so **O**, **V** and **R** work on them.
+
+Entering a command plays the note it acts on at once, through the track's effects, with **O**, **V** or **R** applied, so you can try a start point or a stutter without playing the pattern. The glides and slides are heard when the pattern plays.
+
+Commands are stored as the text you typed, so they copy, paste and save as `G8`; they move with their note when a block is inserted, deleted or pasted, and undo covers them.
 
 ## Sliced samples
 
@@ -71,7 +79,7 @@ The **Sample** tab of the bottom dock (View → Sample) draws the waveform of th
 
 WSOLA can reduce beating on sustained sounds. Transient WSOLA protects up to 15 ms of detected attacks; quiet or closely spaced hits can still be missed, and reverse playback uses ordinary WSOLA. If `gate` is 1, a note can end before the stretched sample does: lengthen the note, or set `gate` to 0 to hear the whole sample.
 
-For a whole sample, choose **Forward loop** or **Ping-pong loop**, then set **Start** and **End** as percentages, or drag their markers on the waveform. The shaded region repeats after the intro has played. This edits the existing sampler rather than making slices. Turning looping on enables `gate` so OFF or the next note can end it. **Loop off** keeps the points for later. Points are saved in the instrument code and take effect on the next note. Start must be before End; loop points do not crossfade automatically, so matching waveform positions give cleaner joins.
+For a whole sample, choose **Forward loop** or **Ping-pong loop**, then set **Start** and **End** as percentages, or drag their markers on the waveform. The shaded region repeats after the intro has played. This edits the existing sampler rather than making slices. Turning looping on enables `gate` so OFF or the next note can end it. **Loop off** keeps the points for later. Points are saved in the instrument code. Edits also reach held playback and MIDI notes, taking effect at their next loop wrap or ping-pong turn. Start must be before End; **Crossfade** sets the overlap in milliseconds of source audio (0 turns it off). It smooths wraps and ping-pong turns, including reverse and stretched playback, and is capped at half the usable loop span. The overlap shortens each repeat; longer fades can soften attacks.
 
 The code is ordinary (`chops = amen.slices(16)`, or `amen.slices([0, 0.18, 0.43])` for pieces that start at those shares of the sample, with a small wrapper), so use `.beats(4)` and `.choke(...)` on the sample as the [language reference](/reference/language/samples/) describes. An instrument is sliced when it has a `sample` parameter and the code cuts one sample into pieces.
 

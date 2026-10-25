@@ -33,6 +33,7 @@ export class SamplePanel {
   private readonly loopMode = document.createElement('select');
   private readonly loopStart = document.createElement('input');
   private readonly loopEnd = document.createElement('input');
+  private readonly loopCrossfade = document.createElement('input');
   private loop: SampleLoop = { mode: 'none', start: 0, end: 1 };
   private loopDrag: 'start' | 'end' | null = null;
   private readonly beats = document.createElement('input');
@@ -100,6 +101,10 @@ export class SamplePanel {
       input.onchange = () => this.commitLoop();
       const label = document.createElement('label'); label.append(`${name} `, input, '%'); bar.append(label);
     }
+    this.loopCrossfade.type = 'number'; this.loopCrossfade.min = '0'; this.loopCrossfade.step = '1'; this.loopCrossfade.style.width = '5em';
+    this.loopCrossfade.setAttribute('aria-label', 'Loop crossfade milliseconds');
+    this.loopCrossfade.onchange = () => this.commitLoop();
+    const fadeLabel = document.createElement('label'); fadeLabel.append('Crossfade ', this.loopCrossfade, 'ms'); bar.append(fadeLabel);
     this.canvas.tabIndex = 0; this.canvas.className = 'sample-canvas'; this.canvas.setAttribute('aria-label', 'Sample waveform');
     this.hint.className = 'device-note';
     root.replaceChildren(bar, this.canvas, this.hint);
@@ -199,13 +204,15 @@ export class SamplePanel {
     this.loopMode.value = this.loop.mode;
     this.loopStart.value = String(Number((this.loop.start * 100).toFixed(4)));
     this.loopEnd.value = String(Number((this.loop.end * 100).toFixed(4)));
+    this.loopCrossfade.value = String(this.loop.crossfade ?? 0);
+    this.loopCrossfade.disabled = this.loopMode.disabled || this.loop.mode === 'none';
     this.loopStart.disabled = this.loopEnd.disabled = this.loopMode.disabled || this.loop.mode === 'none';
   }
   private commitLoop() {
     if (!this.definition || this.loopMode.disabled) return;
-    const loop: SampleLoop = { mode: this.loopMode.value as SampleLoop['mode'], start: this.loopStart.valueAsNumber / 100, end: this.loopEnd.valueAsNumber / 100 };
-    if (!Number.isFinite(loop.start) || !Number.isFinite(loop.end) || loop.start < 0 || loop.end > 1 || loop.end - loop.start < 1 / (this.peaks?.frames || 1)) {
-      this.hint.textContent = 'Loop Start must be before End, between 0 and 100%.'; this.showLoop(); return;
+    const loop: SampleLoop = { mode: this.loopMode.value as SampleLoop['mode'], start: this.loopStart.valueAsNumber / 100, end: this.loopEnd.valueAsNumber / 100, crossfade: this.loopCrossfade.valueAsNumber };
+    if (!Number.isFinite(loop.crossfade) || (loop.crossfade ?? 0) < 0 || !Number.isFinite(loop.start) || !Number.isFinite(loop.end) || loop.start < 0 || loop.end > 1 || loop.end - loop.start < 1 / (this.peaks?.frames || 1)) {
+      this.hint.textContent = 'Loop Start must be before End, between 0 and 100%; Crossfade must be zero or greater.'; this.showLoop(); return;
     }
     const source = writeLoop(this.definition.source, loop);
     this.loop = loop; this.showLoop(); this.draw();

@@ -15,6 +15,7 @@ const PORTS: &[Port] = &[
     Port::optional("stretch_mode", 0.0),
     Port::optional("loop_start", 0.0),
     Port::optional("loop_end", 1.0),
+    Port::optional("loop_crossfade", 0.0),
 ];
 
 /// Frames over which a slice fades in and out.
@@ -387,6 +388,81 @@ impl Sampler {
         }
     }
 
+    fn requested_loop(&self, inputs: &[&[f32]], n: usize) -> (usize, usize) {
+        let frames = self.range.1.saturating_sub(self.range.0);
+        let point = |port: usize, default: f32| {
+            let value = inputs.get(port).map_or(default, |input| input[n]);
+            let value = if value.is_finite() {
+                value.clamp(0.0, 1.0)
+            } else {
+                default
+            };
+            self.range.0 + (f64::from(value) * frames as f64).round() as usize
+        };
+        let (from, to) = (point(8, 0.0), point(9, 1.0));
+        if from < to { (from, to) } else { self.range }
+    }
+
+    fn crossfade_frames(&self, inputs: &[&[f32]], n: usize) -> f64 {
+        let seconds = inputs.get(10).map_or(0.0, |input| input[n]);
+        if !seconds.is_finite() {
+            return 0.0;
+        }
+        let next = self.requested_loop(inputs, n);
+        (f64::from(seconds.max(0.0)) * f64::from(self.source_rate()))
+            .min(self.loop_range.1.saturating_sub(self.loop_range.0 + 1) as f64 * 0.5)
+            .min(next.1.saturating_sub(next.0 + 1) as f64 * 0.5)
+    }
+
+    fn read_loop(&mut self, step: f64, fade: f64, next_range: (usize, usize)) -> f32 {
+        let read = |s: &Self| match s.interp {
+            SampleInterp::Cubic => s.read(),
+            SampleInterp::Sinc => s.read_sinc(step),
+        };
+        let original = read(self);
+        if self.loop_mode == LoopMode::None || fade <= 0.0 {
+            return original;
+        }
+        let (from, to) = (self.loop_range.0 as f64, self.loop_range.1 as f64);
+        let boundary = if self.direction > 0.0 {
+            to - if self.loop_mode == LoopMode::Bidirectional {
+                1.0
+            } else {
+                0.0
+            }
+        } else {
+            from
+        };
+        let distance = (boundary - self.position) * self.direction;
+        if distance < 0.0 || distance >= fade {
+            return original;
+        }
+        let position = self.position;
+        let range = self.loop_range;
+        let bounds = self.read_bounds;
+        self.loop_range = next_range;
+        self.read_bounds = None;
+        let (next_from, next_to) = (next_range.0 as f64, next_range.1 as f64);
+        self.position = if self.loop_mode == LoopMode::Bidirectional {
+            let next_boundary = if self.direction > 0.0 {
+                next_to - 1.0
+            } else {
+                next_from
+            };
+            next_boundary - self.direction * (fade - distance)
+        } else if self.direction > 0.0 {
+            next_from + fade - distance
+        } else {
+            next_to - fade + distance
+        };
+        let incoming = read(self);
+        self.position = position;
+        self.loop_range = range;
+        self.read_bounds = bounds;
+        let weight = (1.0 - distance / fade) as f32;
+        original * (1.0 - weight) + incoming * weight
+    }
+
     fn source_rate(&self) -> f32 {
         self.data.sample_rate_or(self.sample_rate)
     }
@@ -439,19 +515,7 @@ impl Opcode for Sampler {
                 .is_none_or(|m| inputs[4][0].round() as i64 == m as i64);
             if selected && !self.data.is_empty() {
                 let frames = self.range.1.saturating_sub(self.range.0);
-                let share = |port: usize, default: f32| {
-                    let value = inputs.get(port).map_or(default, |input| input[0]);
-                    if value.is_finite() {
-                        value.clamp(0.0, 1.0)
-                    } else {
-                        default
-                    }
-                };
-                let from =
-                    self.range.0 + (f64::from(share(8, 0.0)) * frames as f64).round() as usize;
-                let to = self.range.0 + (f64::from(share(9, 1.0)) * frames as f64).round() as usize;
-                // Invalid or empty regions fall back to the whole sample/slice.
-                self.loop_range = if from < to { (from, to) } else { self.range };
+                self.loop_range = self.requested_loop(inputs, 0);
                 if frames == 0 {
                     self.done = true;
                     out.fill(0.0);
@@ -495,12 +559,33 @@ impl Opcode for Sampler {
                     self.position < from || (self.looped && self.position >= to)
                 };
                 if crossed {
+                    let old_range = self.loop_range;
+                    let fade = self.crossfade_frames(inputs, n);
+                    self.loop_range = self.requested_loop(inputs, n);
+                    let (from, to) = (self.loop_range.0 as f64, self.loop_range.1 as f64);
+                    let overshoot = if self.direction > 0.0 {
+                        self.position - old_range.1 as f64
+                    } else {
+                        old_range.0 as f64 - self.position
+                    };
                     self.looped = true;
                     match self.loop_mode {
                         LoopMode::Forward => {
-                            self.position = from + (self.position - from).rem_euclid(to - from)
+                            let offset = fade + overshoot.rem_euclid(to - from - fade);
+                            self.position = if self.direction > 0.0 {
+                                from + offset
+                            } else {
+                                from + (to - from - offset).rem_euclid(to - from)
+                            };
                         }
                         LoopMode::Bidirectional => {
+                            if old_range != self.loop_range {
+                                self.position = if self.direction > 0.0 {
+                                    to + overshoot
+                                } else {
+                                    from - overshoot
+                                };
+                            }
                             let span = to - from - 1.0;
                             if span <= 0.0 {
                                 self.position = from;
@@ -510,6 +595,8 @@ impl Opcode for Sampler {
                                 if p > span {
                                     self.direction = -self.direction;
                                 }
+                                self.position =
+                                    (self.position + self.direction * fade).clamp(from, to - 1.0);
                             }
                         }
                         LoopMode::None => unreachable!(),
@@ -548,13 +635,11 @@ impl Opcode for Sampler {
                 advance
             };
 
+            let fade = self.crossfade_frames(inputs, n);
             if stretch == 1.0 || attack {
                 let transport = self.position;
                 self.position = mapped;
-                *y = match self.interp {
-                    SampleInterp::Cubic => self.read(),
-                    SampleInterp::Sinc => self.read_sinc(step),
-                };
+                *y = self.read_loop(step, fade, self.requested_loop(inputs, n));
                 self.position = transport;
                 self.grain_offsets = [0.0; 2];
                 if attack {
@@ -574,11 +659,8 @@ impl Opcode for Sampler {
                             .clamp(bounds.0, (bounds.1 - 1.0).max(bounds.0));
                     }
                     self.position = self.loop_position(self.position);
-                    *y += weight as f32
-                        * match self.interp {
-                            SampleInterp::Cubic => self.read(),
-                            SampleInterp::Sinc => self.read_sinc(step),
-                        };
+                    *y +=
+                        weight as f32 * self.read_loop(step, fade, self.requested_loop(inputs, n));
                     self.grain_offsets[head] += self.direction * (step - mapped_advance);
                 }
                 self.position = transport;
@@ -797,7 +879,7 @@ mod tests {
     }
 
     #[test]
-    fn loop_points_are_captured_at_note_start_and_invalid_points_fall_back() {
+    fn loop_points_update_at_wrap_and_invalid_points_fall_back() {
         let freq = [440.0; 8];
         let zero = [0.0; 8];
         let one = [1.0; 8];
@@ -821,7 +903,7 @@ mod tests {
             ],
             &mut out,
         );
-        assert_eq!(out, [4., 5., 2., 3., 4., 5., 2., 3.]);
+        assert_eq!(out, [4., 5., 0., 1., 2., 3., 4., 5.]);
         player.reset();
         player.process(
             &ctx(),
@@ -832,6 +914,94 @@ mod tests {
         );
         assert_eq!(out, [0., 1., 2., 3., 4., 5., 6., 7.]);
         assert_eq!(player.loop_range, (0, 10));
+    }
+
+    #[test]
+    fn loop_edits_wait_for_the_old_boundary_in_both_directions() {
+        for (rate, expected) in [
+            (1.0, [4., 5., 6., 7., 4., 5.]),
+            (-1.0, [5., 4., 3., 2., 5., 4.]),
+        ] {
+            let mut player = sampler(ramp(10, 48000.0), None).with_loop(LoopMode::Forward);
+            let render = |player: &mut Sampler, from, to, count| {
+                let freq = vec![440.0; count];
+                let zero = vec![0.0; count];
+                let one = vec![1.0; count];
+                let rate = vec![rate; count];
+                let from = vec![from; count];
+                let to = vec![to; count];
+                let mut out = vec![0.0; count];
+                player.process(
+                    &ctx(),
+                    &[
+                        &freq, &zero, &rate, &zero, &zero, &zero, &one, &zero, &from, &to,
+                    ],
+                    &mut out,
+                );
+                out
+            };
+            render(&mut player, 0.2, 0.8, 4);
+            assert_eq!(render(&mut player, 0.4, 0.6, 6), expected);
+            assert!(player.is_active());
+        }
+    }
+
+    #[test]
+    fn crossfade_reduces_wrap_jump_and_is_independent_of_blocks() {
+        let data = Arc::new(Table::from_f32(
+            (0..1000).map(|i| i as f32 / 1000.0).collect::<Vec<_>>(),
+            Some(48000.0),
+        ));
+        for mode in [LoopMode::Forward, LoopMode::Bidirectional] {
+            for rate in [1.0, -1.0] {
+                for interp in [SampleInterp::Cubic, SampleInterp::Sinc] {
+                    let render = |fade: f32, block: usize, stretch: f32| {
+                        let mut player = sampler(data.clone(), None)
+                            .with_loop(mode)
+                            .with_interp(interp);
+                        let mut audio = vec![0.0; 5000];
+                        for out in audio.chunks_mut(block) {
+                            let freq = vec![440.0; out.len()];
+                            let zero = vec![0.0; out.len()];
+                            let one = vec![1.0; out.len()];
+                            let rate = vec![rate; out.len()];
+                            let fade = vec![fade; out.len()];
+                            let stretch = vec![stretch; out.len()];
+                            player.process(
+                                &ctx(),
+                                &[
+                                    &freq, &zero, &rate, &zero, &zero, &zero, &stretch, &one,
+                                    &zero, &one, &fade,
+                                ],
+                                out,
+                            );
+                        }
+                        audio
+                    };
+                    for stretch in [1.0, 1.7] {
+                        let faded = render(0.002, 64, stretch);
+                        assert_eq!(faded, render(0.002, 257, stretch));
+                        assert!(
+                            faded.iter().all(|v| v.is_finite() && *v > -0.2 && *v < 1.2),
+                            "{mode:?}, {interp:?}, rate {rate}, stretch {stretch}: {:?}",
+                            faded.iter().fold(
+                                (f32::INFINITY, f32::NEG_INFINITY),
+                                |(lo, hi), &v| (lo.min(v), hi.max(v))
+                            )
+                        );
+                        if mode == LoopMode::Forward && stretch == 1.0 {
+                            let jump = |audio: &[f32]| {
+                                audio[500..]
+                                    .windows(2)
+                                    .map(|w| (w[1] - w[0]).abs())
+                                    .fold(0.0, f32::max)
+                            };
+                            assert!(jump(&faded) < jump(&render(0.0, 64, stretch)) * 0.1);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

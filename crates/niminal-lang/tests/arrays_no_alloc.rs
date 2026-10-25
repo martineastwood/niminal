@@ -163,7 +163,7 @@ instr a() { spectral(osc(saw, 220hz)) }";
 
 #[test]
 fn wsola_sample_alignment_does_not_allocate_while_processing() {
-    let source = "const wave = harmonics([1, 0.5], size: 4800)\ns = sample(wave).root(440hz).loop(forward)\ninstr a() { s(freq: 440hz, stretch: 1.7, stretch_mode: 2, loop_start: 0.2, loop_end: 0.8) }";
+    let source = "const wave = harmonics([1, 0.5], size: 4800)\ns = sample(wave).root(440hz).loop(forward)\ninstr a() { s(freq: 440hz, stretch: 1.7, stretch_mode: 2, loop_start: 0.2, loop_end: 0.8, loop_crossfade: 10ms) }";
     let program = niminal_lang::compile(source).unwrap();
     let graph = &program
         .instruments
