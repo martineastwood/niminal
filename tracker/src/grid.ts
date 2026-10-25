@@ -796,7 +796,7 @@ export class PatternGrid {
       }
       if (key === 'z') { event.preventDefault(); if (event.shiftKey) this.redo(); else this.undo(); }
       if (key === 'y') { event.preventDefault(); this.redo(); }
-      if (key === 'a') { event.preventDefault(); if (event.shiftKey) this.selectWholeTrack(); else { this.anchor = { row: 0, column: 0 }; this.row = this.pattern().rows - 1; this.column = this.lanes.length - 1; this.trackSelected(this.activeTrack); this.render(); } }
+      if (key === 'a') { event.preventDefault(); this.marked = null; if (event.shiftKey) this.selectWholeTrack(); else { this.anchor = { row: 0, column: 0 }; this.row = this.pattern().rows - 1; this.column = this.lanes.length - 1; this.trackSelected(this.activeTrack); this.render(); } }
       const sequence: Record<string, SequenceAction> = { ArrowUp: 'previous', ArrowDown: 'next', Home: 'first', End: 'last', ArrowLeft: 'pattern-previous', ArrowRight: 'pattern-next', ...(event.shiftKey ? {} : { Insert: 'new', Delete: 'remove' }) };
       const edit: Record<string, () => void> = { i: () => this.interpolate(), d: () => this.duplicate(), Enter: () => this.shiftRows(1), Backspace: () => this.shiftRows(-1), ...(event.shiftKey ? { Insert: () => this.shiftRows(1, 'column'), Delete: () => this.shiftRows(-1, 'column') } : {}) };
       if (sequence[key]) { event.preventDefault(); this.sequence(sequence[key]); }
