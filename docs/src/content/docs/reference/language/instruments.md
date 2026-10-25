@@ -74,6 +74,50 @@ Buffer references read with `source[i]` or `source.at(pos, interp: linear)`, inc
 
 Clients update these controls with the timed `array` and `bind_buffer` events. Individual numeric elements also have paths such as `weights[0]`, accepted by `set` and `map`. See [Engine API](/reference/engine-api/#live-parameters-and-modulation).
 
+## Oscillator controls
+
+`osc` accepts `sine`, `saw`, `square`, `pulse`, `tri`, a wavetable, or a wavetable bank. Its numeric controls can be modulated at audio rate:
+
+```nml
+instr pwm(freq: hz) {
+  width = 0.5 + osc(sine, 0.3hz) * 0.35
+  out = osc(pulse, freq, width: width) * env[0 10ms 0.15 | 100ms 0]
+}
+```
+
+`width` is the fraction of a cycle spent high. `pulse` clamps it to 0.01..0.99; at 0.5 it matches `square`. `square` stays at 50% duty cycle, and the other waveforms ignore width. Saw and pulse use polynomial band-limited step corrections.
+
+### Phase and hard sync
+
+```nml
+osc(sine, 220hz, phase: 0.25)                // start a quarter-cycle ahead
+osc(sine, 220hz, phase_mod: modulation)     // continuously offset the phase, in cycles
+osc(saw, 660hz, sync: 220hz)                // slave 660hz, master resets at 220hz
+```
+
+`phase` is captured on the oscillator's first sample and wraps into 0..1, including negative values. A reset scope re-arms that capture. `phase_mod` stays live and offsets the waveform lookup; it does not change the running phase accumulator.
+
+A positive `sync` is the **master frequency in hz**, not a trigger signal. Each master cycle resets the slave to its captured starting phase. Changing the slave frequency while holding the master fixed gives the classic hard-sync sweep. The master's phase starts at zero with each oscillator; sync is per voice. Zero or negative sync disables the master.
+
+Resets retain their fractional position between samples. Polynomial corrections reduce the value and slope discontinuities at reset, including with tables and banks; this suppresses aliasing without adding an output delay. It does not guarantee alias-free output under arbitrary modulation. For aggressive sweeps or modulation, use the existing oversampling scope:
+
+```nml
+voice = oversample(4) { osc(saw, freq * ratio, sync: freq) }
+```
+
+In sync mode `osc` bounds the slave frequency to ±half the sample rate and the master to half the sample rate. `position` still morphs a wavetable bank. The existing phase-modulation and free-running oscillator behaviour is retained when the new controls are omitted.
+
+### Phase ramps for custom readers
+
+```nml
+p = phasor(2hz, phase: 0.25)
+y = curve.phase(p)
+```
+
+`phasor(freq, phase: 0, sync: 0hz)` produces a ramp in 0..1. `phase` and the master-frequency `sync` have the same meanings as on `osc`. Negative frequency runs the ramp backwards; zero frequency holds it. Its sync master is bounded to half the sample rate. Use it to scan a table or buffer, or build a custom modulation signal. A raw phase ramp and arbitrary table lookups are not band-limited audio waveforms; use `osc(table, freq)` for band-limited wavetable playback.
+
+`examples/oscillator_controls.nml` combines a PWM pad, a hard-sync lead, and a phase ramp controlling panning.
+
 ## The running voice
 
 | Name | Meaning |

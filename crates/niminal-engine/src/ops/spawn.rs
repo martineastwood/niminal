@@ -158,6 +158,7 @@ impl Opcode for Spawn {
                 let gate = ctx.gate && layer.age < layer.duration;
                 let sub = ProcessCtx {
                     gate,
+                    envelopes_active: layer.op.has_active_envelope(),
                     dur: layer.duration as f32 / ctx.sample_rate,
                     index: layer.serial as u32,
                     ..*ctx

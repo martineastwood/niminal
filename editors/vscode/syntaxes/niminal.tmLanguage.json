@@ -18,6 +18,34 @@
       ]
     },
     {
+      "name": "meta.grid.inline.niminal",
+      "begin": "\\b(grid)\\s*(\\[)",
+      "end": "\\]",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.niminal"
+        },
+        "2": {
+          "name": "punctuation.bracket.niminal"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.bracket.niminal"
+        }
+      },
+      "patterns": [
+        {
+          "name": "string.other.hit.niminal",
+          "match": "[xXo]+"
+        },
+        {
+          "name": "comment.rest.niminal",
+          "match": "[.~]+"
+        }
+      ]
+    },
+    {
       "begin": "\\b(grid)\\s*(\\{)",
       "end": "\\}",
       "beginCaptures": {
@@ -158,7 +186,7 @@
     },
     {
       "name": "constant.language.wave.niminal",
-      "match": "\\b(sine|saw|square|tri|stereo|mono|quad|true|false|pi|sample_rate)\\b"
+      "match": "\\b(sine|saw|square|pulse|tri|stereo|mono|quad|true|false|pi|sample_rate)\\b"
     },
     {
       "name": "keyword.operator.niminal",

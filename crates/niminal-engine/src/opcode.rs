@@ -132,6 +132,9 @@ pub struct ProcessCtx {
     pub sample_rate: f32,
     /// True while the note is held; false once it has been released.
     pub gate: bool,
+    /// After release, true while an envelope in the enclosing voice still runs.
+    /// Rate-conversion filters use this to drain finite tails after the envelope ends.
+    pub envelopes_active: bool,
     /// The scheduled length of the note in seconds; 0 when a key holds it open.
     pub dur: f32,
     /// How many notes of this instrument started before this one.
@@ -147,6 +150,7 @@ impl ProcessCtx {
             instance: 0,
             sample_rate,
             gate,
+            envelopes_active: false,
             dur: 0.0,
             index: 0,
             clock: Clock::default(),

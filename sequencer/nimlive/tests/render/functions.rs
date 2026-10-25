@@ -194,7 +194,7 @@ const taps = [0.25, 0.5, 0.25]
 #[test]
 fn a_table_is_read_between_its_entries() {
     let wavetable = raw(
-        "const sine = harmonics([1], size: 512)\nfn phasor(freq: hz) {\n state p = 0\n p = (p + freq / sample_rate).fract\n p\n}\ninstr a() { sine.at(phasor(200hz) * sine.len) * env[1 1sec 1] }\na() for 1beat",
+        "const sine = harmonics([1], size: 512)\ninstr a() { sine.at(phasor(200hz) * sine.len) * env[1 1sec 1] }\na() for 1beat",
     );
     let sine = raw("instr a() { osc(sine, 200hz) * env[1 1sec 1] }\na() for 1beat");
     assert_eq!(period(&wavetable[1000..5000]), period(&sine[1000..5000]));

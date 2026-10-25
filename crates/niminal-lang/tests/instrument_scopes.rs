@@ -253,3 +253,119 @@ fn delayed_nested_inputs_preserve_note_start_initialization() {
         "initialization must not see a zero frequency"
     );
 }
+
+#[test]
+fn outer_envelopes_release_oversampled_generators_without_cutting_the_fade() {
+    for factor in [2, 4, 8] {
+        for block in [1, 7, 64] {
+            let src = format!(
+                "instr a() {{ oversample({factor}) {{ osc(sine, 440hz) }} * env[1 | 5ms 0] }}"
+            );
+            let mut v = voice(&src, "a");
+            render(&mut v, 480, block);
+            v.release();
+            let out = render(&mut v, 1024, block);
+            assert!(
+                out[..100].iter().any(|x| x.abs() > 0.01),
+                "release cut off at {factor}x/{block}"
+            );
+            assert!(
+                v.is_finished(),
+                "silent generator survives at {factor}x/{block}"
+            );
+            assert!(out[512..].iter().all(|x| x.abs() < 1e-6));
+        }
+    }
+}
+
+#[test]
+fn external_envelopes_keep_the_oversampling_filters_tail() {
+    for factor in [2, 4, 8] {
+        let src = format!(
+            "instr a() {{ x = osc(sine, 440hz) * env[1 | 0ms 0]\noversample({factor}) {{ x }} }}"
+        );
+        let reference = format!(
+            "instr a() {{ x = osc(sine, 440hz) * env[1 10ms 1 0ms 0 10ms 0]\noversample({factor}) {{ x }} }}"
+        );
+        let want = render(&mut voice(&reference, "a"), 544, 1);
+        for block in [1, 7, 64] {
+            let mut v = voice(&src, "a");
+            render(&mut v, 480, block);
+            v.release();
+            let out = render(&mut v, 64, block);
+            let worst = out
+                .iter()
+                .zip(&want[480..])
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0, f32::max);
+            assert!(
+                worst < 1e-5,
+                "FIR tail differs at {factor}x/{block}: {worst}"
+            );
+            assert!(out[..16].iter().any(|x| x.abs() > 0.01));
+            // Activity is sampled at block boundaries; allow the bounded drain interval.
+            render(&mut v, 64, block);
+            assert!(v.is_finished(), "FIR tail survives at {factor}x/{block}");
+        }
+    }
+}
+
+#[test]
+fn oversampled_delay_tails_keep_ringing_after_release() {
+    let src = "instr a() { oversample(4) { (osc(sine, 440hz) * env[1 | 1ms 0]).delay(time: 10ms, feedback: 0.25) } }";
+    let mut v = voice(src, "a");
+    render(&mut v, 480, 64);
+    v.release();
+    let out = render(&mut v, 24000, 64);
+    assert!(
+        out[900..1500].iter().any(|x| x.abs() > 0.001),
+        "delay tail was cut short"
+    );
+    assert!(v.is_finished(), "delay tail did not finish");
+}
+
+#[test]
+fn spawned_oversampled_layers_use_their_own_release_envelopes() {
+    let src = "instr a() { spawn(osc(square, 100hz), dur: 2ms, max: 2) { oversample(4) { osc(sine, 440hz) } * env[1 | 2ms 0] } }";
+    let mut v = voice(src, "a");
+    let held = render(&mut v, 4800, 64);
+    assert!(
+        held[4320..4560].iter().any(|x| x.abs() > 0.01),
+        "layer pool did not free finished grains"
+    );
+    v.release();
+    render(&mut v, 4800, 64);
+    assert!(v.is_finished());
+}
+
+#[test]
+fn a_short_quiet_input_pulse_keeps_its_delayed_fir_response() {
+    for factor in [2, 4, 8] {
+        let src = format!(
+            "instr a() {{ step = 1sec / sample_rate.num\nx = 0.01 * env[0 step 1 | 0ms 0]\noversample({factor}) {{ x }} }}"
+        );
+        let reference = format!(
+            "instr a() {{ step = 1sec / sample_rate.num\nx = 0.01 * env[0 step 1 step 1 0ms 0 10ms 0]\noversample({factor}) {{ x }} }}"
+        );
+        let want = render(&mut voice(&reference, "a"), 66, 1);
+        let mut v = voice(&src, "a");
+        render(&mut v, 2, 1);
+        v.release();
+        let mut out = render(&mut v, 1, 1);
+        assert!(
+            !v.is_finished(),
+            "{factor}x filter ended before its impulse response arrived"
+        );
+        out.extend(render(&mut v, 63, 1));
+        let worst = out
+            .iter()
+            .zip(&want[2..])
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f32::max);
+        assert!(
+            worst < 1e-6,
+            "{factor}x truncated the FIR response: {worst}"
+        );
+        assert!(v.is_finished());
+    }
+}

@@ -2,7 +2,7 @@ import { StreamLanguage } from '@codemirror/language';
 
 const keywords = new Set('instr mono fn def const bus buffer ctl node fx config state use reset reset_on after new at next now if else match for in and or not init control as capture last spawn oversample env cycle out'.split(' '));
 const types = new Set('hz khz db sec ms samples beat beats bar bars deg st ct bpm int num'.split(' '));
-const constants = new Set('sine saw square tri stereo quad true false pi sample_rate'.split(' '));
+const constants = new Set('sine saw square pulse tri stereo quad true false pi sample_rate'.split(' '));
 
 // Lexical colouring remains available while a definition is incomplete. Semantic
 // information, documentation and validation come from the compiler through LSP.

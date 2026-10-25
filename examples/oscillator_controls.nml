@@ -1,0 +1,29 @@
+// PWM pad, hard-sync lead, and a phase ramp controlling stereo movement.
+// Render: nimlive render examples/oscillator_controls.nml --bars 4 --out oscillator_controls.wav
+config { channels: stereo }
+tempo 128bpm
+
+instr pwm_pad(freq: hz) {
+  width = 0.5 + osc(sine, 0.3hz) * 0.35
+  voice = osc(pulse, freq, width: width, phase: 0.25).lpf(cutoff: 1800hz)
+  movement = sin(phasor(0.125hz) * 2 * pi) * 25deg
+  out = (voice * env[0 80ms 0.1 | 300ms 0]).pan(azimuth: movement)
+}
+
+instr sync_lead(freq: hz) {
+  ratio = env[1.3 1/2beat 4.7 1/2beat 2.1 | 100ms 1.3]
+  voice = oversample(4) { osc(saw, freq * ratio, sync: freq) }
+  out = (voice.lpf(cutoff: 4khz) * env[0 3ms 0.15 | 100ms 0]).pan
+}
+
+clip chords {
+  instrument: pwm_pad
+  notes: [a2,c3,e3].over(2bars)
+}
+clip lead {
+  instrument: sync_lead
+  notes: [a3 ~ e4 ~ g4 e4 c4 ~]
+}
+scene demo { chords, lead }
+demo.start
+at +4bars hush

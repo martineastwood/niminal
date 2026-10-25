@@ -46,6 +46,8 @@ pub struct Oversample {
     indices: Vec<usize>,
     scratch: Vec<Vec<f32>>,
     started: bool,
+    /// None while held; a finite rate-conversion tail budget after release.
+    tail_left: Option<usize>,
 }
 impl Oversample {
     pub fn new(op: Box<dyn Opcode>, factor: usize) -> Self {
@@ -89,6 +91,7 @@ impl Oversample {
             indices: (0..inputs).collect(),
             scratch: blocks(outputs),
             started: false,
+            tail_left: None,
         }
     }
 }
@@ -127,6 +130,7 @@ impl Opcode for Oversample {
     fn reset(&mut self) {
         self.op.reset();
         self.started = false;
+        self.tail_left = None;
         for fir in self.up.iter_mut().chain(&mut self.down) {
             fir.reset();
         }
@@ -139,11 +143,14 @@ impl Opcode for Oversample {
     }
     fn is_active(&self) -> bool {
         self.op.is_active()
-            || self.down.iter().any(|f| {
-                f.history
-                    .iter()
-                    .any(|x| x.abs() > crate::opcode::TAIL_LEVEL)
-            })
+            || match self.tail_left {
+                Some(left) => left > 0,
+                None => self.down.iter().any(|f| {
+                    f.history
+                        .iter()
+                        .any(|x| x.abs() > crate::opcode::TAIL_LEVEL)
+                }),
+            }
     }
     fn has_side_effects(&self) -> bool {
         self.op.has_side_effects()
@@ -165,6 +172,7 @@ impl Opcode for Oversample {
         outs: &mut [Vec<f32>],
         frames: usize,
     ) {
+        let keep_tail = ctx.gate || ctx.envelopes_active || self.op.is_active();
         let sub = ProcessCtx {
             sample_rate: ctx.sample_rate * self.factor as f32,
             ..*ctx
@@ -205,5 +213,15 @@ impl Opcode for Oversample {
                 }
             }
         }
+        // The FIRs have finite support. A free-running generator inside this scope must not
+        // keep an enclosing voice alive forever after its amplitude envelope has finished.
+        let support = (2 * (self.taps.len() - 1)).div_ceil(self.factor);
+        self.tail_left = if ctx.gate {
+            None
+        } else if keep_tail || self.op.is_active() {
+            Some(support)
+        } else {
+            Some(self.tail_left.unwrap_or(support).saturating_sub(frames))
+        };
     }
 }

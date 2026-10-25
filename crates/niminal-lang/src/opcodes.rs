@@ -10,8 +10,8 @@ pub use niminal_engine::ops::Wave;
 use niminal_engine::ops::{
     Allpass, Bitcrush, Chorus, Clip, Comb, Compressor, Convolve, DcBlock, Delay, Distortion, Eq,
     EqMode, Fdn, FilterMode, FinishWhen, Fn1, Fold, Follow, Formant, Func, Gain, Gate, Impulse,
-    IrSpectrum, Lag, Limiter, Noise, NoiseColor, Osc, Phaser, PitchShift, Resonator, Reverb,
-    SampleHold, SpectralDelay, SpectralFreeze, Svf, Waveshape, Wavetable,
+    IrSpectrum, Lag, Limiter, Noise, NoiseColor, Osc, Phaser, Phasor, PitchShift, Resonator,
+    Reverb, SampleHold, SpectralDelay, SpectralFreeze, Svf, Waveshape, Wavetable,
 };
 
 use crate::unit::Unit;
@@ -260,12 +260,15 @@ impl Registry {
             ),
             OpSpec::new(
                 "osc",
-                "An oscillator: `osc(saw, 440hz)`. The waveform is sine, saw, square or tri, a table (`harmonics([...])`), or a `bank([...])` of tables; `phase_mod` bends the phase for FM; `position` morphs a bank.",
+                "An oscillator: `osc(saw, 440hz)`. The waveform is sine, saw, square, pulse or tri, a table (`harmonics([...])`), or a `bank([...])` of tables; `phase_mod` bends the phase for FM; `position` morphs a bank; `width` controls pulse duty cycle (0.01..0.99); `phase` sets the starting/reset phase in cycles; `sync` resets at a master frequency in hz (0 disables sync). Hard sync uses fractional reset timing and polynomial discontinuity corrections.",
                 vec![
                     req("wave", Kind::Wave),
                     req("freq", Kind::Signal(Unit::Hz)),
                     opt("phase_mod", SIGNAL),
                     opt("position", SIGNAL),
+                    opt("width", SIGNAL),
+                    opt("phase", SIGNAL),
+                    opt("sync", Kind::Signal(Unit::Hz)),
                 ],
                 Build::Builtin(|a| {
                     Ok(Box::new(match a.wave.clone().expect("osc has a wave") {
@@ -274,6 +277,16 @@ impl Registry {
                         WaveArg::Bank(bank) => Osc::with_bank(bank),
                     }))
                 }),
+            ),
+            OpSpec::new(
+                "phasor",
+                "A normalized phase ramp (0..1) for table readers and custom oscillators. `phase` sets its starting/reset phase in cycles; `sync` is a master frequency in hz (0 disables hard sync). Negative frequency runs backwards. The ramp itself is not band-limited audio.",
+                vec![
+                    req("freq", Kind::Signal(Unit::Hz)),
+                    opt("phase", SIGNAL),
+                    opt("sync", Kind::Signal(Unit::Hz)),
+                ],
+                Build::Builtin(|_| Ok(Box::new(Phasor::default()))),
             ),
             filter(
                 "lpf",
@@ -723,6 +736,7 @@ pub const WAVES: &[(&str, Wave)] = &[
     ("sine", Wave::Sine),
     ("saw", Wave::Saw),
     ("square", Wave::Square),
+    ("pulse", Wave::Pulse),
     ("tri", Wave::Tri),
 ];
 

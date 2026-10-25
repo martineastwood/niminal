@@ -460,3 +460,22 @@ fn overlapping_notes_do_not_share_state() {
     assert_eq!(&solo[..4700], &both[..4700]);
     assert_ne!(&solo[5000..6000], &both[5000..6000]);
 }
+
+#[test]
+fn oscillator_controls_example_sounds_and_releases_at_device_sample_rates() {
+    for rate in [44_100.0, 48_000.0] {
+        let p = program(include_str!("../../../../examples/oscillator_controls.nml"));
+        let schedule = p.schedule();
+        let mut session = niminal_live::Offline::new(rate, p.master).without_limiter();
+        session.play_program(p, schedule);
+        let out = session.process((rate * 10.0) as usize);
+        let peak = out.iter().flatten().fold(0.0f32, |p, x| p.max(x.abs()));
+        assert!(peak > 0.01, "silent example at {rate}hz");
+        assert_eq!(
+            session.engine().session().state().voices,
+            0,
+            "voices remain after the example at {rate}hz"
+        );
+        assert!(session.take_notices().is_empty());
+    }
+}

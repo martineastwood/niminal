@@ -772,13 +772,14 @@ impl Voice {
             out.iter_mut().for_each(|c| c[..frames].fill(0.0));
             return None;
         }
+        let envelopes_active = self.released && self.ops.iter().any(|op| op.has_active_envelope());
         // after its release a voice rings for its tail, then fades out: without an envelope once the
         // tail is over, with one once its envelopes are done as well
         if self.released && self.choke_left.is_none() {
             let over = self.tail_left == 0;
             self.tail_left = self.tail_left.saturating_sub(frames);
             let done = if self.shaped {
-                over && self.graph.tail > 0.0 && !self.ops.iter().any(|op| op.has_active_envelope())
+                over && self.graph.tail > 0.0 && !envelopes_active
             } else {
                 over
             };
@@ -792,6 +793,7 @@ impl Voice {
             instance: self.instance,
             sample_rate: self.sample_rate,
             gate: !self.released,
+            envelopes_active,
             dur: self.dur,
             index: self.index,
             clock: buses.clock,

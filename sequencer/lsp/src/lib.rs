@@ -577,7 +577,7 @@ mod tests {
         assert_eq!(diagnostics[0]["range"]["start"]["line"], 0);
         assert_eq!(
             diagnostics[0]["message"],
-            "expected a waveform or a table\nhelp: one of sine, saw, square, tri, or an array of numbers"
+            "expected a waveform or a table\nhelp: one of sine, saw, square, pulse, tri, or an array of numbers"
         );
         assert_eq!(diagnostics[0]["range"]["start"]["character"], 27);
         // fixing it clears them
