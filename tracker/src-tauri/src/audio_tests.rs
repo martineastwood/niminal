@@ -13,6 +13,15 @@ fn sync_lanes(song: &mut Song) {
     }
 }
 
+/// Gives the engine the strips of a four-track song, as the tracker's first update does before anything sounds.
+fn build_strips(worker: &mut Worker) {
+    let mut song = test_song(None);
+    for column in song.patterns.iter_mut().flat_map(|p| p.notes.iter_mut().flatten()) {
+        column.inst.clear();
+    }
+    worker.command(Command::Update { song }).unwrap();
+}
+
 fn test_song(note: Option<&str>) -> Song {
     Song {
         bpm: 125.0,
@@ -73,6 +82,7 @@ fn real_engine_plays_last_good_source_and_stop_cancels_the_loop() {
             token: None,
         })
         .unwrap();
+    build_strips(&mut worker);
     worker
         .command(Command::Apply {
             id: "tone".into(),
@@ -174,6 +184,7 @@ fn track_effects_gain_and_mute_change_rendered_audio_and_reject_bad_fx_edits() {
             token: None,
         })
         .unwrap();
+    build_strips(&mut worker);
     // An effect can be applied before any instrument, and may use helpers.
     worker
         .command(Command::Apply {
@@ -329,6 +340,7 @@ fn each_channel_and_the_master_have_a_scope() {
             token: None,
         })
         .unwrap();
+    build_strips(&mut worker);
     // Strip scopes are enabled only while the mixer needs them.
     worker.command(Command::Scopes { strips: true }).unwrap();
     worker
@@ -405,6 +417,7 @@ fn the_master_has_its_own_level_and_effects_and_solo_silences_other_tracks() {
             token: None,
         })
         .unwrap();
+    build_strips(&mut worker);
     for (id, source, kind) in [
         ("tone", "instr flat(freq: hz) { 0.1 }", Kind::Instr),
         ("half", "fx half { out = in * 0.5 }", Kind::Fx),
@@ -501,6 +514,7 @@ fn tracks_send_to_returns_that_have_their_own_effects_level_and_mute() {
             token: None,
         })
         .unwrap();
+    build_strips(&mut worker);
     for (id, source, kind) in [
         ("tone", "instr flat(freq: hz) { 0.1 }", Kind::Instr),
         ("half", "fx half { out = in * 0.5 }", Kind::Fx),
@@ -593,6 +607,60 @@ fn tracks_send_to_returns_that_have_their_own_effects_level_and_mute() {
 }
 
 #[test]
+fn strips_come_and_go_with_the_tracks_and_returns_a_song_has() {
+    let engine = Arc::new(Mutex::new(EngineServer::new(Session::new(48000.0, Layout::Mono).without_limiter())));
+    let server = Server::start(engine.clone(), ServerConfig { port: 0, ..ServerConfig::default() }).unwrap();
+    let mut worker = Worker::default();
+    worker.command(Command::Connect { port: server.port(), token: None }).unwrap();
+    worker.command(Command::Apply { id: "tone".into(), source: "instr flat(freq: hz) { 0.1 }".into(), kind: Kind::Instr, dir: None }).unwrap();
+    worker.command(Command::Apply { id: "half".into(), source: "fx half { out = in * 0.5 }".into(), kind: Kind::Fx, dir: None }).unwrap();
+    let level = |worker: &mut Worker, track: usize| -> Result<f32, String> {
+        worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track, ms: 200, start: None, retrigger: None })?;
+        let audio = engine.lock().unwrap().session_mut().process(16000);
+        Ok(audio[0][2048..4096].iter().map(|s| s.abs()).sum::<f32>() / 2048.0)
+    };
+    let tracks = |count: usize| {
+        let mut song = test_song(None);
+        song.tracks.truncate(count);
+        for pattern in &mut song.patterns {
+            pattern.notes.truncate(count);
+            pattern.fx.truncate(count);
+        }
+        for column in song.patterns.iter_mut().flat_map(|p| p.notes.iter_mut().flatten()) {
+            column.inst.clear();
+        }
+        song
+    };
+
+    // only the tracks a song has can be heard; one added later is heard, one taken away is gone, and one that comes back is heard again
+    worker.command(Command::Update { song: tracks(2) }).unwrap();
+    let dry = level(&mut worker, 0).unwrap();
+    assert!(dry > 0.01);
+    assert!(level(&mut worker, 3).is_err(), "there is no fourth track yet");
+    worker.command(Command::Update { song: tracks(4) }).unwrap();
+    assert!((level(&mut worker, 3).unwrap() - dry).abs() < 0.001, "a track added after connecting sounds");
+    worker.command(Command::Update { song: tracks(2) }).unwrap();
+    assert!(level(&mut worker, 3).is_err(), "a track taken away is gone");
+    assert!((level(&mut worker, 1).unwrap() - dry).abs() < 0.001, "the others still sound");
+    worker.command(Command::Update { song: tracks(4) }).unwrap();
+    assert!((level(&mut worker, 3).unwrap() - dry).abs() < 0.001, "a track that comes back sounds");
+
+    // a return added after the track that outputs to it, taken away, and added again
+    let mut song = tracks(4);
+    song.returns = vec![Track { name: "Drums".into(), fx: vec![Device { id: "r1".into(), definition: "half".into(), ..Device::default() }], ..Track::default() }];
+    sync_lanes(&mut song);
+    song.tracks[3].output = Output::Return { index: 0 };
+    worker.command(Command::Update { song: song.clone() }).unwrap();
+    assert!((level(&mut worker, 3).unwrap() / dry - 0.5).abs() < 0.001, "heard through the return");
+    let mut without = tracks(4);
+    without.tracks[3].output = Output::Master;
+    worker.command(Command::Update { song: without }).unwrap();
+    assert!((level(&mut worker, 3).unwrap() / dry - 1.0).abs() < 0.001, "back on the master once the return is gone");
+    worker.command(Command::Update { song }).unwrap();
+    assert!((level(&mut worker, 3).unwrap() / dry - 0.5).abs() < 0.001, "heard through the return again");
+}
+
+#[test]
 fn outputs_route_tracks_into_returns_and_sends_tap_the_chain_where_they_sit() {
     let engine = Arc::new(Mutex::new(EngineServer::new(
         Session::new(48000.0, Layout::Mono).without_limiter(),
@@ -612,6 +680,7 @@ fn outputs_route_tracks_into_returns_and_sends_tap_the_chain_where_they_sit() {
             token: None,
         })
         .unwrap();
+    build_strips(&mut worker);
     for (id, source, kind) in [
         ("tone", "instr flat(freq: hz) { 0.1 }", Kind::Instr),
         ("half", "fx half { out = in * 0.5 }", Kind::Fx),
@@ -901,6 +970,7 @@ fn imported_samples_play_from_the_project_folder() {
             token: None,
         })
         .unwrap();
+    build_strips(&mut worker);
     // Without the project folder the relative path cannot be found.
     let source = format!(
         "smp_a = sample(\"{file}\").root(c4)\ninstr level(freq: hz) {{ smp_a(freq: freq) }}"
@@ -961,6 +1031,7 @@ fn device_chain_runs_in_order_and_can_be_edited_while_playing() {
             token: None,
         })
         .unwrap();
+    build_strips(&mut worker);
     for (id, source, kind) in [
         ("tone", "instr flat(freq: hz) { 0.1 }", Kind::Instr),
         ("half", "fx half { out = in * 0.5 }", Kind::Fx),
@@ -1326,6 +1397,7 @@ fn library_instruments_expose_controls_and_sound_on_mono_and_stereo_engines() {
         let server = Server::start(engine.clone(), ServerConfig { port: 0, ..ServerConfig::default() }).unwrap();
         let mut worker = Worker::default();
         worker.command(Command::Connect { port: server.port(), token: None }).unwrap();
+        build_strips(&mut worker);
         for (index, source) in sources.iter().enumerate() {
             let id = format!("library_instrument_{index}");
             worker.command(Command::Apply { id: id.clone(), source: (*source).into(), kind: Kind::Instr, dir: None }).unwrap();
@@ -1351,6 +1423,7 @@ fn library_drum_presets_carry_their_voice_and_sound_on_mono_and_stereo_engines()
         let server = Server::start(engine.clone(), ServerConfig { port: 0, ..ServerConfig::default() }).unwrap();
         let mut worker = Worker::default();
         worker.command(Command::Connect { port: server.port(), token: None }).unwrap();
+        build_strips(&mut worker);
         for (index, preset) in presets.iter().enumerate() {
             let id = format!("library_drum_{index}");
             let name = preset.lines().find_map(|l| l.strip_prefix("instr ")).and_then(|l| l.split('(').next()).unwrap();

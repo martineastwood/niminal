@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -125,6 +125,7 @@ impl Audio {
             .spawn(move || {
                 let mut worker = Worker::default();
                 let mut last_scopes = std::time::Instant::now();
+                let mut last_sound = std::time::Instant::now();
                 loop {
                     match receiver.recv_timeout(Duration::from_millis(25)) {
                         Ok((command, reply)) => {
@@ -146,10 +147,15 @@ impl Audio {
                         }
                         *shared.lock().unwrap_or_else(|e| e.into_inner()) = worker.status.clone();
                     }
-                    if worker.client.is_some() && last_scopes.elapsed() >= Duration::from_millis(30)
+                    // after two silent seconds with nothing playing, ask the engine for scope frames less often
+                    let wait = if worker.playback.is_none() && last_sound.elapsed() >= Duration::from_secs(2) { 150 } else { 30 };
+                    if worker.client.is_some() && last_scopes.elapsed() >= Duration::from_millis(wait)
                     {
                         last_scopes = std::time::Instant::now();
                         if worker.pump().is_ok() {
+                            if worker.scopes.values().any(|frames| frames.iter().any(|v| v.abs() >= 0.001)) {
+                                last_sound = std::time::Instant::now();
+                            }
                             *published.lock().unwrap_or_else(|e| e.into_inner()) =
                                 worker.scopes.clone();
                         }
@@ -202,6 +208,8 @@ struct Worker {
     instrument_values: BTreeMap<String, BTreeMap<String, f64>>,
     scopes: Scopes,
     strip_scopes: bool,
+    /// The strips whose scopes the engine has made.
+    scope_labels: BTreeSet<String>,
     playback: Option<Playback>,
     mixer_timing: (f64, u32),
     dir: Option<String>,
@@ -319,29 +327,25 @@ impl Worker {
         Ok(())
     }
 
-    /// Creates (or, unless `fresh`, removes) the strip scopes to match `strip_scopes`; the master's
-    /// scope is created once per connection. Each scope costs a JSON message every frame it reports.
-    fn sync_scopes(&mut self, fresh: bool) -> Result<(), String> {
-        let wanted = self.strip_scopes;
-        for label in mixer::labels() {
-            let master = label == mixer::MASTER;
-            if master && !fresh {
-                continue;
-            }
-            if !master && !wanted && fresh {
-                continue;
-            }
-            let id = format!("s_{label}");
-            if wanted || master {
-                self.call(
-                    "scopes.create",
-                    json!({"id":id, "endpoint":{"kind":"node", "id":format!("tap_{label}")}, "frames":SCOPE_FRAMES, "rate":SCOPE_RATE}),
-                )?;
-            } else {
-                self.call("scopes.remove", json!({"id":id}))?;
-                self.scopes.remove(&id);
-            }
+    /// Makes the engine's scopes match what is wanted: the master's, and with `strip_scopes` one for each
+    /// track and return the song has. Each scope costs a JSON message every frame it reports.
+    fn sync_scopes(&mut self) -> Result<(), String> {
+        let mut wanted = BTreeSet::from([mixer::MASTER.to_string()]);
+        if self.strip_scopes {
+            wanted.extend(mixer::labels(&self.mixer, &self.mixer_returns));
         }
+        for label in self.scope_labels.difference(&wanted).cloned().collect::<Vec<_>>() {
+            // a strip that is gone took its tap with it, and the scope may have gone too
+            let _ = self.call("scopes.remove", json!({"id":format!("s_{label}")}));
+            self.scopes.remove(&format!("s_{label}"));
+        }
+        for label in wanted.difference(&self.scope_labels).cloned().collect::<Vec<_>>() {
+            self.call(
+                "scopes.create",
+                json!({"id":format!("s_{label}"), "endpoint":{"kind":"node", "id":format!("tap_{label}")}, "frames":SCOPE_FRAMES, "rate":SCOPE_RATE}),
+            )?;
+        }
+        self.scope_labels = wanted;
         Ok(())
     }
 
@@ -408,8 +412,9 @@ impl Worker {
                     json!({"op":"routing", "at":"now", "edits":mixer::setup()}),
                 ])?;
                 self.scopes.clear();
+                self.scope_labels.clear();
                 self.call("subscribe", json!({"topics":["scopes"]}))?;
-                self.sync_scopes(true)?;
+                self.sync_scopes()?;
                 self.status.connected = true;
             }
             Command::Disconnect => {
@@ -673,7 +678,7 @@ impl Worker {
                 if self.strip_scopes != strips {
                     self.strip_scopes = strips;
                     if self.client.is_some() {
-                        self.sync_scopes(false)?;
+                        self.sync_scopes()?;
                     }
                 }
             }
@@ -783,6 +788,10 @@ impl Worker {
         self.mixer_returns = song.returns.clone();
         self.mixer_master = song.master.clone();
         self.mixer_timing = (song.bpm, song.rows_per_beat);
+        // strips may have come or gone
+        if self.strip_scopes && self.client.is_some() {
+            self.sync_scopes()?;
+        }
         Ok(())
     }
 

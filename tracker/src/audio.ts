@@ -32,8 +32,11 @@ export function observeAudio(callback: typeof receive) {
   receive = callback;
   receive(audioStatus);
   // This timer paints transport state only. Musical scheduling lives in Rust.
+  let idle = 0;
   return window.setInterval(async () => {
-    if (!isTauri() || polling) return;
+    // Nothing moves while stopped, and commands report the status they cause, so look less often then.
+    idle = audioStatus.playing ? 0 : idle + 1;
+    if (!isTauri() || polling || idle > 4 && idle % 4 !== 0) return;
     polling = true;
     try { update(await invoke<AudioStatus>('audio_status')); }
     catch (error) { update({ ...audioStatus, error: String(error) }); }

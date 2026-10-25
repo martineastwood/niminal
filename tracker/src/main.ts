@@ -574,9 +574,13 @@ function watchStrips() {
   watchingStrips = strips;
   void audioCommand({ op: 'scopes', strips }).catch(() => { watchingStrips = null; });
 }
+let quietPolls = 0, ticks = 0;
 async function pollScopes() {
+  // after two silent seconds, look five times a second instead of twenty; sound brings it back
+  if (quietPolls > 40 && ++ticks % 4 !== 0) return;
   if (isTauri() && audioStatus.connected) { try { scopes = await invoke<Record<string, number[]>>('audio_scopes'); } catch { scopes = {}; } }
   else scopes = {};
+  quietPolls = Object.values(scopes).every(frames => frames.every(v => Math.abs(v) < 0.001)) ? quietPolls + 1 : 0;
   drawScope(element<HTMLCanvasElement>('master-scope'), scopes.s_m);
   if (!element('mix-panel').hidden) mix.paint(scopes);
 }

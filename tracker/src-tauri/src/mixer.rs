@@ -3,7 +3,8 @@
 //! `in_<s>` → its effect devices → `track_<s>` (level and pan) → `tap_<s>` → `out_<s>` (mute) → next stage
 //!
 //! Notes and other strips arrive at `in_<s>`. Tracks and returns feed `in_m`, the master's strip, which
-//! feeds the engine's master output. The tap is a pass-through so each strip's finished signal has one
+//! feeds the engine's master output. Only the strips a song has exist in the engine: adding a track or
+//! return builds its nodes and links, and removing one frees them, so an idle graph costs what the song uses. The tap is a pass-through so each strip's finished signal has one
 //! steady place for a scope to listen. A return is a strip labelled `r<n>`. A track's or return's tap
 //! feeds the master through `out_<s>`, or a return through `outr_<s>_<n>`, whichever its output names;
 //! a return can only feed later returns. A send device is a node that feeds a return through
@@ -11,10 +12,10 @@
 //! place in the chain, and may *mute the source*, so nothing after it carries sound on.
 use crate::{
     commands::{EffectParameters, fx_node},
-    pattern::{Device, MAX_RETURNS, Output, Track},
+    pattern::{Device, Output, Track},
 };
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The label of the master strip; tracks are labelled by number.
 pub const MASTER: &str = "m";
@@ -25,34 +26,27 @@ pub fn setup() -> Vec<Value> {
         json!({"op":"fx", "name":"__tracker_tap", "source":"() { out = in }"}),
     ];
     edits.extend(crate::modulation::declarations());
-    for label in labels() {
-        edits.push(json!({"op":"node", "id":format!("in_{label}"), "fx":"__tracker_tap"}));
-        edits.push(json!({"op":"node", "id":format!("track_{label}"), "fx":"__tracker_mix"}));
-        edits.push(json!({"op":"node", "id":format!("tap_{label}"), "fx":"__tracker_tap"}));
-        edits.push(json!({"op":"connect", "id":format!("fadein_{label}"), "from":{"kind":"node", "id":format!("in_{label}")}, "to":{"kind":"node", "id":format!("track_{label}")}}));
-        edits.push(json!({"op":"connect", "id":format!("tapin_{label}"), "from":{"kind":"node", "id":format!("track_{label}")}, "to":{"kind":"node", "id":format!("tap_{label}")}}));
-        let to = if label == MASTER {
-            json!({"kind":"master"})
-        } else {
-            json!({"kind":"node", "id":format!("in_{MASTER}")})
-        };
-        edits.push(json!({"op":"connect", "id":format!("out_{label}"), "from":{"kind":"node", "id":format!("tap_{label}")}, "to":to}));
-    }
-    let sources = (0..16).map(|t| (t.to_string(), 0)).chain((0..MAX_RETURNS).map(|r| (format!("r{r}"), r + 1)));
-    for (label, first) in sources {
-        for ret in first..MAX_RETURNS {
-            edits.push(json!({"op":"connect", "id":format!("outr_{label}_{ret}"), "from":{"kind":"node", "id":format!("tap_{label}")}, "to":{"kind":"node", "id":format!("in_r{ret}")}, "gain":0.0}));
-        }
-    }
+    edits.extend(strip_nodes(MASTER));
     edits
 }
 
-/// Every strip the engine graph holds, in order: 16 tracks, the returns, then the master.
-pub fn labels() -> impl Iterator<Item = String> {
-    (0..16)
-        .map(|t| t.to_string())
-        .chain((0..MAX_RETURNS).map(|r| format!("r{r}")))
-        .chain([MASTER.to_string()])
+/// The nodes and links of one strip: input, level and pan, tap, and the link on to the master (or, for
+/// the master itself, to the engine's output).
+fn strip_nodes(label: &str) -> Vec<Value> {
+    let to = if label == MASTER { json!({"kind":"master"}) } else { json!({"kind":"node", "id":format!("in_{MASTER}")}) };
+    vec![
+        json!({"op":"node", "id":format!("in_{label}"), "fx":"__tracker_tap"}),
+        json!({"op":"node", "id":format!("track_{label}"), "fx":"__tracker_mix"}),
+        json!({"op":"node", "id":format!("tap_{label}"), "fx":"__tracker_tap"}),
+        json!({"op":"connect", "id":format!("fadein_{label}"), "from":{"kind":"node", "id":format!("in_{label}")}, "to":{"kind":"node", "id":format!("track_{label}")}}),
+        json!({"op":"connect", "id":format!("tapin_{label}"), "from":{"kind":"node", "id":format!("track_{label}")}, "to":{"kind":"node", "id":format!("tap_{label}")}}),
+        json!({"op":"connect", "id":format!("out_{label}"), "from":{"kind":"node", "id":format!("tap_{label}")}, "to":to}),
+    ]
+}
+
+/// The label of every track and return a song has, in order; the master is not among them.
+pub fn labels(tracks: &[Track], returns: &[Track]) -> Vec<String> {
+    (0..tracks.len()).map(|t| t.to_string()).chain((0..returns.len()).map(|r| format!("r{r}"))).collect()
 }
 
 /// The strips of a song, in order: its tracks, its returns, then the master.
@@ -75,29 +69,46 @@ pub fn silent(tracks: &[Track], index: usize) -> bool {
     tracks[index].muted || tracks.iter().any(|t| t.solo) && !tracks[index].solo
 }
 
-/// The gain of every connection that carries a strip's signal on, by connection id: to the master or a
-/// return, and out of each send device. A return can only feed later returns, which rules out loops.
-/// Nothing flows while the strip is silent or its return is missing. The master has none.
-fn gains(label: &str, tracks: &[Track], returns: &[Track]) -> Option<BTreeMap<String, f64>> {
-    let (strip, open, first) = if let Some(ret) = label.strip_prefix('r') {
-        let index: usize = ret.parse().ok()?;
-        let strip = returns.get(index)?;
-        (strip, !strip.muted, index + 1)
-    } else {
-        let index: usize = label.parse().ok()?;
-        (tracks.get(index)?, !silent(tracks, index), 0)
-    };
-    let gate = |on: bool| if open && on { 1.0 } else { 0.0 };
-    let mut gains = BTreeMap::from([(format!("out_{label}"), gate(strip.output == Output::Master))]);
-    for ret in first..MAX_RETURNS {
-        gains.insert(format!("outr_{label}_{ret}"), gate(ret < returns.len() && strip.output == Output::Return { index: ret }));
-    }
-    for device in strip.active() {
-        if let Some(target) = device.target {
-            gains.insert(format!("sendout_{label}_{}", device.id), gate(target < returns.len()));
+/// A link that carries a strip's signal on: from this node to that one, open at `gain`.
+#[derive(Clone, Debug, PartialEq)]
+struct Link {
+    from: String,
+    to: String,
+    gain: f64,
+}
+
+/// Every link that carries a strip's signal on, by connection id: the one to the master, the one to
+/// the return it outputs to, and one out of each send device whose return exists. Nothing flows while
+/// a strip is silent. A return can only feed later returns, which rules out loops. The master has none.
+fn links(tracks: &[Track], returns: &[Track]) -> BTreeMap<String, Link> {
+    let mut links = BTreeMap::new();
+    let strips = tracks.iter().enumerate().map(|(i, t)| (i.to_string(), t, !silent(tracks, i))).chain(returns.iter().enumerate().map(|(i, t)| (format!("r{i}"), t, !t.muted)));
+    for (label, strip, open) in strips {
+        let gate = |on: bool| if open && on { 1.0 } else { 0.0 };
+        let tap = format!("tap_{label}");
+        links.insert(format!("out_{label}"), Link { from: tap.clone(), to: format!("in_{MASTER}"), gain: gate(strip.output == Output::Master) });
+        if let Output::Return { index } = strip.output
+            && index < returns.len()
+        {
+            links.insert(format!("outr_{label}_{index}"), Link { from: tap, to: format!("in_r{index}"), gain: gate(true) });
+        }
+        for device in strip.active() {
+            if let Some(target) = device.target.filter(|t| *t < returns.len()) {
+                links.insert(format!("sendout_{label}_{}", device.id), Link { from: fx_node(&label, &device.id), to: format!("in_r{target}"), gain: gate(true) });
+            }
         }
     }
-    Some(gains)
+    links
+}
+
+/// Every node a song has in the engine's graph: the strips' own and their active devices.
+fn nodes(tracks: &[Track], returns: &[Track], master: &Track) -> BTreeSet<String> {
+    let mut nodes = BTreeSet::new();
+    for (label, strip) in strips(tracks, returns, master) {
+        nodes.extend(["in", "track", "tap"].map(|part| format!("{part}_{label}")));
+        nodes.extend(strip.active().map(|device| fx_node(&label, &device.id)));
+    }
+    nodes
 }
 
 fn gain(id: &str, value: f64) -> Value {
@@ -168,7 +179,6 @@ pub fn reset(
     let mut edits = Vec::new();
     for (label, strip) in strips(tracks, returns, master) {
         edits.push(base(&label, strip));
-        edits.extend(gains(&label, tracks, returns).into_iter().flatten().map(|(id, value)| gain(&id, value)));
         for device in strip.active() {
             let args = arguments(device, parameters);
             if !args.is_empty() {
@@ -178,15 +188,8 @@ pub fn reset(
             }
         }
     }
+    edits.extend(links(tracks, returns).iter().map(|(id, link)| gain(id, link.gain)));
     vec![json!({"op":"routing", "at":"now", "edits":edits})]
-}
-
-/// The connection from a send device to its return, if it is one.
-fn send_connection(tracks: &[Track], returns: &[Track], label: &str, device: &Device) -> Option<Value> {
-    let target = device.target?;
-    let id = format!("sendout_{label}_{}", device.id);
-    let open = gains(label, tracks, returns).and_then(|gains| gains.get(&id).copied()).unwrap_or(0.0);
-    Some(json!({"op":"connect", "id":id, "from":{"kind":"node", "id":fx_node(label, &device.id)}, "to":{"kind":"node", "id":format!("in_r{target}")}, "gain":open}))
 }
 
 fn find<'a>(strips: &[(String, &'a Track)], label: &str) -> Option<&'a Track> {
@@ -224,10 +227,11 @@ pub fn events(
     let new = strips(tracks, returns, master);
     let old = strips(previous, previous_returns, previous_master);
     // Tracks and returns may be added or removed; the master is always last in both lists.
-    for label in labels() {
+    let mut every: Vec<String> = new.iter().map(|(l, _)| l.clone()).collect();
+    every.extend(old.iter().map(|(l, _)| l.clone()).filter(|l| !new.iter().any(|(n, _)| n == l)));
+    for label in every {
         let current = find(&new, &label);
         let before = find(&old, &label);
-        let is_master = label == MASTER;
         let old_chain: Vec<&Device> = before.map(|t| t.active().collect()).unwrap_or_default();
         let chain: Vec<&Device> = current.map(|t| t.active().collect()).unwrap_or_default();
         for device in &old_chain {
@@ -236,23 +240,22 @@ pub fn events(
             }
         }
         let Some(strip) = current else {
-            // A removed track or return goes quiet; its nodes stay for when it comes back.
-            controls.extend(gains(&label, previous, previous_returns).into_iter().flatten().map(|(id, _)| gain(&id, 0.0)));
+            // A removed track or return takes its nodes, and the links on them, with it.
+            topology.extend(["in", "track", "tap"].map(|part| json!({"op":"free_node", "id":format!("{part}_{label}")})));
             continue;
         };
+        if before.is_none() {
+            topology.extend(strip_nodes(&label));
+        }
         for device in &chain {
             match old_chain.iter().find(|d| d.id == device.id) {
                 None => {
                     let fx = effects.get(&device.definition).ok_or_else(|| format!("Apply the effect assigned to {} first", strip.name))?;
                     topology.push(json!({"op":"node", "id":fx_node(&label, &device.id), "fx":fx, "args":arguments(device, parameters)}));
-                    topology.extend(send_connection(tracks, returns, &label, device));
                 }
                 Some(old) if old.definition != device.definition => topology.push(replacement(&label, device, effects, parameters)?),
                 Some(old) if old.values != device.values => controls.push(json!({"op":"set", "id":fx_node(&label, &device.id), "args":arguments(device, parameters), "glide":0.01})),
                 _ => {}
-            }
-            if old_chain.iter().any(|d| d.id == device.id && d.target != device.target) {
-                topology.extend(send_connection(tracks, returns, &label, device));
             }
         }
         let shape = |chain: &[&Device]| chain.iter().map(|d| (d.id.clone(), d.target.is_some(), d.pre, d.mute_source)).collect::<Vec<_>>();
@@ -280,14 +283,24 @@ pub fn events(
         if before.is_none_or(|o| o.volume_db != strip.volume_db || o.pan != strip.pan) {
             controls.push(base(&label, strip));
         }
-        if is_master {
-            continue;
-        }
-        let was = gains(&label, previous, previous_returns).unwrap_or_default();
-        for (id, value) in gains(&label, tracks, returns).into_iter().flatten() {
-            if was.get(&id) != Some(&value) {
-                controls.push(gain(&id, value));
+    }
+    // links come after the nodes they join; one that is new or points somewhere else is connected, one that
+    // is gone is cut unless freeing a node already took it, and one that stays opens or closes
+    let (wanted, had) = (links(tracks, returns), links(previous, previous_returns));
+    let exists = nodes(tracks, returns, master);
+    for (id, link) in &wanted {
+        match had.get(id) {
+            Some(was) if was.from == link.from && was.to == link.to => {
+                if was.gain != link.gain {
+                    controls.push(gain(id, link.gain));
+                }
             }
+            _ => topology.push(json!({"op":"connect", "id":id, "from":{"kind":"node", "id":link.from}, "to":{"kind":"node", "id":link.to}, "gain":link.gain})),
+        }
+    }
+    for (id, link) in &had {
+        if !wanted.contains_key(id) && exists.contains(&link.from) && exists.contains(&link.to) {
+            topology.push(json!({"op":"disconnect", "id":id}));
         }
     }
     topology.extend(modulators);
