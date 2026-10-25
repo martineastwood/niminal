@@ -198,6 +198,13 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
 /// Members of a kit known from the source: `amen.slices(16)` gives `s0`..`s15`.
 fn kit_members(d: &SampleDecl) -> Vec<SymbolParam> {
     match &d.source {
+        SampleSource::Instruments(entries) => entries
+            .iter()
+            .map(|(name, _)| SymbolParam {
+                name: name.name.clone(),
+                label: name.name.clone(),
+            })
+            .collect(),
         SampleSource::Slices { count, .. } if *count >= 1.0 && count.fract() == 0.0 => (0..*count
             as usize)
             .map(|i| {

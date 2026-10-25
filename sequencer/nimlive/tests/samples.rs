@@ -939,3 +939,111 @@ fn detected_attacks_are_played_once_at_native_speed_when_stretched() {
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn a_named_kit_mixes_samples_from_different_folders_and_synths() {
+    let dir = scratch("named-kit");
+    std::fs::create_dir_all(dir.join("kicks")).unwrap();
+    std::fs::create_dir_all(dir.join("snares")).unwrap();
+    write_wav(&dir.join("kicks/deep.wav"), &[block(0.5, 80)]);
+    write_wav(&dir.join("snares/tight.wav"), &[block(0.25, 80)]);
+    let src = r#"
+        tempo 120bpm
+        kick_sample = sample("kicks/deep.wav")
+        snare_sample = sample("snares/tight.wav")
+        drums = kit {
+            kick: kick_sample
+            snare: snare_sample
+            hat: hat_voice(level: 0.125)
+        }
+        instr hat_voice(level: 0..1 = 0.5) { out = level * env[1 80ms 0] }
+        clip beat { instrument: drums, notes: grid {
+            kick:  x...
+            snare: .x..
+            hat:   ..x.
+        } }
+        beat.start
+    "#;
+    let out = play(&dir, src);
+    let at = |s: f64| out[0][(s * SR as f64) as usize + 10];
+    assert!((at(0.0) - 0.5).abs() < 1e-3, "kick: {}", at(0.0));
+    assert!((at(0.5) - 0.25).abs() < 1e-3, "snare: {}", at(0.5));
+    assert!((at(1.0) - 0.125).abs() < 0.01, "synth hat: {}", at(1.0));
+}
+
+#[test]
+fn a_synth_kit_keeps_sends_and_member_defaults() {
+    let dir = scratch("synth-kit");
+    let src = r#"
+        tempo 120bpm
+        bus room
+        fx room_return { out = room }
+        instr bd(level: 0..1 = 0.5) { out = level * env[1 80ms 0] }
+        instr sd(level: 0..1 = 0.25) { room += level * env[1 80ms 0] }
+        instr hh(freq: hz = 8khz, level: 0..1 = 0.125) { out = level * env[1 80ms 0] }
+        drums = kit { kick: bd, snare: sd, hat: hh }
+        clip beat { instrument: drums, notes: grid {
+            kick:  x...
+            snare: .x..
+            hat:   ..X.
+        } }
+        clip extra { instrument: drums.hat(level: 0.0625), notes: [~ ~ ~ c4] }
+        scene groove { beat, extra }
+        groove.start
+    "#;
+    let out = play(&dir, src);
+    let at = |s: f64| out[0][(s * SR as f64) as usize + 10];
+    for (time, expected) in [
+        (0.0, 0.5),
+        (0.5, 0.25),
+        (1.0, 0.125 * 10f32.powf(3.0 / 20.0)),
+        (1.5, 0.0625),
+    ] {
+        assert!(
+            (at(time) - expected).abs() < 0.01,
+            "at {time}: {} expected {expected}",
+            at(time)
+        );
+    }
+}
+
+#[test]
+fn named_kit_mistakes_are_reported() {
+    let dir = scratch("named-kit-errors");
+    for (src, expected) in [
+        ("drums = kit {}", "at least one instrument"),
+        (
+            "instr bd() { out = 0 }\ndrums = kit { kick: bd, kick: bd }",
+            "defined twice",
+        ),
+        (
+            "drums = kit { kick: missing }",
+            "no instrument named `missing`",
+        ),
+        (
+            "instr bd() { out = 0 }\ndrums = kit { kick: bd(nope: 1) }",
+            "no parameter `nope`",
+        ),
+    ] {
+        let e = errors(&dir, src);
+        assert!(e.contains(expected), "{e}");
+    }
+}
+
+#[test]
+fn a_named_kit_can_alias_folder_kit_members() {
+    let dir = scratch("named-folder-members");
+    std::fs::create_dir_all(dir.join("drums")).unwrap();
+    write_wav(&dir.join("drums/kick.wav"), &[block(0.5, 80)]);
+    write_wav(&dir.join("drums/snare.wav"), &[block(0.25, 80)]);
+    let src = r#"
+        tempo 120bpm
+        original = kit("drums")
+        drums = kit { low: original.kick, clap: original.snare(gain: -6db) }
+        clip beat { instrument: drums, notes: [low ~ clap ~] }
+        beat.start
+    "#;
+    let out = play(&dir, src);
+    assert!((out[0][100] - 0.5).abs() < 1e-3);
+    assert!((out[0][SR + 100] - 0.25 * 10f32.powf(-6.0 / 20.0)).abs() < 1e-3);
+}

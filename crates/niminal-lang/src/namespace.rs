@@ -72,6 +72,11 @@ pub(crate) fn qualify(items: &mut [Item], ranges: &[(usize, usize, String)]) {
                     SampleSource::Slices { sample, .. } => {
                         reference(&mut sample.name, &locals, globals)
                     }
+                    SampleSource::Instruments(entries) => {
+                        for (_, value) in entries {
+                            expr(value, &locals, globals);
+                        }
+                    }
                     SampleSource::Table(e) => expr(e, &locals, globals),
                     _ => {}
                 }

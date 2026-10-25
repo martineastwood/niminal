@@ -51,7 +51,7 @@ groove = grid {
 }
 ```
 
-A multi-row grid is a pattern of samples: each row names a sample in a kit (a slice such as `s4` works too) and plays it on its hits, and the rows play together. `X` is an accent (+3db) and `o` a ghost note (-12db). Choke groups on the kit (`.choke(g(s4, s12))`) apply to its rows as they do to any pattern.
+A multi-row grid selects kit members: each row names a sample, slice (such as `s4`), or an instrument assigned in a named kit, and plays it on its hits. The rows play together. `X` is an accent (+3db) and `o` a ghost note (-12db). Choke groups on the kit (`.choke(g(s4, s12))`) apply to its rows as they do to any pattern.
 
 A row can also:
 

@@ -574,6 +574,34 @@ impl Parser {
         } else if matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1) == &Tok::Eq {
             let name = self.ident("a name")?;
             self.bump();
+            if self.is_keyword("kit") && self.peek_at(1) == &Tok::LBrace {
+                self.bump();
+                let start = self.bump().span;
+                let mut entries = Vec::new();
+                self.skip_newlines();
+                while self.peek() != &Tok::RBrace {
+                    let entry = self.ident("a kit member name")?;
+                    self.expect(&Tok::Colon)?;
+                    entries.push((entry, self.expr()?));
+                    if self.peek() != &Tok::RBrace
+                        && !self.eat(&Tok::Comma)
+                        && self.peek() != &Tok::Newline
+                    {
+                        return Err(self.unexpected("a newline, comma, or `}`"));
+                    }
+                    self.skip_newlines();
+                }
+                let end = self.bump().span;
+                let decl = SampleDecl {
+                    span: name.span.to(end),
+                    name,
+                    is_kit: true,
+                    source: SampleSource::Instruments(entries),
+                    source_span: start.to(end),
+                    options: Vec::new(),
+                };
+                return Ok(Item::Sample(decl));
+            }
             let value = self.expr()?;
             if is_sample_chain(&value) {
                 sample_decl(name, value)

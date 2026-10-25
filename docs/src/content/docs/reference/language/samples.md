@@ -11,6 +11,7 @@ description: WAV samples, kits, slices, and playing them from patterns.
 | --- | --- |
 | `sample(...)` | A playable WAV file, or a table |
 | `kit(...)` | A folder of WAVs by name |
+| `kit { name: instrument, ... }` | Named sample or synth instruments in one kit |
 | `.slices(n)` | The slices of a sample, as a kit: `n` equal pieces, or `.slices([0, 0.18, 0.43])` for pieces that start at those shares of its length (0 up to 1, each later than the one before) and run to the next |
 
 ```nml
@@ -22,6 +23,40 @@ hits = amen.slices([0, 0.18, 0.43])   // s0 .. s2, starting at those shares of t
 ```
 
 Paths are resolved relative to the file that declares them (and the project when the server evaluates).
+
+### Kits from samples and synths
+
+A named kit assigns an instrument to each row of a shared grid. Samples can come from different folders; synths and samples can be mixed freely:
+
+```nml
+kick_sample = sample("808/kicks/deep.wav")
+snare_sample = sample("acoustic/snares/tight.wav")
+instr hh(freq: hz = 8khz) {
+  out = noise().hpf(cutoff: freq) * perc(decay: 40ms) * 0.2
+}
+
+drums = kit {
+  kick: kick_sample
+  snare: snare_sample
+  hat: hh
+}
+
+clip beat {
+  instrument: drums
+  notes: grid {
+    kick:  x... x... x... x..x
+    snare: .... x... .... x...
+    hat:   x.x. x.x. x.x. xxxx
+  }
+}
+beat.start
+```
+
+Replace any entry with a synth instrument to make an entirely synthesised kit. Entries can set defaults (`hat: hh(freq: 7khz)`) or select a member of a folder kit (`snare: acoustic.snare(gain: -3db)`). Separate entries with newlines or commas. Each hit plays its assigned instrument with its own playback defaults, sends, choke group and voice policy. Row gains and accents still apply.
+
+Both `notes: [kick ~ snare ~]` and multi-row grids select the named members. Use `instrument: drums.hat` in a separate clip to play that entry on its own, including its assigned defaults. An entry must name an individual sample, a synth, or a selected folder/slice-kit member; whole kits cannot be nested. Named kits select instruments for events; use the individual instruments when building audio inside an `instr`.
+
+The repository’s `examples/synth_drums.nml` demonstrates a three-synth kit.
 
 ### Settings on a sample
 

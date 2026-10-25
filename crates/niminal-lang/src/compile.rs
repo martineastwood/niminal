@@ -676,6 +676,9 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     // Samples before instruments so `kick.data` and table-as-sample are available.
     for item in &items {
         let Item::Sample(decl) = item else { continue };
+        if matches!(decl.source, SampleSource::Instruments(_)) {
+            continue;
+        }
         defined.add(&decl.name, &mut errors, || {
             compile_sample(
                 decl,
@@ -703,6 +706,21 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         defined.add(&decl.name, &mut errors, || {
             crate::lower::compile_midi_out(decl, &names)
         });
+    }
+    for item in &items {
+        let Item::Sample(decl) = item else { continue };
+        let SampleSource::Instruments(entries) = &decl.source else {
+            continue;
+        };
+        let result = compile_instrument_kit(
+            decl,
+            entries,
+            &defined.instruments,
+            &defined.failed,
+            &mut samples_state,
+            owned_tempo(&decl.name.name, tempo),
+        );
+        defined.add(&decl.name, &mut errors, || result);
     }
     let Defined {
         instruments,
@@ -920,15 +938,34 @@ fn compile_node(
     let chain = compile_chain(
         &decl.name, &rest, collection, &mixer, tempo, registry, names,
     )?;
-    let voice_sends = instrument
-        .map(|i| instruments[i].graph.send_buses())
+    let voices: Vec<&Instrument> = instrument
+        .map(|i| {
+            if instruments[i].kit_voices.is_empty() {
+                vec![&instruments[i]]
+            } else {
+                instruments[i]
+                    .kit_voices
+                    .iter()
+                    .map(|v| &instruments[v.instrument])
+                    .collect()
+            }
+        })
         .unwrap_or_default();
-    let voice_buffer_writes = instrument
-        .map(|i| instruments[i].graph.buffer_writes().to_vec())
-        .unwrap_or_default();
-    let voice_buffer_reads = instrument
-        .map(|i| instruments[i].graph.buffer_reads().to_vec())
-        .unwrap_or_default();
+    let mut voice_sends: Vec<_> = voices.iter().flat_map(|i| i.graph.send_buses()).collect();
+    voice_sends.sort_unstable();
+    voice_sends.dedup();
+    let mut voice_buffer_writes: Vec<_> = voices
+        .iter()
+        .flat_map(|i| i.graph.buffer_writes().iter().copied())
+        .collect();
+    voice_buffer_writes.sort_unstable();
+    voice_buffer_writes.dedup();
+    let mut voice_buffer_reads: Vec<_> = voices
+        .iter()
+        .flat_map(|i| i.graph.buffer_reads().iter().copied())
+        .collect();
+    voice_buffer_reads.sort_unstable();
+    voice_buffer_reads.dedup();
     Ok(Some(NodeInfo {
         accepts_notes: collection,
         taps: chain.taps.clone(),
@@ -948,6 +985,87 @@ fn compile_node(
             voice_buffer_reads,
         },
     }))
+}
+
+/// Assemble a named kit without combining the instruments' DSP graphs.
+fn compile_instrument_kit(
+    decl: &SampleDecl,
+    entries: &[(Ident, Expr)],
+    instruments: &[Instrument],
+    failed: &[&str],
+    state: &mut SampleState,
+    tempo: Tempo,
+) -> Res<Instrument> {
+    if entries.is_empty() {
+        return Err(Diagnostic::new(
+            "a kit needs at least one instrument",
+            decl.source_span,
+        ));
+    }
+    let mut voices = Vec::new();
+    let mut members = Vec::new();
+    for (name, value) in entries {
+        if members.contains(&name.name) {
+            return Err(Diagnostic::new(
+                format!("kit member `{}` is defined twice", name.name),
+                name.span,
+            ));
+        }
+        let Some((instrument, defaults)) =
+            resolve_instrument(value, instruments, failed, &state.names, tempo)?
+        else {
+            return Err(Diagnostic::new(
+                "kit member instrument failed to compile",
+                value.span,
+            ));
+        };
+        if !instruments[instrument].kit_voices.is_empty() {
+            return Err(Diagnostic::new(
+                "use a sample or synth instrument as a kit member",
+                value.span,
+            ));
+        }
+        if !instruments[instrument].members.is_empty() && !defaults.contains_key("sample") {
+            return Err(Diagnostic::new(
+                "choose a member of the sample kit, such as `drums.snare`",
+                value.span,
+            ));
+        }
+        members.push(name.name.clone());
+        if !state.names.contains(&name.name) {
+            state.names.push(name.name.clone());
+        }
+        voices.push(crate::program::KitVoice {
+            instrument,
+            defaults,
+        });
+    }
+    let mut graph = niminal_engine::GraphBuilder::new();
+    graph.param("sample", 0.0).expect("a fresh graph");
+    graph.param("gain", 1.0).expect("a fresh graph");
+    let silence =
+        vec![niminal_engine::Src::Const(0.0); instruments[voices[0].instrument].graph.channels()];
+    let mut kit = Instrument::new(
+        decl.name.name.clone(),
+        Arc::new(graph.build_channels(&silence)),
+        vec![
+            crate::program::Param {
+                name: "sample".into(),
+                unit: crate::unit::Unit::Num,
+                range: None,
+                default: Some(0.0),
+            },
+            crate::program::Param {
+                name: "gain".into(),
+                unit: crate::unit::Unit::Db,
+                range: None,
+                default: Some(1.0),
+            },
+        ],
+    );
+    kit.members = members;
+    kit.kit_voices = voices;
+    Ok(kit)
 }
 
 /// `pluck`, `pluck(bright: 0.6)`, `drums.snare`, or `drums.snare(pitch: -2st)`.
@@ -997,6 +1115,29 @@ fn resolve_instrument(
         return Err(d);
     };
     let instr = &instruments[index];
+    if !instr.kit_voices.is_empty()
+        && let Some(member) = member
+    {
+        let local = instr
+            .members
+            .iter()
+            .position(|m| m == member)
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    format!("there is no member `{member}` in the kit `{name}`"),
+                    span,
+                )
+            })?;
+        let voice = &instr.kit_voices[local];
+        let mut defaults = voice.defaults.clone();
+        defaults.extend(literal_args(
+            args,
+            &instruments[voice.instrument],
+            sample_names,
+            tempo,
+        )?);
+        return Ok(Some((voice.instrument, defaults)));
+    }
     let mut defaults = literal_args(args, instr, sample_names, tempo)?;
     if let Some(member) = member {
         let local = instr
@@ -1406,6 +1547,9 @@ fn compile_sample(
                 loop_mode: loop_mode_of(&decl.options)?,
                 interp: niminal_engine::ops::SampleInterp::Cubic,
             }]
+        }
+        (SampleSource::Instruments(_), _) => {
+            unreachable!("instrument kits compile after instruments")
         }
         (SampleSource::Table(_), true) => {
             return Err(Diagnostic::new(
@@ -3279,6 +3423,45 @@ mod tests {
         assert_eq!(
             help("fx t(tone: hz) { out = in }").as_deref(),
             Some("for example `fx bass(tone: hz = 2khz)`")
+        );
+    }
+    #[test]
+    fn named_kit_selection_survives_the_wire_and_keeps_voice_rules() {
+        let p = ok(r#"
+            instr bd(freq: hz = 55hz) { max = 2
+                out = osc(sine, freq) * perc(decay: 80ms)
+            }
+            instr hh(freq: hz = 8khz) { choke = hats
+                out = noise() * perc(decay: 20ms)
+            }
+            drums = kit { kick: bd(freq: 60hz), hat: hh }
+            node beat { instrument = drums }
+        "#);
+        let id = p.sample_names.iter().position(|n| n == "kick").unwrap() as u32;
+        let mut event = niminal_score::Event {
+            target: "beat".into(),
+            at: Time::Seconds(0.0),
+            dur: Time::Seconds(0.1),
+            args: BTreeMap::from([("sample".into(), Value::Sample(id))]),
+        };
+        let plan = p.plan(&event).unwrap();
+        assert_eq!(p.instruments[plan.instrument].name, "bd");
+        assert_eq!(plan.rule.as_ref().unwrap().max, 2);
+        let freq = p.instruments[plan.instrument].param("freq").unwrap().0;
+        assert!(plan.params.contains(&(freq, 60.0)));
+        event.args = p.dsp_args(&event).unwrap();
+        assert_eq!(event.args["sample"], Value::Num(0.0));
+        assert_eq!(p.plan(&event).unwrap(), plan);
+        event.args.insert("sample".into(), Value::Num(1.0));
+        let hat = p.plan(&event).unwrap();
+        assert_eq!(p.instruments[hat.instrument].name, "hh");
+        assert!(hat.choke.is_some());
+        event.args.insert("sample".into(), Value::Num(2.0));
+        assert!(
+            p.plan(&event)
+                .unwrap_err()
+                .to_string()
+                .contains("out of range")
         );
     }
 }

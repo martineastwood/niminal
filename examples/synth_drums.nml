@@ -1,5 +1,5 @@
 // Synthesised drums: kick, snare and hats from oscillators and noise.
-// Render with:  niminal render examples/synth_drums.nml --out synth_drums.wav --bars 4
+// Render with:  nimlive render examples/synth_drums.nml --out synth_drums.wav --bars 4
 config { channels: stereo }
 tempo 128bpm
 
@@ -31,22 +31,20 @@ instr hh(freq: hz = 8khz, open: 0..1 = 0) {
   glue += out.gain(-6db)
 }
 
-clip kick {
-  instrument: bd
-  notes: [c2 ~ ~ c2  ~ ~ c2 ~  c2 ~ ~ c2  ~ ~ ~ ~]
+drums = kit {
+  kick: bd
+  snare: sd
+  hat: hh
 }
 
-clip snare {
-  instrument: sd
-  notes: [~ ~ ~ ~  c2 ~ ~ ~  ~ ~ ~ ~  c2 ~ ~ ~]
+clip beat {
+  instrument: drums
+  notes: grid {
+    kick:  x..x ..x. x..x ....
+    snare: .... x... .... x...
+    hat:   xxxx xxxx xxxx xxxx
+  }
 }
 
-clip hats {
-  instrument: hh
-  notes: [c2 c2 c2 c2  c2 c2 c2 c2  c2 c2 c2 c2  c2 c2 c2 c2]
-  open:  [0  0  0  0.6 0  0  0  0   0  0  0  0.8 0  0  0  0]
-}
-
-scene beat { kick, snare, hats }
 beat.start
 at +4bars hush

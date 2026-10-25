@@ -26,8 +26,10 @@ pub struct Instrument {
     pub arrays: BTreeMap<String, Vec<String>>,
     pub resources: BTreeMap<String, Vec<String>>,
     pub resource_keys: BTreeMap<String, u64>,
-    /// For a kit, the names of its samples, in the order its `sample` parameter counts them.
+    /// Kit member names, in the order its `sample` parameter counts them.
     pub members: Vec<String>,
+    /// Named-instrument kit entries, in member order. Each hit plays one entry.
+    pub kit_voices: Vec<KitVoice>,
     /// The choke group of each sample: one entry per kit member, or at most
     /// one for a lone sample.
     pub chokes: Vec<Option<u64>>,
@@ -47,6 +49,13 @@ pub struct Instrument {
     pub pitch: String,
     /// `midi_out`: notes are sent to external gear instead of sounding here.
     pub midi: Option<MidiTarget>,
+}
+
+/// The instrument and argument defaults assigned to a kit member.
+#[derive(Clone)]
+pub struct KitVoice {
+    pub instrument: usize,
+    pub defaults: BTreeMap<String, Value>,
 }
 
 /// How often a named value in an instrument's body changes.
@@ -314,8 +323,9 @@ pub fn resolve_target<'a>(
 impl Program {
     /// Translate client/compiler values to physical engine arguments and local kit indices.
     pub fn dsp_args(&self, event: &Event) -> Result<BTreeMap<String, Value>, ArgError> {
-        let plan = self.plan(event)?;
-        let instrument = &self.instruments[plan.instrument];
+        self.plan(event)?;
+        let target = resolve_target(&self.instruments, &self.nodes, &event.target)?;
+        let instrument = &self.instruments[target.instrument];
         event
             .args
             .iter()
@@ -372,11 +382,33 @@ impl Program {
     pub fn plan(&self, event: &Event) -> Result<NotePlan, ArgError> {
         let Target {
             node,
-            instrument,
+            mut instrument,
             defaults,
         } = resolve_target(&self.instruments, &self.nodes, &event.target)?;
         let mut args = defaults.cloned().unwrap_or_default();
         args.extend(event.args.iter().map(|(k, v)| (k.clone(), *v)));
+        if !self.instruments[instrument].kit_voices.is_empty() {
+            let selected = args.remove("sample").unwrap_or(Value::Num(0.0));
+            let local = match selected {
+                Value::Sample(id) => {
+                    self.kit_index(&self.instruments[instrument], id, &event.target)?
+                }
+                Value::Num(n) if n >= 0.0 && n.fract() == 0.0 => n as usize,
+                _ => {
+                    return Err(ArgError::new(
+                        "kit member must be a name or nonnegative integer".into(),
+                    ));
+                }
+            };
+            let voice = self.instruments[instrument]
+                .kit_voices
+                .get(local)
+                .ok_or_else(|| ArgError::new("kit member index is out of range".into()))?;
+            let mut merged = voice.defaults.clone();
+            merged.extend(args);
+            args = merged;
+            instrument = voice.instrument;
+        }
         // a note's pitch is `freq` to the score, and whatever `pitch = ...` named it to the instrument
         let pitch_name = &self.instruments[instrument].pitch;
         if pitch_name != PITCH_PARAM
@@ -543,6 +575,7 @@ impl Instrument {
             resources: BTreeMap::new(),
             resource_keys: BTreeMap::new(),
             members: Vec::new(),
+            kit_voices: Vec::new(),
             chokes: Vec::new(),
             max_voices: None,
             release_same_note: false,

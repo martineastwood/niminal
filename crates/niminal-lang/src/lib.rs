@@ -45,7 +45,7 @@ pub use modules::{
     embedded as embedded_module, expand, expand_with_rules, packages_dir,
 };
 pub use program::{
-    ArgError, ControlDef, Instrument, MidiNote, MidiTarget, NodeInfo, NotePlan, OscTap,
+    ArgError, ControlDef, Instrument, KitVoice, MidiNote, MidiTarget, NodeInfo, NotePlan, OscTap,
     PITCH_PARAM, Param, Program, RateHint, engine_value, resolve_target,
 };
 pub use sample::Samples;

@@ -64,6 +64,8 @@ pub struct MidiOutDecl {
 /// Where a sample or kit comes from.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SampleSource {
+    /// Named sample or synth instruments played by a shared grid.
+    Instruments(Vec<(Ident, Expr)>),
     /// A file, or for a kit a folder.
     Path(String),
     /// `amen.slices(16)`: a kit of equal pieces of a sample declared earlier.
