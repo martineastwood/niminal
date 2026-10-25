@@ -63,6 +63,42 @@ A row can also:
 
 Muting or stopping the host node does not silence rows routed to other nodes. Each drum node has its own mute and solo. Choke groups still apply only among notes that share a node and kit.
 
+## Rhythmic audio gates
+
+Inside an `instr` or `fx`, `grid[...]` produces a transport-synced level signal rather than note events. Multiply it by audio, or use `.gate(...)` to shape its opening and closing:
+
+```nml
+fx trance_gate {
+  out = pad_audio.gate(
+    grid[x.x. xx.x .x.. xx.x].over(1bar),
+    width: 60%,
+    attack: 5ms,
+    release: 10ms
+  )
+}
+```
+
+Route the sustained sound into `pad_audio` with a bus send; omit its dry `out` if you want only the gated sound. The sound keeps playing underneath the gate, so chords and sample playback are not retriggered. See `examples/trance_gate.nml` for a complete piece.
+
+- **Timing:** grids repeat against the shared transport, including in an instrument whose note starts later. The default length is one bar; `.over(...)` accepts a positive literal duration in beats or bars. Bar lengths follow the current meter.
+- **Levels:** `x` is 1, `.` is 0, `X` is +3db (about 1.41), and `o` is -12db (about 0.25). Spaces only group steps. DSP grids use these characters, rather than mini-notation or multiple rows.
+- **Width:** the fraction of each active step occupied by its whole pulse, from `0%` to `100%` (or 0 to 1). Defaults to `100%`; a `.` stays closed at every width.
+- **Edges:** attack rises linearly, then the gate holds, then release falls linearly. Both edges fit inside the width. If their sum exceeds the pulse duration, both shrink proportionally and there is no hold.
+- **Joined hits:** at `100%` width, adjacent active steps form one pulse, including across the loop boundary. Attack and release apply to that whole run. An entirely active full-width grid stays open, with no opening or closing edges. Accent/ghost levels still change at step boundaries.
+
+`.gate(...)` defaults to a 2ms attack and 8ms release. Its width, attack and release can read live controls; width is clamped to 0..1 and edge times to nonnegative values. Put the grid literal and its `.over(...)`/`.width(...)` chain directly in the gate call.
+
+For a raw level signal with no edge shaping:
+
+```nml
+fx chopped {
+  gate = grid[x.x. xx.x .x.. xx.x].over(1bar).width(60%)
+  out = pad_audio * gate.smooth(3ms)
+}
+```
+
+`.smooth(3ms)` adds a lag, whose tails can extend beyond the pulse. Use `.gate(...)` when attack and release must fit within its width. A named local gate signal can be shared by multiplying it into several signals, or passed into a DSP function. Functions do not read the transport themselves. Grid notation in clip note patterns keeps its existing hit-triggering behaviour.
+
 ## Value patterns vs event patterns
 
 - **Value patterns** — notes, numbers, triggers. Note patterns need a node with an instrument.

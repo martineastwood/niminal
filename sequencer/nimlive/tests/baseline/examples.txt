@@ -23,4 +23,5 @@ spectral.nml: 2x478367
 stereo.nml: 2x280705
 synth_drums.nml: 2x356382
 tables.nml: 2x182400
+trance_gate.nml: 2x337043
 voices.nml: 2x158390

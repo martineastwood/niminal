@@ -341,6 +341,7 @@ pub fn pattern_ops() -> Vec<OpInfo> {
         op("fast", "Play it this many times faster.", &[("by", "number", true)]),
         op("slow", "Play it this many times slower.", &[("by", "number", true)]),
         op("over", "Stretch it to fill this long, as in `over(4bars)`.", &[("length", "bars", true)]),
+        op("width", "On a DSP grid literal, open each active step for this share of its duration: `.width(60%)`. Consecutive steps join at 100%.", &[("amount", "percent", true)]),
         op("reverse", "Play each cycle backwards.", &[]),
         op("shift", "Move it later by this many bars (earlier if negative).", &[("by", "bars", true)]),
         op("repeat_each", "Play each note this many times within its own length.", &[("times", "number", true)]),

@@ -258,6 +258,12 @@ fn locate(dsp: &DspSource, mut d: Diagnostic) -> Diagnostic {
     d.message = d
         .message
         .replace("a node has only one", "a clip has only one");
+    for name in ["width", "attack", "release"] {
+        d.message = d
+            .message
+            .replace(&format!("`__rg_{name}`"), &format!("`{name}`"));
+    }
+    d.message = d.message.replace("`__niminal_rhythm_gate`", "`gate`");
     d
 }
 

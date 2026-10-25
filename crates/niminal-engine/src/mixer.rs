@@ -1465,7 +1465,9 @@ impl Mixer {
                             .inputs
                             .iter()
                             .all(|input| heard(input).iter().all(|s| *s == 0.0));
-                        if silent_in
+                        // Input-free chains are generators: silence can be part of their rhythm.
+                        if !node.def.inputs.is_empty()
+                            && silent_in
                             && node.chain_quiet >= rest_after
                             && !(node.fade.previous.is_some()
                                 && node.fade.elapsed < node.fade.frames)

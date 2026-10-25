@@ -233,6 +233,29 @@ pub fn project(
         }
     }
 
+    let mut uses_grids = false;
+    for piece in &mut pieces {
+        let lowered = crate::rhythm_gate::lower(&piece.text).map_err(|mut d| {
+            d.span = match piece.verbatim_at {
+                Some(base) => Span::new(base + d.span.start, base + d.span.end),
+                None => piece.span,
+            };
+            d
+        })?;
+        if let Some(text) = lowered {
+            piece.text = text;
+            piece.verbatim_at = None;
+            uses_grids = true;
+        }
+    }
+    if uses_grids {
+        pieces.push(Piece {
+            text: crate::rhythm_gate::HELPER.into(),
+            verbatim_at: None,
+            span: Span::new(0, 0),
+        });
+    }
+
     // Musical time becomes seconds. Tokens preserve strings, comments and paths, including words
     // that resemble musical units.
     let mut text = String::new();
@@ -374,6 +397,9 @@ fn token_edits(text: &str, tempo: Tempo) -> Result<Vec<(Span, String)>, Diagnost
             unit: Some(unit),
         } = &token.tok
         {
+            if unit == "%" {
+                edits.push((token.span, (value / 100.0).to_string()));
+            }
             let seconds = match unit.as_str() {
                 "beat" | "beats" => Some(value * 60.0 / tempo.bpm),
                 "bar" | "bars" => Some(value * tempo.beats_per_bar * 60.0 / tempo.bpm),

@@ -13,6 +13,7 @@ mod modules;
 mod parser;
 mod perform;
 mod performance;
+mod rhythm_gate;
 mod schedule;
 mod score_file;
 #[cfg(test)]

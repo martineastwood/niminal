@@ -1,0 +1,26 @@
+// A sustained chord chopped by a transport-synced grid, without retriggering its notes.
+// Render: nimlive render examples/trance_gate.nml --bars 4 --out trance_gate.wav
+config { channels: stereo }
+tempo 138bpm
+
+bus pad_audio: stereo
+instr pad(freq: hz) {
+  voice = (osc(saw, freq) + osc(saw, freq * 1.005)) * 0.08
+  pad_audio += (voice.lpf(cutoff: 2khz) * env[0 100ms 1 | 200ms 0]).pan
+}
+
+fx trance_gate {
+  out = pad_audio.gate(
+    grid[x.x. xx.x .x.. xx.x].over(1bar),
+    width: 60%,
+    attack: 5ms,
+    release: 10ms
+  )
+}
+
+clip chords {
+  instrument: pad
+  notes: [a3,c4,e4].over(2bars)
+}
+chords.start
+at +4bars hush

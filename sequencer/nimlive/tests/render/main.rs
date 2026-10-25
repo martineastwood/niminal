@@ -14,6 +14,7 @@ mod pitch;
 mod prev_feedback;
 mod prev_in_opcodes;
 mod range_at_the_use_site;
+mod rhythm_gate;
 mod routing;
 mod stems;
 mod tempo_ramps;
