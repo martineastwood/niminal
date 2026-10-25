@@ -30,7 +30,7 @@ const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <div id="toolbar">
     <div class="group"><button id="play" title="Loop pattern (Space)">▶ Pattern</button><button id="play-song" title="Play from the selected sequence step to the end, or repeat the loop once it is reached">▶ Song</button><button id="stop" title="Stop">■</button><button id="record" aria-pressed="false" title="Record mode: typed notes and values are entered (Esc)">● Rec</button><label class="check"><input id="follow" type="checkbox" checked> Follow</label><label class="check" title="Volume 0 to 100 given to notes entered in record mode; blank leaves it unset">Vel <input id="velocity" type="number" min="0" max="100" placeholder="–" style="width:3.5em"></label><span id="play-position" class="muted"></span><span id="midi-controls" class="group"></span></div>
-    <div class="group"><label>BPM <input id="bpm" type="number" min="20" max="300" step="1"></label><label>LPB <input id="rows-per-beat" type="number" min="1" max="16" title="Rows per beat"></label><label>Oct <input id="octave" type="number" min="0" max="8" value="4"></label><label>Step <input id="entry-step" aria-label="Note entry step" title="Rows to advance after entering a note; 0 stays on this row" type="number" min="0" max="256" value="1"></label></div>
+    <div class="group"><label>BPM <input id="bpm" type="number" min="20" max="300" step="1"></label><label>LPB <input id="rows-per-beat" type="number" min="1" max="16" title="Rows per beat"></label><label>Swing <input id="swing" type="number" min="0" max="75" title="Swing: how much of every pair of rows' time moves to the first row, 0 to 75 percent. Acts on rows, so LPB sets the subdivision swung"></label><label>Oct <input id="octave" type="number" min="0" max="8" value="4"></label><label>Step <input id="entry-step" aria-label="Note entry step" title="Rows to advance after entering a note; 0 stays on this row" type="number" min="0" max="256" value="1"></label></div>
     <div class="group"><strong id="pattern-number">00</strong><select id="pattern-picker" aria-label="Pattern to edit"></select><input id="pattern-name" aria-label="Pattern name"><label>Rows <input id="pattern-rows" type="number" min="1" max="256" data-structure></label><span id="pattern-uses" class="muted"></span></div>
     <div class="group"><button id="undo" title="Undo (Cmd/Ctrl+Z)" aria-label="Undo">↶</button><button id="redo" title="Redo (Cmd/Ctrl+Shift+Z)" aria-label="Redo">↷</button><button id="add-track" data-structure title="Add track" aria-label="Add track">+ Track</button><button id="delete-track" data-structure title="Delete selected track" aria-label="Delete selected track">− Track</button><button id="duplicate-track" data-structure title="Duplicate the selected track, with its effects and notes" aria-label="Duplicate the selected track">⧉ Track</button><button id="restore-track" data-structure title="Restore last deleted track" aria-label="Restore last deleted track">↺</button></div>
     <div class="group push"><button id="open-matrix" aria-pressed="false" title="Pattern matrix: mute a track, or have it play another pattern, in each sequence step">Matrix</button><button id="open-mix" aria-pressed="false" title="Mixer: levels, pan, mute, solo and a scope for each channel">Mixer</button><button id="import">Open</button><button id="export">Save</button></div>
@@ -163,7 +163,7 @@ function renderDefinitions() { soundBrowser.refresh(); projectPanel.refresh(); }
 function allParameters() { return { ...audioStatus.instrument_parameters, ...audioStatus.effect_parameters }; }
 function song(): Song {
   const instrument_values = Object.fromEntries(project.definitions.filter(d => d.kind === 'instr' && d.values).map(d => [d.id, d.values!]));
-  return { bpm: project.bpm, rows_per_beat: project.rows_per_beat, tracks: project.tracks, returns: project.returns, master: project.master, patterns: project.patterns, sequence: project.sequence, loop_range: project.loop_range, matrix: project.matrix, instrument_values };
+  return { bpm: project.bpm, rows_per_beat: project.rows_per_beat, swing: project.swing ?? 0, tracks: project.tracks, returns: project.returns, master: project.master, patterns: project.patterns, sequence: project.sequence, loop_range: project.loop_range, matrix: project.matrix, instrument_values };
 }
 async function action(work: () => Promise<unknown>) {
   audioError = null;
@@ -630,6 +630,7 @@ function timingInputs() {
   renderTiming();
   element<HTMLInputElement>('bpm').value = String(project.bpm);
   element<HTMLInputElement>('rows-per-beat').value = String(project.rows_per_beat);
+  element<HTMLInputElement>('swing').value = String(project.swing ?? 0);
 }
 for (const [id, field, min, max] of [['bpm', 'bpm', 20, 300], ['rows-per-beat', 'rows_per_beat', 1, 16]] as const) {
   element<HTMLInputElement>(id).onchange = event => {
@@ -639,6 +640,11 @@ for (const [id, field, min, max] of [['bpm', 'bpm', 20, 300], ['rows-per-beat', 
     timingInputs(); editedPattern();
   };
 }
+element<HTMLInputElement>('swing').onchange = event => {
+  const swing = Math.min(75, Math.max(0, Math.round(Number((event.target as HTMLInputElement).value) || 0)));
+  if (swing) project.swing = swing; else delete project.swing;
+  timingInputs(); grid.render(); editedPattern();
+};
 element<HTMLInputElement>('entry-step').onchange = event => {
   const input = event.target as HTMLInputElement; input.value = String(Math.max(0, Math.min(256, Math.trunc(Number(input.value) || 0))));
 };
@@ -792,7 +798,7 @@ element('dock-resize').onpointerdown = event => {
 };
 const timingControls = document.createElement('div');
 timingControls.className = 'group';
-timingControls.innerHTML = `<label>Pattern BPM <input id="pattern-bpm" aria-label="Pattern BPM" type="number" min="20" max="300" step="any"></label><label>LPB <input id="pattern-lpb" aria-label="Pattern rows per quarter note" type="number" min="1" max="16"></label><label>Meter <input id="meter-beats" aria-label="Beats per bar" type="number" min="1" max="32"> / <select id="meter-unit" aria-label="Meter beat unit"><option>1</option><option>2</option><option>4</option><option>8</option><option>16</option></select></label><label>Tempo points <input id="tempo-points" aria-label="Tempo automation points" placeholder="0:125, 32:80" title="Row:BPM points, separated by commas. Linear ramps between points; BPM counts quarter notes."></label><button id="reset-timing">Use song timing</button>`;
+timingControls.innerHTML = `<label>Pattern BPM <input id="pattern-bpm" aria-label="Pattern BPM" type="number" min="20" max="300" step="any"></label><label>LPB <input id="pattern-lpb" aria-label="Pattern rows per quarter note" type="number" min="1" max="16"></label><label>Meter <input id="meter-beats" aria-label="Beats per bar" type="number" min="1" max="32"> / <select id="meter-unit" aria-label="Meter beat unit"><option>1</option><option>2</option><option>4</option><option>8</option><option>16</option></select></label><label>Swing <input id="pattern-swing" aria-label="Pattern swing" type="number" min="0" max="75" title="Swing for this pattern, 0 to 75 percent; blank follows the song. 0 is straight even when the song swings"></label><label>Tempo points <input id="tempo-points" aria-label="Tempo automation points" placeholder="0:125, 32:80" title="Row:BPM points, separated by commas. Linear ramps between points; BPM counts quarter notes."></label><button id="reset-timing">Use song timing</button>`;
 element('pattern-rows').parentElement!.parentElement!.append(timingControls);
 function renderTiming() {
   const t = patternTiming(project, arrangement.pattern);
@@ -800,6 +806,8 @@ function renderTiming() {
   element<HTMLInputElement>('pattern-lpb').value = String(t.rows_per_beat);
   element<HTMLInputElement>('meter-beats').value = String(t.beats_per_bar);
   element<HTMLSelectElement>('meter-unit').value = String(t.beat_unit);
+  element<HTMLInputElement>('pattern-swing').value = arrangement.pattern.swing === undefined ? '' : String(arrangement.pattern.swing);
+  element<HTMLInputElement>('pattern-swing').placeholder = String(project.swing ?? 0);
   element<HTMLInputElement>('tempo-points').value = t.tempo.map(p => `${p.row}:${p.value}`).join(', ');
 }
 for (const id of ['pattern-bpm', 'pattern-lpb', 'meter-beats', 'meter-unit', 'tempo-points']) element(id).onchange = () => {
@@ -808,7 +816,12 @@ for (const id of ['pattern-bpm', 'pattern-lpb', 'meter-beats', 'meter-unit', 'te
   if (!validTiming(timing, arrangement.pattern.rows)) { status('Use ascending Row:BPM points within the pattern, BPM 20–300, LPB 1–16 and meter 1–32.'); renderTiming(); return; }
   arrangement.pattern.timing = timing; grid.render(); editedPattern();
 };
-element('reset-timing').onclick = () => { delete arrangement.pattern.timing; renderTiming(); grid.render(); editedPattern(); };
+element<HTMLInputElement>('pattern-swing').onchange = event => {
+  const text = (event.target as HTMLInputElement).value.trim();
+  if (text === '') delete arrangement.pattern.swing; else arrangement.pattern.swing = Math.min(75, Math.max(0, Math.round(Number(text) || 0)));
+  renderTiming(); grid.render(); editedPattern();
+};
+element('reset-timing').onclick = () => { delete arrangement.pattern.timing; delete arrangement.pattern.swing; renderTiming(); grid.render(); editedPattern(); };
 function patternControls() {
   renderTiming();
   const current = arrangement.pattern;

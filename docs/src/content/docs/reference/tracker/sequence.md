@@ -62,11 +62,13 @@ Tracks have compact, colour-coded headers. Click a track name to select it, **do
 
 ## Timing
 
-**BPM** and **LPB** set song defaults and can change during playback. **Pattern BPM**, pattern **LPB**, and **Meter** override timing for the selected pattern; **Use song timing** clears those overrides.
+**BPM** and **LPB** set song defaults and can change during playback. **Pattern BPM**, pattern **LPB**, and **Meter** override timing for the selected pattern; **Use song timing** clears those overrides, including the pattern's swing.
 
 BPM counts quarter notes per minute and LPB counts rows per quarter note. Meter groups rows: 7/8 with LPB 4 has 14 rows per bar, so set **Rows** to 14 or a multiple for complete bars.
 
 **Tempo points** takes ascending `row:BPM` pairs, e.g. `0:125, 32:80` for a ritardando. BPM ramps linearly in row space between points, holds the last value, uses Pattern BPM before the first point, and steps to the first point rather than ramping into it. Points can reach the pattern end. Each pattern starts its own timing, including when reused or looped; a variation copies it independently. Playback, note holds, delays, envelopes, LFO row periods and WAV export all follow the timing.
+
+**Swing** (0–75, in the toolbar for the song and in the pattern controls for a pattern) delays every second row of each pair of rows. For each pair, the shorter row's time multiplied by the swing percentage moves from the second row to the first, so the pair lasts as long as before, including during a tempo ramp: with straight rows, 50 makes the first row three times as long as the second. It is a swing amount, not a position within the pair. Swing acts on rows, so LPB sets the subdivision that swings: LPB 4 swings sixteenth notes. Pairs begin at each pattern's first row, and an odd last row is left alone. A pattern's own swing, even 0, replaces the song's; leave it blank to follow the song. Notes, delays, retriggers, glides, envelopes, the playhead and export all follow the swung rows, and a delay stays a fraction of its row, so it is still there when swing is turned off. A matrix alias plays with the swing of the step it is in.
 
 Live timing edits affect rows beyond the scheduler's existing lookahead; queued events and sounding notes retain the timing they were given. Lengths written in beats in instrument or effect code are compiled at a fixed 120 BPM, so they do not follow pattern timing — use `sec` for anything meant to track it.
 

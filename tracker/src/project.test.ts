@@ -1,6 +1,6 @@
 import { patternSeconds, patternRow } from './project';
 import { expect, it } from 'vitest';
-import { emptyProject, keyboardNote, transposeNote, setTrackSource, trackSource, newProject, emptyFxLane, blankColumn, makePattern, removeTrack, restoreTrack, readProject, resizePattern, startValue, pitchValue, retriggerValue, duplicateTrack } from './project';
+import { emptyProject, keyboardNote, transposeNote, setTrackSource, trackSource, newProject, emptyFxLane, blankColumn, makePattern, removeTrack, restoreTrack, readProject, resizePattern, patternSwing, startValue, chanceValue, pitchValue, retriggerValue, duplicateTrack } from './project';
 
 it('round trips source and notes and rejects unsupported project data', () => {
   const project = newProject();
@@ -215,19 +215,22 @@ it('keeps start, pitch and retrigger cells in the project and rejects older file
   for (const bad of ['', '100', '<5', '5x', 'v']) expect(startValue(bad), bad).toBeNull();
   expect(pitchValue('g8')).toBe('G8'); expect(pitchValue('D12')).toBe('D12'); expect(pitchValue('u3')).toBe('U3');
   for (const bad of ['', 'G', 'U0', 'G100', 'X3', '8', 'R4']) expect(pitchValue(bad), bad).toBeNull();
-  expect(retriggerValue('4')).toBe('4'); expect(retriggerValue('32')).toBe('32');
-  for (const bad of ['', '1', '33', 'R4', '-2']) expect(retriggerValue(bad), bad).toBeNull();
+  expect(retriggerValue('4')).toBe('4'); expect(retriggerValue('32')).toBe('32'); expect(retriggerValue('4:-25')).toBe('4:-25'); expect(retriggerValue('2:100')).toBe('2:100');
+  for (const bad of ['', '1', '33', 'R4', '-2', '4:', '4:101', '4:-101', '4:+5', ':5', '4:--1']) expect(retriggerValue(bad), bad).toBeNull();
+  expect(chanceValue('0')).toBe('0'); expect(chanceValue(' 100 ')).toBe('100'); expect(chanceValue('050')).toBe('50');
+  for (const bad of ['', '101', '-1', '5%', '5.5']) expect(chanceValue(bad), bad).toBeNull();
   const project = newProject(), column = project.patterns[0].notes[0][0];
-  column.pitch[3] = 'G8'; column.start[2] = '50<'; column.rtg[4] = '4';
+  column.chance[1] = '50'; column.pitch[3] = 'G8'; column.start[2] = '50<'; column.rtg[4] = '4';
   const read = readProject(JSON.stringify(project)).patterns[0].notes[0][0];
-  expect([read.pitch[3], read.start[2], read.rtg[4]]).toEqual(['G8', '50<', '4']);
+  expect([read.pitch[3], read.start[2], read.rtg[4], read.chance[1]]).toEqual(['G8', '50<', '4', '50']);
+  column.chance[1] = '101'; expect(() => readProject(JSON.stringify(project))).toThrow(); column.chance[1] = null;
   column.pitch[3] = 'G'; expect(() => readProject(JSON.stringify(project))).toThrow();
   column.pitch[3] = 'G8'; column.rtg[3] = '4'; expect(() => readProject(JSON.stringify(project))).toThrow(); // a glide and a retrigger compete
   column.pitch[3] = 'U12'; readProject(JSON.stringify(project));
   expect(() => readProject(JSON.stringify({ ...newProject(), version: 11 }))).toThrow(/version 12/);
   const longer = newProject();
   resizePattern(longer.patterns[0], 64);
-  for (const cells of [longer.patterns[0].notes[0][0].start, longer.patterns[0].notes[0][0].pitch, longer.patterns[0].notes[0][0].rtg]) expect(cells).toHaveLength(64);
+  for (const cells of [longer.patterns[0].notes[0][0].start, longer.patterns[0].notes[0][0].chance, longer.patterns[0].notes[0][0].pitch, longer.patterns[0].notes[0][0].rtg]) expect(cells).toHaveLength(64);
 });
 
 it('duplicates a track with its effects, notes, lanes and matrix cells, right after it', () => {
@@ -270,4 +273,22 @@ it('integrates BPM ramps and locates fractional rows for the playhead', () => {
   expect(patternRow(t, patternSeconds(t, 2.5), 32)).toBeCloseTo(2.5, 5);
   t.tempo = [{ row: 2, value: 60 }];
   expect(patternSeconds(t, 4)).toBeCloseTo(0.75, 9);
+});
+
+it('swings pairs of rows without changing how long a pair lasts, and reads swing back', () => {
+  const t = { bpm: 120, rows_per_beat: 4, beats_per_bar: 4, beat_unit: 4, tempo: [] }; // an eighth of a second a row
+  expect([0, 1, 2, 3, 4].map(row => patternSeconds(t, row, 50, 4))).toEqual([0, 0.1875, 0.25, 0.4375, 0.5]); // 3 parts to 1
+  expect(patternSeconds(t, 0.5, 50, 4)).toBeCloseTo(0.09375); // half way through a swung row is half its length
+  expect(patternSeconds(t, 3, 50, 3)).toBeCloseTo(0.375); // an odd last row is left alone
+  expect(patternSeconds(t, 1, 0, 4)).toBeCloseTo(0.125);
+  const ramp = { ...t, tempo: [{ row: 0, value: 60 }, { row: 6, value: 180 }] };
+  for (const pair of [0, 2, 4, 6]) expect(patternSeconds(ramp, pair, 40, 6)).toBeCloseTo(patternSeconds(ramp, pair, 0, 6));
+  expect(patternRow(t, 0.1875, 4, 50)).toBeCloseTo(1, 3);
+  const project = newProject();
+  expect(patternSwing(project, project.patterns[0])).toBe(0);
+  project.swing = 50; expect(patternSwing(project, project.patterns[0])).toBe(50);
+  project.patterns[0].swing = 0; expect(patternSwing(project, project.patterns[0])).toBe(0); // its own, even when it is straight
+  expect(readProject(JSON.stringify(project)).patterns[0].swing).toBe(0);
+  project.swing = 76; expect(() => readProject(JSON.stringify(project))).toThrow();
+  project.swing = 50; project.patterns[0].swing = -1; expect(() => readProject(JSON.stringify(project))).toThrow();
 });

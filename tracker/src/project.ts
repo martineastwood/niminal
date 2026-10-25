@@ -34,12 +34,12 @@ export const columnStrip = (project: Song, column: number): Track => column < pr
 export const columnLanes = (project: Song, pattern: Pattern, column: number): FxLane[] => column < project.tracks.length ? pattern.fx[column] : column < project.tracks.length + project.returns.length ? pattern.return_fx[column - project.tracks.length] : pattern.master_fx;
 /**
  * One note column: parallel cells for each row. `notes` hold `C-4`, `OFF` (release) or `CUT` (stop at once); `inst` an instrument's
- * definition id; `vol` and `pan` a number from 0 to 128 (as text); `delay` from 0 to 255 256ths of a row; `start`, `pitch` and
- * `rtg` are the note's expression (see {@link startValue}, {@link pitchValue} and {@link retriggerValue}).
+ * definition id; `vol` and `pan` a number from 0 to 128 (as text); `delay` from 0 to 255 256ths of a row; `start`, `chance`, `pitch`
+ * and `rtg` are the note's expression (see {@link startValue}, {@link chanceValue}, {@link pitchValue} and {@link retriggerValue}).
  */
-export interface NoteColumn { notes: (string | null)[]; inst: (string | null)[]; vol: (string | null)[]; pan: (string | null)[]; delay: (string | null)[]; start: (string | null)[]; pitch: (string | null)[]; rtg: (string | null)[] }
-export type SubColumn = 'inst' | 'vol' | 'pan' | 'delay' | 'start' | 'pitch' | 'rtg';
-export const subColumns: SubColumn[] = ['inst', 'vol', 'pan', 'delay', 'start', 'pitch', 'rtg'];
+export interface NoteColumn { notes: (string | null)[]; inst: (string | null)[]; vol: (string | null)[]; pan: (string | null)[]; delay: (string | null)[]; start: (string | null)[]; chance: (string | null)[]; pitch: (string | null)[]; rtg: (string | null)[] }
+export type SubColumn = 'inst' | 'vol' | 'pan' | 'delay' | 'start' | 'chance' | 'pitch' | 'rtg';
+export const subColumns: SubColumn[] = ['inst', 'vol', 'pan', 'delay', 'start', 'chance', 'pitch', 'rtg'];
 /** A start cell's text, or null if it is not one: `50` starts the sample half way in, `<` plays it backwards, `50<` does both. */
 export function startValue(text: string): string | null {
   const t = text.trim();
@@ -50,23 +50,41 @@ export function pitchValue(text: string): string | null {
   const t = text.trim().toUpperCase(), n = Number(t.slice(1));
   return /^([GUD])\d{1,2}$/.test(t) && (t[0] === 'G' || n >= 1) ? t : null;
 }
-/** A retrigger cell's text, or null: the number of times the note plays in its row, 2 to 32. */
+/** A retrigger cell's text, or null: the number of times the note plays in its row, 2 to 32, then optionally `:` and how much each hit's level changes from the one before, -100 to 100 percent (`4:-25`). */
 export function retriggerValue(text: string): string | null {
+  const t = text.trim(), match = /^(\d{1,2})(?::(-?\d{1,3}))?$/.exec(t);
+  return match && Number(match[1]) >= 2 && Number(match[1]) <= 32 && Math.abs(Number(match[2] ?? 0)) <= 100 ? t : null;
+}
+/** A chance cell's text, or null: the percent chance, 0 to 100, that the note plays. */
+export function chanceValue(text: string): string | null {
   const t = text.trim();
-  return /^\d{1,2}$/.test(t) && Number(t) >= 2 && Number(t) <= 32 ? t : null;
+  return /^\d{1,3}$/.test(t) && Number(t) <= 100 ? String(Number(t)) : null;
 }
 /** Whether a row's pitch and retrigger cells compete: a glide keeps one voice and a retrigger restarts it. */
 export const glideRetriggers = (pitch: string | null | undefined, rtg: string | null | undefined) => !!pitch && !!rtg && pitch[0] === 'G';
 export const maxNoteColumns = 8;
-export const blankColumn = (rows: number): NoteColumn => ({ notes: Array(rows).fill(null), inst: Array(rows).fill(null), vol: Array(rows).fill(null), pan: Array(rows).fill(null), delay: Array(rows).fill(null), start: Array(rows).fill(null), pitch: Array(rows).fill(null), rtg: Array(rows).fill(null) });
-export const cloneColumn = (column: NoteColumn): NoteColumn => ({ notes: [...column.notes], inst: [...column.inst], vol: [...column.vol], pan: [...column.pan], delay: [...column.delay], start: [...column.start], pitch: [...column.pitch], rtg: [...column.rtg] });
+export const blankColumn = (rows: number): NoteColumn => ({ notes: Array(rows).fill(null), inst: Array(rows).fill(null), vol: Array(rows).fill(null), pan: Array(rows).fill(null), delay: Array(rows).fill(null), start: Array(rows).fill(null), chance: Array(rows).fill(null), pitch: Array(rows).fill(null), rtg: Array(rows).fill(null) });
+export const cloneColumn = (column: NoteColumn): NoteColumn => ({ notes: [...column.notes], inst: [...column.inst], vol: [...column.vol], pan: [...column.pan], delay: [...column.delay], start: [...column.start], chance: [...column.chance], pitch: [...column.pitch], rtg: [...column.rtg] });
 /** BPM counts quarter notes, LPB counts rows per quarter note; meter groups those rows. */
 export interface PatternTiming { bpm: number; rows_per_beat: number; beats_per_bar: number; beat_unit: number; tempo: EnvelopePoint[] }
 export function patternTiming(project: Song, pattern: Pattern): PatternTiming {
   return pattern.timing ?? { bpm: project.bpm, rows_per_beat: project.rows_per_beat, beats_per_bar: 4, beat_unit: 4, tempo: [] };
 }
-/** Elapsed seconds to a fractional pattern row, integrating linear BPM ramps. */
-export function patternSeconds(t: PatternTiming, row: number): number {
+/** The swing, in percent, a pattern plays with: its own, or else the song's. */
+export const patternSwing = (project: Song, pattern: Pattern) => pattern.swing ?? project.swing ?? 0;
+/**
+ * Elapsed seconds to a fractional pattern row of a pattern `rows` long, integrating linear BPM ramps. Swing moves that
+ * percent of the shorter row's time from the second row of each pair to the first (the engine does the same sum);
+ * pairs begin at row 0 and an odd last row is left alone.
+ */
+export function patternSeconds(t: PatternTiming, row: number, swing = 0, rows = Infinity): number {
+  if (swing <= 0 || row >= rows) return straightSeconds(t, row);
+  const first = Math.floor(row) & ~1;
+  if (first + 1 >= rows) return straightSeconds(t, row);
+  const start = straightSeconds(t, first), a = straightSeconds(t, first + 1) - start, b = straightSeconds(t, first + 2) - straightSeconds(t, first + 1), moved = Math.min(a, b) * swing / 100;
+  return row < first + 1 ? start + (straightSeconds(t, row) - start) * (a + moved) / a : start + a + moved + (straightSeconds(t, row) - straightSeconds(t, first + 1)) * (b - moved) / b;
+}
+function straightSeconds(t: PatternTiming, row: number): number {
   let at = 0, seconds = 0;
   while (at < row) {
     const before = t.tempo.filter(p => p.row <= at).at(-1), after = t.tempo.find(p => p.row > at);
@@ -78,11 +96,12 @@ export function patternSeconds(t: PatternTiming, row: number): number {
   }
   return seconds;
 }
-export function patternRow(t: PatternTiming, seconds: number, rows: number): number {
+export function patternRow(t: PatternTiming, seconds: number, rows: number, swing = 0): number {
   let lo = 0, hi = rows;
-  for (let i = 0; i < 24; i++) { const mid = (lo+hi)/2; if (patternSeconds(t, mid) < seconds) lo = mid; else hi = mid; }
+  for (let i = 0; i < 24; i++) { const mid = (lo+hi)/2; if (patternSeconds(t, mid, swing, rows) < seconds) lo = mid; else hi = mid; }
   return (lo+hi)/2;
 }
+export const validSwing = (swing: unknown) => swing === undefined || typeof swing === 'number' && Number.isFinite(swing) && swing >= 0 && swing <= 75;
 export function validTiming(t: PatternTiming, rows: number): boolean {
   return !!t && Number.isFinite(t.bpm) && t.bpm >= 20 && t.bpm <= 300 && Number.isInteger(t.rows_per_beat) && t.rows_per_beat >= 1 && t.rows_per_beat <= 16 &&
     Number.isInteger(t.beats_per_bar) && t.beats_per_bar >= 1 && t.beats_per_bar <= 32 && [1, 2, 4, 8, 16].includes(t.beat_unit) && Array.isArray(t.tempo) && t.tempo.length <= 257 &&
@@ -90,6 +109,8 @@ export function validTiming(t: PatternTiming, rows: number): boolean {
 }
 export interface Pattern {
   timing?: PatternTiming;
+  /** Percent, 0 to 75, instead of the song's. */
+  swing?: number;
   id: string; name: string; rows: number; notes: NoteColumn[][];
   /** Parameter lanes by track, then by return, then the master's. Returns and the master have no notes. */
   fx: FxLane[][]; return_fx: FxLane[][]; master_fx: FxLane[];
@@ -98,7 +119,7 @@ export interface Pattern {
 export interface LoopRange { start: number; end: number }
 /** Where one track plays from in one sequence step, when not from the step's own pattern: silent, or another pattern's track. */
 export type TrackSource = { kind: 'mute' } | { kind: 'pattern'; id: string };
-export interface Song { bpm: number; rows_per_beat: number; tracks: Track[]; master: Track; returns: Track[]; patterns: Pattern[]; sequence: string[]; loop_range?: LoopRange;
+export interface Song { bpm: number; rows_per_beat: number; /** Percent, 0 to 75; absent is straight. */ swing?: number; tracks: Track[]; master: Track; returns: Track[]; patterns: Pattern[]; sequence: string[]; loop_range?: LoopRange;
   /** By sequence step, then track. Steps and tracks beyond the ends of the lists, and `null`, play the step's own pattern. */
   matrix?: (TrackSource | null)[][]; instrument_values?: Record<string, Record<string, number>> }
 /** A named group of consecutive sequence steps, from `start` up to the next section's start. It only organises the sequence list. */
@@ -135,6 +156,7 @@ export function makePattern(project: Project, source?: Pattern): Pattern {
     name: source ? `${source.name} variation` : `Pattern ${project.patterns.length.toString().padStart(2, '0')}`,
     rows: source?.rows ?? 32,
     ...(source?.timing ? { timing: structuredClone(source.timing) } : {}),
+    ...(source?.swing !== undefined ? { swing: source.swing } : {}),
     fx: source ? source.fx.map(lanes => lanes.map(cloneLane)) : Array.from({ length: project.tracks.length }, () => [emptyFxLane(32)]),
     return_fx: source ? source.return_fx.map(lanes => lanes.map(cloneLane)) : project.returns.map(() => [emptyFxLane(32)]),
     master_fx: source ? source.master_fx.map(cloneLane) : [emptyFxLane(32)],
@@ -148,7 +170,7 @@ export function resizePattern(pattern: Pattern, rows: number) {
   pattern.rows = Math.min(256, Math.max(1, Math.trunc(rows) || 1));
   if (pattern.timing) pattern.timing.tempo = pattern.timing.tempo.filter(p => p.row <= pattern.rows);
   // Retain notes beyond a shortened pattern so increasing its length restores them.
-  const cells = [...pattern.notes.flat().flatMap(c => [c.notes, c.inst, c.vol, c.pan, c.delay, c.start, c.pitch, c.rtg]), ...pattern.fx.flat().map(lane => lane.values), ...pattern.return_fx.flat().map(lane => lane.values), ...pattern.master_fx.map(lane => lane.values)];
+  const cells = [...pattern.notes.flat().flatMap(c => [c.notes, c.inst, c.vol, c.pan, c.delay, c.start, c.chance, c.pitch, c.rtg]), ...pattern.fx.flat().map(lane => lane.values), ...pattern.return_fx.flat().map(lane => lane.values), ...pattern.master_fx.map(lane => lane.values)];
   for (const column of cells) while (column.length < pattern.rows) column.push(null);
 }
 
@@ -158,7 +180,7 @@ export function readProject(raw: string): Project {
   if (value?.version !== 12 || typeof value.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value.id) || !Array.isArray(value.definitions) || value.definitions.length === 0 ||
       !value.definitions.every((d: Definition) => d && typeof d.id === 'string' && /^[a-zA-Z_][\w-]*$/.test(d.id) && typeof d.name === 'string' && typeof d.source === 'string' && ['instr', 'fx'].includes(d.kind) && (d.values === undefined || !!d.values && typeof d.values === 'object' && Object.values(d.values).every(Number.isFinite)) && (d.hidden === undefined || Array.isArray(d.hidden) && d.hidden.every((name: unknown) => typeof name === 'string'))) ||
       new Set(value.definitions.map((d: Definition) => d.id)).size !== value.definitions.length ||
-      !Number.isFinite(value.bpm) || value.bpm < 20 || value.bpm > 300 ||
+      !Number.isFinite(value.bpm) || value.bpm < 20 || value.bpm > 300 || !validSwing(value.swing) ||
       !Number.isInteger(value.rows_per_beat) || value.rows_per_beat < 1 || value.rows_per_beat > 16 ||
       !Array.isArray(value.tracks) || (value.tracks.length < 1 || value.tracks.length > 16) ||
       !value.tracks.every((t: Track) => validTrack(t, value.definitions)) || !validTrack(value.master, value.definitions) ||
@@ -167,7 +189,7 @@ export function readProject(raw: string): Project {
       value.returns.some((t: Track, i: number) => t.output?.kind === 'return' && t.output.index <= i || t.fx.some(d => d.target !== undefined && d.target <= i)) ||
       !Array.isArray(value.patterns) || value.patterns.length < 1 || value.patterns.length > 128 ||
       !value.patterns.every((p: Pattern) => p && typeof p.id === 'string' && /^[a-zA-Z_][\w-]*$/.test(p.id) && typeof p.name === 'string' &&
-        Number.isInteger(p.rows) && p.rows >= 1 && p.rows <= 256 && (p.timing === undefined || validTiming(p.timing, p.rows)) && Array.isArray(p.notes) && p.notes.length === value.tracks.length &&
+        Number.isInteger(p.rows) && p.rows >= 1 && p.rows <= 256 && (p.timing === undefined || validTiming(p.timing, p.rows)) && validSwing(p.swing) && Array.isArray(p.notes) && p.notes.length === value.tracks.length &&
         p.notes.every(track => Array.isArray(track) && track.length >= 1 && track.length <= maxNoteColumns && track.every(column => validColumn(column, p.rows, value.definitions))) &&
         Array.isArray(p.fx) && p.fx.length === value.tracks.length && p.fx.every(lanes => validLanes(lanes, p.rows)) &&
         Array.isArray(p.return_fx) && p.return_fx.length === value.returns.length && [...p.return_fx, p.master_fx].every(lanes => validLanes(lanes, p.rows) && lanes.every(lane => lane.target?.kind !== 'instrument'))) ||
@@ -275,7 +297,7 @@ export function restoreTrack(project: Project, deleted: DeletedTrack): boolean {
   tidyMatrix(project);
   for (const pattern of project.patterns) {
     const restored = (deleted.notes.get(pattern.id) ?? [blankColumn(pattern.rows)]).map(cloneColumn);
-    for (const column of restored) for (const cells of [column.notes, column.inst, column.vol, column.pan, column.delay, column.start, column.pitch, column.rtg]) while (cells.length < pattern.rows) cells.push(null);
+    for (const column of restored) for (const cells of [column.notes, column.inst, column.vol, column.pan, column.delay, column.start, column.chance, column.pitch, column.rtg]) while (cells.length < pattern.rows) cells.push(null);
     pattern.notes.splice(deleted.index, 0, restored);
     const fx = (deleted.fx.get(pattern.id) ?? [emptyFxLane(pattern.rows)]).map(cloneLane);
     for (const column of fx) while (column.values.length < pattern.rows) column.values.push(null);
@@ -294,10 +316,10 @@ export function validTarget(target: FxTarget | null): boolean {
 const integerWithin = (max: number) => (v: unknown) => v === null || typeof v === 'string' && /^\d{1,3}$/.test(v) && Number(v) <= max;
 function validColumn(column: NoteColumn, rows: number, definitions: Definition[]) {
   const sized = (cells: unknown, optional: boolean): cells is (string | null)[] => Array.isArray(cells) && cells.length <= 256 && (cells.length >= rows || optional && cells.length === 0);
-  return !!column && sized(column.notes, false) && sized(column.inst, true) && sized(column.vol, true) && sized(column.pan, true) && sized(column.delay, true) && sized(column.start, true) && sized(column.pitch, true) && sized(column.rtg, true) &&
+  return !!column && sized(column.notes, false) && sized(column.inst, true) && sized(column.vol, true) && sized(column.pan, true) && sized(column.delay, true) && sized(column.start, true) && sized(column.chance, true) && sized(column.pitch, true) && sized(column.rtg, true) &&
     column.notes.every(n => n === null || typeof n === 'string' && (n === 'OFF' || n === 'CUT' || /^[A-G][#-][0-8]$/.test(n))) &&
     column.inst.every(id => id === null || typeof id === 'string' && definitions.some(d => d.id === id && d.kind === 'instr')) &&
-    column.vol.every(integerWithin(128)) && column.pan.every(integerWithin(128)) && column.delay.every(integerWithin(255)) && column.start.every(c => c === null || startValue(c) === c) && column.pitch.every(c => c === null || pitchValue(c) === c) && column.rtg.every(c => c === null || retriggerValue(c) === c) &&
+    column.vol.every(integerWithin(128)) && column.pan.every(integerWithin(128)) && column.delay.every(integerWithin(255)) && column.start.every(c => c === null || startValue(c) === c) && column.chance.every(c => c === null || chanceValue(c) === c) && column.pitch.every(c => c === null || pitchValue(c) === c) && column.rtg.every(c => c === null || retriggerValue(c) === c) &&
     !column.pitch.some((c, row) => glideRetriggers(c, column.rtg[row]));
 }
 function validTrack(t: Track, definitions: Definition[]): boolean {

@@ -17,6 +17,7 @@ fn test_song(note: Option<&str>) -> Song {
     Song {
         bpm: 125.0,
         rows_per_beat: 4,
+        swing: 0.0,
         tracks: (0..4)
             .map(|i| Track {
                 name: format!("Track {i}"),
@@ -25,6 +26,7 @@ fn test_song(note: Option<&str>) -> Song {
             .collect(),
         patterns: vec![Pattern {
             timing: None,
+            swing: None,
             id: "p0".into(),
             name: "First".into(),
             rows: 32,

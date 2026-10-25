@@ -450,6 +450,9 @@ impl Timing {
 pub struct Pattern {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timing: Option<Timing>,
+    /// The swing for this pattern, 0 (straight) to 75 percent, instead of the song's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swing: Option<f64>,
     pub id: String,
     pub name: String,
     pub rows: usize,
@@ -466,6 +469,9 @@ pub struct Pattern {
 pub struct Song {
     pub bpm: f64,
     pub rows_per_beat: u32,
+    /// How much of every pair of rows' time moves to the first row: 0 (straight) to 75 percent.
+    #[serde(default)]
+    pub swing: f64,
     pub tracks: Vec<Track>,
     /// The final stage every track feeds: a level, a pan and an effect chain.
     #[serde(default)]
@@ -597,6 +603,10 @@ impl Song {
             })
         {
             return Err("The matrix must name existing patterns and tracks".into());
+        }
+        let swing = |value: f64| value.is_finite() && (0.0..=75.0).contains(&value);
+        if !swing(self.swing) || self.patterns.iter().any(|p| p.swing.is_some_and(|value| !swing(value))) {
+            return Err("Swing runs from 0 to 75".into());
         }
         if self
             .loop_range
@@ -862,12 +872,27 @@ impl Playback {
         }
     }
 
+    /// The seconds from the start of the row at `index` to `fraction` of the way through it. This is the
+    /// one place the tracker's time is made: swing moves time between the two rows of a pair, so notes,
+    /// delays, hits, bends, lanes, the playhead and export all follow it. Pairs begin at each pattern's
+    /// first row, and an odd last row has no partner and is left alone.
     fn row_seconds(&self, index: u64, fraction: f64) -> f64 {
-        if let Some(p) = self.location(index)
-            && let Some(timing) = &p.pattern.timing {
-                return timing.seconds(p.row as f64, p.row as f64 + fraction);
-            }
-        self.song.row_samples(1.0) * fraction
+        let Some(p) = self.location(index) else {
+            return self.song.row_samples(1.0) * fraction;
+        };
+        let straight = |from: usize, rows: f64| match &p.pattern.timing {
+            Some(timing) => timing.seconds(from as f64, from as f64 + rows),
+            None => self.song.row_samples(1.0) * rows,
+        };
+        let swing = p.pattern.swing.unwrap_or(self.song.swing) / 100.0;
+        let first = p.row & !1;
+        if swing <= 0.0 || first + 1 >= p.pattern.rows {
+            return straight(p.row, fraction);
+        }
+        let (a, b) = (straight(first, 1.0), straight(first + 1, 1.0));
+        let moved = a.min(b) * swing;
+        let length = if p.row == first { a + moved } else { b - moved };
+        straight(p.row, fraction) * length / if p.row == first { a } else { b }
     }
 
     fn seconds_at(&self, row: f64) -> f64 {
@@ -1429,6 +1454,7 @@ mod tests {
         Song {
             bpm: 137.0,
             rows_per_beat: 4,
+            swing: 0.0,
             tracks: (0..4)
                 .map(|i| Track {
                     name: format!("Track {i}"),
@@ -1439,6 +1465,7 @@ mod tests {
                 .into_iter()
                 .map(|(id, rows, note)| Pattern {
                     timing: None,
+                    swing: None,
                     id: id.into(),
                     name: id.into(),
                     rows,
@@ -1665,6 +1692,7 @@ mod tests {
         song.tracks.truncate(1);
         song.patterns = vec![Pattern {
             timing: None,
+            swing: None,
             id: "a".into(),
             name: "a".into(),
             rows,
@@ -1865,6 +1893,124 @@ mod tests {
     }
 
     #[test]
+    fn each_hit_of_a_retrigger_is_a_set_share_quieter_or_louder_than_the_one_before() {
+        let db = |e: &Value| e["args"].get("gain").and_then(|g| g.as_str()).map_or(0.0, |g| g.trim_end_matches("db").parse::<f64>().unwrap());
+        let gains = |text: &str| -> Vec<f64> {
+            played(2, vec![with_commands(2, &[(0, "C-4")], &[(0, text)])], Mode::Song).iter().map(db).collect()
+        };
+        let halving = 20.0 * 0.5_f64.log10();
+        let fading = gains("R4:-50");
+        assert_eq!(fading.len(), 4);
+        for (hit, gain) in fading.iter().enumerate() {
+            assert!((gain - hit as f64 * halving).abs() < 0.01, "{fading:?}");
+        }
+        let swelling = gains("R3:100");
+        assert!((swelling[0] + 2.0 * -halving).abs() < 0.01 && (swelling[1] + -halving).abs() < 0.01 && swelling[2] == 0.0, "the last hit is the note's own level: {swelling:?}");
+        assert!(gains("R4").iter().all(|g| *g == 0.0));
+        let silenced = gains("R3:-100");
+        assert!(silenced[0] == 0.0 && silenced[1] < -100.0 && silenced[2] < -100.0, "{silenced:?}");
+    }
+
+    #[test]
+    fn a_retrigger_dynamics_start_from_the_notes_volume() {
+        let mut column = with_commands(2, &[(0, "C-4")], &[(0, "R2:-50")]);
+        column.vol = vec![Some("64".into()), None];
+        let events = played(2, vec![column], Mode::Song);
+        let gain = |i: usize| events[i]["args"]["gain"].as_str().unwrap().trim_end_matches("db").parse::<f64>().unwrap();
+        assert!((gain(0) - volume_db(64)).abs() < 0.01 && (gain(1) - volume_db(64) + 20.0 * 2.0_f64.log10()).abs() < 0.01, "{:?}", (gain(0), gain(1)));
+    }
+
+    fn chance_column(rows: usize, cells: &[(usize, &str)], chances: &[(usize, &str)]) -> NoteColumn {
+        let mut column = column(rows, cells);
+        column.chance = vec![None; rows];
+        for (row, text) in chances {
+            column.chance[*row] = Some((*text).into());
+        }
+        column
+    }
+
+    #[test]
+    fn a_note_that_does_not_play_leaves_the_one_held_before_it_sounding() {
+        let notes = |chance: &str| -> Vec<Value> {
+            played(4, vec![chance_column(4, &[(0, "C-4"), (2, "E-4")], &[(2, chance)])], Mode::Song).into_iter().filter(|e| e["op"] == "note").collect()
+        };
+        let sure = notes("100");
+        assert_eq!(sure.len(), 2);
+        assert!((duration(&sure[0]) - 0.25).abs() < 1e-5, "E-4 ends C-4 at its row: {}", duration(&sure[0]));
+        let never = notes("0");
+        assert_eq!(never.len(), 1, "E-4 does not play");
+        assert!((duration(&never[0]) - 0.5).abs() < 1e-5, "C-4 rings on to the end of the pattern: {}", duration(&never[0]));
+    }
+
+    #[test]
+    fn chance_is_rolled_afresh_and_a_note_and_its_hold_agree() {
+        // 64 notes at half chance: some play and some do not
+        let cells: Vec<_> = (0..64).map(|row| (row, "C-4")).collect();
+        let chances: Vec<_> = (0..64).map(|row| (row, "50")).collect();
+        let events = played(64, vec![chance_column(64, &cells, &chances)], Mode::Song);
+        let notes: Vec<_> = events.iter().filter(|e| e["op"] == "note").collect();
+        assert!((10..54).contains(&notes.len()), "{}", notes.len());
+        // each note that played is held to the next one that played, never to one that was skipped
+        for pair in notes.windows(2) {
+            let gap = (pair[1]["at"].as_u64().unwrap() - pair[0]["at"].as_u64().unwrap()) as f64 / 48000.0;
+            assert!((duration(pair[0]) - gap).abs() < 1e-4, "{} against {gap}", duration(pair[0]));
+        }
+        // a note with no chance written always plays
+        assert_eq!(played(4, vec![chance_column(4, &[(0, "C-4"), (1, "C-4")], &[])], Mode::Song).iter().filter(|e| e["op"] == "note").count(), 2);
+    }
+
+    /// Where the notes of a one-column pattern start, in samples, with `swing` percent on the song
+    /// and `own` on the pattern. A row is 6000 samples.
+    fn starts(rows: usize, swing: f64, own: Option<f64>, ramp: bool) -> Vec<u64> {
+        let cells: Vec<_> = (0..rows).map(|row| (row, "C-4")).collect();
+        played_with(rows, vec![column(rows, &cells)], Mode::Song, |play| {
+            play.song.swing = swing;
+            play.song.patterns[0].swing = own;
+            if ramp {
+                play.song.patterns[0].timing = Some(Timing { bpm: 120.0, rows_per_beat: 4, beats_per_bar: 4, beat_unit: 4, tempo: vec![EnvelopePoint { row: 0.0, value: 60.0 }, EnvelopePoint { row: rows as f64, value: 180.0 }] });
+            }
+        })
+        .iter()
+        .filter(|e| e["op"] == "note")
+        .map(|e| e["at"].as_u64().unwrap())
+        .collect()
+    }
+
+    #[test]
+    fn swing_moves_time_from_the_second_row_of_each_pair_to_the_first() {
+        assert_eq!(starts(4, 0.0, None, false), [0, 6000, 12000, 18000]);
+        // half the shorter row moves: 3 parts to 1
+        assert_eq!(starts(4, 50.0, None, false), [0, 9000, 12000, 21000]);
+        // a pattern of its own says straight even when the song swings, and the reverse
+        assert_eq!(starts(4, 50.0, Some(0.0), false), [0, 6000, 12000, 18000]);
+        assert_eq!(starts(4, 0.0, Some(50.0), false), [0, 9000, 12000, 21000]);
+        // an odd last row has no partner, so it starts where the pairs before it end
+        assert_eq!(starts(3, 50.0, None, false), [0, 9000, 12000]);
+    }
+
+    #[test]
+    fn swing_keeps_the_length_of_each_pair_through_a_tempo_ramp() {
+        let straight = starts(6, 0.0, None, true);
+        let swung = starts(6, 50.0, None, true);
+        for pair in [0, 2, 4] {
+            assert_eq!(swung[pair], straight[pair], "a pair starts where it did: {swung:?} against {straight:?}");
+        }
+        assert!(swung[1] > straight[1] && swung[3] > straight[3], "the second row of a pair starts later: {swung:?} against {straight:?}");
+    }
+
+    #[test]
+    fn swing_has_to_be_between_0_and_75() {
+        let mut song = song();
+        song.swing = 75.0;
+        song.validate().unwrap();
+        song.swing = 76.0;
+        assert!(song.validate().is_err());
+        song.swing = 0.0;
+        song.patterns[0].swing = Some(-1.0);
+        assert!(song.validate().is_err());
+    }
+
+    #[test]
     fn offset_and_reverse_reach_only_instruments_that_have_the_parameter() {
         let cells = [(0, "C-4"), (2, "C-4")];
         let commands = [(0, "O25"), (2, "V")];
@@ -1998,6 +2144,7 @@ mod tests {
         notes.inst = vec![Some("tone".into()), None, Some("alt".into()), Some("tone".into())];
         song.patterns = vec![Pattern {
             timing: None,
+            swing: None,
             id: "a".into(),
             name: "a".into(),
             rows: 4,
@@ -2035,6 +2182,7 @@ mod tests {
         lane.values[2] = Some("500".into());
         song.patterns = vec![Pattern {
             timing: None,
+            swing: None,
             id: "a".into(),
             name: "a".into(),
             rows: 4,

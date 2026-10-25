@@ -25,7 +25,7 @@ There is no fixed note length, so leave a gap with OFF for staccato. A looped pa
 
 ## Note columns and sub-columns
 
-The **⋯** button in a track header adds up to eight note columns (for chords; shared by every pattern) and shows or hides the **Vol**, **Pan**, **Dly**, **Start**, **Pitch** and **Rtg** sub-columns beside each note (the menu calls them **Volume**, **Panning**, **Delay**, **Start**, **Pitch** and **Retrigger**).
+The **⋯** button in a track header adds up to eight note columns (for chords; shared by every pattern) and shows or hides the **Vol**, **Pan**, **Dly**, **Start**, **Chance**, **Pitch** and **Rtg** sub-columns beside each note (the menu calls them **Volume**, **Panning**, **Delay**, **Start**, **Chance**, **Pitch** and **Retrigger**).
 
 The **Ins** column is always there: it holds the number of the instrument that plays the note. They take plain numbers, edited like a parameter lane (click a cell or just type a digit, then Enter to save and move down):
 
@@ -36,14 +36,15 @@ The **Ins** column is always there: it holds the number of the instrument that p
 | **Pan** | −50 (left) to +50 (right), or `C` for centre. |
 | **Dly** | Starts the note that many percent of a row late, 0–99. |
 | **Start** | Where a new note's sample starts and which way it plays: `50`, `<` or `50<`. See [Start, Pitch and Rtg](#start-pitch-and-rtg). |
+| **Chance** | The percent chance, 0–100, that the note plays. Blank always plays. See [Chance](#chance). |
 | **Pitch** | A glide or slide: `G8`, `U12` or `D3`. |
-| **Rtg** | How many times the note plays in its row, 2–32. |
+| **Rtg** | How many times the note plays in its row, 2–32, optionally with a change in level per hit, such as `4:-25`. |
 
 Hidden sub-columns still play.
 
 ## Start, Pitch and Rtg
 
-These three sub-columns — the **Start**, **Pitch** and **Retrigger** checkboxes in **⋯** — sit to the right of **Dly** beside every note column, so each of a track's note columns has its own. Returns and the master hold no notes, so they have none. Hidden sub-columns still play, and hiding one never deletes what it holds.
+These sub-columns — the **Start**, **Chance**, **Pitch** and **Retrigger** checkboxes in **⋯** — sit to the right of **Dly** beside every note column, so each of a track's note columns has its own. Returns and the master hold no notes, so they have none. Hidden sub-columns still play, and hiding one never deletes what it holds.
 
 **Start** configures a new note:
 
@@ -53,7 +54,7 @@ These three sub-columns — the **Start**, **Pitch** and **Retrigger** checkboxe
 | `<` | Plays it backwards (`rate` of −1). |
 | `50<` | Both. |
 
-**Rtg** is a number from 2 to 32: the note plays that many times within its row, like a stutter. The last hit is held as the note would be.
+**Rtg** is a number from 2 to 32: the note plays that many times within its row, like a stutter. The last hit is held as the note would be. After a `:` it takes how much each hit's level changes from the one before, from −100 to 100 percent: `4:-25` plays four hits, each 75% as loud as the last, and `4:-100` silences every hit after the first. A positive change builds up instead: in `4:50` each hit is 50% louder than the one before and the last plays at the note's own level, so no hit is louder than the note.
 
 **Pitch** takes a letter and a whole number, **G**, **U** or **D**:
 
@@ -64,11 +65,19 @@ These three sub-columns — the **Start**, **Pitch** and **Retrigger** checkboxe
 
 A glide keeps one voice and a retrigger restarts it, so a row cannot have both: entering one where the other is refused with a message, and a project that has both is rejected. A slide and a retrigger can share a row.
 
-Enter and edit them like any other cell: click it or just start typing, **Enter** to save and move down by **Step**, **Escape** to cancel, and clearing the cell removes the setting. Lower case is tidied to upper case, so `g8` becomes `G8`; an entry that is not valid is refused, with a hint saying what the cell takes, and the cell keeps what it had.
+Type into them like any other cell: click it or just start typing, **Enter** to save and move down by **Step**, **Escape** to cancel, and clearing the cell removes the setting.
+
+**Enter** on a cell you have not started typing in, or a double click, opens its **editor** instead: a small panel with named fields and units (Offset and Backwards for Start; Movement and Amount for Pitch; Hits and Level change for Rtg; Chance), a preview of the cell's text and what it means in words, and **Apply**, **Clear** and **Cancel**. **Enter** applies and **Escape** cancels. An entry that is out of range stays in the editor with a note saying what the field takes, and nothing changes until it is valid. Applying is one undo step. If a glide and a retrigger would share the row, the editor says so and offers **Replace the retrigger** (or the glide), which does both changes as one undo step. Hovering over a filled cell shows the same meaning in words. Lower case is tidied to upper case, so `g8` becomes `G8`; an entry that is not valid is refused, with a hint saying what the cell takes, and the cell keeps what it had.
 
 Each acts on the note in its own row, or on the note held above it in the same column. An **OFF** or a **CUT** ends that hold, so a slide below one has nothing to move. **Start** needs a note in its own row to start something. Whatever a setting needs, the instrument has to have the parameter it sets: one it cannot use is ignored, and nothing else about the row changes. Samplers made by **♪** import or the scissors have `begin` and `rate`, so **Start** works on them.
 
 Entering a **Start** or **Rtg** value plays the note it acts on at once, through the track's effects, so you can try a start point or a stutter without playing the pattern. Glides and slides are heard when the pattern plays.
+
+### Chance
+
+**Chance** is a whole percent from 0 to 100; blank is certain (100). Each time the pattern plays, every note with a chance rolls afresh, so loop passes and restarts differ. A note that does not play leaves the note before it sounding, as if the cell were empty, and drops its Start, Pitch and Rtg with it. A whole retrigger plays or not as one. An empty, **OFF** or **CUT** row ignores its Chance.
+
+A row with only a Pitch or Rtg and no new note is never rolled. An export draws once for the whole song, and the mix and every stem share the same draws.
 
 Cells are stored as the text you typed, so they copy, paste and save as `G8`; they move with their note when a block is inserted, deleted or pasted, and undo covers them.
 

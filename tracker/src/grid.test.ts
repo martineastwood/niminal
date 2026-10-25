@@ -674,7 +674,7 @@ it('enters absolute MIDI pitch, hardware velocity and instrument as one undoable
 
 it('previews MIDI without editing when record is off, including from a parameter lane', () => {
   const { project, grid, parent, edited } = setup(undefined, () => 'tone');
-  grid.setRecording(false); parent.querySelector<HTMLElement>('#fx-4-1-0')!.click();
+  grid.setRecording(false); parent.querySelector<HTMLElement>('#fx-4-1-0')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
   const before = JSON.stringify(project);
   expect(grid.midiNoteOn(60, 100)).toEqual({ note: 'C-4', track: 1, instrument: 'tone', velocity: 100 });
   expect(JSON.stringify(project)).toBe(before); expect(edited).not.toHaveBeenCalled();
@@ -746,7 +746,7 @@ it('cuts a whole track to the clipboard and clears it', () => {
 
 it('enters start, pitch and retrigger cells and plays the note they act on with them', () => {
   const { parent, project, grid, audition } = setup();
-  project.tracks[0].show = { start: true, pitch: true, rtg: true }; grid.render();
+  project.tracks[0].show = { start: true, chance: true, pitch: true, rtg: true }; grid.render();
   const column = project.patterns[0].notes[0][0], cell = (row: number, kind: string) => parent.querySelector<HTMLElement>(`#cell-${row}-0-0-${kind}`)!;
   const type = (row: number, kind: string, text: string) => {
     cell(row, kind).click(); const input = parent.querySelector<HTMLInputElement>('.lane-value')!; input.value = text;
@@ -758,6 +758,78 @@ it('enters start, pitch and retrigger cells and plays the note they act on with 
   audition.mockClear(); type(4, 'pitch', 'x9'); expect(column.pitch[4]).toBeNull(); expect(audition).not.toHaveBeenCalled();
   type(5, 'pitch', 'g8'); expect(column.pitch[5]).toBe('G8'); expect(audition).not.toHaveBeenCalled();
   type(5, 'rtg', '4'); expect(column.rtg[5]).toBeNull(); // a glide and a retrigger compete for the row
+  type(1, 'chance', '50'); expect(column.chance[1]).toBe('50'); type(2, 'chance', '101'); expect(column.chance[2]).toBeNull();
+  type(9, 'rtg', '4:-25'); expect(column.rtg[9]).toBe('4:-25');
   type(3, 'pitch', 'u12'); expect(column.pitch[3]).toBe('U12'); // a slide and a retrigger do not
-  column.notes[7] = 'OFF'; type(7, 'rtg', '2'); expect(column.rtg[7]).toBe('2'); expect(audition).not.toHaveBeenCalled(); // nothing is held after an OFF
+  audition.mockClear(); column.notes[7] = 'OFF'; type(7, 'rtg', '2'); expect(column.rtg[7]).toBe('2'); expect(audition).not.toHaveBeenCalled(); // nothing is held after an OFF
+});
+
+it('opens a popup editor on an expression cell, with its meaning in words, and applies it as one undo step', () => {
+  const { parent, project, grid, key, audition, edited } = setup();
+  project.tracks[0].show = { start: true, chance: true, pitch: true, rtg: true }; grid.render();
+  const column = project.patterns[0].notes[0][0], cell = (row: number, kind: string) => parent.querySelector<HTMLElement>(`#cell-${row}-0-0-${kind}`)!;
+  const editor = () => document.querySelector<HTMLElement>('.expression-editor');
+  const input = (label: string) => editor()!.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`)!;
+  const press = (label: string) => [...editor()!.querySelectorAll('button')].find(b => b.textContent === label)!.click();
+  const open = (row: number, kind: string) => { cell(row, kind).click(); (parent.querySelector<HTMLInputElement>('.lane-value'))!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); key('Enter'); };
+
+  open(3, 'rtg'); expect(editor()).not.toBeNull();
+  input('Hits').value = '4'; input('Hits').dispatchEvent(new Event('input')); input('Level change').value = '-25'; input('Level change').dispatchEvent(new Event('input'));
+  expect(editor()!.querySelector('.expression-preview')!.textContent).toBe('4:-25 — Plays 4 times in the row, each 25% quieter than the one before');
+  press('Apply'); expect(editor()).toBeNull(); expect(column.rtg[3]).toBe('4:-25');
+  expect(audition).toHaveBeenLastCalledWith('tone', 'C-4', 0, { retrigger: '4:-25' });
+  expect(cell(3, 'rtg').title).toBe('Plays 4 times in the row, each 25% quieter than the one before');
+  key('z', { metaKey: true }); expect(column.rtg[3]).toBeNull(); // one undo step
+
+  // a bad entry is explained and cannot be applied; the cell keeps what it had
+  open(3, 'rtg'); input('Hits').value = '1'; input('Hits').dispatchEvent(new Event('input'));
+  expect(editor()!.querySelector('.expression-problem')!.textContent).toContain('2 to 32');
+  expect(editor()!.querySelector<HTMLButtonElement>('button')!.disabled).toBe(true);
+  press('Cancel'); expect(editor()).toBeNull(); expect(column.rtg[3]).toBeNull();
+
+  // a glide and a retrigger compete: the editor says so, and replacing the retrigger is one undo step
+  column.rtg[5] = '3'; grid.render();
+  open(5, 'pitch'); input('Amount').value = '8'; input('Amount').dispatchEvent(new Event('input'));
+  expect(editor()!.querySelector('.expression-problem')!.textContent).toContain('cannot share a row');
+  press('Replace the retrigger'); expect(column.pitch[5]).toBe('G8'); expect(column.rtg[5]).toBeNull();
+  key('z', { metaKey: true }); expect(column.pitch[5]).toBeNull(); expect(column.rtg[5]).toBe('3');
+
+  // start takes an offset and a direction; Clear empties the cell
+  open(0, 'start'); input('Offset').value = '50'; input('Offset').dispatchEvent(new Event('input')); (input('Backwards') as HTMLInputElement).click();
+  press('Apply'); expect(column.start[0]).toBe('50<');
+  open(0, 'start'); press('Clear'); expect(column.start[0]).toBeNull();
+  expect(edited).toHaveBeenCalled();
+});
+
+it('opens the editor on a double click, from the cell the clicks have opened for typing', () => {
+  const { parent, project, grid } = setup();
+  project.tracks[0].show = { chance: true }; grid.render();
+  const cell = parent.querySelector<HTMLElement>('#cell-2-0-0-chance')!;
+  cell.click(); cell.click(); cell.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  expect(document.querySelector('.expression-editor')).not.toBeNull();
+  document.querySelector<HTMLInputElement>('.expression-editor input')!.value = '30';
+  document.querySelector<HTMLInputElement>('.expression-editor input')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  expect(project.patterns[0].notes[0][0].chance[2]).toBe('30');
+});
+
+it('outside record mode a click only marks cells; a double click moves the cursor', () => {
+  const { grid, parent } = setup();
+  grid.setRecording(false);
+  const cell = parent.querySelector<HTMLElement>('[data-note-row="3"][data-column="0"]')!;
+  cell.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 })); cell.click();
+  expect(cell.classList.contains('range-selected')).toBe(true); expect(cell.classList.contains('cursor')).toBe(false);
+  cell.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  expect(parent.querySelector('[data-note-row="3"][data-column="0"]')!.classList.contains('cursor')).toBe(true);
+});
+
+it('pastes at the cursor outside record mode, from cells marked by a click', () => {
+  const { grid, parent, project, click } = setup();
+  click(0, 0); grid.setRecording(false);
+  const cell = parent.querySelector<HTMLElement>('[data-note-row="0"][data-column="0"]')!;
+  cell.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 })); cell.click();
+  const copied = clipboard(parent, 'copy'); expect(copied.split('\t')[0]).toBe('C-4');
+  const target = parent.querySelector<HTMLElement>('[data-note-row="5"][data-column="0"]')!;
+  target.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  clipboard(parent, 'paste', copied);
+  expect(project.patterns[0].notes[0][0].notes[5]).toBe('C-4');
 });
