@@ -15,7 +15,9 @@ Enter notes on the keyboard as a piano: the **Z** row (**Z S X D C V G B H N J M
 
 ## Record mode
 
-**Record mode** (**● Rec** in the toolbar, or **Escape** from anywhere) controls editing. With it off, note keys play the selected instrument from any grid column, including during playback, and typing, Delete, cut, paste and value editing do nothing. With it on, a red frame surrounds the grid and notes and values are entered at the cursor. Corner brackets and a tinted header always mark the selected track.
+**Record mode** (**● Rec** in the toolbar, or **Escape** from anywhere) controls editing. With it off, note keys play the selected instrument from any grid column, including during playback, and typing, Delete, cut and value editing do nothing. With it on, a red frame surrounds the grid and notes and values are entered at the cursor. Corner brackets and a tinted header always mark the selected track.
+
+The cursor's row is highlighted across every track, and the grid scrolls to keep it in the middle of the view. With record mode on, a click moves the cursor to that cell and centres its row. With it off, a click only marks cells (red) so you can copy them with **Cmd/Ctrl+C**, and drag or shift-click marks a block; the cursor stays where it is and the grid does not scroll. **Double-click** a cell to move the cursor there and centre it, then paste with **Cmd/Ctrl+V**, which works with record mode off too. Pressing a key clears the marked cells.
 
 ## How long a note lasts
 
