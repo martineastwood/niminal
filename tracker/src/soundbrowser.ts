@@ -8,7 +8,7 @@ export type ManageOp = 'new' | 'import' | 'duplicate' | 'delete' | 'edit';
 export interface SoundBrowserActions {
   /** Hears an item: called as the selection moves, after a short pause so scrolling past does not play everything. */
   audition(kind: SoundKind, item: BrowserItem): void;
-  /** Uses an item (Enter or double-click). `replace` (Shift+Enter) loads a ready-made instrument into the current slot instead of adding a slot. */
+  /** Uses an item (Enter or double-click). `replace` (Shift+Enter or Shift+double-click) loads a ready-made instrument into the current slot instead of adding a slot. */
   pick(kind: SoundKind, item: BrowserItem, replace: boolean): void;
   /** One of the buttons under the list, with the selected item (if any). */
   manage(op: ManageOp, kind: SoundKind, item: BrowserItem | null): void;
@@ -125,7 +125,7 @@ export class SoundBrowser {
       button.style.paddingLeft = `${4 + row.depth * 10}px`;
       if (row.path || item.note) { const where = document.createElement('span'); where.className = 'browser-path'; where.textContent = row.path || item.note!; button.append(where); }
       button.onclick = () => { this.select(item, true); this.search.focus(); };
-      button.ondblclick = () => this.actions.pick(this.kind, item, false);
+      button.ondblclick = event => this.actions.pick(this.kind, item, event.shiftKey);
       this.list.append(button);
     }
     this.list.scrollTop = top;

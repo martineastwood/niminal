@@ -522,7 +522,7 @@ function toggleBrowser(kind?: SoundKind) {
 }
 function browserTarget() {
   const instruments = project.definitions.filter(d => d.kind === 'instr'), at = instruments.findIndex(d => d.id === currentInstrument), strip = stripOf(project, deviceTrack);
-  soundBrowser.setTarget(`Notes use ${at < 0 ? 'no instrument' : `${String(at).padStart(2, '0')} ${instruments[at].name}`} · effects go on ${strip.name}`);
+  soundBrowser.setTarget(`Notes use ${at < 0 ? 'no instrument' : `${String(at).padStart(2, '0')} ${instruments[at].name}`} · effects go on ${strip.name} · Shift+Enter or Shift+double-click replaces the current instrument`);
 }
 envelopeEditor = new EnvelopeEditor(element('automation'), () => project, () => arrangement.pattern, () => allParameters(),
   () => { editedPattern(); grid.render(); });
