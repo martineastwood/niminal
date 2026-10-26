@@ -654,3 +654,22 @@ fn an_arrangement_can_only_be_started_and_stopped() {
         problems[0].message
     );
 }
+
+#[test]
+fn notes_written_below_a_use_line_point_at_the_sent_text() {
+    let dir = rig_dir("instr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\n");
+    let sent = "use rig\nclip riff {\n  instrument: pluck\n  notes: [c4 e4]\n}\nriff.start\n";
+    let mut s = session();
+    s.eval_parsed(niminal_live::ParsedEval::from_dir(sent, &dir, Some("now")).with_origin(7))
+        .unwrap();
+    let written: Vec<_> = s.clips()[0].lanes[0]
+        .events
+        .iter()
+        .map(|e| {
+            let (start, end) = e.src.expect("a written note has a source range");
+            assert_eq!(e.eval, Some(7));
+            sent[start..end].to_string()
+        })
+        .collect();
+    assert_eq!(written, ["c4", "e4"]);
+}

@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.0",
     "@codemirror/commands": "^6.10.0",
     "@codemirror/language": "^6.11.0",
     "@codemirror/lsp-client": "^6.3.0",

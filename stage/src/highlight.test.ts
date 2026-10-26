@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { Highlighter, evaluated, highlightExtensions, litRanges } from './highlight';
+import { Highlighter, evaluated, highlightExtensions, litRanges, markProblems } from './highlight';
 import { Clip, Snapshot } from './live';
 
 const source = 'clip a { notes: [c4 e4] }';
@@ -35,7 +35,9 @@ function snapshot(clips: Clip[]): Snapshot {
     transport: { bpm: 120 },
     beats_per_bar: 4,
     clips,
-  } as Snapshot;
+    scenes: [],
+    pending: [],
+  } as unknown as Snapshot;
 }
 
 function setup(doc = source) {
@@ -91,5 +93,41 @@ describe('lighting notes in the source', () => {
     highlighter.update(snapshot([clip([{ start: 0, value: 'c4', src: [5000, 5002], eval: 1 }])]));
     expect(() => highlighter.paint()).not.toThrow();
     expect(litRanges(view)).toEqual([]);
+  });
+});
+
+describe('marking clip headers and problems in the source', () => {
+  const headers = (view: EditorView) =>
+    [...view.dom.querySelectorAll('.cm-live')].map(line => [line.textContent, line.className.replace(/.*cm-live /, '')]);
+
+  it('marks the header of a clip that is playing, and one that is muted', () => {
+    const doc = 'clip a {\n}\nclip b {\n}\nclip c {\n}';
+    const { view, highlighter } = setup(doc);
+    const a = clip([]);
+    const b = { ...clip([]), name: 'b', muted: true };
+    const c = { ...clip([]), name: 'c', running: false };
+    highlighter.update(snapshot([a, b, c]));
+    highlighter.paint();
+    expect(headers(view)).toEqual([
+      ['clip a {', expect.stringContaining('cm-live-on')],
+      ['clip b {', expect.stringContaining('cm-live-muted')],
+    ]);
+  });
+
+  it('marks a clip that has a start waiting to land', () => {
+    const { view, highlighter } = setup('clip a {\n}');
+    const waiting = { ...snapshot([{ ...clip([]), running: false }]), pending: [{ changes: ['a.start'] }] };
+    highlighter.update(waiting as unknown as Snapshot);
+    highlighter.paint();
+    expect(headers(view)).toEqual([['clip a {', expect.stringContaining('cm-live-queued')]]);
+  });
+
+  it('underlines what a problem points at, in the text that was sent', () => {
+    const doc = '// intro\nclip a {\n  notes: [c4 zz]\n}';
+    const { view } = setup(doc);
+    const sent = doc.slice(9);
+    const column = sent.split('\n')[1].indexOf('zz') + 1;
+    markProblems(view, 9, sent, [{ message: 'nope', help: null, line: 2, column, in_definition: null }]);
+    expect([...view.dom.querySelectorAll('.cm-refused')].map(e => e.textContent)).toEqual(['zz']);
   });
 });

@@ -1,6 +1,7 @@
 import { basicSetup } from 'codemirror';
 import { EditorState, Prec } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
+import { acceptCompletion } from '@codemirror/autocomplete';
 import { indentWithTab } from '@codemirror/commands';
 import {
   LSPClient,
@@ -93,11 +94,13 @@ export function niminalEditor(source: string, uri: string, apply: (scope: Scope)
         ]),
       ),
       basicSetup,
+      EditorView.lineWrapping,
       niminal,
       theme,
       colours,
       highlightExtensions,
-      keymap.of([indentWithTab]),
+      // Tab takes the suggestion when the list is open, and indents otherwise
+      keymap.of([{ key: 'Tab', run: acceptCompletion }, indentWithTab]),
       lsp.plugin(uri, 'niminal'),
       EditorView.updateListener.of(update => {
         if (update.docChanged) changed?.();

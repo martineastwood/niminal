@@ -1,6 +1,7 @@
 import { ChangeSet, StateEffect, StateField } from '@codemirror/state';
 import { Decoration, DecorationSet, EditorView } from '@codemirror/view';
-import { Snapshot, sinceOnset } from './live';
+import { Problem, Snapshot, sinceOnset } from './live';
+import { sceneStates } from './scenes';
 
 /** How long a note stays lit after it starts, in seconds. */
 const DECAY = 0.45;
@@ -97,7 +98,50 @@ const flash = StateField.define<DecorationSet>({
   provide: field => EditorView.decorations.from(field),
 });
 
-export const highlightExtensions = [drift, hits, flash];
+/** The `clip` and `scene` header lines, marked with whether they are playing, muted or waiting to start. */
+const marked = StateEffect.define<DecorationSet>();
+const headers = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    for (const effect of tr.effects) if (effect.is(marked)) return effect.value;
+    return tr.docChanged ? value.map(tr.changes) : value;
+  },
+  provide: field => EditorView.decorations.from(field),
+});
+
+/** Where the last evaluation went wrong, underlined until the next one. */
+const refused = StateEffect.define<DecorationSet>();
+const refusals = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(refused)) return effect.value;
+      if (effect.is(evaluated)) return Decoration.none;
+    }
+    return tr.docChanged ? value.map(tr.changes) : value;
+  },
+  provide: field => EditorView.decorations.from(field),
+});
+
+export const highlightExtensions = [drift, hits, flash, headers, refusals];
+
+/** Underline what each problem points at in the text that was sent from `base`. */
+export function markProblems(view: EditorView, base: number, text: string, problems: Problem[]) {
+  const lines = text.split('\n');
+  const marks = [];
+  for (const problem of problems) {
+    if (!problem.line || problem.line > lines.length) continue;
+    const before = lines.slice(0, problem.line - 1).reduce((n, line) => n + line.length + 1, 0);
+    const line = lines[problem.line - 1];
+    const column = Math.min(Math.max((problem.column ?? 1) - 1, 0), line.length);
+    const word = /^[\w.:]+|^\S/.exec(line.slice(column));
+    const from = base + before + column;
+    const to = from + (word ? word[0].length : Math.max(line.length - column, 1));
+    if (to > view.state.doc.length) continue;
+    marks.push(Decoration.mark({ class: 'cm-refused', attributes: { title: problem.message } }).range(from, to));
+  }
+  view.dispatch({ effects: refused.of(Decoration.set(marks, true)) });
+}
 
 /** Flash the lines from `from` to `to`, which fade on their own and are then taken off. */
 export function flashLines(view: EditorView, from: number, to: number) {
@@ -130,6 +174,8 @@ export class Highlighter {
   private snapshot: Snapshot | null = null;
   private updatedAt = 0;
   private shown = '';
+  private headed = '';
+  private headedDoc: unknown = null;
 
   constructor(private view: () => EditorView | undefined) {
     const frame = () => {
@@ -153,10 +199,51 @@ export class Highlighter {
     }
   }
 
+  /** Mark each `clip name` and `scene name` line with what the clip or scene is doing. */
+  private mark(view: EditorView, snapshot: Snapshot) {
+    const states = new Map<string, { kind: string; classes: string; colour: string }>();
+    const waiting = (name: string) => snapshot.pending.some(p => p.changes.some(c => c.startsWith(`${name}.`)));
+    snapshot.clips.forEach((clip, index) => {
+      const classes = [
+        clip.running && !clip.muted ? 'cm-live-on' : '',
+        clip.muted ? 'cm-live-muted' : '',
+        clip.soloed ? 'cm-live-solo' : '',
+        waiting(clip.name) ? 'cm-live-queued' : '',
+      ].filter(Boolean);
+      if (classes.length) {
+        states.set(`clip ${clip.name}`, { kind: 'clip', classes: classes.join(' '), colour: CLIP_COLOURS[index % CLIP_COLOURS.length] });
+      }
+    });
+    const scenes = sceneStates(snapshot.scenes);
+    for (const scene of snapshot.scenes) {
+      const state = scenes.get(scene.name)?.state;
+      const classes = [
+        state === 'playing' ? 'cm-live-on' : state === 'included' || state === 'partial' ? 'cm-live-part' : '',
+        waiting(scene.name) ? 'cm-live-queued' : '',
+      ].filter(Boolean);
+      if (classes.length) states.set(`scene ${scene.name}`, { kind: 'scene', classes: classes.join(' '), colour: '#e9b66e' });
+    }
+    const signature = JSON.stringify([...states]);
+    if (signature === this.headed && view.state.doc === this.headedDoc) return;
+    this.headed = signature;
+    this.headedDoc = view.state.doc;
+    const marks = [];
+    for (let n = 1; n <= view.state.doc.lines; n++) {
+      const line = view.state.doc.line(n);
+      const header = /^\s*(clip|scene)\s+([A-Za-z_]\w*)/.exec(line.text);
+      const state = header && states.get(`${header[1]} ${header[2]}`);
+      if (state) {
+        marks.push(Decoration.line({ class: `cm-live ${state.classes}`, attributes: { style: `--hit:${state.colour}` } }).range(line.from));
+      }
+    }
+    view.dispatch({ effects: marked.of(Decoration.set(marks)) });
+  }
+
   private light() {
     const view = this.view();
     const snapshot = this.snapshot;
     if (!view || !snapshot?.transport) return;
+    this.mark(view, snapshot);
     const beats = snapshot.beats_per_bar || 4;
     const secondsPerCycle = (60 / snapshot.transport.bpm) * beats;
     const elapsed = (performance.now() - this.updatedAt) / 1000;

@@ -413,3 +413,13 @@ body.perform .cm-content { line-height: 1.55; }
 /* a scene that is only playing because a bigger one that contains it is */
 .scene.included { background: transparent; border: 1px dashed var(--accent); }
 .scene.included .scene-name { color: var(--accent-text); }
+
+/* clip and scene headers: a bar in the clip's colour while it plays, hollow when muted, pulsing when waiting */
+.cm-live { box-shadow: inset calc(3px * var(--z)) 0 0 transparent; }
+.cm-live-on { box-shadow: inset calc(3px * var(--z)) 0 0 var(--hit); background-color: color-mix(in srgb, var(--hit) 9%, transparent); }
+.cm-live-part { box-shadow: inset calc(3px * var(--z)) 0 0 color-mix(in srgb, var(--hit) 45%, transparent); }
+.cm-live-muted { opacity: 0.55; }
+.cm-live-solo { box-shadow: inset calc(3px * var(--z)) 0 0 var(--hit), inset calc(6px * var(--z)) 0 0 #14161a, inset calc(8px * var(--z)) 0 0 var(--hit); }
+.cm-live-queued { animation: queued-pulse 1.2s ease-in-out infinite; }
+@keyframes queued-pulse { 50% { background-color: color-mix(in srgb, var(--hit) 22%, transparent); } }
+.cm-refused { text-decoration: underline wavy #d86a6a; text-underline-offset: 3px; background-color: rgba(216, 106, 106, 0.14); }

@@ -1,6 +1,7 @@
 import { basicSetup } from 'codemirror';
 import { EditorState, Prec } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
+import { acceptCompletion } from '@codemirror/autocomplete';
 import { indentWithTab } from '@codemirror/commands';
 import { LSPClient, serverDiagnostics, serverCompletion, hoverTooltips, signatureHelp, formatKeymap } from '@codemirror/lsp-client';
 import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -39,7 +40,7 @@ const theme = EditorView.theme({
 export function editorState(uri: string, source: string, changed: (source: string) => void, apply: () => void) {
   return EditorState.create({ doc: source, extensions: [
     Prec.highest(keymap.of([{ key: 'Mod-Enter', run: () => { apply(); return true; } }])),
-    basicSetup, niminal, theme, colours, keymap.of([indentWithTab]),
+    basicSetup, niminal, theme, colours, keymap.of([{ key: 'Tab', run: acceptCompletion }, indentWithTab]),
     lsp.plugin(uri, 'niminal'),
     EditorView.updateListener.of(update => { if (update.docChanged) changed(update.state.doc.toString()); }),
   ] });

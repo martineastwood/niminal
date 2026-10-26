@@ -3,7 +3,7 @@ import { demoSource } from './demo';
 import { Scope, connectLanguageServer, niminalEditor } from './editor';
 import { blockAround } from '../../editors/codemirror/blocks';
 import { LaneView } from './laneview';
-import { Highlighter, evaluated, flashLines } from './highlight';
+import { Highlighter, evaluated, flashLines, markProblems } from './highlight';
 import { mod } from './shortcuts';
 import { sceneCommand, sceneStates } from './scenes';
 import { Action, EvalOutcome, Problem, Scene, Snapshot, stage } from './live';
@@ -361,8 +361,13 @@ function updateTransport(snapshot: Snapshot) {
 }
 
 /** A refused evaluation is shown big at the top of the code, where it cannot be missed from across a room. */
+let bannerTimer: ReturnType<typeof setTimeout> | undefined;
+/** How long the banner stays up; the problems list below the code keeps the detail. */
+const BANNER_SECONDS = 6;
+
 function showBanner(list: Problem[]) {
   const banner = $('banner');
+  clearTimeout(bannerTimer);
   if (!list.length) {
     banner.hidden = true;
     return;
@@ -371,6 +376,7 @@ function showBanner(list: Problem[]) {
   const where = first.line ? ` · line ${first.line}` : '';
   banner.textContent = `✕ not sent${where} · ${first.message}${list.length > 1 ? ` (+${list.length - 1} more)` : ''}`;
   banner.hidden = false;
+  bannerTimer = setTimeout(() => showBanner([]), BANNER_SECONDS * 1000);
 }
 
 function showProblems(list: Problem[]) {
@@ -435,6 +441,7 @@ async function evaluate(scope: Scope = 'chunk') {
   try {
     const outcome = await stage.evaluate(text, input('quantize').value.trim(), fileDir, id);
     showOutcome(outcome);
+    if (view && outcome.problems.length) markProblems(view, from, text, outcome.problems);
     await refresh();
   } catch (error) {
     status(String(error));
