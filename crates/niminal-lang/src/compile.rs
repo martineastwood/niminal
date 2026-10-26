@@ -428,6 +428,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     let tempo = Tempo {
         bpm: DEFAULT_BPM,
         beats_per_bar: 4.0,
+        beat_unit: 4,
         tuning,
     };
 

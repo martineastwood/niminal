@@ -355,7 +355,7 @@ function updateTransport(snapshot: Snapshot) {
   bar.textContent = String(t.bar);
   beat.textContent = t.beat.toFixed(2);
   bpm.textContent = t.bpm.toFixed(1);
-  meter.textContent = `${snapshot.beats_per_bar}/4`;
+  meter.textContent = snapshot.meter.join('/');
   voices.textContent = String(t.voices);
   waiting.textContent = String(snapshot.pending.length);
 }
@@ -519,6 +519,7 @@ function offline(): Snapshot {
     revision: 0,
     transport: null,
     beats_per_bar: 4,
+    meter: [4, 4],
     sample_rate: 0,
     channels: 0,
     clips: [],

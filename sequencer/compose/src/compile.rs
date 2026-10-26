@@ -156,15 +156,16 @@ pub fn compile_with(
     items = expand_score_fors(items).map_err(|d| vec![d])?;
     let mut errors = Vec::new();
 
-    let beats_per_bar = meter_of(&items).unwrap_or_else(|d| {
+    let meter = meter_of(&items).unwrap_or_else(|d| {
         errors.push(d);
-        4.0
+        (4.0, 4)
     });
-    let tempo = tempo_of(&items, beats_per_bar, Tuning::default()).unwrap_or_else(|d| {
+    let tempo = tempo_of(&items, meter, Tuning::default()).unwrap_or_else(|d| {
         errors.push(d);
         Tempo {
             bpm: DEFAULT_BPM,
-            beats_per_bar,
+            beats_per_bar: meter.0,
+            beat_unit: meter.1,
             tuning: Tuning::default(),
         }
     });
@@ -568,21 +569,21 @@ fn quantize_config(items: &[Item]) -> Res<QuantizeConfig> {
     Ok(config)
 }
 
-/// Beats per bar from `meter 3/4`: the top over the bottom, in quarter-note beats.
-fn meter_of(items: &[Item]) -> Res<f64> {
-    let mut beats_per_bar = None;
+/// Beats per bar and beat unit from `meter 3/4`: the top over the bottom in quarter-note beats, and the bottom.
+fn meter_of(items: &[Item]) -> Res<(f64, u32)> {
+    let mut meter = None;
     for item in items {
         let Item::Meter(e) = item else { continue };
-        if beats_per_bar.is_some() {
+        if meter.is_some() {
             return Err(Diagnostic::new("meter is set more than once", e.span));
         }
-        beats_per_bar = Some(meter_beats(e)?);
+        meter = Some(meter_beats(e)?);
     }
-    Ok(beats_per_bar.unwrap_or(4.0))
+    Ok(meter.unwrap_or((4.0, 4)))
 }
 
-/// Beats per bar from a fraction such as `3/4`.
-pub(crate) fn meter_beats(e: &Expr) -> Res<f64> {
+/// Beats per bar and beat unit from a fraction such as `3/4`.
+pub(crate) fn meter_beats(e: &Expr) -> Res<(f64, u32)> {
     let whole = |e: &Expr| match &e.kind {
         ExprKind::Num { value, unit: None } if value.fract() == 0.0 && *value >= 1.0 => {
             Some(*value)
@@ -603,7 +604,7 @@ pub(crate) fn meter_beats(e: &Expr) -> Res<f64> {
                 .with_help("for example `meter 3/4` or `meter 7/8`"),
         );
     };
-    Ok(top * 4.0 / bottom)
+    Ok((top * 4.0 / bottom, bottom as u32))
 }
 
 /// Beats per minute from a number such as `120bpm`.
@@ -620,7 +621,7 @@ pub(crate) fn bpm_of(e: &Expr) -> Res<f64> {
     }
 }
 
-fn tempo_of(items: &[Item], beats_per_bar: f64, tuning: Tuning) -> Res<Tempo> {
+fn tempo_of(items: &[Item], meter: (f64, u32), tuning: Tuning) -> Res<Tempo> {
     let mut tempo = None;
     for item in items {
         let Item::Tempo(stmt) = item else { continue };
@@ -630,13 +631,15 @@ fn tempo_of(items: &[Item], beats_per_bar: f64, tuning: Tuning) -> Res<Tempo> {
         // `@ next bar` and `over 2bars` say how a live session gets there; a file starts at the tempo.
         tempo = Some(Tempo {
             bpm: bpm_of(&stmt.value)?,
-            beats_per_bar,
+            beats_per_bar: meter.0,
+            beat_unit: meter.1,
             tuning,
         });
     }
     Ok(tempo.unwrap_or(Tempo {
         bpm: DEFAULT_BPM,
-        beats_per_bar,
+        beats_per_bar: meter.0,
+        beat_unit: meter.1,
         tuning,
     }))
 }

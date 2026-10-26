@@ -34,6 +34,7 @@ function snapshot(clips: Clip[]): Snapshot {
     connected: true,
     transport: { bpm: 120 },
     beats_per_bar: 4,
+  meter: [4, 4],
     clips,
     scenes: [],
     pending: [],

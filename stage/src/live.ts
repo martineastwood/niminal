@@ -61,6 +61,7 @@ export type Snapshot = {
   revision: number;
   transport: Transport | null;
   beats_per_bar: number;
+  meter: [number, number];
   sample_rate: number;
   channels: number;
   clips: Clip[];

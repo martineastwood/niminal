@@ -8,6 +8,7 @@ const snapshot = {
   revision: 1,
   transport: { sample: 96000, seconds: 2, bar: 2, beat: 1.5, bpm: 128, voices: 1, pending: 1 },
   beats_per_bar: 4,
+  meter: [4, 4],
   sample_rate: 48000,
   channels: 2,
   clips: [

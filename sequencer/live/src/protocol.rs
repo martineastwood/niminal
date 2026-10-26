@@ -493,7 +493,8 @@ impl LiveServer {
         }
         let mut live = seat().map_err(|e| RpcError::new(INTERNAL_ERROR, &e))?;
         let tempo = self.chairs[MAIN_CHAIR].live.tempo();
-        let start = format!("tempo {}bpm\nmeter {}/4", tempo.bpm, tempo.beats_per_bar);
+        let (top, bottom) = tempo.meter();
+        let start = format!("tempo {}bpm\nmeter {top}/{bottom}", tempo.bpm);
         live.eval(&start, Some("now"))
             .map_err(|problems| rejected(&problems))?;
         self.chairs.insert(name.to_string(), Chair::new(live));

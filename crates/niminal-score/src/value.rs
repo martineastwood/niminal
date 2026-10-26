@@ -320,17 +320,26 @@ impl Tuning {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Tempo {
     pub bpm: f64,
+    /// The bar's length in quarter-note beats: `7/8` is 3.5.
     pub beats_per_bar: f64,
+    /// The bottom of the meter as written, so `6/8` reads back as `6/8` and not `3/4`.
+    pub beat_unit: u32,
     /// Carried here because everything that turns beats into seconds also turns notes into hertz.
     pub tuning: Tuning,
 }
 
 impl Tempo {
+    /// The meter as written, such as `(6, 8)`.
+    pub fn meter(&self) -> (u32, u32) {
+        ((self.beats_per_bar * f64::from(self.beat_unit) / 4.0).round() as u32, self.beat_unit)
+    }
+
     /// `bpm` in 4/4.
     pub fn new(bpm: f64) -> Self {
         Tempo {
             bpm,
             beats_per_bar: 4.0,
+            beat_unit: 4,
             tuning: Tuning::default(),
         }
     }

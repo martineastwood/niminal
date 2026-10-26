@@ -9,6 +9,7 @@ function snapshot(overrides: Partial<Snapshot>): Snapshot {
     revision: 0,
     transport: null,
     beats_per_bar: 4,
+  meter: [4, 4],
     sample_rate: 48000,
     channels: 2,
     clips: [],

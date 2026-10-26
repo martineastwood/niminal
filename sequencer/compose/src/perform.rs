@@ -2683,7 +2683,7 @@ impl Perform<'_> {
                 tempo.bpm = crate::compile::bpm_of(e)?;
             }
             if let Some(e) = decl.meters.as_ref().map(|l| &l[i]) {
-                tempo.beats_per_bar = crate::compile::meter_beats(e)?;
+                (tempo.beats_per_bar, tempo.beat_unit) = crate::compile::meter_beats(e)?;
             }
             let length = self.cycles_in(&section.length, tempo.beats_per_bar)?;
             if length <= Rational::ZERO {
