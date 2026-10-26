@@ -8,6 +8,7 @@ const alias = { '@codemirror/language': modules('@codemirror/language'), '@lezer
 
 export default defineConfig({
   resolve: { alias },
-  server: { fs: { allow: ['..'] } },
+  // src-tauri/target holds gigabytes of build output that the dev server must not watch
+  server: { fs: { allow: ['..'] }, watch: { ignored: ['**/src-tauri/**'] } },
   test: { environment: 'happy-dom', testTimeout: 30000 },
 });

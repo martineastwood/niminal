@@ -549,6 +549,7 @@ impl Live {
             }),
             Ok((mut statements, fallback)) => match self.expand_ramp(&mut statements) {
                 Ok(ramp) => {
+                    let statements = self.expand_scenes(statements, fallback);
                     return Begin::Job(
                         self.job(source, uses, quantize, fallback, statements, ramp),
                     );

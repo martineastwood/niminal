@@ -36,10 +36,37 @@ describe('the niminal language colours', () => {
     has('keyword', 'reverse');
   });
 
+  it('colours the kit and consecutive hats in synth_drums', () => {
+    const source = readFileSync('../examples/synth_drums.nml', 'utf8');
+    const found = tokens(source);
+    expect(found).toContainEqual(['keyword', 'kit']);
+    expect(found.filter(([name, text]) => name === 'string' && text === 'xxxx')).toHaveLength(4);
+
+    const grammar = JSON.parse(readFileSync('../editors/vscode/syntaxes/niminal.tmLanguage.json', 'utf8'));
+    const grid = grammar.patterns.find((rule: { begin?: string }) => rule.begin === '\\b(grid)\\s*(\\{)');
+    const row = grid.patterns.find((rule: { begin?: string }) => rule.begin?.startsWith('^'));
+    const hit = row.patterns.find((rule: { name?: string }) => rule.name === 'string.other.hit.niminal');
+    const hits = new RegExp(hit.match, 'g');
+    expect('xxxx xxxx xxxx xxxx'.match(hits)).toEqual(['xxxx', 'xxxx', 'xxxx', 'xxxx']);
+    expect('extra'.match(hits)).toBeNull();
+  });
+
   it('stops colouring as a grid when the grid ends', () => {
     const found = tokens('grid { kick: x }\nx = 1');
     const xs = found.filter(([, text]) => text === 'x').map(([name]) => name);
-    expect(xs).toEqual(['string', 'variableName']);
+    expect(xs).toEqual(['string', 'variableName.definition']);
+  });
+
+  it('colours definitions, parameters, methods and built-in names', () => {
+    const found = tokens('fn lp(input, cutoff: 800hz) {\n  y = it.filter(cutoff)\n  y += note\n}');
+    const has = (name: string, text: string) => expect(found).toContainEqual([name, text]);
+    has('variableName.function', 'lp');
+    has('variableName.local', 'input');
+    has('propertyName', 'cutoff');
+    has('variableName.definition', 'y');
+    has('variableName.special', 'it');
+    has('variableName.function', 'filter');
+    has('variableName.special', 'note');
   });
 });
 

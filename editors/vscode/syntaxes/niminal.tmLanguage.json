@@ -87,7 +87,7 @@
             },
             {
               "name": "string.other.hit.niminal",
-              "match": "(?<![A-Za-z0-9_])[xXo](?![A-Za-z0-9_])"
+              "match": "(?<![A-Za-z0-9_])[xXo]+(?![A-Za-z0-9_])"
             },
             {
               "name": "comment.rest.niminal",

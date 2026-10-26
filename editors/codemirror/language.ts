@@ -11,13 +11,17 @@ export const types = new Set('hz khz db sec ms samples beat beats bar bars deg s
 export const commands = new Set('start stop play mute unmute solo unsolo undo clear set reverse thin'.split(' '));
 /** Words that name what they define: `clip beat`, `scene verse`. */
 const definers = new Set('clip scene arrangement'.split(' '));
+/** Words that introduce a function-like definition: `fn name(a, b)`. */
+const fnDefiners = new Set('instr mono fn def fx'.split(' '));
+/** Words the compiler binds for you inside a body. */
+const specials = new Set('it note clock'.split(' '));
 export const constants = new Set('sine saw square pulse tri stereo quad true false pi sample_rate'.split(' '));
 
 // Lexical colouring remains available while a definition is incomplete. Semantic
 // information, documentation and validation come from the compiler through LSP.
 export const niminal = StreamLanguage.define({
   name: 'niminal',
-  startState: () => ({ string: false, grid: null as null | { close: string; depth: number }, naming: false, dot: false }),
+  startState: () => ({ string: false, grid: null as null | { close: string; depth: number }, naming: false, dot: false, def: 0, params: 0 }),
   token(stream, state) {
     if (state.string) {
       while (!stream.eol()) {
@@ -37,23 +41,37 @@ export const niminal = StreamLanguage.define({
       const word = stream.current();
       const named = state.naming;
       const after = state.dot;
+      const defining = state.def === 1;
       state.naming = definers.has(word);
       state.dot = false;
+      state.def = defining ? 2 : fnDefiners.has(word) ? 1 : 0;
       if (word === 'grid' && stream.match(/^\s*[{[]/, false)) {
         state.grid = { close: stream.match(/^\s*\{/, false) ? '}' : ']', depth: 0 };
         return 'keyword';
       }
       if (named) return 'typeName';
+      if (defining) return 'variableName.function';
       if (after && commands.has(word)) return 'keyword';
+      if (after) return stream.match(/^\s*\(/, false) ? 'variableName.function' : 'propertyName';
+      if (stream.match(/^\s*:(?!:)/, false)) return 'propertyName';
+      if (state.params > 0 && !keywords.has(word) && !types.has(word)) return 'variableName.local';
+      if (specials.has(word)) return 'variableName.special';
       if (keywords.has(word)) return 'keyword';
       if (types.has(word)) return 'typeName';
       if (constants.has(word)) return 'atom';
       if (stream.match(/^\s*\(/, false)) return 'variableName.function';
+      if (stream.match(/^\s*:(?!:)/, false)) return 'propertyName';
+      if (stream.match(/^\s*(?:\+=|=(?!=))/, false)) return 'variableName.definition';
       return 'variableName';
     }
     if (stream.match(/[-+*/=<>!|~]+/)) return 'operator';
-    state.dot = stream.next() === '.';
-    return 'punctuation';
+    const ch = stream.next();
+    state.dot = ch === '.';
+    if (ch === '(' && state.def === 2) { state.def = 0; state.params = 1; }
+    else if (state.params > 0 && ch === '(') state.params++;
+    else if (state.params > 0 && ch === ')') state.params--;
+    else state.def = 0;
+    return /[()[\]{}]/.test(ch!) ? 'bracket' : 'punctuation';
   },
   languageData: { commentTokens: { line: '//' }, closeBrackets: { brackets: ['(', '[', '{', '"'] } },
 });
@@ -95,5 +113,11 @@ export const colours = syntaxHighlighting(
     { tag: [tags.number, tags.atom], color: '#e9b66e' },
     { tag: tags.typeName, color: '#74c7c3' },
     { tag: tags.function(tags.variableName), color: '#8cbce7' },
+    { tag: tags.propertyName, color: '#e8a0a8' },
+    { tag: tags.local(tags.variableName), color: '#e8a0a8' },
+    { tag: tags.definition(tags.variableName), color: '#e5c07b' },
+    { tag: tags.special(tags.variableName), color: '#d19a66' },
+    { tag: tags.operator, color: '#95a0ad' },
+    { tag: [tags.punctuation, tags.bracket], color: '#8a929d' },
   ]),
 );

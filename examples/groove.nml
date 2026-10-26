@@ -48,13 +48,15 @@ clip lead_outro {
   notes: spread
 }
 
-// A scene is a list of clips, started and stopped together. It leaves every other clip alone.
+// A scene is a list of clips, started and stopped together. Scenes play one at a time: starting one stops
+// the clips of the others that it does not use, at the same moment. Evaluate a scene again while it plays
+// to add or remove clips live.
 scene verse  { bass, lead }
 scene chorus { bass_chorus, lead_chorus }
 scene outro  { lead_outro }
 
 // An arrangement is a timeline of its own: `at +4bars` counts from when it is started.
-// Swapping one scene for another is a stop and a start that land together.
+// In an arrangement a scene start only starts, so the scene it replaces is stopped on the same line.
 arrangement song {
   at +0bars  verse.start
   at +4bars  verse.stop

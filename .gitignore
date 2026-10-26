@@ -1,4 +1,6 @@
 target/
+.vitest-cache/
+**/.vite/vitest/
 *.wav
 .DS_Store
 AGENTS.md

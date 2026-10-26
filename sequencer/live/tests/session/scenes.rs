@@ -271,9 +271,10 @@ fn clips_with_instruments_are_started_changed_muted_and_stopped_by_name() {
 }
 
 #[test]
-fn starting_a_scene_leaves_the_other_clips_alone() {
+fn starting_a_scene_stops_the_clips_of_other_scenes_that_it_does_not_use() {
     let mut s = session();
     s.eval(PARTS, Some("now")).unwrap();
+    // `bass` is part of `verse`, whoever started it
     s.eval("bass.start", Some("now")).unwrap();
     run(&mut s, BAR);
     s.eval("bridge.start", Some("now")).unwrap();
@@ -283,7 +284,7 @@ fn starting_a_scene_leaves_the_other_clips_alone() {
         .iter()
         .map(|t| (t.name.as_str(), t.running))
         .collect();
-    assert_eq!(names, [("lead", true), ("bass", true)]);
+    assert_eq!(names, [("lead", true), ("bass", false)], "bridge has no bass");
     let scenes: Vec<_> = s
         .scenes()
         .iter()
@@ -291,16 +292,16 @@ fn starting_a_scene_leaves_the_other_clips_alone() {
         .collect();
     assert_eq!(
         scenes,
-        [("verse".into(), 2, true), ("bridge".into(), 1, true)],
-        "both are active, and a clip can be in both"
+        [("verse".into(), 1, false), ("bridge".into(), 1, true)],
+        "only bridge is playing, though its clip is in verse too"
     );
     s.eval("bridge.stop", Some("now")).unwrap();
     run(&mut s, 24_000);
     let scenes: Vec<_> = s.scenes().iter().map(|c| (c.running, c.active())).collect();
     assert_eq!(
         scenes,
-        [(1, false), (0, false)],
-        "stopping one scene stops its clips"
+        [(0, false), (0, false)],
+        "stopping the scene stops its clips"
     );
 }
 

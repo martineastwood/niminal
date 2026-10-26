@@ -33,6 +33,7 @@ use crate::quantize::{Grid, QuantizeDefaults};
 mod eval;
 mod input;
 mod playing;
+mod scenes;
 
 use eval::options;
 pub use eval::{Begin, CancelDone, CancelJob, EvalDone, EvalJob, ParsedEval};
@@ -124,6 +125,7 @@ pub struct Accepted {
     pub id: Option<u64>,
     /// The sample at which it lands.
     pub lands_at: u64,
+    #[serde(serialize_with = "position_object")]
     pub position: (u64, f64),
     pub changes: Vec<String>,
 }
@@ -133,6 +135,7 @@ pub struct Accepted {
 pub struct Landed {
     pub id: u64,
     pub at: u64,
+    #[serde(serialize_with = "position_object")]
     pub position: (u64, f64),
     pub changes: Vec<String>,
 }
@@ -144,6 +147,7 @@ pub struct PendingInfo {
     pub lands_at: u64,
     /// Samples until it lands.
     pub in_samples: u64,
+    #[serde(serialize_with = "position_object")]
     pub position: (u64, f64),
     pub changes: Vec<String>,
 }
@@ -1512,3 +1516,12 @@ fn first_line(text: &str) -> String {
 
 /// A statement to compile, and for a change to a node, what the node is playing after it.
 type Edited = (Statement, Option<(String, Playing)>);
+
+/// A bar and beat as `{"bar": 3, "beat": 1.5}`, the shape the protocol and its clients use.
+fn position_object<S: serde::Serializer>(position: &(u64, f64), out: S) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeStruct;
+    let mut object = out.serialize_struct("Position", 2)?;
+    object.serialize_field("bar", &position.0)?;
+    object.serialize_field("beat", &position.1)?;
+    object.end()
+}

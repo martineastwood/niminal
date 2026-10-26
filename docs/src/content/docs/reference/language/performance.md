@@ -81,20 +81,30 @@ verse.unmute
 verse.stop
 ```
 
-A scene has no state of its own, and `verse.start` is `bass.start`, `drums.start` and `lead.start`: clips that are already playing carry on, and **nothing outside the scene is touched**. `stop`, `mute`, `unmute`, `solo` and `unsolo` work the same way. A clip can be in several scenes, and you can still address it directly while a scene has started it: `bass.mute`.
-
-To swap one scene for another, stop one and start the other. They land together, and a clip they share keeps playing with what had been done to it, because a stop and a start of the same clip at the same moment cancel out:
+Scenes play **one at a time**. `chorus.start` switches to `chorus`: the running clips of other scenes that `chorus` does not use stop, `chorus`'s clips start, and it all lands at the same moment, so there is no boundary to miss between a stop and a start. A clip that both scenes use keeps playing, with what had been done to it. A clip belongs to a scene whoever started it, so one you started by hand, such as `lead_outro.start`, stops when a scene that does not use it starts. A clip that is in no scene is never touched by a switch.
 
 ```nml
-verse.stop
-chorus.start @ next 4bars
+verse.start
+chorus.start @ next 4bars   // verse's clips that chorus lacks stop with it, at the same time
+chorus.stop                 // stops the scene's clips, and nothing is playing
 ```
 
-Stopping a scene stops all its clips, even one that another running scene also lists. A scene can set when it lands, which then holds for every clip it starts: `scene verse { bass, lead, quantize: 4bars }`.
+`stop`, `mute`, `unmute`, `solo` and `unsolo` act on every clip of the scene. You can still address a clip directly while a scene has started it: `bass.mute`.
+
+**Changing a scene while it plays.** Evaluating a scene that is playing again changes what is playing to match: clips it gained start and clips it lost stop, all together at the scene's usual time.
+
+```nml
+scene verse { bass, lead }
+verse.start
+scene verse { bass, lead, chords }   // chords starts; the rest carries on
+scene verse { lead }                 // bass and chords stop
+```
+
+Defining a scene that is not playing only changes the definition. A scene can set when it lands, which then holds for every clip it starts: `scene verse { bass, lead, quantize: 4bars }`.
 
 ## Arrangements
 
-An arrangement is a timeline of commands, counted from when it is started. It is launched and stopped like a clip:
+An arrangement is a timeline of commands, counted from when it is started. It is launched and stopped like a clip. Its lines are a script, so a scene start in an arrangement only starts: write the stop of the scene it replaces, as below.
 
 ```nml
 arrangement song {

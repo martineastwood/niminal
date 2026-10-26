@@ -1,3 +1,5 @@
+import { CLIP_COLOURS } from './highlight';
+import { mod, shortcuts } from './shortcuts';
 import { Clip, Lane, LaneEvent, Snapshot, isSounding, phaseOf, windowOf } from './live';
 
 type ActionHandler = (action: string, target?: string, change?: string) => void;
@@ -15,6 +17,8 @@ type Row = {
   notes: NoteElement[];
   parameters: NoteElement[];
   active: Set<HTMLElement>;
+  /** The whole cycle it was last in, so the clip can pulse as each begins. */
+  cycle: number;
 };
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string) {
@@ -59,6 +63,8 @@ export class LaneView {
   private snapshot: Snapshot | null = null;
   private updatedAt = 0;
   private signature = '';
+  /** The clips opened to show their lanes and the stack of changes made to them. */
+  private open = new Set<string>();
 
   constructor(
     private root: HTMLElement,
@@ -74,7 +80,9 @@ export class LaneView {
   update(snapshot: Snapshot) {
     this.snapshot = snapshot;
     this.updatedAt = performance.now();
-    const signature = JSON.stringify(
+    const signature = JSON.stringify([
+      snapshot.connected,
+      snapshot.scenes.map(scene => scene.name),
       snapshot.clips.map(clip => [
         clip.name,
         clip.instrument,
@@ -84,13 +92,15 @@ export class LaneView {
         clip.edits,
         clip.length,
         clip.endless,
-        clip.lanes.map(lane => [
-          lane.name,
-          lane.truncated,
-          lane.events.map(event => [event.start, event.dur, event.value, event.gain, event.pan]),
-        ]),
+        this.open.has(clip.name)
+          ? clip.lanes.map(lane => [
+              lane.name,
+              lane.truncated,
+              lane.events.map(event => [event.start, event.dur, event.value, event.gain, event.pan]),
+            ])
+          : null,
       ]),
-    );
+    ]);
     if (signature !== this.signature) {
       this.signature = signature;
       this.rebuild(snapshot);
@@ -107,52 +117,73 @@ export class LaneView {
     if (!snapshot.connected) {
       const empty = element('div', 'stage-empty');
       empty.innerHTML =
-        '<strong>No engine yet.</strong><span>Start niminal server, or let the stage start it, then evaluate the piece.</span>';
+        '<strong>No engine yet</strong><span>The stage looks for one on the port above. Start one with <code>niminal server</code>, then connect.</span>';
+      const connect = button('Connect', 'Look for the engine again', 'connect');
+      connect.classList.add('ready-connect');
+      empty.append(connect);
+      this.wire(empty);
       this.root.append(empty);
       return;
     }
     if (snapshot.clips.length === 0) {
-      const empty = element('div', 'stage-empty');
-      empty.innerHTML =
-        '<strong>The stage is empty.</strong><span>Evaluate a piece with clips to see its lanes here.</span>';
+      const empty = element('div', 'stage-empty ready');
+      empty.innerHTML = '<strong>Ready</strong><span>Nothing has been sent yet. Evaluate your code to put its clips here.</span>';
+      empty.append(this.shortcutList());
       this.root.append(empty);
       return;
     }
-    for (const clip of snapshot.clips) this.root.append(this.row(clip));
+    if (!snapshot.clips.some(clip => clip.running)) {
+      const scene = snapshot.scenes[0];
+      const next = scene ? `Press <kbd>${mod}1</kbd> to start <b>${scene.name}</b>` : 'Press ▶ on a clip to start it';
+      const hint = element('div', 'stage-ready');
+      hint.innerHTML = `Nothing is playing yet · ${next}`;
+      this.root.append(hint);
+    }
+    snapshot.clips.forEach((clip, index) => this.root.append(this.row(clip, index)));
   }
 
-  private row(clip: Clip) {
+  /** The shortcuts, as a grid of keys and what they do. */
+  private shortcutList() {
+    const list = element('dl', 'shortcut-list');
+    for (const [keys, what] of shortcuts) {
+      list.append(text('dt', '', keys), text('dd', '', what));
+    }
+    return list;
+  }
+
+  /** Make the buttons in `node` do their action, as a clip's buttons do. */
+  private wire(node: HTMLElement) {
+    node.querySelectorAll<HTMLElement>('button[data-action]').forEach(item => {
+      item.addEventListener('click', () => this.onAction(item.dataset.action ?? ''));
+    });
+  }
+
+  private row(clip: Clip, index: number) {
     const article = element('article', 'clip');
+    // the same colour as the clip's notes in the code
+    article.style.setProperty('--clip', CLIP_COLOURS[index % CLIP_COLOURS.length]);
     article.dataset.clip = clip.name;
     article.classList.toggle('running', clip.running);
     article.classList.toggle('muted', clip.muted);
     article.classList.toggle('soloed', clip.soloed);
     article.classList.toggle('idle', !clip.running);
+    const open = this.open.has(clip.name);
+    article.classList.toggle('open', open);
 
+    // one line: what it is, what has been done to it, and the controls that matter live
     const head = element('header', 'clip-head');
-    const state = element('span', 'clip-state');
-    state.title = clip.running ? 'Playing' : 'Not playing';
-    head.append(state);
-    head.append(text('span', 'clip-name', clip.name));
-    if (clip.instrument && clip.instrument !== clip.name) {
-      head.append(text('span', 'clip-instrument', clip.instrument));
-    }
-    if (clip.running) {
-      const loop = clip.endless
-        ? 'endless'
-        : `${clip.length.toFixed(clip.length % 1 === 0 ? 0 : 2)} bar${clip.length === 1 ? '' : 's'}`;
-      head.append(text('span', 'clip-loop', loop));
-    }
+    head.title = open ? 'Click to close' : 'Click for its lanes and the changes made to it';
+    // the chevron says the line opens; whether it is playing shows in its colour, its name and its stop button
+    head.append(text('span', 'clip-twisty', '▸'), text('span', 'clip-name', clip.name));
 
-    const edits = element('span', 'clip-edits');
-    for (const edit of clip.edits) {
-      const chip = text('span', 'chip', edit.startsWith('reverse') ? `↺ ${edit}` : edit);
-      chip.title = `Live change: ${edit}`;
-      edits.append(chip);
-    }
-    head.append(edits);
-
-    head.append(element('span', 'clip-spacer'));
+    const stack = element('span', 'clip-edits');
+    clip.edits.forEach((edit, i) => {
+      const newest = i === clip.edits.length - 1;
+      const chip = text('span', newest ? 'chip newest' : 'chip', edit);
+      chip.title = newest ? `${clip.name}.undo takes this back first` : `Change ${i + 1}: ${edit}`;
+      stack.append(chip);
+    });
+    head.append(stack, element('span', 'clip-spacer'));
 
     const controls = element('span', 'clip-controls');
     const running = button(
@@ -162,52 +193,51 @@ export class LaneView {
     );
     running.classList.add('play');
     controls.append(running);
-    const mute = button(clip.muted ? 'M' : 'M', clip.muted ? 'Unmute this clip' : 'Mute this clip', clip.muted ? 'unmute' : 'mute');
+    const mute = button('M', clip.muted ? 'Unmute this clip' : 'Mute this clip', clip.muted ? 'unmute' : 'mute');
     mute.classList.toggle('on', clip.muted);
-    controls.append(mute);
-    const solo = button(clip.soloed ? 'S' : 'S', clip.soloed ? 'Unsolo this clip' : 'Solo this clip', clip.soloed ? 'unsolo' : 'solo');
+    const solo = button('S', clip.soloed ? 'Unsolo this clip' : 'Solo this clip', clip.soloed ? 'unsolo' : 'solo');
     solo.classList.toggle('on', clip.soloed);
-    controls.append(solo);
-    controls.append(button('↺', 'Play this clip backwards', 'edit', { change: 'reverse' }));
-    controls.append(button('∅', 'Thin this clip by 25%', 'edit', { change: 'thin(25%)' }));
-    controls.append(button('↩', 'Take back the last change', 'edit', { change: 'undo' }));
+    controls.append(mute, solo);
     head.append(controls);
+    head.addEventListener('click', () => {
+      if (this.open.has(clip.name)) this.open.delete(clip.name);
+      else this.open.add(clip.name);
+      if (this.snapshot) this.rebuild(this.snapshot);
+    });
     article.append(head);
-
-    const lanes = element('div', 'clip-lanes');
-    const window = windowOf(clip);
-    const noteLane = clip.lanes.find(lane => lane.name === 'notes') ?? clip.lanes[0];
-    if (!noteLane) {
-      const empty = text('div', 'clip-empty', clip.running ? 'playing from keys' : 'no lanes');
-      lanes.append(empty);
-    } else {
-      lanes.append(this.lane(noteLane, window, true, clip));
-      for (const lane of clip.lanes) {
-        if (lane === noteLane) continue;
-        lanes.append(this.lane(lane, window, false, clip));
-      }
-    }
-    article.append(lanes);
-
-    const playhead = element('div', 'playhead');
-    playhead.append(element('span', 'playhead-dot'));
-    gates(article).append(playhead);
 
     const notes: NoteElement[] = [];
     const parameters: NoteElement[] = [];
-    for (const node of article.querySelectorAll<HTMLElement>('.event')) {
-      notes.push({
-        element: node,
-        start: Number(node.dataset.start),
-        dur: Number(node.dataset.dur),
-      });
-    }
-    for (const node of article.querySelectorAll<HTMLElement>('.param-event')) {
-      parameters.push({
-        element: node,
-        start: Number(node.dataset.start),
-        dur: Number(node.dataset.dur),
-      });
+    let playhead = element('div', 'playhead');
+    if (open) {
+      const detail = element('div', 'clip-detail');
+      const loop = clip.endless
+        ? 'endless'
+        : `${clip.length.toFixed(clip.length % 1 === 0 ? 0 : 2)} bar${clip.length === 1 ? '' : 's'}`;
+      detail.append(text('div', 'clip-meta', `${clip.instrument || 'no instrument'} · ${loop}`));
+      detail.append(this.undoStack(clip));
+
+      const lanes = element('div', 'clip-lanes');
+      const window = windowOf(clip);
+      const noteLane = clip.lanes.find(lane => lane.name === 'notes') ?? clip.lanes[0];
+      if (!noteLane) {
+        lanes.append(text('div', 'clip-empty', clip.running ? 'playing from keys' : 'no lanes'));
+      } else {
+        lanes.append(this.lane(noteLane, window, true, clip));
+        for (const lane of clip.lanes) {
+          if (lane !== noteLane) lanes.append(this.lane(lane, window, false, clip));
+        }
+      }
+      playhead.append(element('span', 'playhead-dot'));
+      gates(lanes).append(playhead);
+      detail.append(lanes);
+      article.append(detail);
+      for (const node of article.querySelectorAll<HTMLElement>('.event')) {
+        notes.push({ element: node, start: Number(node.dataset.start), dur: Number(node.dataset.dur) });
+      }
+      for (const node of article.querySelectorAll<HTMLElement>('.param-event')) {
+        parameters.push({ element: node, start: Number(node.dataset.start), dur: Number(node.dataset.dur) });
+      }
     }
 
     article.querySelectorAll<HTMLElement>('button[data-action]').forEach(node => {
@@ -218,9 +248,34 @@ export class LaneView {
       });
     });
 
-    const row: Row = { clip, element: article, playhead, notes, parameters, active: new Set() };
+    const row: Row = { clip, element: article, playhead, notes, parameters, active: new Set(), cycle: -1 };
     this.rows.set(clip.name, row);
     return article;
+  }
+
+  /** What has been done to a clip, newest first: the order `undo` takes the changes back in. */
+  private undoStack(clip: Clip) {
+    const box = element('div', 'undo-stack');
+    if (clip.edits.length === 0) {
+      box.append(text('div', 'undo-empty', 'No changes: this is the clip as written'));
+      return box;
+    }
+    box.append(text('div', 'undo-title', 'Changes · undo takes the top one first'));
+    [...clip.edits].reverse().forEach((edit, i) => {
+      const number = clip.edits.length - i;
+      const line = element('div', i === 0 ? 'undo-line next' : 'undo-line');
+      line.append(text('span', 'undo-number', String(number)), text('span', 'undo-edit', edit));
+      if (i === 0) line.append(text('span', 'undo-note', '← next undo'));
+      box.append(line);
+    });
+    box.append(text('div', 'undo-line base', 'as written'));
+    const actions = element('div', 'undo-actions');
+    actions.append(
+      button('Undo last', `${clip.name}.undo`, 'edit', { change: 'undo' }),
+      button('Clear all', `${clip.name}.clear`, 'edit', { change: 'clear' }),
+    );
+    box.append(actions);
+    return box;
   }
 
   private lane(lane: Lane, window: number, notes: boolean, clip: Clip) {
@@ -265,6 +320,13 @@ export class LaneView {
       const cycles = clip.cycles + (elapsed * bpm) / 60 / beats;
       const phase = phaseOf(clip, cycles);
       const window = windowOf(clip);
+      const cycle = Math.floor(cycles);
+      if (cycle !== row.cycle) {
+        row.cycle = cycle;
+        row.element.classList.remove('pulse');
+        void row.element.offsetWidth;
+        row.element.classList.add('pulse');
+      }
       row.playhead.style.opacity = '1';
       row.playhead.style.left = `${(phase / window) * 100}%`;
       const active = new Set<HTMLElement>();
@@ -283,11 +345,11 @@ export class LaneView {
   }
 }
 
-function gates(article: HTMLElement) {
-  let gate = article.querySelector<HTMLElement>('.clip-gates');
+function gates(parent: HTMLElement) {
+  let gate = parent.querySelector<HTMLElement>('.clip-gates');
   if (!gate) {
     gate = element('div', 'clip-gates');
-    article.append(gate);
+    parent.append(gate);
   }
   return gate;
 }

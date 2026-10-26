@@ -101,7 +101,17 @@ async fn perform(
             return Err(format!("`{action}` needs a clip or scene to act on"));
         }
     };
-    eval(state, source, quantize.or_else(|| Some("now".into())), None, None).await
+    eval(state, source, sidebar_quantize(&action, quantize), None, None).await
+}
+
+/// When a sidebar button lands. Starting, stopping and changing a clip wait for the same moment as the
+/// same words typed in the code would (the session's default, or the clip's or scene's own `quantize`),
+/// unless the land box says otherwise. Only hush is immediate, since it is for stopping things now.
+fn sidebar_quantize(action: &str, quantize: Option<String>) -> Option<String> {
+    match action {
+        "hush" => quantize.or_else(|| Some("now".into())),
+        _ => quantize,
+    }
 }
 
 #[tauri::command]
@@ -205,4 +215,17 @@ fn main() {
                 app.state::<AppState>().shared.shutdown();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sidebar_quantize;
+
+    #[test]
+    fn sidebar_buttons_wait_for_the_default_except_hush() {
+        assert_eq!(sidebar_quantize("start", None), None);
+        assert_eq!(sidebar_quantize("edit", None), None);
+        assert_eq!(sidebar_quantize("start", Some("next bar".into())), Some("next bar".into()));
+        assert_eq!(sidebar_quantize("hush", None), Some("now".into()));
+    }
 }

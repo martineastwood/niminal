@@ -964,34 +964,134 @@ fn lane_sources_stay_on_the_notes_as_the_project_changes() {
     check(&mut d, "undone", Some(false));
 }
 
+/// The stage reads these straight from the session, so a bar and beat must be an object, as in the
+/// protocol, not a pair.
 #[test]
-fn repro_whole_file_reversals() {
-    let mut d = server();
-    let c = d.connect();
-    call(&mut d, c, 1, "hello", json!({"protocol": PROTOCOL_VERSION, "client": "test"}));
-    let base = include_str!("../../../examples/synth_drums.nml")
-        .replace("at +4bars hush", "")
-        .replace("config { channels: stereo }", "")
-        .replace("bus glue: stereo", "bus glue: mono");
-    let bar = (SR as f64 * 60.0 / 128.0 * 4.0) as u64;
-    let mut sent: Vec<String> = vec![String::new()];
-    for round in 1..=6u64 {
-        let src = format!("{base}\nbeat.reverse\n");
-        sent.push(src.clone());
-        let r = call(&mut d, c, 10 + round, "eval", json!({"source": src, "origin": round}));
-        assert!(r["result"].is_object(), "{r}");
-        for step in 1..=3u64 {
-            d.advance_to(bar * (round * 3 + step));
-            let status = call(&mut d, c, 100, "status", json!({}))["result"].clone();
-            let beat = status["clips"].as_array().unwrap().iter().find(|c| c["name"] == "beat").unwrap().clone();
-            let events = beat["lanes"][0]["events"].as_array().unwrap();
-            let bad = events.iter().filter(|e| {
-                match (e["src"].as_array(), e["eval"].as_u64()) {
-                    (Some(s), Some(o)) => &sent[o as usize][s[0].as_u64().unwrap() as usize..s[1].as_u64().unwrap() as usize] != "x",
-                    _ => true,
-                }
-            }).count();
-            println!("round {round} step {step}: edits {} cycles {} events {} bad {} first {}", beat["edits"], beat["cycles"], events.len(), bad, events.first().map_or(Value::Null, |e| e["src"].clone()));
-        }
+fn positions_are_sent_as_a_bar_and_a_beat() {
+    use niminal_live::{Accepted, PendingInfo};
+    let pending = PendingInfo {
+        id: 3,
+        lands_at: 96_000,
+        in_samples: 48_000,
+        position: (4, 1.5),
+        changes: vec!["beat.reverse".into()],
+    };
+    assert_eq!(
+        serde_json::to_value(&pending).unwrap()["position"],
+        json!({"bar": 4, "beat": 1.5})
+    );
+    let accepted = Accepted {
+        id: Some(3),
+        lands_at: 96_000,
+        position: (4, 1.5),
+        changes: vec![],
+    };
+    assert_eq!(
+        serde_json::to_value(&accepted).unwrap()["position"],
+        json!({"bar": 4, "beat": 1.5})
+    );
+}
+
+/// The groove example in a session, with a clip that belongs to no scene, and a way to ask what is running.
+struct Groove {
+    d: Server,
+    c: ClientId,
+    id: u64,
+}
+
+impl Groove {
+    fn new() -> Groove {
+        let mut d = server();
+        let c = d.connect();
+        call(&mut d, c, 1, "hello", json!({"protocol": PROTOCOL_VERSION, "client": "test"}));
+        let source = include_str!("../../../examples/groove.nml")
+            .replace("song.start", "")
+            .replace("config { channels: stereo }", "")
+            .replace("bus space: stereo", "bus space: mono")
+            + "\nclip solo {\n  instrument: pluck\n  notes: [c3]\n}\n";
+        let mut groove = Groove { d, c, id: 1 };
+        groove.run(&source);
+        groove
     }
+
+    fn run(&mut self, source: &str) -> Value {
+        self.id += 1;
+        let r = call(&mut self.d, self.c, self.id, "eval", json!({"source": source, "quantize": "now"}));
+        assert!(r["result"].is_object(), "{r}");
+        r
+    }
+
+    fn running(&mut self) -> Vec<String> {
+        self.id += 1;
+        let status = call(&mut self.d, self.c, self.id, "status", json!({}))["result"].clone();
+        let mut names: Vec<String> = status["clips"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| c["running"] == true)
+            .map(|c| c["name"].as_str().unwrap().to_string())
+            .collect();
+        names.sort();
+        names
+    }
+}
+
+#[test]
+fn starting_a_scene_switches_to_it() {
+    let mut g = Groove::new();
+    g.run("verse.start");
+    assert_eq!(g.running(), ["bass", "lead"]);
+    g.run("chorus.start");
+    // verse's clips stopped as chorus's started
+    assert_eq!(g.running(), ["bass_chorus", "lead_chorus"]);
+    g.run("chorus.stop");
+    assert_eq!(g.running(), Vec::<String>::new());
+}
+
+#[test]
+fn a_clip_started_by_hand_follows_the_scene_that_holds_it() {
+    let mut g = Groove::new();
+    // `lead_outro` is part of `outro`, though nothing started it as a scene
+    g.run("lead_outro.start");
+    g.run("verse.start");
+    assert_eq!(g.running(), ["bass", "lead"]);
+}
+
+#[test]
+fn a_clip_in_no_scene_is_left_alone() {
+    let mut g = Groove::new();
+    g.run("solo.start");
+    g.run("verse.start");
+    g.run("chorus.start");
+    assert_eq!(g.running(), ["bass_chorus", "lead_chorus", "solo"]);
+}
+
+#[test]
+fn defining_a_playing_scene_again_changes_what_plays() {
+    let mut g = Groove::new();
+    g.run("verse.start");
+    g.run("scene verse { bass, lead, lead_outro }");
+    assert_eq!(g.running(), ["bass", "lead", "lead_outro"]);
+    g.run("scene verse { lead }");
+    assert_eq!(g.running(), ["lead"]);
+}
+
+#[test]
+fn defining_a_scene_that_is_not_playing_starts_nothing() {
+    let mut g = Groove::new();
+    g.run("verse.start");
+    g.run("scene chorus { bass_chorus, lead_chorus, lead_outro }");
+    assert_eq!(g.running(), ["bass", "lead"]);
+}
+
+#[test]
+fn a_switch_is_one_change_that_lands_together() {
+    let mut g = Groove::new();
+    g.run("verse.start");
+    // it is accepted as a single change, whose stops and start land at the same moment
+    g.id += 1;
+    let r = call(&mut g.d, g.c, g.id, "eval", json!({"source": "chorus.start"}));
+    let changes: Vec<&str> = r["result"]["changes"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
+    assert_eq!(changes, ["bass.stop", "lead.stop", "chorus.start"]);
+    assert!(r["result"]["id"].is_u64(), "{r}");
 }

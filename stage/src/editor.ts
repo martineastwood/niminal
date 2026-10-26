@@ -49,7 +49,7 @@ export async function connectLanguageServer(status: (message: string) => void) {
 
 const theme = EditorView.theme(
   {
-    '&': { height: '100%', backgroundColor: '#14161a', color: '#d3d7de', fontSize: '12.5px' },
+    '&': { height: '100%', backgroundColor: '#14161a', color: '#d3d7de', fontSize: 'calc(14px * var(--z))' },
     '.cm-scroller': { overflow: 'auto', fontFamily: '"SF Mono", "SFMono-Regular", Consolas, monospace' },
     '.cm-content': { padding: '6px 0', caretColor: '#e9b66e' },
     '.cm-gutters': { backgroundColor: '#14161a', color: '#5f6670', border: 'none' },

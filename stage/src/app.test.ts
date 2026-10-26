@@ -12,6 +12,19 @@ const snapshot = {
   channels: 2,
   clips: [
     {
+      name: 'lead',
+      instrument: 'pluck',
+      running: false,
+      muted: false,
+      soloed: false,
+      edits: [],
+      length: 1,
+      looped: true,
+      endless: true,
+      cycles: null,
+      lanes: [],
+    },
+    {
       name: 'beat',
       instrument: 'drums',
       running: true,
@@ -31,7 +44,10 @@ const snapshot = {
       ],
     },
   ],
-  scenes: [{ name: 'verse', clips: ['beat'], running: 1 }],
+  scenes: [
+    { name: 'verse', clips: ['beat'], running: 1 },
+    { name: 'chorus', clips: ['lead'], running: 0 },
+  ],
   pending: [{ id: 3, lands_at: 144000, in_samples: 48000, position: { bar: 3, beat: 1 }, changes: ['beat.reverse'] }],
   landed: [{ id: 2, at: 90000, position: { bar: 2, beat: 1 }, changes: ['beat.start'] }],
   notices: ['a notice'],
@@ -39,10 +55,12 @@ const snapshot = {
 };
 
 const calls: string[] = [];
+const sent: Record<string, any>[] = [];
 vi.mock('@tauri-apps/api/core', () => ({
   isTauri: () => true,
-  invoke: async (command: string) => {
+  invoke: async (command: string, args?: Record<string, any>) => {
     calls.push(command);
+    if (command === 'eval') sent.push(args ?? {});
     if (command === 'snapshot') return snapshot;
     if (command === 'lsp_message') return [];
     return undefined;
@@ -62,5 +80,36 @@ describe('the stage app', () => {
     // it connects, but sends nothing until the player asks
     expect(calls).not.toContain('eval');
     console.log(document.getElementById('footer-status')!.textContent, document.getElementById('editor-status')!.textContent);
+  });
+
+  it('changes the text size, remembers it, and keeps the mode controls working', async () => {
+    document.getElementById('zoom-in')!.click();
+    expect(document.documentElement.style.getPropertyValue('--z')).toBe('1.15');
+    expect(document.getElementById('zoom-reset')!.textContent).toBe('115%');
+    expect(localStorage.getItem('niminal-stage-zoom')).toBe('1.15');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '-', metaKey: true }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '-', metaKey: true }));
+    expect(document.getElementById('zoom-reset')!.textContent).toBe('85%');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '0', metaKey: true }));
+    expect(document.documentElement.style.getPropertyValue('--z')).toBe('1');
+
+    document.getElementById('perform')!.click();
+    expect(document.body.classList.contains('perform')).toBe(true);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'P', metaKey: true, shiftKey: true }));
+    expect(document.body.classList.contains('perform')).toBe(false);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', metaKey: true }));
+    expect(document.body.classList.contains('no-rail')).toBe(true);
+  });
+
+  it('starts the nth scene from the keyboard, which the engine switches to', async () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '2', metaKey: true }));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(sent.at(-1)!.source).toBe('chorus.start');
+  });
+
+  it('stops a scene that is already playing when it is pressed again', async () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', metaKey: true }));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(sent.at(-1)!.source).toBe('verse.stop');
   });
 });
