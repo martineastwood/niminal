@@ -65,19 +65,19 @@ fn project_dir(app: tauri::AppHandle, id: String) -> Result<String, String> {
         .into_owned())
 }
 
-/// A WAV copied into the project: its path relative to the project folder, and how long it plays.
+/// A sample copied into the project: its path relative to the project folder, and how long it plays.
 #[derive(serde::Serialize)]
 struct ImportedSample {
     file: String,
     seconds: f64,
 }
 
-/// Asks for WAV files and copies them into the project; returns them with how long each plays.
+/// Asks for audio files and copies them into the project; returns them with how long each plays.
 #[tauri::command]
 async fn import_samples(app: tauri::AppHandle, id: String) -> Result<Vec<ImportedSample>, String> {
     let dir = files::project_dir(&app_data(&app)?, &id)?;
     let Some(picked) = rfd::AsyncFileDialog::new()
-        .add_filter("WAV samples", &["wav"])
+        .add_filter("Audio samples", niminal_lang::AUDIO_EXTENSIONS)
         .pick_files()
         .await
     else {
@@ -105,13 +105,13 @@ struct ImportedKit {
     members: Vec<String>,
 }
 
-/// Asks for WAV files and copies them into a kit folder of the project, named for the folder they came from.
+/// Asks for audio files and copies them into a kit folder of the project, named for the folder they came from.
 #[tauri::command]
 async fn import_kit(app: tauri::AppHandle, id: String) -> Result<Option<ImportedKit>, String> {
     let dir = files::project_dir(&app_data(&app)?, &id)?;
     let Some(picked) = rfd::AsyncFileDialog::new()
         .set_title("Choose the samples of the kit")
-        .add_filter("WAV samples", &["wav"])
+        .add_filter("Audio samples", niminal_lang::AUDIO_EXTENSIONS)
         .pick_files()
         .await
     else {

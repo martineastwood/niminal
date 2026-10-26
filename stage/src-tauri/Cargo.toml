@@ -17,10 +17,13 @@ serde_json = "1"
 niminal-compose = { path = "../../sequencer/compose" }
 niminal-lang = { path = "../../crates/niminal-lang" }
 niminal-live = { path = "../../sequencer/live" }
+niminal-live-cli = { path = "../../sequencer/live-cli" }
+midir = "0.11"
 niminal-lsp = { path = "../../sequencer/lsp" }
 niminal-server = { path = "../../crates/niminal-server" }
 niminal-ws = { path = "../../crates/niminal-ws" }
 rfd = "0.17"
+hound = "3"
 
 [profile.dev]
 debug = "line-tables-only"

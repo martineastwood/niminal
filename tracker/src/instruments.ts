@@ -19,7 +19,7 @@ const gateNote = '/// gate: 0 plays the whole sample, 1 ends it when the note do
 /** Samples this long or longer (loops, pads, breaks) follow their notes; shorter ones are hits that play out. */
 export const longSample = 2;
 
-/** Plays one imported WAV, pitched from its root note. `file` is relative to the project folder; `seconds` is how long it plays, if known. */
+/** Plays one imported audio file, pitched from its root note. `file` is relative to the project folder; `seconds` is how long it plays, if known. */
 export const samplerSource = (code: string, file: string, seconds = 0) =>
   `/// Plays ${file}. Change .root(...) to retune, or add .loop(forward) to sustain it.\n${gateNote}\n${code}_sample = sample("${file}").root(c4)\ninstr ${code}(freq: hz, ${sampleParams}, ${gateParams(seconds >= longSample ? 1 : 0)}) {\n  ${gated(`${code}_sample(freq: freq, begin: begin, rate: rate, stretch: stretch, stretch_mode: stretch_mode)`)}\n}\n`;
 
@@ -50,7 +50,7 @@ function create(project: Project, base: string, write: (code: string) => string)
 
 /** A new synth, or a sampler for an imported file (`seconds` long, if known). */
 export function addInstrument(project: Project, sample?: string, seconds = 0): Definition {
-  const stem = sample?.split('/').pop()?.replace(/\.wav$/i, '');
+  const stem = sample?.split('/').pop()?.replace(/\.[^.]+$/, '');
   return create(project, stem ?? 'Synth', code => sample ? samplerSource(code, sample, seconds) : synthSource(code));
 }
 

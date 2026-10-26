@@ -24,15 +24,12 @@ pub fn project_dir(base: &Path, id: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// Copies a WAV into the project and returns its path relative to the project folder.
+/// Copies an audio file into the project and returns its path relative to the project folder.
 pub fn import_sample(dir: &Path, source: &Path) -> Result<String, String> {
-    let extension = source
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_lowercase);
-    if extension.as_deref() != Some("wav") {
-        return Err("Samples need to be WAV files".into());
+    if !niminal_lang::is_audio(source) {
+        return Err("Choose a supported audio file".into());
     }
+    let extension = source.extension().unwrap().to_string_lossy().to_lowercase();
     let stem: String = source
         .file_stem()
         .and_then(|s| s.to_str())
@@ -48,12 +45,12 @@ pub fn import_sample(dir: &Path, source: &Path) -> Result<String, String> {
         .collect();
     let samples = dir.join("samples");
     fs::create_dir_all(&samples).map_err(|e| e.to_string())?;
-    let mut name = format!("{stem}.wav");
+    let mut name = format!("{stem}.{extension}");
     for n in 2.. {
         if !samples.join(&name).exists() {
             break;
         }
-        name = format!("{stem}-{n}.wav");
+        name = format!("{stem}-{n}.{extension}");
     }
     fs::copy(source, samples.join(&name)).map_err(|e| e.to_string())?;
     Ok(format!("samples/{name}"))
@@ -65,7 +62,7 @@ fn member_name(stem: &str) -> String {
     if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) { format!("s{name}") } else { name }
 }
 
-/// Copies WAVs into a new kit folder of the project, `samples/<name>`, each named for its sample. Returns
+/// Copies audio files into a new kit folder of the project, `samples/<name>`, each named for its sample. Returns
 /// the folder, relative to the project, and the sample names in the order the engine counts them (by file name).
 pub fn import_kit(dir: &Path, sources: &[PathBuf], name: &str) -> Result<(String, Vec<String>), String> {
     if sources.is_empty() {
@@ -83,9 +80,10 @@ pub fn import_kit(dir: &Path, sources: &[PathBuf], name: &str) -> Result<(String
     let target = samples.join(&folder);
     fs::create_dir_all(&target).map_err(|e| e.to_string())?;
     let mut members: Vec<String> = Vec::new();
+    let mut filenames = Vec::new();
     for source in sources {
-        if source.extension().and_then(|e| e.to_str()).map(str::to_lowercase).as_deref() != Some("wav") {
-            return Err("Samples need to be WAV files".into());
+        if !niminal_lang::is_audio(source) {
+            return Err("Choose a supported audio file".into());
         }
         let stem = member_name(source.file_stem().and_then(|s| s.to_str()).unwrap_or("sample"));
         let mut member = stem.clone();
@@ -95,11 +93,13 @@ pub fn import_kit(dir: &Path, sources: &[PathBuf], name: &str) -> Result<(String
             }
             member = format!("{stem}_{n}");
         }
-        fs::copy(source, target.join(format!("{member}.wav"))).map_err(|e| e.to_string())?;
+        let extension = source.extension().unwrap().to_string_lossy().to_lowercase();
+        fs::copy(source, target.join(format!("{member}.{extension}"))).map_err(|e| e.to_string())?;
+        filenames.push((format!("{member}.{extension}"), member.clone()));
         members.push(member);
     }
-    members.sort_by_key(|member| format!("{member}.wav"));
-    Ok((format!("samples/{folder}"), members))
+    filenames.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok((format!("samples/{folder}"), filenames.into_iter().map(|(_, member)| member).collect()))
 }
 
 /// Copies every file in `from` into `to`, replacing files of the same name.
@@ -126,6 +126,26 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn compressed_samples_keep_their_format_and_use_engine_decoding() {
+        let base = scratch("formats");
+        let dir = project_dir(&base, "formats").unwrap();
+        let source = base.join("Hit.FLAC");
+        let bytes = include_bytes!("../../../crates/niminal-engine/tests/fixtures/stereo.flac");
+        fs::write(&source, bytes).unwrap();
+        let file = import_sample(&dir, &source).unwrap();
+        assert_eq!(file, "samples/Hit.flac");
+        assert_eq!(fs::read(dir.join(&file)).unwrap(), bytes);
+        let peaks = crate::slicing::peaks(&dir, &file, 2).unwrap();
+        assert_eq!((peaks.frames, peaks.rate), (4, 44100.0));
+        let other = base.join("Hit_.wav");
+        fs::write(&other, b"RIFF").unwrap();
+        let (folder, members) = import_kit(&dir, &[other, source.clone(), source], "mixed").unwrap();
+        assert_eq!(members, ["Hit", "Hit_", "Hit_2"]);
+        assert_eq!(fs::read(dir.join(folder).join("Hit_2.flac")).unwrap(), bytes);
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]

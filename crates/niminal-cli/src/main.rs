@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 use clap::{Args, Parser, Subcommand};
 use niminal_cli::audio::{NullClock, Output, Shared};
 use niminal_cli::render::{DEFAULT_SAMPLE_RATE, write_wav};
-use niminal_cli::replay::replay;
+use niminal_cli::replay::{replay, slice};
 use niminal_lang::Layout;
 use niminal_server::{EngineServer, Session, from_lines, to_lines};
 use niminal_ws::{Server, ServerConfig};
@@ -35,6 +35,15 @@ struct ReplayArgs {
     /// The `--control-step` the server that recorded the log ran with.
     #[arg(long, default_value_t = niminal_engine::DEFAULT_CONTROL_STEP)]
     control_step: usize,
+    /// The sample rate of the server that recorded the log.
+    #[arg(long, default_value_t = DEFAULT_SAMPLE_RATE)]
+    sample_rate: u32,
+    /// Keep the audio from this many seconds into the session.
+    #[arg(long, default_value_t = 0.0)]
+    from: f64,
+    /// Keep the audio up to this many seconds into the session (default: to the end).
+    #[arg(long)]
+    to: Option<f64>,
 }
 
 #[derive(Args)]
@@ -127,7 +136,7 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Replay(args) => niminal_engine::set_control_step(args.control_step)
             .map_err(|e| format!("error: {e}"))
-            .and_then(|()| run_replay(&args.log, &args.out, args.channels, args.no_limiter)),
+            .and_then(|()| run_replay(&args)),
         Command::Server(mut args) => {
             install_crash_log();
             if args.log.is_none() && !args.no_log {
@@ -220,11 +229,13 @@ fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
 
-fn run_replay(log: &Path, out: &Path, channels: u16, no_limiter: bool) -> Result<(), String> {
+fn run_replay(args: &ReplayArgs) -> Result<(), String> {
+    let (log, out) = (&args.log, &args.out);
     let entries = from_lines(&read(log)?).map_err(|e| format!("error: {}: {e}", log.display()))?;
-    let audio = replay(&entries, channels, DEFAULT_SAMPLE_RATE, !no_limiter)?;
+    let audio = replay(&entries, args.channels, args.sample_rate, !args.no_limiter)?;
+    let audio = slice(audio, args.from, args.to, args.sample_rate);
     if audio[0].is_empty() {
-        return Err("error: that session made no sound".into());
+        return Err("error: that part of the session made no sound".into());
     }
     write_wav(out, &audio).map_err(|e| format!("error: can't write {}: {e}", out.display()))?;
     println!(

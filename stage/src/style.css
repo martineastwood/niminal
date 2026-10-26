@@ -447,3 +447,66 @@ body.perform .cm-content { line-height: 1.55; }
 .tab-close:hover { color: var(--red); background: none; }
 .tab.drop-before { box-shadow: inset 2px 0 var(--accent); }
 .tab.drop-after { box-shadow: inset -2px 0 var(--accent); }
+
+/* ---- sent code: amber until the change lands, then green for a moment ---------------------------- */
+.cm-queued-eval { box-shadow: inset calc(2px * var(--z)) 0 0 #d9903f; background-color: rgba(217, 144, 63, 0.07); }
+.cm-landed { box-shadow: inset calc(2px * var(--z)) 0 0 #5fa86e; animation: landed-fade 0.9s ease-out forwards; }
+@keyframes landed-fade { from { background-color: rgba(95, 168, 110, 0.28); } to { background-color: transparent; } }
+
+/* ---- launch state: what will start or stop at the next boundary, and how far off it is ------------ */
+.queued-eta { color: var(--accent-text); font-family: var(--mono); font-size: calc(10px * var(--z)); font-weight: 600; }
+.scene.queued-start, .clip.queued-start > .clip-head { animation: queued-start 0.8s ease-in-out infinite; }
+.scene.queued-stop, .clip.queued-stop > .clip-head { animation: queued-stop 0.8s ease-in-out infinite; }
+@keyframes queued-start { 50% { background-color: color-mix(in srgb, var(--clip, #5fa86e) 28%, transparent); } }
+@keyframes queued-stop { 50% { background-color: rgba(216, 106, 106, 0.22); } }
+.clip.queued-start .clip-state { background: #5fa86e; }
+.clip.queued-stop .clip-state { background: #d86a6a; }
+.beats { display: flex; gap: calc(3px * var(--z)); align-self: center; }
+.beats i { width: calc(7px * var(--z)); height: calc(7px * var(--z)); background: var(--faint); }
+.beats i.on { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+.beats i.on:first-child { background: #fff; box-shadow: 0 0 8px #fff; }
+
+/* ---- level meters: a bar that falls slowly, a tick at the recent peak, a light that stays on after a clip ---- */
+.meter { position: relative; flex: none; width: calc(54px * var(--z)); height: calc(5px * var(--z)); overflow: hidden; background: #0d0f12; border: 1px solid var(--line); cursor: default; }
+.meter-fill { position: absolute; inset: 0; transform-origin: left; transform: scaleX(0); background: linear-gradient(90deg, #5fa86e 0%, #5fa86e 62%, #d9b43f 82%, #d86a6a 100%); background-size: calc(54px * var(--z)) 100%; }
+.meter-hold { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -2px; background: #e1e7ed; opacity: 0; }
+.meter.clipped { border-color: #d86a6a; box-shadow: 0 0 6px #d86a6a; cursor: pointer; }
+.master { display: flex; flex-direction: column; gap: 2px; justify-content: center; }
+.master .meter { width: calc(96px * var(--z)); }
+.clip-meter { width: calc(40px * var(--z)); margin: 0 calc(4px * var(--z)); opacity: 0.85; }
+.clip.idle .clip-meter { opacity: 0.4; }
+.buses { margin-top: calc(6px * var(--z)); padding: calc(6px * var(--z)) calc(8px * var(--z)); border-top: 1px solid var(--line); }
+.buses-title { margin-bottom: calc(4px * var(--z)); color: var(--dim); font-size: calc(9px * var(--z)); font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; }
+.bus { display: flex; align-items: center; justify-content: space-between; gap: calc(8px * var(--z)); margin-bottom: calc(3px * var(--z)); }
+.bus-name { color: var(--text); font-family: var(--mono); font-size: calc(11px * var(--z)); }
+.bus .meter { width: calc(120px * var(--z)); }
+
+/* ---- engine health: quiet while the audio is fine, loud for a few seconds after a glitch -------------- */
+.health.ok { color: #5fa86e; }
+.health.trouble { color: #fff; background: #b8473f; padding: 0 calc(5px * var(--z)); animation: queued-stop 0.8s ease-in-out infinite; }
+
+/* ---- takes: a stretch of the set to render or keep ----------------------------------------------------- */
+#rec.recording { color: #fff; background: #b8473f; border-color: #d86a6a; animation: queued-stop 1s ease-in-out infinite; }
+.take { display: flex; align-items: center; gap: calc(6px * var(--z)); padding: calc(5px * var(--z)) calc(8px * var(--z)); border-top: 1px solid var(--line); color: var(--text); font-family: var(--mono); font-size: calc(11px * var(--z)); }
+.take[hidden] { display: none; }
+.take span { flex: 1; color: var(--accent-text); }
+
+/* ---- midi: quiet until something is plugged in, flashes when a message arrives ------------------------- */
+.midi { height: calc(16px * var(--z)); padding: 0 calc(5px * var(--z)); font-family: var(--mono); font-size: calc(10px * var(--z)); color: var(--dim); background: transparent; border-color: transparent; }
+.midi.active { color: var(--accent-text); }
+.midi.blink { animation: midi-blink 0.35s ease-out; }
+@keyframes midi-blink { from { background: var(--accent); color: #1a1006; } to { background: transparent; } }
+
+/* ---- the sample browser: a panel over the lower editor, for building a set rather than playing one --- */
+#backstage { position: relative; }
+#samples { position: absolute; z-index: 20; left: calc(12px * var(--z)); bottom: calc(28px * var(--z)); display: flex; flex-direction: column; gap: calc(6px * var(--z)); width: calc(480px * var(--z)); max-height: 60%; padding: calc(8px * var(--z)); background: var(--bg-panel); border: 1px solid var(--edge); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5); }
+#samples[hidden] { display: none; }
+.samples-head { display: flex; align-items: center; gap: calc(8px * var(--z)); }
+.samples-where { flex: 1; overflow: hidden; color: var(--dim); font-family: var(--mono); font-size: calc(10px * var(--z)); text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.samples-filter { width: 100%; }
+.samples-list { overflow-y: auto; min-height: calc(80px * var(--z)); border: 1px solid var(--line); background: #0d0f12; }
+.sample { padding: calc(2px * var(--z)) calc(6px * var(--z)); color: var(--text); font-family: var(--mono); font-size: calc(11px * var(--z)); cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sample:hover { background: rgba(255, 255, 255, 0.05); }
+.sample.on { color: #1a1006; background: var(--accent); }
+.samples-wave { width: 100%; height: calc(56px * var(--z)); background: #0d0f12; border: 1px solid var(--line); }
+.samples-detail { color: var(--dim); font-family: var(--mono); font-size: calc(10px * var(--z)); }

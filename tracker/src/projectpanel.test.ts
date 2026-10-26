@@ -41,7 +41,7 @@ it('chooses with a click or the arrow keys, opens the code with Enter or a doubl
 
 it('passes its buttons on, and follows the project when it is drawn again', () => {
   const { root, panel, actions, rows, setItems } = setup();
-  for (const [label, op] of [['New instrument', 'new'], ['Duplicate the current instrument', 'duplicate'], ['Delete the current instrument', 'delete'], ['New sampler from WAV files', 'import']] as const) {
+  for (const [label, op] of [['New instrument', 'new'], ['Duplicate the current instrument', 'duplicate'], ['Delete the current instrument', 'delete'], ['New sampler from audio files', 'import']] as const) {
     root.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!.click(); expect(actions.manage).toHaveBeenLastCalledWith(op);
   }
   setItems([{ id: 'b', name: 'Bass renamed' }]); panel.refresh();
@@ -54,8 +54,8 @@ it('offers to cut the current sampler into pieces from the scissors button', () 
   expect(actions.slice).toHaveBeenCalledWith(expect.any(HTMLButtonElement));
 });
 
-it('offers to make a kit from several WAV files', () => {
+it('offers to make a kit from several audio files', () => {
   const { root, actions } = setup();
-  root.querySelector<HTMLButtonElement>('button[aria-label^="New instrument from WAV files"]')!.click();
+  root.querySelector<HTMLButtonElement>('button[aria-label^="New instrument from audio files"]')!.click();
   expect(actions.kit).toHaveBeenCalledOnce();
 });

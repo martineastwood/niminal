@@ -24,6 +24,8 @@ hits = amen.slices([0, 0.18, 0.43])   // s0 .. s2, starting at those shares of t
 
 Paths are resolved relative to the file that declares them (and the project when the server evaluates).
 
+A sample can be a WAV, FLAC, MP3, Ogg Vorbis, AIFF, AAC or M4A file (WAV is read exactly; the others are decoded when the piece loads). `kit("folder")` takes every audio file in the folder. A `.csv`, `.txt` or `.dat` file of numbers loads as a table.
+
 ### Kits from samples and synths
 
 A named kit assigns an instrument to each row of a shared grid. Samples can come from different folders; synths and samples can be mixed freely:

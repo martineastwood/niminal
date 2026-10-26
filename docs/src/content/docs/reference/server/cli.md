@@ -46,7 +46,7 @@ Default listen `127.0.0.1:7401`, stereo output. `--channels` supports 1, 2, 4, 6
 
 ## `niminal replay`
 
-`niminal replay <log> --out set.wav --channels 2` turns a session log into audio, sample for sample. Pass the same `--block-size` and `--control-step` the server ran with, or the render will differ.
+`niminal replay <log> --out set.wav --channels 2` turns a session log into audio, sample for sample. Pass the same `--block-size` and `--control-step` the server ran with, or the render will differ. Pass the server's `--sample-rate` too (the default is 48000, and the log doesn't record it). `--from SECONDS` and `--to SECONDS` keep only that stretch of the session, such as one take of a set.
 
 ## What plays it
 

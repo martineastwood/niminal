@@ -7,10 +7,14 @@ import { demoSource } from './demo';
 import { Scope, connectLanguageServer, niminalEditor } from './editor';
 import { blockAround } from '../../editors/codemirror/blocks';
 import { LaneView } from './laneview';
-import { Highlighter, evaluated, flashLines, markProblems } from './highlight';
+import { Highlighter, evaluated, flashLines, markProblems, markSent } from './highlight';
 import { mod } from './shortcuts';
 import { sceneCommand, sceneStates } from './scenes';
-import { Action, EvalOutcome, Problem, Scene, Snapshot, stage } from './live';
+import { HealthWatch } from './health';
+import { learnedRange } from './learn';
+import { SampleBrowser } from './samples';
+import { Bar, loudest } from './meters';
+import { Action, EvalOutcome, Problem, Queued, Scene, Snapshot, beatsUntil, queuedStates, stage } from './live';
 import { StoredTabs, loadTabs, moveItem, tabTitle, tabsKey } from './tabs';
 import './style.css';
 
@@ -25,9 +29,12 @@ app.innerHTML = `
       </div>
     </div>
     <div class="transport" id="transport">
-      <div class="position"><span class="eyebrow">bar</span><strong id="bar">1</strong><span class="beat" id="beat">1.1</span></div>
+      <div class="position"><span class="eyebrow">bar</span><strong id="bar">1</strong><span class="beat" id="beat">1.1</span><span class="beats" id="beats"></span></div>
       <div class="readout"><span class="eyebrow">tempo</span><span id="bpm">—</span><small>bpm</small></div>
       <div class="readout"><span class="eyebrow">meter</span><span id="meter">4/4</span></div>
+      <div class="readout"><span class="eyebrow">out</span><span id="master" class="master" title="Output level in dB, peak held; click to clear the clip light"></span></div>
+      <div class="readout"><span class="eyebrow">engine</span><span id="health" class="health ok">ok</span></div>
+      <div class="readout"><span class="eyebrow">midi</span><button id="midi" class="midi" title="Look for MIDI inputs again">—</button></div>
       <div class="readout"><span class="eyebrow">voices</span><span id="voices">0</span></div>
       <div class="readout"><span class="eyebrow">waiting</span><span id="waiting">0</span></div>
     </div>
@@ -46,6 +53,7 @@ app.innerHTML = `
       <button id="perform" title="Performance mode: just the code and what is playing (Cmd/Ctrl+Shift+P)">Perform</button>
       <button id="hush" title="Stop every clip, letting what sounds ring out">Hush</button>
       <button id="panic" class="danger" title="Stop everything now">Panic</button>
+      <button id="rec" title="Mark the start of a take; press again to end it, then render it or save what you evaluated">Rec</button>
     </div>
   </header>
 
@@ -61,6 +69,7 @@ app.innerHTML = `
             <button id="open" title="Open a .nml file in a tab">Open</button>
             <button id="open-project" title="Open a folder: main.nml and what it uses, or every .nml file, as tabs">Project</button>
             <button id="save" title="Save the file">Save</button>
+            <button id="samples-toggle" title="Find a sample, hear it, and write it into the code (Cmd/Ctrl+Shift+L)">Samples</button>
             <button id="demo" title="Load the stage's opening piece">Demo</button>
           </span>
           <label class="quantize" title="When an evaluation lands">land <input id="quantize" placeholder="next 4bars" /></label>
@@ -86,6 +95,7 @@ app.innerHTML = `
       <div class="stage-scroll"><div id="lanes"></div></div>
       <div id="pending" class="pending"></div>
       <div id="notices" class="notices"></div>
+      <div id="take" class="take" hidden></div>
     </section>
   </main>
 
@@ -318,7 +328,7 @@ async function ensureConnected() {
   }
 }
 
-function sceneButton(scene: Scene, index: number, shown: ReturnType<typeof sceneStates>) {
+function sceneButton(scene: Scene, index: number, shown: ReturnType<typeof sceneStates>, queued?: Queued) {
   const button = document.createElement('button');
   button.className = 'scene';
   const { state, within } = shown.get(scene.name) ?? { state: 'off' as const };
@@ -342,6 +352,14 @@ function sceneButton(scene: Scene, index: number, shown: ReturnType<typeof scene
   count.className = 'scene-count';
   count.textContent = `${scene.running}/${scene.clips.length}`;
   button.append(icon, name, count);
+  if (queued) {
+    button.classList.add(`queued-${queued.kind}`);
+    const eta = document.createElement('span');
+    eta.className = 'queued-eta';
+    eta.dataset.lands = String(queued.landsAt);
+    button.append(eta);
+    button.title = `${scene.name} ${queued.kind === 'start' ? 'starts' : 'stops'} at the next boundary`;
+  }
   if (index < 9) {
     const key = document.createElement('span');
     key.className = 'scene-key';
@@ -364,13 +382,15 @@ async function launch(scene: Scene) {
 
 let sceneList: Scene[] = [];
 
-function updateScenes(list: Scene[]) {
+function updateScenes(snapshot: Snapshot) {
+  const list = snapshot.scenes;
   sceneList = list;
-  const signature = JSON.stringify(list.map(scene => [scene.name, scene.running, scene.clips]));
+  const queued = queuedStates(snapshot);
+  const signature = JSON.stringify(list.map(scene => [scene.name, scene.running, scene.clips, queued.get(scene.name)?.kind]));
   if (signature === lastSceneSignature) return;
   lastSceneSignature = signature;
   const shown = sceneStates(list);
-  scenes.replaceChildren(...list.map((scene, index) => sceneButton(scene, index, shown)));
+  scenes.replaceChildren(...list.map((scene, index) => sceneButton(scene, index, shown, queued.get(scene.name))));
   stageHint.textContent = list.length === 0 ? 'no scenes yet' : `${list.length} scene${list.length === 1 ? '' : 's'}`;
 }
 
@@ -404,6 +424,9 @@ function updateLanding(snapshot: Snapshot) {
 let pendingSignature = '';
 function updatePending(snapshot: Snapshot) {
   updateLanding(snapshot);
+  for (const eta of document.querySelectorAll<HTMLElement>('.scene .queued-eta')) {
+    eta.textContent = `in ${beatsUntil(snapshot, Number(eta.dataset.lands)).toFixed(1)}`;
+  }
   if (!snapshot.pending.length) {
     pending.replaceChildren();
     pending.classList.add('empty');
@@ -411,9 +434,6 @@ function updatePending(snapshot: Snapshot) {
     return;
   }
   pending.classList.remove('empty');
-  const t = snapshot.transport;
-  const beatsUntil = (landsAt: number) =>
-    t && snapshot.sample_rate ? Math.max(0, ((landsAt - t.sample) / snapshot.sample_rate) * (t.bpm / 60)) : 0;
   const signature = JSON.stringify(snapshot.pending.map(change => [change.id, change.changes]));
   if (signature !== pendingSignature) {
     pendingSignature = signature;
@@ -442,7 +462,7 @@ function updatePending(snapshot: Snapshot) {
   }
   for (const row of pending.querySelectorAll<HTMLElement>('.pending-row')) {
     const when = row.querySelector('.pending-when')!;
-    when.textContent = `in ${beatsUntil(Number(row.dataset.lands)).toFixed(1)} beats`;
+    when.textContent = `in ${beatsUntil(snapshot, Number(row.dataset.lands)).toFixed(1)} beats`;
   }
 }
 
@@ -471,7 +491,146 @@ function updateNotices(snapshot: Snapshot) {
   );
 }
 
+/** The output meter: one bar per channel (up to two), stepped and drawn every frame. */
+const masterBars: Bar[] = [];
+let masterAt = performance.now();
+function masterFrame() {
+  const now = performance.now();
+  const passed = Math.min((now - masterAt) / 1000, 0.25);
+  masterAt = now;
+  for (const bar of masterBars) {
+    bar.step(passed);
+    bar.draw();
+  }
+  requestAnimationFrame(masterFrame);
+}
+requestAnimationFrame(masterFrame);
+
+/** The MIDI chip, and the controls that learned a control change written back into the code that asked. */
+let lastMidi: string | null = null;
+function updateMidi(snapshot: Snapshot) {
+  const chip = $('midi');
+  const { inputs, last } = snapshot.midi;
+  chip.textContent = inputs.length ? (last ?? `${inputs.length} in`) : 'none';
+  chip.title = inputs.length
+    ? `${inputs.join(', ')}${last ? ` · last: ${last}` : ''}. Click to look for inputs again.`
+    : 'No MIDI inputs. Plug one in and click to look again.';
+  chip.classList.toggle('active', inputs.length > 0);
+  if (last !== lastMidi) {
+    lastMidi = last;
+    chip.classList.remove('blink');
+    void chip.offsetWidth;
+    chip.classList.add('blink');
+  }
+  for (const { control, source } of snapshot.learned) writeLearned(control, source);
+}
+
+function writeLearned(control: string, source: string) {
+  for (const tab of tabs) {
+    const doc = tab === current && view ? view.state.doc.toString() : tab.state.doc.toString();
+    const range = learnedRange(doc, control);
+    if (!range) continue;
+    const changes = { from: range.from, to: range.to, insert: source };
+    if (tab === current && view) view.dispatch({ changes });
+    else tab.state = tab.state.update({ changes }).state;
+    status(`${control} learned ${source}`);
+    persist();
+    return;
+  }
+}
+
+const healthWatch = new HealthWatch();
+function updateHealth(snapshot: Snapshot) {
+  const chip = $('health');
+  const { ok, detail, known } = healthWatch.update(snapshot.health, performance.now());
+  chip.classList.toggle('ok', ok);
+  chip.classList.toggle('trouble', !ok);
+  chip.textContent = ok ? 'ok' : 'dropouts';
+  chip.title = ok
+    ? known
+      ? 'The engine is keeping up'
+      : 'This engine does not report its health'
+    : `The audio glitched: ${detail}. Fewer voices or lighter effects will help.`;
+}
+
+function updateMaster(snapshot: Snapshot) {
+  const count = Math.min(Math.max(snapshot.channels, 1), 2);
+  const host = $('master');
+  if (masterBars.length !== count) {
+    masterBars.length = 0;
+    for (let i = 0; i < count; i++) masterBars.push(new Bar());
+    host.replaceChildren(...masterBars.map(bar => bar.element));
+  }
+  // more than two channels: the second bar is the loudest of the rest
+  masterBars.forEach((bar, i) =>
+    bar.push(i === count - 1 && snapshot.master.length > count ? loudest(snapshot.master.slice(i)) : (snapshot.master[i] ?? 0)),
+  );
+}
+
+/** A take is a stretch of the engine's clock: the engine's session log and the evaluations are cut to it. */
+let take: { from: number; to: number | null } | null = null;
+let clock = { sample: 0, rate: 48000 };
+
+function minutes(samples: number) {
+  const seconds = Math.max(0, Math.floor(samples / clock.rate));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+function drawTake() {
+  const box = $('take');
+  const rec = $('rec');
+  rec.classList.toggle('recording', take !== null && take.to === null);
+  if (!take) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  const { from, to } = take;
+  if (to === null) {
+    box.textContent = `● recording ${minutes(clock.sample - from)}`;
+    return;
+  }
+  box.replaceChildren();
+  const label = document.createElement('span');
+  label.textContent = `take · ${minutes(to - from)}`;
+  const button = (name: string, title: string, run: () => Promise<string | null>) => {
+    const node = document.createElement('button');
+    node.textContent = name;
+    node.title = title;
+    node.addEventListener('click', async () => {
+      try {
+        const done = await run();
+        if (done) status(done);
+      } catch (error) {
+        status(String(error));
+        showBanner([{ message: String(error), help: null, line: null, column: null, in_definition: null }], 'take');
+      }
+    });
+    return node;
+  };
+  const close = button('×', 'Forget this take', async () => {
+    take = null;
+    drawTake();
+    return null;
+  });
+  box.append(
+    label,
+    button('Render WAV', "Play the engine's session log over this take to a WAV file", () => stage.renderTake(from, to)),
+    button('Save script', 'Everything you evaluated during this take, in order, with when', () => stage.saveTranscript(from, to)),
+    close,
+  );
+}
+
+function toggleRecording() {
+  if (!clock.sample && !take) return;
+  if (!take || take.to !== null) take = { from: clock.sample, to: null };
+  else take.to = clock.sample;
+  drawTake();
+}
+
 function updateTransport(snapshot: Snapshot) {
+  if (snapshot.transport) clock = { sample: snapshot.transport.sample, rate: snapshot.sample_rate || clock.rate };
+  if (take && take.to === null) drawTake();
   const t = snapshot.transport;
   if (!t) {
     bar.textContent = '1';
@@ -483,6 +642,12 @@ function updateTransport(snapshot: Snapshot) {
   }
   bar.textContent = String(t.bar);
   beat.textContent = t.beat.toFixed(2);
+  // one dot per beat as written (6/8 has six), while the engine counts quarter notes
+  const [top, unit] = snapshot.meter;
+  const count = Math.max(1, top || 4);
+  const dots = $('beats');
+  if (dots.children.length !== count) dots.replaceChildren(...Array.from({ length: count }, () => document.createElement('i')));
+  Array.from(dots.children).forEach((dot, i) => dot.classList.toggle('on', i === Math.floor(((t.beat - 1) * unit) / 4 + 1e-9)));
   bpm.textContent = t.bpm.toFixed(1);
   meter.textContent = snapshot.meter.join('/');
   voices.textContent = String(t.voices);
@@ -572,6 +737,7 @@ async function evaluate(scope: Scope = 'chunk') {
     const outcome = await stage.evaluate(text, input('quantize').value.trim(), fileDir(), id);
     showOutcome(outcome);
     if (view && tab === current && outcome.problems.length) markProblems(view, from, text, outcome.problems);
+    if (view && tab === current && outcome.accepted?.id) markSent(view, outcome.accepted.id, from, to);
     await refresh();
   } catch (error) {
     status(String(error));
@@ -689,6 +855,11 @@ function offline(): Snapshot {
     pending: [],
     landed: [],
     notices: [],
+    master: [],
+    levels: { nodes: {}, buses: {} },
+    health: null,
+    learned: [],
+    midi: { inputs: [], last: null },
     error: null,
   };
 }
@@ -724,7 +895,10 @@ async function refresh() {
   // a mistake in drawing one part of the window must not stop the others, or the polling
   const parts: [string, () => void][] = [
     ['transport', () => updateTransport(snapshot)],
-    ['scenes', () => updateScenes(snapshot.scenes)],
+    ['meters', () => updateMaster(snapshot)],
+    ['health', () => updateHealth(snapshot)],
+    ['midi', () => updateMidi(snapshot)],
+    ['scenes', () => updateScenes(snapshot)],
     ['pending', () => updatePending(snapshot)],
     ['notices', () => updateNotices(snapshot)],
     ['lanes', () => laneView.update(snapshot)],
@@ -887,6 +1061,29 @@ $('open').addEventListener('click', () => void openFile());
 $('open-project').addEventListener('click', () => void openProject());
 $('save').addEventListener('click', () => void saveFile());
 $('demo').addEventListener('click', loadDemo);
+/** The sample browser: finds WAVs, plays them, and writes the one chosen where the cursor is. */
+const samples = new SampleBrowser({
+  fileDir,
+  status,
+  insert: make => {
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    const start = view.state.doc.lineAt(from);
+    const end = view.state.doc.lineAt(to);
+    const text = make(start.text.slice(0, from - start.from), end.text.slice(to - end.from));
+    view.dispatch({ changes: { from, to, insert: text }, selection: { anchor: from + text.length } });
+    view.focus();
+  },
+});
+$('backstage').append(samples.element);
+$('samples-toggle').addEventListener('click', () => samples.toggle());
+$('rec').addEventListener('click', toggleRecording);
+$('midi').addEventListener('click', () => {
+  stage.openMidi('').then(
+    names => status(names.length ? `listening to ${names.join(', ')}` : 'no MIDI inputs found'),
+    error => status(String(error)),
+  );
+});
 $('hush').addEventListener('click', () => void act({ action: 'hush' }));
 $('panic').addEventListener('click', () => void act({ action: 'panic' }));
 $('reconnect').addEventListener('click', async () => {
@@ -919,6 +1116,9 @@ window.addEventListener('keydown', event => {
   } else if (event.key.toLowerCase() === 'p' && event.shiftKey) {
     event.preventDefault();
     $('perform').click();
+  } else if (event.key.toLowerCase() === 'l' && event.shiftKey) {
+    event.preventDefault();
+    samples.toggle();
   } else if (event.key.toLowerCase() === 't' && !event.shiftKey) {
     event.preventDefault();
     $('new').click();
@@ -942,6 +1142,10 @@ window.addEventListener('keydown', event => {
   if (event.key === '.') {
     event.preventDefault();
     void act({ action: 'hush' });
+  }
+  if (event.key === '>') {
+    event.preventDefault();
+    void act({ action: 'panic' });
   }
   if (event.key === 'Enter' && !(event.target instanceof HTMLElement && event.target.closest('.cm-editor'))) {
     event.preventDefault();

@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { Highlighter, evaluated, highlightExtensions, litRanges, markProblems } from './highlight';
+import { Highlighter, evaluated, highlightExtensions, litRanges, markProblems, markSent } from './highlight';
 import { Clip, Snapshot } from './live';
 
 const source = 'clip a { notes: [c4 e4] }';
@@ -38,6 +38,7 @@ function snapshot(clips: Clip[]): Snapshot {
     clips,
     scenes: [],
     pending: [],
+    landed: [],
   } as unknown as Snapshot;
 }
 
@@ -130,5 +131,28 @@ describe('marking clip headers and problems in the source', () => {
     const column = sent.split('\n')[1].indexOf('zz') + 1;
     markProblems(view, 9, sent, [{ message: 'nope', help: null, line: 2, column, in_definition: null }]);
     expect([...view.dom.querySelectorAll('.cm-refused')].map(e => e.textContent)).toEqual(['zz']);
+  });
+
+  it('marks sent lines until they land, then shows them landed, then lets go', () => {
+    vi.useFakeTimers();
+    const { view, highlighter } = setup('one\ntwo\nthree');
+    markSent(view, 7, 0, 7);
+    const lines = (cls: string) => view.dom.querySelectorAll(`.${cls}`).length;
+    expect(lines('cm-queued-eval')).toBe(2);
+    highlighter.update({ ...snapshot([]), pending: [{ id: 7 }] } as unknown as Snapshot);
+    expect(lines('cm-queued-eval')).toBe(2);
+    highlighter.update({ ...snapshot([]), landed: [{ id: 7 }] } as unknown as Snapshot);
+    expect(lines('cm-queued-eval')).toBe(0);
+    expect(lines('cm-landed')).toBe(2);
+    vi.advanceTimersByTime(1000);
+    expect(lines('cm-landed')).toBe(0);
+    vi.useRealTimers();
+  });
+
+  it('forgets sent lines whose change was cancelled', () => {
+    const { view, highlighter } = setup('one\ntwo');
+    markSent(view, 3, 0, 3);
+    highlighter.update(snapshot([]));
+    expect(view.dom.querySelectorAll('.cm-queued-eval, .cm-landed').length).toBe(0);
   });
 });

@@ -15,7 +15,7 @@ export interface ProjectPanelActions {
   edit(id: string): void;
   /** The buttons above the list. */
   manage(op: ManageOp): void;
-  /** The kit button: choose WAV files and make one instrument that plays them by key. */
+  /** The kit button: choose audio files and make one instrument that plays them by key. */
   kit(): void;
   /** The scissors button: offers to cut the current sampler into pieces, with a menu under `anchor`. */
   slice(anchor: HTMLElement): void;
@@ -34,11 +34,11 @@ export class ProjectPanel {
     const heading = document.createElement('div'); heading.className = 'pp-heading';
     const title = document.createElement('span'); title.className = 'section-title'; title.textContent = 'INSTRUMENTS'; heading.append(title);
     const tools = document.createElement('span'); tools.className = 'side-tools';
-    for (const [op, text, label] of [['new', '+', 'New instrument'], ['duplicate', '⧉', 'Duplicate the current instrument'], ['delete', '−', 'Delete the current instrument'], ['import', '♪', 'New sampler from WAV files']] as const) {
+    for (const [op, text, label] of [['new', '+', 'New instrument'], ['duplicate', '⧉', 'Duplicate the current instrument'], ['delete', '−', 'Delete the current instrument'], ['import', '♪', 'New sampler from audio files']] as const) {
       const button = document.createElement('button'); button.textContent = text; button.title = label; button.setAttribute('aria-label', label);
       button.onclick = () => actions.manage(op); tools.append(button);
     }
-    const kit = document.createElement('button'); kit.textContent = '▦'; kit.title = 'New instrument from WAV files: one sample on each key, from C-4'; kit.setAttribute('aria-label', kit.title);
+    const kit = document.createElement('button'); kit.textContent = '▦'; kit.title = 'New instrument from audio files: one sample on each key, from C-4'; kit.setAttribute('aria-label', kit.title);
     kit.onclick = () => actions.kit(); tools.append(kit);
     const scissors = document.createElement('button'); scissors.textContent = '✂'; scissors.title = 'New instrument that plays the current sampler cut into pieces'; scissors.setAttribute('aria-label', scissors.title);
     scissors.onclick = () => actions.slice(scissors); tools.append(scissors);

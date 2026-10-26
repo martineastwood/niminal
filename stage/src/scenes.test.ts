@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sceneCommand, sceneStates } from './scenes';
-import { Scene } from './live';
+import { Scene, Snapshot, queuedStates } from './live';
 
 const scene = (name: string, clips: string[], running: number): Scene => ({ name, clips, running });
 
@@ -45,5 +45,32 @@ describe('pressing a scene', () => {
 
   it('starts a scene that is not playing', () => {
     expect(sceneCommand(scene('outro', ['pad'], 0), [verse, scene('outro', ['pad'], 0)])).toBe('outro.start');
+  });
+});
+
+describe('what is queued', () => {
+  const snapshot = (pending: string[], running: string[]) =>
+    ({
+      scenes: [scene('verse', ['bass', 'lead'], 0), scene('chorus', ['bass', 'shimmer'], 0)],
+      clips: ['bass', 'lead', 'shimmer'].map(name => ({ name, running: running.includes(name) })),
+      pending: pending.map((text, i) => ({ id: i, lands_at: 100 + i, changes: [text] })),
+    }) as unknown as Snapshot;
+
+  it('queues a clip start and stop by name', () => {
+    const queued = queuedStates(snapshot(['bass.start', 'lead.stop'], ['lead']));
+    expect(queued.get('bass')).toEqual({ kind: 'start', landsAt: 100 });
+    expect(queued.get('lead')).toEqual({ kind: 'stop', landsAt: 101 });
+  });
+
+  it('shows a scene switch as starts for its new clips and stops for those it drops', () => {
+    const queued = queuedStates(snapshot(['chorus.start'], ['bass', 'lead']));
+    expect(queued.get('chorus')?.kind).toBe('start');
+    expect(queued.get('shimmer')?.kind).toBe('start');
+    expect(queued.get('lead')?.kind).toBe('stop');
+    expect(queued.has('bass')).toBe(false);
+  });
+
+  it('ignores changes that are not a start or a stop', () => {
+    expect(queuedStates(snapshot(['bass.mute', 'bass = [c4]'], [])).size).toBe(0);
   });
 });

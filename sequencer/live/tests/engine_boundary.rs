@@ -67,3 +67,29 @@ fn two_live_clients_keep_independent_tempos_and_musical_clock_controls() {
     assert!(a.take_notices().is_empty());
     assert!(b.take_notices().is_empty());
 }
+
+#[test]
+fn metering_reports_how_loud_each_node_is_by_name() {
+    let engine = Arc::new(Mutex::new(EngineServer::new(
+        Session::new(48_000.0, Layout::Mono).without_limiter(),
+    )));
+    let mut live = Live::new(
+        Box::new(InProcess::new(engine.clone())),
+        48_000.0,
+        Layout::Mono,
+    );
+    live.set_metering(true);
+    live.eval(
+        "instr kick(freq: hz) { tail = 0ms\n osc(sine, freq) * 0.5 }\nclip beat { instrument: kick\nnotes: [c2 c2]\nlength: 1bar }\nbeat.start",
+        Some("now"),
+    )
+    .unwrap();
+    live.advance();
+    for _ in 0..4 {
+        engine.lock().unwrap().session_mut().process(4800);
+        live.advance();
+    }
+    let levels = live.take_levels();
+    assert!(levels.nodes.get("beat").is_some_and(|l| *l > 0.1), "{levels:?}");
+    assert_eq!(live.take_levels().nodes["beat"], 0.0, "reading resets them but keeps the name");
+}

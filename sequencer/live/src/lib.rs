@@ -17,7 +17,7 @@ mod ws_link;
 pub use link::{EngineLink, InProcess};
 pub use live::{
     Accepted, Begin, CancelDone, CancelJob, ClipStatus, ControlSignal, EvalDone, EvalJob, Landed,
-    Live, ParsedEval, PendingInfo, SceneStatus, Transport,
+    Levels, Live, ParsedEval, PendingInfo, SceneStatus, Transport,
 };
 pub use log::{Expression, LiveInput, LiveLogEntry};
 

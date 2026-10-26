@@ -123,7 +123,61 @@ const refusals = StateField.define<DecorationSet>({
   provide: field => EditorView.decorations.from(field),
 });
 
-export const highlightExtensions = [drift, hits, flash, headers, refusals];
+type Sent = { from: number; to: number; landed: boolean };
+const sentEval = StateEffect.define<{ id: number; from: number; to: number }>();
+const settledEval = StateEffect.define<{ id: number; landed: boolean | null }>();
+
+/**
+ * The lines of each evaluation that was accepted but has not landed: marked until the engine makes the
+ * change, then shown landed for a moment. `landed: null` forgets one (cancelled, or the flash is over).
+ */
+const sentLines = StateField.define<Map<number, Sent>>({
+  create: () => new Map(),
+  update(value, tr) {
+    let next = value;
+    if (tr.docChanged) {
+      next = new Map();
+      for (const [id, s] of value) next.set(id, { ...s, from: tr.changes.mapPos(s.from, 1), to: tr.changes.mapPos(s.to, -1) });
+    }
+    for (const effect of tr.effects) {
+      if (effect.is(sentEval)) {
+        if (next === value) next = new Map(value);
+        next.set(effect.value.id, { from: effect.value.from, to: effect.value.to, landed: false });
+      } else if (effect.is(settledEval)) {
+        const entry = next.get(effect.value.id);
+        if (!entry) continue;
+        if (next === value) next = new Map(value);
+        if (effect.value.landed === null) next.delete(effect.value.id);
+        else next.set(effect.value.id, { ...entry, landed: effect.value.landed });
+      }
+    }
+    return next;
+  },
+  provide: field =>
+    EditorView.decorations.compute([field], state => {
+      const marks = new Map<number, string>();
+      for (const s of state.field(field).values()) {
+        const doc = state.doc;
+        const last = Math.min(s.to, doc.length);
+        for (let line = doc.lineAt(Math.min(s.from, doc.length)); ; line = doc.line(line.number + 1)) {
+          // landed wins over waiting where two evaluations share a line
+          if (marks.get(line.from) !== 'cm-landed') marks.set(line.from, s.landed ? 'cm-landed' : 'cm-queued-eval');
+          if (line.to >= last || line.number >= doc.lines) break;
+        }
+      }
+      return Decoration.set([...marks].sort((a, b) => a[0] - b[0]).map(([from, cls]) => Decoration.line({ class: cls }).range(from)));
+    }),
+});
+
+export const highlightExtensions = [drift, hits, flash, headers, refusals, sentLines];
+
+/** Mark the lines `from` to `to` as sent in pending change `id`, until it lands. */
+export function markSent(view: EditorView, id: number, from: number, to: number) {
+  view.dispatch({ effects: sentEval.of({ id, from, to }) });
+}
+
+/** How long a landed change stays marked green, in milliseconds. */
+const LANDED_FOR = 900;
 
 /** Underline what each problem points at in the text that was sent from `base`. */
 export function markProblems(view: EditorView, base: number, text: string, problems: Problem[]) {
@@ -194,6 +248,24 @@ export class Highlighter {
   update(snapshot: Snapshot) {
     this.snapshot = snapshot;
     this.updatedAt = performance.now();
+    this.settle(snapshot);
+  }
+
+  /** Turn the lines of each evaluation that landed green, and forget those that are no longer waiting. */
+  private settle(snapshot: Snapshot) {
+    const view = this.view();
+    if (!view) return;
+    const waiting = new Set(snapshot.pending.map(p => p.id));
+    const landed = new Set(snapshot.landed.map(l => l.id));
+    for (const [id, sent] of view.state.field(sentLines)) {
+      if (sent.landed || waiting.has(id)) continue;
+      if (landed.has(id)) {
+        view.dispatch({ effects: settledEval.of({ id, landed: true }) });
+        setTimeout(() => view.dispatch({ effects: settledEval.of({ id, landed: null }) }), LANDED_FOR);
+      } else {
+        view.dispatch({ effects: settledEval.of({ id, landed: null }) });
+      }
+    }
   }
 
   paint() {

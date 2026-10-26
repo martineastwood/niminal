@@ -48,7 +48,7 @@ pub use program::{
     ArgError, ControlDef, Instrument, KitVoice, MidiNote, MidiTarget, NodeInfo, NotePlan, OscTap,
     PITCH_PARAM, Param, Program, RateHint, engine_value, resolve_target,
 };
-pub use sample::Samples;
+pub use sample::{AUDIO_EXTENSIONS, Samples, is_audio};
 pub use unit::Unit;
 
 pub use niminal_engine::ops::detect_transients;

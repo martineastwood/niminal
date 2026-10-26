@@ -48,3 +48,56 @@ pub struct LiveLogEntry {
     #[serde(flatten)]
     pub input: LiveInput,
 }
+
+/// What was sent between samples `from` and `to` (the end is not included) as a script to read or keep: each
+/// evaluation under a comment saying how far into the stretch it was sent, and when it was set to land.
+pub fn transcript(entries: &[LiveLogEntry], from: u64, to: u64, sample_rate: f32) -> String {
+    let mut out = String::new();
+    for entry in entries.iter().filter(|e| (from..to).contains(&e.sample)) {
+        let seconds = ((entry.sample - from) as f64 / f64::from(sample_rate)) as u64;
+        let when = format!("{}:{:02}", seconds / 60, seconds % 60);
+        match &entry.input {
+            LiveInput::Eval { source, quantize } => {
+                out.push_str(&format!("// {when}"));
+                if let Some(quantize) = quantize {
+                    out.push_str(&format!(" · {quantize}"));
+                }
+                out.push_str(&format!("\n{}\n\n", source.trim_end()));
+            }
+            LiveInput::Panic => out.push_str(&format!("// {when} · panic\n\n")),
+            LiveInput::Cancel { .. } => out.push_str(&format!("// {when} · cancelled a change\n\n")),
+            LiveInput::Key { .. } | LiveInput::Expression { .. } => {}
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn eval(sample: u64, source: &str, quantize: Option<&str>) -> LiveLogEntry {
+        LiveLogEntry {
+            sample,
+            input: LiveInput::Eval {
+                source: source.into(),
+                quantize: quantize.map(Into::into),
+            },
+        }
+    }
+
+    #[test]
+    fn a_transcript_holds_what_was_sent_in_the_stretch_with_when() {
+        let log = vec![
+            eval(0, "before.start", None),
+            eval(100, "bass.start\n", Some("next bar")),
+            LiveLogEntry { sample: 100 + 75 * 10, input: LiveInput::Panic },
+            LiveLogEntry { sample: 150, input: LiveInput::Key { channel: 0, note: 60, velocity: 90 } },
+            eval(1000, "after.start", None),
+        ];
+        assert_eq!(
+            transcript(&log, 100, 1000, 10.0),
+            "// 0:00 · next bar\nbass.start\n\n// 1:15 · panic\n\n"
+        );
+    }
+}

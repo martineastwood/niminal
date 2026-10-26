@@ -154,6 +154,18 @@ pub fn start_midi(
     server: &LiveShared,
     filter: &str,
 ) -> Result<(Vec<MidiInputConnection<()>>, Vec<String>), String> {
+    let server = server.clone();
+    open_midi(filter, move |signal| {
+        lock(&server).live_mut().control_input(signal);
+    })
+}
+
+/// Like [`start_midi`], handing each message that parses to `deliver`, for a client that holds its
+/// sequencer another way.
+pub fn open_midi(
+    filter: &str,
+    deliver: impl Fn(&ControlSignal) + Clone + Send + 'static,
+) -> Result<(Vec<MidiInputConnection<()>>, Vec<String>), String> {
     let probe = MidiInput::new("niminal").map_err(|e| format!("can't use MIDI: {e}"))?;
     let mut connections = Vec::new();
     let mut names = Vec::new();
@@ -165,14 +177,14 @@ pub fn start_midi(
             continue;
         }
         let input = MidiInput::new("niminal").map_err(|e| format!("can't use MIDI: {e}"))?;
-        let server = server.clone();
+        let deliver = deliver.clone();
         let connection = input
             .connect(
                 &port,
                 "niminal-in",
                 move |_, bytes, _| {
                     if let Some(signal) = parse_midi(bytes) {
-                        lock(&server).live_mut().control_input(&signal);
+                        deliver(&signal);
                     }
                 },
                 (),

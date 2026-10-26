@@ -36,3 +36,28 @@ pub fn replay(
 }
 
 pub const DEFAULT_SAMPLE_RATE: u32 = SAMPLE_RATE;
+
+/// The part of `audio` from `from` seconds to `to` seconds (or its end).
+pub fn slice(audio: Vec<Vec<f32>>, from: f64, to: Option<f64>, sample_rate: u32) -> Vec<Vec<f32>> {
+    let frame = |seconds: f64| (seconds.max(0.0) * f64::from(sample_rate)).round() as usize;
+    audio
+        .into_iter()
+        .map(|channel| {
+            let end = to.map_or(channel.len(), frame).min(channel.len());
+            channel[frame(from).min(end)..end].to_vec()
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::slice;
+
+    #[test]
+    fn slicing_keeps_the_seconds_asked_for() {
+        let audio = vec![(0..10).map(|i| i as f32).collect::<Vec<_>>()];
+        assert_eq!(slice(audio.clone(), 2.0, Some(5.0), 1)[0], [2.0, 3.0, 4.0]);
+        assert_eq!(slice(audio.clone(), 8.0, None, 1)[0], [8.0, 9.0]);
+        assert!(slice(audio, 20.0, Some(30.0), 1)[0].is_empty());
+    }
+}

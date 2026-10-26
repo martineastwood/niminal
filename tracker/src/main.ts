@@ -691,7 +691,7 @@ async function importSamples() {
     if (files.length) status(`Added ${files.length} sampler${files.length > 1 ? 's' : ''}`);
   } catch (error) { status(`Could not import samples: ${error}`); }
 }
-/** Several WAV files as one instrument with a sample on each key from C-4. */
+/** Several audio files as one instrument with a sample on each key from C-4. */
 async function importKit() {
   if (!isTauri()) { status('Importing samples needs the desktop app'); return; }
   try {

@@ -17,6 +17,11 @@ function snapshot(overrides: Partial<Snapshot>): Snapshot {
     pending: [],
     landed: [],
     notices: [],
+    master: [],
+    levels: { nodes: {}, buses: {} },
+    health: null,
+    learned: [],
+    midi: { inputs: [], last: null },
     error: null,
     ...overrides,
   };

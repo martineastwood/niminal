@@ -17,6 +17,8 @@ mod mixer;
 mod op_dispatch;
 mod opcode;
 pub mod ops;
+mod sample_file;
+pub use sample_file::{AUDIO_EXTENSIONS, is_audio, read_sample_file};
 mod table;
 mod voice;
 mod waveform;

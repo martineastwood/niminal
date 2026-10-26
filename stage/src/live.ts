@@ -71,6 +71,21 @@ export type Snapshot = {
   pending: Pending[];
   landed: { id: number; at: number; position: { bar: number; beat: number }; changes: string[] }[];
   notices: string[];
+  /** The loudest sample on each output channel since the last snapshot. */
+  master: number[];
+  /** The same for each clip and each bus, by name. */
+  levels: { nodes: Record<string, number>; buses: Record<string, number> };
+  /** The engine's running counts of things that make audio glitch; null when it does not play in real time. */
+  health: {
+    late_events: number;
+    starved_frames: number;
+    deadline_misses: number;
+    capacity_drops: number;
+    max_render_micros: number;
+  } | null;
+  /** Controls that took a MIDI control change since the last snapshot. */
+  learned: { control: string; source: string }[];
+  midi: { inputs: string[]; last: string | null };
   error: string | null;
 };
 
@@ -119,8 +134,14 @@ export const stage = {
   get desktop() {
     return desktop;
   },
-  connect(port: number, token: string) {
-    return invoke<void>('connect', { port, token: token || null });
+  async connect(port: number, token: string) {
+    await invoke<void>('connect', { port, token: token || null });
+    // a missing MIDI device must not stop the stage
+    await this.openMidi('').catch(() => []);
+  },
+  /** Listen to the MIDI inputs whose names contain `filter` (all of them when empty); returns their names. */
+  openMidi(filter: string) {
+    return invoke<string[]>('midi_open', { filter: filter || null });
   },
   disconnect() {
     return invoke<void>('disconnect');
@@ -153,6 +174,14 @@ export const stage = {
   },
   saveFileAs(source: string) {
     return invoke<string | null>('save_file_as', { source });
+  },
+  /** Render engine samples `from` to `to` to a WAV file the user picks, from the engine's own session log. */
+  renderTake(from: number, to: number) {
+    return invoke<string | null>('render_take', { from, to });
+  },
+  /** Save what was evaluated in samples `from` to `to` as a script the user picks the place of. */
+  saveTranscript(from: number, to: number) {
+    return invoke<string | null>('save_transcript', { from, to });
   },
   lspMessage(message: unknown) {
     return invoke<unknown[]>('lsp_message', { message });
@@ -211,4 +240,48 @@ export function laneSignature(clips: Clip[]) {
       clip.lanes.map(lane => [lane.name, lane.events.map(event => [event.start, event.dur, event.value])]),
     ]),
   );
+}
+
+/** How many beats until sample `landsAt`, with `elapsed` seconds gone since the snapshot was taken. */
+export function beatsUntil(snapshot: Snapshot, landsAt: number, elapsed = 0) {
+  const t = snapshot.transport;
+  if (!t || !snapshot.sample_rate) return 0;
+  const now = t.sample + elapsed * snapshot.sample_rate;
+  return Math.max(0, ((landsAt - now) / snapshot.sample_rate) * (t.bpm / 60));
+}
+
+export type Queued = { kind: 'start' | 'stop'; landsAt: number };
+
+/**
+ * The start or stop each clip and scene has waiting, from the changes that have not landed yet. A scene's
+ * start is also a start for each of its clips that is not playing, and a stop for each playing clip of
+ * another scene that it does not use, because that is what lands.
+ */
+export function queuedStates(snapshot: Snapshot) {
+  const queued = new Map<string, Queued>();
+  const set = (name: string, kind: Queued['kind'], landsAt: number) => {
+    if (!queued.has(name)) queued.set(name, { kind, landsAt });
+  };
+  const byTime = [...snapshot.pending].sort((a, b) => a.lands_at - b.lands_at);
+  for (const change of byTime) {
+    for (const text of change.changes) {
+      const match = /^\s*([A-Za-z_]\w*)\.(start|stop)\b/.exec(text);
+      if (!match) continue;
+      const [, name, kind] = match;
+      const scene = snapshot.scenes.find(s => s.name === name);
+      set(name, kind as Queued['kind'], change.lands_at);
+      if (!scene) continue;
+      const running = (clip: string) => snapshot.clips.some(c => c.name === clip && c.running);
+      if (kind === 'stop') {
+        for (const clip of scene.clips) if (running(clip)) set(clip, 'stop', change.lands_at);
+        continue;
+      }
+      for (const clip of scene.clips) if (!running(clip)) set(clip, 'start', change.lands_at);
+      for (const other of snapshot.scenes) {
+        if (other === scene) continue;
+        for (const clip of other.clips) if (!scene.clips.includes(clip) && running(clip)) set(clip, 'stop', change.lands_at);
+      }
+    }
+  }
+  return queued;
 }

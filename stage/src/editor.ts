@@ -17,6 +17,7 @@ import { colours, niminal } from '../../editors/codemirror/language';
 import { languageTransport } from './transport';
 import { stage } from './live';
 import { highlightExtensions } from './highlight';
+import { scrubbing } from './scrub';
 
 export const lsp = new LSPClient({
   extensions: [
@@ -93,6 +94,7 @@ export function niminalEditor(source: string, uri: string, apply: (scope: Scope)
           },
         ]),
       ),
+      scrubbing(() => apply('chunk')),
       basicSetup,
       EditorView.lineWrapping,
       niminal,

@@ -140,6 +140,13 @@ pub struct Landed {
     pub changes: Vec<String>,
 }
 
+/// How loud each node (a clip's sound) and bus has been, as a linear peak, since the last reading.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct Levels {
+    pub nodes: BTreeMap<String, f32>,
+    pub buses: BTreeMap<String, f32>,
+}
+
 /// A change waiting to land.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct PendingInfo {
@@ -269,6 +276,9 @@ pub struct Live {
     version: u64,
     log: Vec<LiveLogEntry>,
     peaks: Vec<f32>,
+    /// The loudest sample of each node and bus (by name) since [`Live::take_levels`], across channels.
+    node_peaks: BTreeMap<String, f32>,
+    bus_peaks: BTreeMap<String, f32>,
     /// Where the next evaluation lands, whatever its quantum says: a clip's `then:` lands where the
     /// clip's last pass ends.
     landing_at: Option<u64>,
@@ -351,6 +361,8 @@ impl Live {
             version: 0,
             log: Vec::new(),
             peaks: vec![0.0; layout.channels()],
+            node_peaks: BTreeMap::new(),
+            bus_peaks: BTreeMap::new(),
             landing_at: None,
             armed: Vec::new(),
             arming: false,
@@ -504,6 +516,10 @@ impl Live {
                         for (mine, theirs) in self.peaks.iter_mut().zip(peaks) {
                             *mine = mine.max(theirs.as_f64().unwrap_or(0.0) as f32);
                         }
+                    }
+                    for client in params["routing"].as_array().into_iter().flatten() {
+                        note_peaks(&mut self.node_peaks, &client["nodes"]);
+                        note_peaks(&mut self.bus_peaks, &client["buses"]);
                     }
                 }
                 _ => {}
@@ -797,6 +813,26 @@ impl Live {
     /// The loudest sample on each output channel since this was last called.
     pub fn take_peaks(&mut self) -> Vec<f32> {
         std::mem::replace(&mut self.peaks, vec![0.0; self.layout.channels()])
+    }
+
+    /// The loudest sample of each node and each bus since this was last called, by the name the project gives it.
+    pub fn take_levels(&mut self) -> Levels {
+        // the names stay, at silence: the engine reports less often than this is read, and a name that
+        // came and went with each reading would make a meter flicker in and out
+        let silence = |peaks: &mut BTreeMap<String, f32>| {
+            let read = peaks.clone();
+            peaks.values_mut().for_each(|peak| *peak = 0.0);
+            read
+        };
+        Levels {
+            nodes: silence(&mut self.node_peaks),
+            buses: silence(&mut self.bus_peaks),
+        }
+    }
+
+    /// What was evaluated between engine samples `from` and `to`, as a script (see [`crate::log::transcript`]).
+    pub fn transcript(&self, from: u64, to: u64) -> String {
+        crate::log::transcript(&self.log, from, to, self.sample_rate)
     }
 
     /// Everything that was sent to the sequencer, with when.
@@ -1459,6 +1495,41 @@ fn definition_ops(
     ops
 }
 
+/// The peaks of the nodes or buses in an engine `meters` report, as one level each: the loudest channel.
+fn note_peaks(into: &mut BTreeMap<String, f32>, entries: &serde_json::Value) {
+    // what the engine no longer lists is gone
+    let listed: Vec<String> = entries
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry["id"].as_str().and_then(routing_name))
+        .collect();
+    into.retain(|name, _| listed.contains(name));
+    for entry in entries.as_array().into_iter().flatten() {
+        let Some(name) = entry["id"].as_str().and_then(routing_name) else {
+            continue;
+        };
+        let peak = entry["peaks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_f64)
+            .fold(0.0, f64::max) as f32;
+        let level = into.entry(name).or_insert(0.0);
+        *level = level.max(peak);
+    }
+}
+
+/// The name a routing id was made from: the inverse of [`routing_id`].
+fn routing_name(id: &str) -> Option<String> {
+    let hex = id.strip_prefix("live_")?;
+    let bytes = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
+        .collect::<Option<Vec<u8>>>()?;
+    String::from_utf8(bytes).ok()
+}
+
 pub(super) fn routing_id(name: &str) -> String {
     format!(
         "live_{}",
@@ -1633,4 +1704,24 @@ fn position_object<S: serde::Serializer>(position: &(u64, f64), out: S) -> Resul
     object.serialize_field("bar", &position.0)?;
     object.serialize_field("beat", &position.1)?;
     object.end()
+}
+
+#[cfg(test)]
+mod level_tests {
+    use super::*;
+
+    #[test]
+    fn routing_ids_name_their_nodes_again() {
+        assert_eq!(routing_name(&routing_id("bass line")), Some("bass line".into()));
+        assert_eq!(routing_name("sum"), None);
+    }
+
+    #[test]
+    fn a_nodes_level_is_its_loudest_channel() {
+        let mut levels = BTreeMap::new();
+        let report = serde_json::json!([{ "id": routing_id("kick"), "peaks": [0.25, 0.5] }]);
+        note_peaks(&mut levels, &report);
+        note_peaks(&mut levels, &serde_json::json!([{ "id": routing_id("kick"), "peaks": [0.1, 0.2] }]));
+        assert_eq!(levels["kick"], 0.5);
+    }
 }

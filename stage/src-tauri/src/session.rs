@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use niminal_lang::{Layout, Problem};
 use niminal_live::{
-    Accepted, Begin, ClipStatus, Landed, Live, LiveServer, ParsedEval, PendingInfo, SceneStatus,
+    Accepted, Begin, ClipStatus, Landed, Levels, Live, LiveServer, ParsedEval, PendingInfo, SceneStatus,
     Transport, WsLink,
 };
 use niminal_server::EngineReply;
@@ -21,6 +21,18 @@ pub struct Shared {
     engine: Mutex<Option<Child>>,
     /// Changes whenever the project does, so the window can redraw only when it needs to.
     revision: AtomicU64,
+    /// The engine's last health reading and when it was taken: asking is a full status request.
+    health: Mutex<Option<(Instant, Option<Health>)>>,
+    /// The MIDI inputs that are open, and the last message that came in on them.
+    midi: Mutex<Midi>,
+}
+
+#[derive(Default)]
+struct Midi {
+    /// Held so that the inputs stay open until they are replaced.
+    _open: Vec<midir::MidiInputConnection<()>>,
+    names: Vec<String>,
+    last: Arc<Mutex<Option<String>>>,
 }
 
 impl Shared {
@@ -29,6 +41,8 @@ impl Shared {
             session: Mutex::new(None),
             engine: Mutex::new(None),
             revision: AtomicU64::new(0),
+            health: Mutex::new(None),
+            midi: Mutex::new(Midi::default()),
         }
     }
 
@@ -150,8 +164,9 @@ pub fn connect(shared: &Shared, port: u16, token: Option<&str>) -> Result<(), St
         return Err("the engine did not say what its audio format is".into());
     };
     let layout = Layout::standard(channels as u16)?;
-    let live = Live::new(Box::new(link), sample_rate, layout)
+    let mut live = Live::new(Box::new(link), sample_rate, layout)
         .with_clock_sync(Duration::from_millis(100));
+    live.set_metering(true);
     if let Some(child) = started
         && let Some(mut old) = lock(&shared.engine).replace(child)
     {
@@ -170,6 +185,135 @@ pub fn disconnect(shared: &Shared) {
     shared.bump();
 }
 
+/// Open the MIDI inputs whose names contain `filter` (all of them when it is empty), in place of any that
+/// were open. Controls bound with `midi.cc` and `midi.learn`, and clips played `midi.keys`, hear them.
+pub fn open_midi(shared: &Arc<Shared>, filter: &str) -> Result<Vec<String>, String> {
+    let mut midi = lock(&shared.midi);
+    midi._open.clear();
+    midi.names.clear();
+    let last = midi.last.clone();
+    let session = shared.clone();
+    let opened = niminal_live_cli::input::open_midi(filter, move |signal| {
+        *lock(&last) = describe(signal);
+        if let Some(server) = lock(&session.session).as_mut() {
+            server.live_mut().control_input(signal);
+        }
+    });
+    match opened {
+        Ok((connections, names)) => {
+            midi._open = connections;
+            midi.names = names.clone();
+            Ok(names)
+        }
+        // no devices is not a failure of the stage
+        Err(e) if e.starts_with("no MIDI input") => Ok(Vec::new()),
+        Err(e) => Err(e),
+    }
+}
+
+fn describe(signal: &niminal_live::ControlSignal) -> Option<String> {
+    use niminal_live::ControlSignal::*;
+    match signal {
+        MidiCc { cc, channel, value } => Some(format!("cc {cc} = {value} · ch {channel}")),
+        MidiNote { note, velocity, .. } if *velocity > 0 => Some(format!("note {note}")),
+        _ => None,
+    }
+}
+
+/// What was evaluated between engine samples `from` and `to`, as a script.
+pub fn transcript(shared: &Shared, from: u64, to: u64) -> Result<String, String> {
+    let mut guard = lock(&shared.session);
+    let session = guard.as_mut().ok_or("the stage is not connected to an engine")?;
+    Ok(session.live_mut().transcript(from, to))
+}
+
+/// The newest session log the engine wrote: every server records what it is sent in `~/.niminal/sessions`.
+fn newest_session_log() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    std::fs::read_dir(PathBuf::from(home).join(".niminal").join("sessions"))
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|e| e == "log"))
+        .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
+        .max()
+        .map(|(_, path)| path)
+}
+
+/// Render engine samples `from` to `to` of the session to a WAV file by replaying the engine's own log.
+pub fn render_take(shared: &Shared, from: u64, to: u64, out: &Path) -> Result<String, String> {
+    let (rate, channels) = {
+        let mut guard = lock(&shared.session);
+        let session = guard.as_mut().ok_or("the stage is not connected to an engine")?;
+        let live = session.live_mut();
+        (live.sample_rate(), live.channels())
+    };
+    let log = newest_session_log().ok_or(
+        "There is no session log to render from. The engine writes one to ~/.niminal/sessions unless it was started with --no-log.",
+    )?;
+    let binary = find_binary().ok_or("Could not find the niminal program to replay the log with.")?;
+    let seconds = |sample: u64| (sample as f64 / f64::from(rate)).to_string();
+    let output = Command::new(binary)
+        .arg("replay")
+        .arg(&log)
+        .arg("--out")
+        .arg(out)
+        .args(["--channels", &channels.to_string()])
+        .args(["--sample-rate", &(rate.round() as u32).to_string()])
+        .args(["--from", &seconds(from), "--to", &seconds(to)])
+        .output()
+        .map_err(|e| format!("Could not run niminal replay: {e}"))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+/// How often to ask the engine how it is doing.
+const HEALTH_EVERY: Duration = Duration::from_millis(1000);
+
+/// A `ctl` that was bound with `midi.learn` and what the line should now say.
+#[derive(Debug, Clone, Serialize)]
+pub struct Learned {
+    pub control: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct MidiStatus {
+    /// The MIDI inputs that are open.
+    pub inputs: Vec<String>,
+    /// The last control change or note that came in, to show that something is arriving.
+    pub last: Option<String>,
+}
+
+/// The engine's count of things that go wrong while it plays. They only ever go up.
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct Health {
+    /// Notes that arrived after the moment they were for.
+    pub late_events: u64,
+    /// Audio frames the engine had to make up because it was not ready.
+    pub starved_frames: u64,
+    /// Audio blocks that took longer to make than they last.
+    pub deadline_misses: u64,
+    /// Voices or events dropped because the engine was full.
+    pub capacity_drops: u64,
+    /// The longest a block took to make, in microseconds.
+    pub max_render_micros: u64,
+}
+
+fn health_from(status: &serde_json::Value) -> Option<Health> {
+    let realtime = status.get("realtime").filter(|r| r.is_object())?;
+    let count = |name: &str| realtime[name].as_u64().unwrap_or(0);
+    Some(Health {
+        late_events: count("late_events"),
+        starved_frames: count("starved_frames"),
+        deadline_misses: count("deadline_misses"),
+        capacity_drops: count("capacity_drops"),
+        max_render_micros: count("max_render_micros"),
+    })
+}
+
 pub fn snapshot(shared: &Shared) -> Snapshot {
     let mut guard = lock(&shared.session);
     let Some(session) = guard.as_mut() else {
@@ -181,6 +325,13 @@ pub fn snapshot(shared: &Shared) -> Snapshot {
     };
     let live = session.live_mut();
     let tempo = live.tempo();
+    let health = {
+        let mut last = lock(&shared.health);
+        if last.as_ref().is_none_or(|(at, _)| at.elapsed() >= HEALTH_EVERY) {
+            *last = Some((Instant::now(), health_from(&live.engine_status())));
+        }
+        last.as_ref().and_then(|(_, health)| health.clone())
+    };
     Snapshot {
         connected: true,
         revision: shared.revision.load(Ordering::Relaxed),
@@ -194,6 +345,22 @@ pub fn snapshot(shared: &Shared) -> Snapshot {
         pending: live.pending(),
         landed: live.take_landed(),
         notices: live.take_notices(),
+        master: live.take_peaks(),
+        levels: live.take_levels(),
+        health,
+        learned: live
+            .take_learned()
+            .into_iter()
+            .map(|(control, source)| Learned { control, source })
+            .collect(),
+        midi: {
+            let midi = lock(&shared.midi);
+            let last = lock(&midi.last).clone();
+            MidiStatus {
+                inputs: midi.names.clone(),
+                last,
+            }
+        },
         error: None,
     }
 }
@@ -311,5 +478,14 @@ pub struct Snapshot {
     pub pending: Vec<PendingInfo>,
     pub landed: Vec<Landed>,
     pub notices: Vec<String>,
+    /// The loudest sample on each output channel since the last snapshot.
+    pub master: Vec<f32>,
+    /// The same for each node and bus.
+    pub levels: Levels,
+    /// How the engine is coping, if it plays in real time.
+    pub health: Option<Health>,
+    /// Controls that took a MIDI control change since the last snapshot, to be written into the code.
+    pub learned: Vec<Learned>,
+    pub midi: MidiStatus,
     pub error: Option<String>,
 }

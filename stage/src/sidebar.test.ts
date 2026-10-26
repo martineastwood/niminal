@@ -24,7 +24,7 @@ const clip: Clip = {
 };
 
 const snapshot = (): Snapshot =>
-  ({ connected: true, clips: [clip], scenes: [], pending: [], landed: [], notices: [], transport: null }) as unknown as Snapshot;
+  ({ connected: true, clips: [clip], scenes: [], pending: [], landed: [], notices: [], transport: null, master: [], levels: { nodes: {}, buses: {} }, learned: [], midi: { inputs: [], last: null } }) as unknown as Snapshot;
 
 describe('a clip in the sidebar', () => {
   it('is one line with the changes made to it in order, the newest marked', () => {

@@ -1,6 +1,7 @@
 import { CLIP_COLOURS } from './highlight';
 import { mod, shortcuts } from './shortcuts';
-import { Clip, Lane, LaneEvent, Snapshot, isSounding, phaseOf, windowOf } from './live';
+import { Bar } from './meters';
+import { Clip, Lane, LaneEvent, Queued, Snapshot, beatsUntil, isSounding, phaseOf, queuedStates, windowOf } from './live';
 
 type ActionHandler = (action: string, target?: string, change?: string) => void;
 
@@ -16,6 +17,10 @@ type Row = {
   playhead: HTMLElement;
   notes: NoteElement[];
   parameters: NoteElement[];
+  /** The countdown to a queued start or stop, if there is one. */
+  eta: HTMLElement | null;
+  /** How loud the clip is. */
+  bar: Bar;
   active: Set<HTMLElement>;
   /** The whole cycle it was last in, so the clip can pulse as each begins. */
   cycle: number;
@@ -65,6 +70,9 @@ export class LaneView {
   private signature = '';
   /** The clips opened to show their lanes and the stack of changes made to them. */
   private open = new Set<string>();
+  private queued = new Map<string, Queued>();
+  private buses = new Map<string, Bar>();
+  private frameAt = performance.now();
 
   constructor(
     private root: HTMLElement,
@@ -80,8 +88,10 @@ export class LaneView {
   update(snapshot: Snapshot) {
     this.snapshot = snapshot;
     this.updatedAt = performance.now();
+    this.queued = queuedStates(snapshot);
     const signature = JSON.stringify([
       snapshot.connected,
+      Object.keys(snapshot.levels.buses),
       snapshot.scenes.map(scene => scene.name),
       snapshot.clips.map(clip => [
         clip.name,
@@ -89,6 +99,7 @@ export class LaneView {
         clip.running,
         clip.muted,
         clip.soloed,
+        this.queued.get(clip.name)?.kind,
         clip.edits,
         clip.length,
         clip.endless,
@@ -107,12 +118,17 @@ export class LaneView {
     }
     for (const clip of snapshot.clips) {
       const row = this.rows.get(clip.name);
-      if (row) row.clip = clip;
+      if (row) {
+        row.clip = clip;
+        row.bar.push(snapshot.levels.nodes[clip.name] ?? 0);
+      }
     }
+    for (const [name, bar] of this.buses) bar.push(snapshot.levels.buses[name] ?? 0);
   }
 
   private rebuild(snapshot: Snapshot) {
     this.rows.clear();
+    this.buses.clear();
     this.root.replaceChildren();
     if (!snapshot.connected) {
       const empty = element('div', 'stage-empty');
@@ -140,6 +156,19 @@ export class LaneView {
       this.root.append(hint);
     }
     snapshot.clips.forEach((clip, index) => this.root.append(this.row(clip, index)));
+    const buses = Object.keys(snapshot.levels.buses).sort();
+    if (buses.length) {
+      const section = element('section', 'buses');
+      section.append(text('div', 'buses-title', 'buses'));
+      for (const name of buses) {
+        const line = element('div', 'bus');
+        const bar = new Bar();
+        this.buses.set(name, bar);
+        line.append(text('span', 'bus-name', name), bar.element);
+        section.append(line);
+      }
+      this.root.append(section);
+    }
   }
 
   /** The shortcuts, as a grid of keys and what they do. */
@@ -169,6 +198,8 @@ export class LaneView {
     article.classList.toggle('idle', !clip.running);
     const open = this.open.has(clip.name);
     article.classList.toggle('open', open);
+    const queued = this.queued.get(clip.name);
+    if (queued) article.classList.add(`queued-${queued.kind}`);
 
     // one line: what it is, what has been done to it, and the controls that matter live
     const head = element('header', 'clip-head');
@@ -184,6 +215,14 @@ export class LaneView {
       stack.append(chip);
     });
     head.append(stack, element('span', 'clip-spacer'));
+    const bar = new Bar('clip-meter');
+    head.append(bar.element);
+    let eta: HTMLElement | null = null;
+    if (queued) {
+      eta = text('span', 'queued-eta', '');
+      eta.title = `${queued.kind === 'start' ? 'Starts' : 'Stops'} at the next boundary`;
+      head.append(eta);
+    }
 
     const controls = element('span', 'clip-controls');
     const running = button(
@@ -248,7 +287,7 @@ export class LaneView {
       });
     });
 
-    const row: Row = { clip, element: article, playhead, notes, parameters, active: new Set(), cycle: -1 };
+    const row: Row = { clip, element: article, playhead, notes, parameters, eta, bar, active: new Set(), cycle: -1 };
     this.rows.set(clip.name, row);
     return article;
   }
@@ -304,6 +343,13 @@ export class LaneView {
 
   /** Move the playheads and light the notes that are sounding. */
   private paint() {
+    const now = performance.now();
+    const passed = Math.min((now - this.frameAt) / 1000, 0.25);
+    this.frameAt = now;
+    for (const bar of [...[...this.rows.values()].map(row => row.bar), ...this.buses.values()]) {
+      bar.step(passed);
+      bar.draw();
+    }
     const snapshot = this.snapshot;
     if (!snapshot?.transport) return;
     const bpm = snapshot.transport.bpm;
@@ -311,6 +357,8 @@ export class LaneView {
     const elapsed = (performance.now() - this.updatedAt) / 1000;
     for (const row of this.rows.values()) {
       const clip = row.clip;
+      const queued = row.eta && this.queued.get(clip.name);
+      if (row.eta && queued) row.eta.textContent = `${queued.kind === 'start' ? '▶' : '■'} in ${beatsUntil(snapshot, queued.landsAt, elapsed).toFixed(1)}`;
       if (!clip.running || clip.cycles == null) {
         row.playhead.style.opacity = '0';
         for (const node of row.active) node.classList.remove('active');

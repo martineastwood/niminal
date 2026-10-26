@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod project;
+mod samples;
 mod session;
 
 use std::path::Path;
@@ -30,6 +31,15 @@ async fn connect(state: State<'_, AppState>, port: u16, token: Option<String>) -
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Listen to the MIDI inputs whose names contain `filter` (all of them when empty); returns their names.
+#[tauri::command]
+async fn midi_open(state: State<'_, AppState>, filter: Option<String>) -> Result<Vec<String>, String> {
+    let shared = state.shared.clone();
+    tauri::async_runtime::spawn_blocking(move || session::open_midi(&shared, filter.as_deref().unwrap_or("")))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -209,6 +219,70 @@ async fn save_file_as(source: String) -> Result<Option<String>, String> {
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
+/// Save what was evaluated during a take as a script, for reading or for pasting back into a piece.
+#[tauri::command]
+async fn save_transcript(state: State<'_, AppState>, from: u64, to: u64) -> Result<Option<String>, String> {
+    let text = session::transcript(&state.shared, from, to)?;
+    if text.is_empty() {
+        return Err("Nothing was evaluated during that take.".into());
+    }
+    let Some(file) = rfd::AsyncFileDialog::new()
+        .add_filter("niminal", &["nml"])
+        .set_file_name("take.nml")
+        .save_file()
+        .await
+    else {
+        return Ok(None);
+    };
+    let path = file.path().to_path_buf();
+    std::fs::write(&path, text).map_err(|e| e.to_string())?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+/// Render a take to audio by replaying the engine's session log over its stretch.
+#[tauri::command]
+async fn render_take(state: State<'_, AppState>, from: u64, to: u64) -> Result<Option<String>, String> {
+    let Some(file) = rfd::AsyncFileDialog::new()
+        .add_filter("WAV audio", &["wav"])
+        .set_file_name("take.wav")
+        .save_file()
+        .await
+    else {
+        return Ok(None);
+    };
+    let (shared, path) = (state.shared.clone(), file.path().to_path_buf());
+    tauri::async_runtime::spawn_blocking(move || session::render_take(&shared, from, to, &path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map(Some)
+}
+
+/// The audio files under a folder, for the sample browser.
+#[tauri::command]
+async fn list_samples(dir: String) -> Result<Vec<samples::SampleFile>, String> {
+    tauri::async_runtime::spawn_blocking(move || samples::list(Path::new(&dir)))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// An audio file as WAV bytes, sent as they are rather than as a list of numbers.
+#[tauri::command]
+async fn read_sample(path: String) -> Result<tauri::ipc::Response, String> {
+    tauri::async_runtime::spawn_blocking(move || samples::read(Path::new(&path)))
+        .await
+        .map_err(|e| e.to_string())?
+        .map(tauri::ipc::Response::new)
+}
+
+/// Ask for a folder; its path, or nothing if the dialog was closed.
+#[tauri::command]
+async fn pick_folder() -> Result<Option<String>, String> {
+    Ok(rfd::AsyncFileDialog::new()
+        .pick_folder()
+        .await
+        .map(|folder| folder.path().to_string_lossy().into_owned()))
+}
+
 /// The same LSP implementation as `niminal-live lsp`, without a child process. Compilation stays off the
 /// window thread and the frontend keeps messages in document order.
 #[tauri::command]
@@ -300,6 +374,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             connect,
             disconnect,
+            midi_open,
             snapshot,
             eval,
             perform,
@@ -308,6 +383,11 @@ fn main() {
             open_project,
             save_file,
             save_file_as,
+            list_samples,
+            read_sample,
+            pick_folder,
+            save_transcript,
+            render_take,
             lsp_message
         ])
         .build(tauri::generate_context!())

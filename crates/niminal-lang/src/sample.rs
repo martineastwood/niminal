@@ -86,12 +86,12 @@ impl Samples {
         }
     }
 
-    /// Load a WAV as one table per channel.
+    /// Load an audio or numeric file as one table per channel.
     pub fn load(&self, path: &str) -> Result<Vec<Arc<Table>>, String> {
         self.load_file(&self.resolve(path))
     }
 
-    /// Load one channel of a WAV as a table (`channel` counts from 0).
+    /// Load one channel of an audio or numeric file as a table (`channel` counts from 0).
     pub fn load_channel(
         &self,
         path: &str,
@@ -129,21 +129,13 @@ impl Samples {
         {
             return Ok(data.clone());
         }
-        let is_text = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "csv" | "txt" | "dat"));
-        let tables = if is_text {
-            read_text(path)?
-        } else {
-            read_wav(path)?
-        };
+        let tables = niminal_engine::read_sample_file(path)?;
         let data = tables.into_iter().map(Arc::new).collect::<Vec<_>>();
         cache.insert(path.to_path_buf(), (modified, data.clone()));
         Ok(data)
     }
 
-    /// Every WAV file in a folder, by name without the extension, in name order.
+    /// Every audio file in a folder, by name without the extension, in name order.
     /// Each entry is the file's channels as tables.
     pub fn load_kit(&self, path: &str) -> Result<Kit, String> {
         let dir = self.resolve(path);
@@ -152,11 +144,11 @@ impl Samples {
         let mut files: Vec<PathBuf> = entries
             .filter_map(Result::ok)
             .map(|e| e.path())
-            .filter(|p| p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("wav")))
+            .filter(|p| p.is_file() && is_audio(p))
             .collect();
         files.sort();
         if files.is_empty() {
-            return Err(format!("there are no .wav files in {}", dir.display()));
+            return Err(format!("there are no audio files in {}", dir.display()));
         }
         files
             .iter()
@@ -172,92 +164,45 @@ impl Samples {
     }
 }
 
-/// A text file of numbers, a row per line and a column per channel, split by commas, tabs or
-/// spaces. `#` starts a comment, and a first line that isn't numbers is a header.
-fn read_text(path: &Path) -> Result<Vec<Table>, String> {
-    let fail = |e: &dyn std::fmt::Display| format!("can't read {}: {e}", path.display());
-    let text = std::fs::read_to_string(path).map_err(|e| fail(&e))?;
-    let mut columns: Vec<Vec<f32>> = Vec::new();
-    let mut seen_row = false;
-    for (n, line) in text.lines().enumerate() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        let fields: Vec<&str> = line
-            .split(|c: char| c == ',' || c == ';' || c.is_whitespace())
-            .filter(|f| !f.is_empty())
-            .collect();
-        let row: Result<Vec<f32>, _> = fields.iter().map(|f| f.parse::<f32>()).collect();
-        let Ok(row) = row else {
-            if seen_row {
-                return Err(fail(&format!("line {} is not all numbers", n + 1)));
-            }
-            seen_row = true; // a header
-            continue;
-        };
-        seen_row = true;
-        if columns.is_empty() {
-            columns = vec![Vec::new(); row.len()];
-        } else if row.len() != columns.len() {
-            return Err(fail(&format!(
-                "line {} has {} values, the lines before it have {}",
-                n + 1,
-                row.len(),
-                columns.len()
-            )));
-        }
-        for (column, x) in columns.iter_mut().zip(row) {
-            column.push(x);
-        }
-    }
-    if columns.is_empty() {
-        return Err(format!("{} has no numbers in it", path.display()));
-    }
-    Ok(columns
-        .into_iter()
-        .map(|c| Table::from_f32(c.into_boxed_slice(), None))
-        .collect())
-}
-
-fn read_wav(path: &Path) -> Result<Vec<Table>, String> {
-    let fail = |e: &dyn std::fmt::Display| format!("can't read {}: {e}", path.display());
-    let mut reader = hound::WavReader::open(path).map_err(|e| fail(&e))?;
-    let spec = reader.spec();
-    let channels = usize::from(spec.channels);
-    let interleaved: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Float => reader
-            .samples::<f32>()
-            .collect::<Result<_, _>>()
-            .map_err(|e| fail(&e))?,
-        hound::SampleFormat::Int => {
-            let scale = 1.0 / (1_u64 << (spec.bits_per_sample - 1)) as f32;
-            reader
-                .samples::<i32>()
-                .map(|s| s.map(|v| v as f32 * scale))
-                .collect::<Result<_, _>>()
-                .map_err(|e| fail(&e))?
-        }
-    };
-    if channels == 0 || interleaved.is_empty() {
-        return Err(format!("{} has no audio in it", path.display()));
-    }
-    let mut buffers = vec![Vec::with_capacity(interleaved.len() / channels); channels];
-    for frame in interleaved.chunks_exact(channels) {
-        for (buffer, &x) in buffers.iter_mut().zip(frame) {
-            buffer.push(x);
-        }
-    }
-    let rate = Some(spec.sample_rate as f32);
-    Ok(buffers
-        .into_iter()
-        .map(|b| Table::from_f32(b.into_boxed_slice(), rate))
-        .collect())
-}
+pub use niminal_engine::{AUDIO_EXTENSIONS, is_audio};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_aiff_file_loads_like_a_wav() {
+        // 16-bit mono AIFF at 44100 Hz, four frames
+        let frames: [i16; 4] = [0, 16384, -16384, 32767];
+        let mut comm = Vec::new();
+        comm.extend(1_u16.to_be_bytes());
+        comm.extend(4_u32.to_be_bytes());
+        comm.extend(16_u16.to_be_bytes());
+        comm.extend([0x40, 0x0E, 0xAC, 0x44, 0, 0, 0, 0, 0, 0]);
+        let mut ssnd = vec![0_u8; 8];
+        for f in frames {
+            ssnd.extend(f.to_be_bytes());
+        }
+        let mut body = b"AIFF".to_vec();
+        for (id, data) in [(b"COMM", comm), (b"SSND", ssnd)] {
+            body.extend(id);
+            body.extend((data.len() as u32).to_be_bytes());
+            body.extend(data);
+        }
+        let mut file = b"FORM".to_vec();
+        file.extend((body.len() as u32).to_be_bytes());
+        file.extend(body);
+        let dir = std::env::temp_dir().join(format!("niminal-aiff-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.aiff"), file).unwrap();
+        let table = Samples::new(&dir)
+            .load_channel("a.aiff", 0, None, None)
+            .unwrap();
+        assert_eq!(table.len(), 4);
+        assert!((table.get(1) - 0.5).abs() < 1e-3 && (table.get(2) + 0.5).abs() < 1e-3);
+        assert!(is_audio(Path::new("x/Kick.FLAC")) && !is_audio(Path::new("x/notes.txt")));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn a_csv_is_a_table_for_each_column() {
