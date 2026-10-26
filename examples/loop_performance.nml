@@ -1,0 +1,22 @@
+// Evaluate the definitions and launch, then try the commands below one at a time.
+// The held loop follows tempo changes without restarting or changing pitch.
+config { channels: stereo }
+tempo 130bpm
+
+brk = sample("break.wav").beats(4).loop(forward)
+ctl transpose = 0st
+instr loop_voice(freq: hz) {
+  brk(freq: freq, pitch: transpose, stretch_mode: 2)
+}
+clip loop {
+  instrument: loop_voice
+  length: 16bars
+  notes: [c4]
+}
+loop.start
+
+// tempo 100bpm @ next bar over 4bars
+// ctl transpose = +3st
+// ctl transpose = 0st
+// tempo 160bpm @ next bar over 4bars
+// For tape-style tempo and pitch changes, redefine brk with `.mode(repitch)`.

@@ -1,5 +1,5 @@
 // Synthesised drums: kick, snare and hats from oscillators and noise.
-// Render with:  nimlive render examples/synth_drums.nml --out synth_drums.wav --bars 4
+// Render with:  niminal-live render examples/synth_drums.nml --out synth_drums.wav --bars 4
 config { channels: stereo }
 tempo 128bpm
 

@@ -139,6 +139,7 @@ pub fn project(
             | Item::Arrangement(_)
             | Item::Def(_)
             | Item::Command(_)
+            | Item::On(_)
             | Item::Note(_)
             | Item::For { .. }
             | Item::If { .. } => {}
@@ -215,10 +216,10 @@ pub fn project(
                                 arg.value.span,
                             ));
                         }
-                        // `beats(4)` becomes `duration(2sec)`
+                        // Keep duration connected to the live tempo, including on held voices.
                         text.replace_range(
                             name.span.start - span.start..arg.value.span.end - span.start,
-                            &format!("duration({}sec", value * 60.0 / tempo.bpm),
+                            &format!("duration({}sec / {LIVE_BPM}", value * 60.0),
                         );
                         changed = true;
                     }
@@ -273,6 +274,7 @@ pub fn project(
             };
             d
         })?;
+        uses_clock |= piece.text.contains(LIVE_BPM);
         uses_clock |= edits
             .iter()
             .any(|(_, replacement)| replacement.contains(LIVE_BPM));

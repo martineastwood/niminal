@@ -146,3 +146,113 @@ fn midi_learn_takes_the_next_control_change_and_reports_it() {
     // the control still follows what it learned
     assert_eq!(s.process(8)[0], vec![0.0 + 10.0; 8]);
 }
+
+const PADS: &str = "\ntempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip beat { instrument: pluck\n notes: [c4] }\nclip fill { instrument: pluck\n notes: [e4] }\non midi.note(36) beat.start\non midi.note(37, 10) {\n  fill.start\n  beat.stop\n}\non midi.cc(64) beat.reverse\non osc_in(\"/stop\") hush\n";
+
+fn running(s: &Offline) -> Vec<String> {
+    s.clips()
+        .into_iter()
+        .filter(|c| c.running)
+        .map(|c| c.name)
+        .collect()
+}
+
+fn note(note: u8, channel: u8, velocity: u8) -> ControlSignal<'static> {
+    ControlSignal::MidiNote {
+        note,
+        channel,
+        velocity,
+    }
+}
+
+#[test]
+fn a_key_can_run_commands() {
+    let mut s = session(PADS);
+    s.process(100);
+    assert!(running(&s).is_empty());
+    assert_eq!(s.control_input(&note(36, 1, 100)), 1);
+    s.process(96_000 * 2);
+    s.advance();
+    assert_eq!(running(&s), ["beat"], "the pad started the clip");
+    // the wrong channel, and a key coming up, do nothing
+    assert_eq!(s.control_input(&note(37, 1, 100)), 0);
+    assert_eq!(s.control_input(&note(37, 10, 0)), 0);
+    assert_eq!(s.control_input(&note(37, 10, 90)), 1);
+    s.process(96_000 * 2);
+    s.advance();
+    assert_eq!(running(&s), ["fill"], "both commands of the pad ran");
+}
+
+#[test]
+fn a_controller_sets_off_once_each_time_it_goes_down() {
+    let mut s = session(PADS);
+    s.eval("beat.start", Some("now")).unwrap();
+    s.process(96_000);
+    let edits = |s: &Offline| {
+        s.clips()
+            .into_iter()
+            .find(|c| c.name == "beat")
+            .unwrap()
+            .edits
+            .len()
+    };
+    let cc = |value| ControlSignal::MidiCc {
+        cc: 64,
+        channel: 1,
+        value,
+    };
+    assert_eq!(s.control_input(&cc(127)), 1);
+    assert_eq!(s.control_input(&cc(110)), 0, "still down");
+    s.process(96_000 * 2);
+    s.advance();
+    assert_eq!(edits(&s), 1);
+    assert_eq!(s.control_input(&cc(0)), 0);
+    assert_eq!(s.control_input(&cc(127)), 1, "down again");
+    s.process(96_000 * 2);
+    s.advance();
+    assert_eq!(edits(&s), 2);
+}
+
+#[test]
+fn an_osc_message_can_run_commands() {
+    let mut s = session(PADS);
+    s.eval("beat.start", Some("now")).unwrap();
+    s.process(96_000);
+    assert_eq!(
+        s.control_input(&ControlSignal::Osc {
+            address: "/other",
+            value: 1.0
+        }),
+        0
+    );
+    assert_eq!(
+        s.control_input(&ControlSignal::Osc {
+            address: "/stop",
+            value: 1.0
+        }),
+        1
+    );
+    s.process(96_000 * 2);
+    s.advance();
+    assert!(running(&s).is_empty(), "hush stopped everything");
+}
+
+#[test]
+fn pads_launch_scenes_and_each_switches_the_other_off() {
+    let mut s = session(
+        "\ntempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip drums { instrument: pluck\n notes: [c3] }\nclip bass { instrument: pluck\n notes: [c2] }\nclip pad { instrument: pluck\n notes: [e4] }\nscene verse { drums, bass\n launch: midi.note(36) }\nscene chorus { drums, pad\n launch: midi.note(37) }\n",
+    );
+    s.process(100);
+    s.control_input(&note(36, 1, 100));
+    s.process(96_000 * 2);
+    s.advance();
+    assert_eq!(running(&s), ["drums", "bass"], "the verse is playing");
+    s.control_input(&note(37, 1, 100));
+    s.process(96_000 * 2);
+    s.advance();
+    assert_eq!(
+        running(&s),
+        ["drums", "pad"],
+        "the chorus took over: bass stopped, drums carried on"
+    );
+}

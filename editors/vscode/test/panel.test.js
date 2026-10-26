@@ -6,8 +6,8 @@ test("a clip says whether it plays, what has been done to it, and whether it is 
   assert.strictEqual(clipDescription({ name: "a", running: false, muted: false, soloed: false }), "stopped");
   assert.strictEqual(clipDescription({ name: "a", running: true, muted: true, soloed: true }), "▶ · muted · solo");
   assert.strictEqual(
-    clipDescription({ name: "a", running: true, muted: false, soloed: false, edits: ["reverse", "thin(25%)"] }),
-    "▶ · reverse → thin(25%)",
+    clipDescription({ name: "a", running: true, muted: false, soloed: false, edits: ["reverse", "drop(25%)"] }),
+    "▶ · reverse → drop(25%)",
   );
 });
 

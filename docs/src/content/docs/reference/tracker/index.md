@@ -5,7 +5,7 @@ description: A desktop tracker for niminal — pattern grid, mixer and a code pa
 
 **Compiled by niminal.** The instrument and effect code you edit in the tracker is the same language as the server's half of a `.nml` file, compiled by the server as you press **Apply**. The notes, patterns, tracks and automation belong to the tracker's own project, not to a `.nml` file.
 
-The tracker is a desktop app: a keyboard-driven pattern grid, a mixer, and an editor for the code behind each sound. It connects directly to `niminal` and does not need `nimlive`, so the only program you need installed beside it is the server.
+The tracker is a desktop app: a keyboard-driven pattern grid, a mixer, and an editor for the code behind each sound. It connects directly to `niminal` and does not need `niminal-live`, so the only program you need installed beside it is the server.
 
 ## Open it
 

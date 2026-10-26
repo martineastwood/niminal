@@ -5,7 +5,7 @@
 config { channels: stereo }
 tempo 130bpm
 
-// the loop is four beats long; `.beats(4)` speeds it up or down to last four beats at the tempo
+// Fit four beats at the current tempo while preserving pitch; add `.mode(repitch)` for tape speed.
 brk = sample("break.wav").beats(4)
 chops = brk.slices(16)
 

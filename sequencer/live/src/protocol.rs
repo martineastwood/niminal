@@ -860,6 +860,7 @@ fn status_json(live: &mut Live) -> Value {
             "edits": c.edits,
             "length": c.length,
             "looped": c.looped,
+            "plays": c.plays,
             "endless": c.endless,
             "cycles": c.cycles,
             "lanes": c.lanes.iter().map(lane_json).collect::<Vec<_>>(),

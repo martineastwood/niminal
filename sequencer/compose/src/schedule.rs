@@ -105,7 +105,7 @@ impl Clock {
 }
 
 /// The passes of a clip, counting from 0, that overlap the cycles `first..last` since it began. An endless
-/// clip is one long pass, and a clip that does not loop has just the one.
+/// clip is one long pass, and a clip that plays `times: n` has just the n.
 fn loops(clip: &Clip, first: f64, last: f64) -> (i64, i64) {
     if clip.endless {
         return (0, 1);
@@ -113,10 +113,9 @@ fn loops(clip: &Clip, first: f64, last: f64) -> (i64, i64) {
     let length = clip.length.to_f64();
     let first_loop = (first / length).floor().max(0.0) as i64;
     let last_loop = ((last / length).ceil() as i64).max(1);
-    if clip.looped {
-        (first_loop, last_loop)
-    } else {
-        (first_loop.min(1), last_loop.min(1))
+    match clip.plays {
+        None => (first_loop, last_loop),
+        Some(n) => (first_loop.min(i64::from(n)), last_loop.min(i64::from(n))),
     }
 }
 
@@ -137,9 +136,10 @@ struct Segment {
 impl Segment {
     /// Has a clip that plays once come to its end by `at`?
     fn finished(&self, at: f64) -> bool {
-        !self.clip.looped
-            && !self.clip.endless
-            && self.clock.cycles_at(at) >= self.clip.length.to_f64()
+        self.clip.plays.is_some_and(|n| {
+            !self.clip.endless
+                && self.clock.cycles_at(at) >= self.clip.length.to_f64() * f64::from(n)
+        })
     }
 }
 
@@ -151,6 +151,18 @@ enum Gate {
     Unsolo(Option<usize>),
     /// `reset` and `new`: nothing is muted or soloed any more.
     Clear,
+}
+
+/// A clip that will play its last pass, and what it asks for then.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Finish {
+    pub node: usize,
+    /// When the clip began, which tells one run of a clip from the next.
+    pub origin: f64,
+    /// When its last pass ends, in seconds.
+    pub at: f64,
+    /// The statements from its `then:`.
+    pub then: Vec<String>,
 }
 
 /// What a part is doing at a moment, for showing in an editor.
@@ -388,6 +400,29 @@ impl Schedule {
             end = end.max(s.end?);
         }
         Some(end)
+    }
+
+    /// The clips with a `then:` that play through to their last pass, and when that ends. A clip that
+    /// is stopped or replaced before then is not among them.
+    pub fn finishes(&self) -> Vec<Finish> {
+        self.segments
+            .iter()
+            .filter_map(|s| {
+                let n = s.clip.plays?;
+                if s.clip.endless || s.clip.then.is_empty() {
+                    return None;
+                }
+                let at = s.clock.seconds_at(s.clip.length.to_f64() * f64::from(n));
+                s.end
+                    .is_none_or(|end| at <= end + END_SLACK)
+                    .then(|| Finish {
+                        node: s.node,
+                        origin: s.origin,
+                        at,
+                        then: s.clip.then.clone(),
+                    })
+            })
+            .collect()
     }
 
     /// The times at which `panic` silences everything.
@@ -863,7 +898,9 @@ impl Schedule {
                         into.rem_euclid(length)
                     };
                     let place = Rational::from_f64(in_loop);
-                    let over = !clip.looped && !clip.endless && into >= length;
+                    let over = clip
+                        .plays
+                        .is_some_and(|n| !clip.endless && into >= length * f64::from(n));
                     if let Some(hap) = pattern
                         .query(CycleSpan::new(place, place))
                         .into_iter()
@@ -1394,7 +1431,7 @@ mod tests {
             [60, 64, 60, 64]
         );
         assert_eq!(
-            order(&schedule("lead.__update([c4 e4].every(2, it.reverse))")),
+            order(&schedule("lead.__update([c4 e4].every(2, reverse))")),
             [64, 60, 60, 64, 64, 60, 60, 64]
         );
         assert_eq!(
@@ -1465,18 +1502,17 @@ mod tests {
 
     #[test]
     fn a_clip_that_does_not_loop_plays_once() {
-        let s = schedule(
-            "clip c { instrument: pluck, notes: [c4], length: 1bar, loop: false }\nc.start",
-        );
+        let s =
+            schedule("clip c { instrument: pluck, notes: [c4], length: 1bar, times: 1 }\nc.start");
         assert_eq!(notes(&s, 0.0, 10.0).len(), 1);
-        let s = schedule("clip c { instrument: pluck, notes: [c4], loop: false }\nc.start");
+        let s = schedule("clip c { instrument: pluck, notes: [c4], times: 1 }\nc.start");
         assert_eq!(notes(&s, 0.0, 10.0).len(), 1);
     }
 
     #[test]
     fn a_clip_that_has_finished_can_be_started_again() {
         let s = schedule(
-            "clip c { instrument: pluck, notes: [c4], length: 1bar, loop: false }\nc.start\nat +3bars c.start",
+            "clip c { instrument: pluck, notes: [c4], length: 1bar, times: 1 }\nc.start\nat +3bars c.start",
         );
         assert_eq!(notes(&s, 0.0, 10.0).len(), 2);
         let c = s.node_names.iter().position(|n| n == "c").unwrap();
@@ -1672,7 +1708,7 @@ mod tests {
 
     #[test]
     fn thinned_patterns_are_the_same_whichever_way_they_are_asked_for() {
-        let s = schedule("lead.__update([c4*8].thin(40%))");
+        let s = schedule("lead.__update([c4*8].drop(40%))");
         let whole = times(&s, 0.0, 16.0);
         let mut pieces = Vec::new();
         for i in 0..8 {

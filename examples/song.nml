@@ -17,7 +17,7 @@ instr pluck(freq: hz, bright: 0..1 = 0.5) {
 fx hall { out = space.reverb(room: 0.8, damp: 0.4).gain(0.8) }
 bassline = [c2 ~ c2 eb2 ~ g1 bb1 ~]
 groove   = [kick ~ ~ kick  snare ~ kick ~  kick ~ ~ kick  snare ~ ~ snare]
-tune     = [c4 e4 g4 b4].every(2, it.reverse)
+tune     = [c4 e4 g4 b4].every(2, reverse)
 
 clip beat { instrument: drums, notes: groove }
 clip hats { instrument: drums(gain: -8db), notes: [hat hat hat hat hat hat hat hat] }

@@ -16,6 +16,8 @@ const PORTS: &[Port] = &[
     Port::optional("loop_start", 0.0),
     Port::optional("loop_end", 1.0),
     Port::optional("loop_crossfade", 0.0),
+    // Target duration of the whole source, in seconds; zero means unfitted playback.
+    Port::optional("duration", 0.0),
 ];
 
 /// Frames over which a slice fades in and out.
@@ -81,8 +83,7 @@ pub struct Sampler {
     member: Option<usize>,
     /// The part of the sample this player covers, in frames.
     range: (usize, usize),
-    /// A fixed playback speed on top of the pitch, to fit a loop to a tempo.
-    speed: f64,
+    repitch: bool,
     loop_mode: LoopMode,
     loop_range: (usize, usize),
     looped: bool,
@@ -108,7 +109,7 @@ impl Sampler {
             root_hz,
             member,
             range,
-            speed: 1.0,
+            repitch: false,
             loop_mode: LoopMode::None,
             loop_range: range,
             looped: false,
@@ -170,9 +171,9 @@ impl Sampler {
         }
     }
 
-    /// Play `speed` times as fast, whatever the pitch asked for.
-    pub fn with_speed(mut self, speed: f64) -> Self {
-        self.speed = speed;
+    /// Fit duration by changing pitch as well as speed, instead of stretching.
+    pub fn with_repitch(mut self, repitch: bool) -> Self {
+        self.repitch = repitch;
         self
     }
 
@@ -607,29 +608,43 @@ impl Opcode for Sampler {
             let pitch = f64::from(inputs[1][n]) / 12.0;
             let ratio = f64::from(inputs[0][n]) / f64::from(self.root_hz)
                 * if pitch == 0.0 { 1.0 } else { pitch.exp2() }
-                * f64::from(inputs[2][n]).abs()
-                * self.speed;
-            let step = ratio.max(0.0) * source_rate / f64::from(self.sample_rate);
+                * f64::from(inputs[2][n]).abs();
+            let mut step = ratio.max(0.0) * source_rate / f64::from(self.sample_rate);
             let stretch = inputs.get(6).map_or(1.0, |input| input[n]);
             let stretch = if stretch.is_finite() {
                 stretch.clamp(0.25, 4.0)
             } else {
                 1.0
             };
-            let advance = step / f64::from(stretch);
+            let mut advance = step / f64::from(stretch);
+            let duration = inputs.get(11).map_or(0.0, |input| input[n]);
+            if duration.is_finite() && duration > 0.0 {
+                let fitted =
+                    self.data.len() as f64 / (f64::from(duration) * f64::from(self.sample_rate));
+                if self.repitch {
+                    step *= fitted / (source_rate / f64::from(self.sample_rate));
+                    advance = step / f64::from(stretch);
+                } else {
+                    advance = if step > 0.0 {
+                        fitted / f64::from(stretch)
+                    } else {
+                        0.0
+                    };
+                }
+            }
+            // The grain readers follow pitch; only the transport follows fitted time.
+            let stretch = if advance > 0.0 { step / advance } else { 1.0 };
             let mode = inputs.get(7).map_or(0.0, |input| input[n]);
             // Reverse grains use ordinary WSOLA; attack protection is forward-only.
             let transient = mode >= 1.5 && self.direction > 0.0 && stretch != 1.0;
             let (mapped, attack, bounds) = if transient {
-                self.transient_position(self.position, f64::from(stretch))
+                self.transient_position(self.position, stretch)
             } else {
                 (self.position, false, (first, last))
             };
             self.read_bounds = transient.then_some(bounds);
             let mapped_advance = if transient {
-                let next = self
-                    .transient_position(self.position + advance, f64::from(stretch))
-                    .0;
+                let next = self.transient_position(self.position + advance, stretch).0;
                 next - mapped
             } else {
                 advance
@@ -683,7 +698,7 @@ impl Opcode for Sampler {
             if let Some(head) = restart {
                 self.grain_offsets[head] = if stretch != 1.0 && mode >= 0.5 && !attack {
                     let next = if transient {
-                        self.transient_position(self.position, f64::from(stretch)).0
+                        self.transient_position(self.position, stretch).0
                     } else {
                         self.position
                     };
@@ -831,6 +846,46 @@ mod tests {
             );
         }
         out
+    }
+
+    #[test]
+    fn fitted_loop_transport_keeps_phase_across_pitch_and_duration_changes() {
+        for reverse in [false, true] {
+            let mut player =
+                sampler(tone(48_000, 440.0, 48_000.0), None).with_loop(LoopMode::Forward);
+            let mut elapsed = 0.0;
+            for (duration, pitch, frames) in [
+                (2.0, 0.0, 120_000),
+                (0.8, 7.0, 96_000),
+                (1.3, -5.0, 160_000),
+            ] {
+                for _ in 0..frames / 64 {
+                    let freq = [440.0; 64];
+                    let pitch = [pitch; 64];
+                    let rate = [if reverse { -1.0 } else { 1.0 }; 64];
+                    let zero = [0.0; 64];
+                    let one = [1.0; 64];
+                    let duration = [duration; 64];
+                    let mut out = [0.0; 64];
+                    player.process(
+                        &ctx(),
+                        &[
+                            &freq, &pitch, &rate, &zero, &zero, &zero, &one, &one, &zero, &one,
+                            &zero, &duration,
+                        ],
+                        &mut out,
+                    );
+                    assert!(out.iter().all(|v| v.is_finite()));
+                    elapsed += 64.0 / f64::from(duration[0]);
+                }
+            }
+            let expected = if reverse { 47_999.0 - elapsed } else { elapsed };
+            let error = (player.position - expected).rem_euclid(48_000.0);
+            assert!(
+                error.min(48_000.0 - error) < 1e-5,
+                "reverse {reverse}: {error}"
+            );
+        }
     }
 
     #[test]

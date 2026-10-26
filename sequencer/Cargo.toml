@@ -2,7 +2,7 @@
 # niminal engine. It depends on the engine's crates; nothing in `../crates` depends on this.
 [workspace]
 resolver = "3"
-members = ["pattern", "compose", "live", "lsp", "nimlive"]
+members = ["pattern", "compose", "live", "lsp", "live-cli"]
 
 [workspace.package]
 version = "0.0.1"

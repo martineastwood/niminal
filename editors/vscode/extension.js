@@ -6,6 +6,7 @@ const { startLive } = require("./live");
 const { blockAround } = require("./blocks");
 const { clipDescription, sceneDescription, silencers } = require("./panel");
 const { rewriteLearned } = require("./learn");
+const { projectFiles } = require("./project");
 
 let client = null;
 let live = null;
@@ -276,6 +277,26 @@ function evalFile() {
   return evaluate(editor, new vscode.Range(0, 0, last, editor.document.lineAt(last).text.length));
 }
 
+/** Open a folder's files as tabs, then play it: evaluate `main.nml`, or each file in turn without one. */
+async function openProject() {
+  const [folder] =
+    (await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, openLabel: "Open Project" })) ?? [];
+  if (!folder) return;
+  const { entry, files } = projectFiles(folder.fsPath);
+  if (files.length === 0) return vscode.window.showErrorMessage("niminal: no .nml files in that folder");
+  const editors = [];
+  for (const file of files) {
+    const document = await vscode.workspace.openTextDocument(file);
+    editors.push(await vscode.window.showTextDocument(document, { preview: false, preserveFocus: true }));
+  }
+  const first = editors[0];
+  await vscode.window.showTextDocument(first.document, { preview: false });
+  for (const editor of entry ? [first] : editors) {
+    const last = editor.document.lineCount - 1;
+    await evaluate(editor, new vscode.Range(0, 0, last, editor.document.lineAt(last).text.length));
+  }
+}
+
 async function simple(method) {
   const c = await ensureConnected();
   if (c) await c.call(method).catch((e) => vscode.window.showErrorMessage(`niminal: ${e.message}`));
@@ -333,7 +354,7 @@ async function startServer() {
   }
 }
 
-// Errors, completion, hover and go-to-definition come from `nimlive lsp`, the same
+// Errors, completion, hover and go-to-definition come from `niminal-live lsp`, the same
 // binary as the live sequencer, so they always agree with it about the language.
 function startLanguageServer() {
   const server = new LanguageClient(
@@ -345,7 +366,7 @@ function startLanguageServer() {
   languageServer = server;
   server.start().catch((e) => {
     channel.appendLine(`language server: ${e.message}`);
-    vscode.window.showWarningMessage(`niminal: can't start \`${settings().livePath} lsp\`. Set niminal.livePath to the nimlive executable.`);
+    vscode.window.showWarningMessage(`niminal: can't start \`${settings().livePath} lsp\`. Set niminal.livePath to the niminal-live executable.`);
   });
 }
 
@@ -370,6 +391,7 @@ function activate(context) {
     flash,
     command("niminal.evalBlock", evalBlock),
     command("niminal.evalFile", evalFile),
+    command("niminal.openProject", openProject),
     command("niminal.hush", () => simple("hush")),
     command("niminal.panic", () => simple("panic")),
     command("niminal.connect", ensureConnected),

@@ -275,7 +275,7 @@ enum Receiver {
     Signal,
 }
 
-/// Find the start of the chain that ends at the end of `text` (`riff.fast(2).thin(10%)`),
+/// Find the start of the chain that ends at the end of `text` (`riff.fast(2).drop(10%)`),
 /// by walking back over calls, brackets and `.name` parts, and say what it begins with.
 fn receiver_and_root<'a>(text: &'a str, symbols: &[Symbol]) -> (Receiver, Option<&'a str>) {
     let mut rest = text.trim_end();
@@ -334,7 +334,14 @@ fn receiver_and_root<'a>(text: &'a str, symbols: &[Symbol]) -> (Receiver, Option
             // `grid[...]` and `name[...]` are not a bare pattern
             return (Receiver::Signal, None);
         }
-        if name == "it" {
+        if name == "same" {
+            return (Receiver::Pattern, None);
+        }
+        // inside a change, `reverse.` and `fast(2).` start from the pattern being changed
+        if before.ends_with(['(', ','])
+            && symbols.iter().all(|s| s.name != name)
+            && pattern_ops().iter().any(|o| o.name == name)
+        {
             return (Receiver::Pattern, None);
         }
         // at the start of a statement, `bass.` is a command to give; inside an expression it is a value
@@ -572,12 +579,16 @@ pub fn items(
             {
                 out.extend(waves().map(|w| item(w, ENUM_MEMBER, "waveform", "")));
             }
-            if matches!(call.name, "every" | "layer") {
+            // a change is written as operations on the pattern being changed
+            if patterns.iter().any(|o| {
+                on_pattern && o.name == call.name && o.params.iter().any(|p| p.ty == "transform")
+            }) {
+                out.extend(patterns.iter().map(op_item));
                 out.push(item(
-                    "it",
+                    "same",
                     VARIABLE,
-                    "the pattern being changed",
-                    "Write `it.reverse`, `it.transpose(+7st)`...",
+                    "no change",
+                    "Leave the pattern as it is",
                 ));
             }
         } else if let Some((name, _)) = call.current.split_once(':')
@@ -686,12 +697,14 @@ mod tests {
             "[c4 e4].",
             "riff.fast(2).",
             "riff.transpose(+5st).th",
-            "riff.every(2, it.",
+            "riff.every(2, reverse.",
             "x = riff.every(2, ",
         ] {
             let l = labels_in(SONG, before);
             if before.ends_with("(2, ") {
-                assert!(l.contains(&"it".to_string()), "{before}");
+                for word in ["same", "reverse", "transpose"] {
+                    assert!(l.contains(&word.to_string()), "{before}: {word}");
+                }
                 continue;
             }
             assert!(
@@ -749,11 +762,11 @@ mod tests {
     #[test]
     fn a_pattern_operation_offers_its_own_arguments() {
         assert_eq!(
-            &labels_in(SONG, "riff.euclid(")[..3],
+            &labels_in(SONG, "riff.spread_evenly(")[..3],
             ["hits:", "steps:", "rotation:"]
         );
         assert_eq!(
-            &labels_in(SONG, "riff.euclid(3, ")[..2],
+            &labels_in(SONG, "riff.spread_evenly(3, ")[..2],
             ["steps:", "rotation:"]
         );
         assert_eq!(labels_in(SONG, "riff.every(2, ")[0], "change:");

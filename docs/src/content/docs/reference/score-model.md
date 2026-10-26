@@ -3,7 +3,7 @@ title: Score model
 description: Events, sections, projects, and the .nms JSON format.
 ---
 
-**Played by niminal.** The server plays score events; nimlive, a `.nms` file or a client of your own can be what writes them.
+**Played by niminal.** The server plays score events; niminal-live, a `.nms` file or a client of your own can be what writes them.
 
 The engine can play **score events** that do not come from niminal source: a `.nms` file on the command line, or `events.send` / `clip.define` on a live server. The orchestra still defines the instruments; the score times and names the notes, clips and scenes.
 
@@ -49,7 +49,7 @@ JSON. Values keep units as strings. Every file has a format **`version`**.
 | `args` | Named parameters; strings with units or numbers, checked like orchestra code |
 
 ```sh
-nimlive render examples/saw_lead.nml --score examples/phi.nms --out phi.wav
+niminal-live render examples/saw_lead.nml --score examples/phi.nms --out phi.wav
 ```
 
 ### Version 2 — a project
@@ -73,7 +73,7 @@ Clips, scenes and an optional arrangement. The CLI compiles them to `.nml` and r
 ```
 
 ```sh
-nimlive render examples/live_controls.nml --score examples/project.nms --out project.wav
+niminal-live render examples/live_controls.nml --score examples/project.nms --out project.wav
 ```
 
 Live: define the same clips with **`clip.define`** / **`scene.define`**, or send timed events with **`events.send`** ([Sequencer protocol](/reference/protocol/)). In `.nml`, `load("score/riff.nms")` turns a version-1 section (or a one-clip project) into a clip.

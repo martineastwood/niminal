@@ -27,6 +27,8 @@ export type Clip = {
   edits: string[];
   length: number;
   looped: boolean;
+  /** How many times it plays before it is finished, if it is not for ever. */
+  plays?: number | null;
   endless: boolean;
   cycles: number | null;
   lanes: Lane[];
@@ -98,6 +100,13 @@ export type OpenedFile = {
   source: string;
 };
 
+export type OpenedProject = {
+  dir: string;
+  /** The file that plays the project, when it has a `main.nml`. */
+  entry: string | null;
+  files: OpenedFile[];
+};
+
 export type Action = {
   action: string;
   target?: string;
@@ -135,6 +144,9 @@ export const stage = {
   },
   openFile() {
     return invoke<OpenedFile | null>('open_file');
+  },
+  openProject() {
+    return invoke<OpenedProject | null>('open_project');
   },
   saveFile(path: string, source: string) {
     return invoke<void>('save_file', { path, source });

@@ -59,8 +59,8 @@ export default defineConfig({
           { label: 'Command line', slug: 'reference/server/cli' },
           { label: 'Engine API', slug: 'reference/engine-api' },
         ] },
-        { label: 'nimlive (sequencer)', items: [
-          { label: 'Command line', slug: 'reference/nimlive/cli' },
+        { label: 'niminal-live (sequencer)', items: [
+          { label: 'Command line', slug: 'reference/niminal-live/cli' },
           { label: 'Sequencer protocol', slug: 'reference/protocol' },
           { label: 'Editor and LSP', slug: 'reference/editor' },
         ] },

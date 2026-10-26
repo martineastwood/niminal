@@ -25,7 +25,7 @@ use tauri::{
 #[derive(Default, Clone)]
 struct LanguageServer(Arc<Mutex<niminal_lsp::Server>>);
 
-// The same LSP implementation as `nimlive lsp`, without stdio framing or a child
+// The same LSP implementation as `niminal-live lsp`, without stdio framing or a child
 // process. Keep compilation off the window thread; the frontend orders messages.
 #[tauri::command]
 async fn lsp_message(

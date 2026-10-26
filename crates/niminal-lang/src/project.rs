@@ -102,9 +102,9 @@ impl Project {
                 .filter(|(k, _)| PERFORMANCE.contains(k))
             {
                 let keeps = |x: &Entry| {
-                    x.key.split_once(':').is_none_or(|(k, n)| {
-                        n != name || !PERFORMANCE.contains(&k) || k == kind
-                    })
+                    x.key
+                        .split_once(':')
+                        .is_none_or(|(k, n)| n != name || !PERFORMANCE.contains(&k) || k == kind)
                 };
                 self.entries.retain(keeps);
                 waiting.retain(keeps);

@@ -3,14 +3,14 @@ title: Editor and LSP
 description: VS Code extension, language server, and editing without a server.
 ---
 
-**Read by nimlive.** The extension is an editor around nimlive: it runs the language server, and a private live sequencer, for you.
+**Read by niminal-live.** The extension is an editor around niminal-live: it runs the language server, and a private live sequencer, for you.
 
-## Language server (`nimlive lsp`)
+## Language server (`niminal-live lsp`)
 
 The CLI runs an **LSP server on stdio**. Any editor that can spawn a language server can use it for `.nml` files:
 
 ```sh
-nimlive lsp
+niminal-live lsp
 ```
 
 The VS Code extension starts the same binary automatically (see settings below).
@@ -26,7 +26,7 @@ The VS Code extension starts the same binary automatically (see settings below).
 
 Trigger character for completion: `.`
 
-After installing a new `nimlive` binary, run **Restart Language Server** in the command palette (VS Code) or restart your editor’s LSP client.
+After installing a new `niminal-live` binary, run **Restart Language Server** in the command palette (VS Code) or restart your editor’s LSP client.
 
 ## VS Code / Cursor extension
 
@@ -40,7 +40,7 @@ Reload the window (`--cursor` for Cursor). Build or install both binaries first:
 
 ```sh
 cargo install --path crates/niminal-cli   # niminal, the server
-cargo install --path sequencer/nimlive    # nimlive, the live sequencer and language server
+cargo install --path sequencer/live-cli    # niminal-live, the live sequencer and language server
 ```
 
 Start a server in a terminal, or use **niminal: Start Server in a Terminal** from the command palette:
@@ -49,7 +49,7 @@ Start a server in a terminal, or use **niminal: Start Server in a Terminal** fro
 niminal server
 ```
 
-Open a `.nml` file. The first evaluation starts a private `nimlive live --port 0 --parent-stdio` process owned by that window: clips, scenes, lanes and quantized edits live there, and only generic events reach the server. Each window has its own performance state, and closing it stops the sequencer. The language server is separate (stdio).
+Open a `.nml` file. The first evaluation starts a private `niminal-live live --port 0 --parent-stdio` process owned by that window: clips, scenes, lanes and quantized edits live there, and only generic events reach the server. Each window has its own performance state, and closing it stops the sequencer. The language server is separate (stdio).
 
 ### Shortcuts
 
@@ -67,7 +67,7 @@ The **niminal** sidebar lists scenes and clips. A scene shows how many of its cl
 | Setting | Purpose |
 | --- | --- |
 | `niminal.path` | Path to the `niminal` binary (the audio server) |
-| `niminal.livePath` | Path to the `nimlive` binary (live sequencer + LSP) |
+| `niminal.livePath` | Path to the `niminal-live` binary (live sequencer + LSP) |
 | `niminal.port` | Server WebSocket port (default `7401`) |
 | `niminal.token` | Token if the server was started with `--token` |
 | `niminal.quantize` | Default land time for evaluation (e.g. `next 4bars`); empty uses the sequencer's default |
@@ -87,4 +87,4 @@ With MIDI enabled (`niminal.midi`), a control written as `midi.learn` waits for 
 | Live `start` / `stop` / changes | No | Yes |
 | Diagnostics / completion | Yes | Eval diagnostics via extension/REPL |
 
-For command-line workflow (REPL, `send`, render, replay), see [Command line](/reference/nimlive/cli/) and [Live coding](/guide/live-coding/). For WebSocket messages, subscriptions, and `eval` / `events.send`, see [Sequencer protocol](/reference/protocol/).
+For command-line workflow (REPL, `send`, render, replay), see [Command line](/reference/niminal-live/cli/) and [Live coding](/guide/live-coding/). For WebSocket messages, subscriptions, and `eval` / `events.send`, see [Sequencer protocol](/reference/protocol/).

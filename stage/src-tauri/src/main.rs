@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod project;
 mod session;
 
 use std::path::Path;
@@ -7,7 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{Manager, State};
+use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+use tauri::{Emitter, Manager, State};
 
 use session::{EvalOutcome, Snapshot};
 
@@ -152,6 +154,41 @@ async fn open_file() -> Result<Option<OpenedFile>, String> {
     }))
 }
 
+/// A folder of `.nml` files: what to open as tabs, and the file to evaluate to play them.
+#[derive(Serialize)]
+struct OpenedProject {
+    dir: String,
+    entry: Option<String>,
+    files: Vec<OpenedFile>,
+}
+
+#[tauri::command]
+async fn open_project() -> Result<Option<OpenedProject>, String> {
+    let Some(folder) = rfd::AsyncFileDialog::new().pick_folder().await else {
+        return Ok(None);
+    };
+    let dir = folder.path().to_path_buf();
+    let (entry, paths) = project::files(&dir).map_err(|e| e.to_string())?;
+    if paths.is_empty() {
+        return Err("no .nml files in that folder".into());
+    }
+    let files = paths
+        .iter()
+        .map(|path| {
+            Ok(OpenedFile {
+                path: path.to_string_lossy().into_owned(),
+                dir: path.parent().unwrap_or(&dir).to_string_lossy().into_owned(),
+                source: std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?,
+            })
+        })
+        .collect::<Result<_, String>>()?;
+    Ok(Some(OpenedProject {
+        dir: dir.to_string_lossy().into_owned(),
+        entry: entry.map(|p| p.to_string_lossy().into_owned()),
+        files,
+    }))
+}
+
 #[tauri::command]
 async fn save_file(path: String, source: String) -> Result<(), String> {
     std::fs::write(path, source).map_err(|e| e.to_string())
@@ -172,7 +209,7 @@ async fn save_file_as(source: String) -> Result<Option<String>, String> {
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
-/// The same LSP implementation as `nimlive lsp`, without a child process. Compilation stays off the
+/// The same LSP implementation as `niminal-live lsp`, without a child process. Compilation stays off the
 /// window thread and the frontend keeps messages in document order.
 #[tauri::command]
 async fn lsp_message(
@@ -188,10 +225,74 @@ async fn lsp_message(
     .map_err(|e| e.to_string())?
 }
 
+/// The menu bar. Items send their id to the page as a `menu` event, which runs what its button or key
+/// already does. Shortcuts the page handles itself are shown in the label, not bound here, so they
+/// do not fire twice. Cut, copy, paste and select all are the system's.
+fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let item = |id: &str, text: &str, keys: Option<&str>| {
+        let builder = MenuItemBuilder::with_id(id, text);
+        match keys {
+            Some(keys) => builder.accelerator(keys).build(app),
+            None => builder.build(app),
+        }
+    };
+    let file = SubmenuBuilder::new(app, "File")
+        .item(&item("new", "New Tab (⌘T)", None)?)
+        .item(&item("open", "Open…", Some("CmdOrCtrl+O"))?)
+        .item(&item("open-project", "Open Project Folder…", Some("CmdOrCtrl+Shift+O"))?)
+        .separator()
+        .item(&item("save", "Save", Some("CmdOrCtrl+S"))?)
+        .item(&item("save-all", "Save All", Some("CmdOrCtrl+Alt+S"))?)
+        .separator()
+        .item(&item("close-tab", "Close Tab", Some("CmdOrCtrl+W"))?)
+        .build()?;
+    let edit = SubmenuBuilder::new(app, "Edit")
+        .item(&item("undo", "Undo", Some("CmdOrCtrl+Z"))?)
+        .item(&item("redo", "Redo", Some("CmdOrCtrl+Shift+Z"))?)
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+    let view = SubmenuBuilder::new(app, "View")
+        .item(&item("sidebar", "Sidebar (⌘B)", None)?)
+        .item(&item("perform", "Performance Mode (⇧⌘P)", None)?)
+        .separator()
+        .item(&item("zoom-in", "Bigger Text (⌘+)", None)?)
+        .item(&item("zoom-out", "Smaller Text (⌘−)", None)?)
+        .item(&item("zoom-reset", "Actual Size (⌘0)", None)?)
+        .separator()
+        .item(&item("previous-tab", "Previous Tab (⇧⌘[)", None)?)
+        .item(&item("next-tab", "Next Tab (⇧⌘])", None)?)
+        .separator()
+        .fullscreen()
+        .build()?;
+    let window = SubmenuBuilder::new(app, "Window").minimize().maximize().build()?;
+    let mut menu = MenuBuilder::new(app);
+    if cfg!(target_os = "macos") {
+        let name = SubmenuBuilder::new(app, "niminal stage")
+            .about(None)
+            .separator()
+            .hide()
+            .hide_others()
+            .show_all()
+            .separator()
+            .quit()
+            .build()?;
+        menu = menu.item(&name);
+    }
+    menu.items(&[&file, &edit, &view, &window]).build()
+}
+
 fn main() {
     let shared = Arc::new(session::Shared::new());
     session::start_worker(shared.clone());
     tauri::Builder::default()
+        .menu(menu)
+        .on_menu_event(|app, event| {
+            let _ = app.emit("menu", event.id().as_ref());
+        })
         .manage(AppState {
             shared: shared.clone(),
             lsp: LanguageServer::default(),
@@ -204,6 +305,7 @@ fn main() {
             perform,
             cancel,
             open_file,
+            open_project,
             save_file,
             save_file_as,
             lsp_message

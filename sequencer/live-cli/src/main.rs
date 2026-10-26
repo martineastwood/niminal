@@ -7,10 +7,12 @@ use std::time::{Duration, SystemTime};
 use clap::{Args, Parser, Subcommand};
 use niminal_compose::ScoreFile;
 use niminal_live::{Live, LiveServer};
-use niminal_ws::{Client, Server, ServerConfig, lock};
 use niminal_live_cli::input::LiveShared;
-use niminal_live_cli::render::{End, RenderOptions, SAMPLE_RATE, render, render_session, write_wav};
+use niminal_live_cli::render::{
+    End, RenderOptions, SAMPLE_RATE, render, render_session, write_wav,
+};
 use niminal_live_cli::report::{render_error, render_problems};
+use niminal_ws::{Client, Server, ServerConfig, lock};
 use serde_json::json;
 
 #[derive(Parser)]
@@ -261,8 +263,8 @@ fn run_render(args: RenderArgs) -> Result<(), String> {
     let expanded = niminal_compose::expand(&source, file.parent().unwrap_or(Path::new(".")))
         .map_err(|d| d.render(&name, &source))?;
     // a tempo ramp is made as the music plays, so a file with one is played through a session
-    let (rest, ramps) =
-        niminal_live_cli::render::split_ramps(&expanded.text).map_err(|d| d.render(&name, &source))?;
+    let (rest, ramps) = niminal_live_cli::render::split_ramps(&expanded.text)
+        .map_err(|d| d.render(&name, &source))?;
     let program = niminal_compose::compile_with(&rest, &options).map_err(|errors| {
         errors
             .into_iter()
@@ -392,7 +394,8 @@ fn run_live(args: LiveArgs) -> Result<(), String> {
         midi,
         osc_port,
     } = args;
-    let link = niminal_live::WsLink::connect(engine_port, token.as_deref(), "niminal-live")?.exit_when_lost();
+    let link = niminal_live::WsLink::connect(engine_port, token.as_deref(), "niminal-live")?
+        .exit_when_lost();
     let EngineReply::Hello {
         sample_rate,
         channels,
@@ -411,7 +414,9 @@ fn run_live(args: LiveArgs) -> Result<(), String> {
     let chair_token = token.clone();
     let live: LiveShared = Arc::new(Mutex::new(
         LiveServer::new(new_live(Box::new(link))).with_chairs(move || {
-            let link = niminal_live::WsLink::connect(engine_port, chair_token.as_deref(), "niminal-live")?.exit_when_lost();
+            let link =
+                niminal_live::WsLink::connect(engine_port, chair_token.as_deref(), "niminal-live")?
+                    .exit_when_lost();
             Ok(new_live(Box::new(link)))
         }),
     ));

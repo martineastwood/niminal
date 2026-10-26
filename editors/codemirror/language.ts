@@ -5,12 +5,20 @@ import { tags } from '@lezer/highlight';
 // The VS Code grammar (editors/vscode/syntaxes) lists the same words; language.test.ts keeps them
 // from drifting apart.
 
-export const keywords = new Set('instr mono fn def const bus buffer ctl node fx config clip scene arrangement kit grid events midi_out over meter tempo state use unsolo hush panic reset reset_on after new at next now if else match for in and or not init control as capture last spawn oversample env cycle out'.split(' '));
+export const keywords = new Set('instr mono fn def const bus buffer ctl node fx config clip scene arrangement kit grid events midi_out over meter tempo state use unsolo hush panic reset reset_on after new at next now on if else match for in and or not init control as capture last spawn oversample env cycle out sample'.split(' '));
 export const types = new Set('hz khz db sec ms samples beat beats bar bars deg st ct bpm int num'.split(' '));
 /** Words after a dot that act on a clip or scene: `beat.start`, `bass.reverse`. */
-export const commands = new Set('start stop play mute unmute solo unsolo undo clear set reverse thin'.split(' '));
-/** Words that name what they define: `clip beat`, `scene verse`. */
-const definers = new Set('clip scene arrangement'.split(' '));
+export const commands = new Set('start stop play mute unmute solo unsolo undo clear set reverse drop'.split(' '));
+/** Words that name what they define, and how the name is coloured: `clip beat`, `bus pad_audio`. */
+const definers: Record<string, string> = {
+  clip: 'typeName',
+  scene: 'typeName',
+  arrangement: 'typeName',
+  bus: 'variableName.definition',
+  buffer: 'variableName.definition',
+  ctl: 'variableName.definition',
+  const: 'variableName.definition',
+};
 /** Words that introduce a function-like definition: `fn name(a, b)`. */
 const fnDefiners = new Set('instr mono fn def fx'.split(' '));
 /** Words the compiler binds for you inside a body. */
@@ -21,7 +29,7 @@ export const constants = new Set('sine saw square pulse tri stereo quad true fal
 // information, documentation and validation come from the compiler through LSP.
 export const niminal = StreamLanguage.define({
   name: 'niminal',
-  startState: () => ({ string: false, grid: null as null | { close: string; depth: number }, naming: false, dot: false, def: 0, params: 0 }),
+  startState: () => ({ string: false, grid: null as null | { close: string; depth: number }, naming: null as null | string, dot: false, def: 0, params: 0, declared: {} as Record<string, string> }),
   token(stream, state) {
     if (state.string) {
       while (!stream.eol()) {
@@ -42,20 +50,28 @@ export const niminal = StreamLanguage.define({
       const named = state.naming;
       const after = state.dot;
       const defining = state.def === 1;
-      state.naming = definers.has(word);
+      state.naming = definers[word] ?? null;
       state.dot = false;
       state.def = defining ? 2 : fnDefiners.has(word) ? 1 : 0;
       if (word === 'grid' && stream.match(/^\s*[{[]/, false)) {
         state.grid = { close: stream.match(/^\s*\{/, false) ? '}' : ']', depth: 0 };
         return 'keyword';
       }
-      if (named) return 'typeName';
-      if (defining) return 'variableName.function';
+      // what this file defines is coloured as defined wherever it is used again; a new object, as states are copied shallowly
+      if (named) {
+        state.declared = { ...state.declared, [word]: named };
+        return named;
+      }
+      if (defining) {
+        state.declared = { ...state.declared, [word]: 'variableName.function' };
+        return 'variableName.function';
+      }
       if (after && commands.has(word)) return 'keyword';
       if (after) return stream.match(/^\s*\(/, false) ? 'variableName.function' : 'propertyName';
       if (stream.match(/^\s*:(?!:)/, false)) return 'propertyName';
       if (state.params > 0 && !keywords.has(word) && !types.has(word)) return 'variableName.local';
       if (specials.has(word)) return 'variableName.special';
+      if (Object.hasOwn(state.declared, word)) return state.declared[word];
       if (keywords.has(word)) return 'keyword';
       if (types.has(word)) return 'typeName';
       if (constants.has(word)) return 'atom';

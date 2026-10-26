@@ -1,5 +1,5 @@
 use niminal_pattern::{
-    Hap, Hit, Param, Strength, Pattern, Rational, Span, euclid_steps, grid, parse, parse_with,
+    Hap, Hit, Param, Pattern, Rational, Span, Strength, euclid_steps, grid, parse, parse_with,
 };
 
 fn r(n: i64, d: i64) -> Rational {
@@ -456,9 +456,11 @@ fn atoms_are_converted_as_they_are_read_and_bad_ones_are_located() {
     .unwrap();
     assert_eq!(err.offset, 5);
     // and in parenthesised groups
-    let err = parse_with("(1 q)", |a, _| a.parse::<i32>().map_err(|_| "bad".to_string()))
-        .err()
-        .unwrap();
+    let err = parse_with("(1 q)", |a, _| {
+        a.parse::<i32>().map_err(|_| "bad".to_string())
+    })
+    .err()
+    .unwrap();
     assert_eq!(err.offset, 0);
 }
 
@@ -658,7 +660,11 @@ fn invert_swaps_hits_and_rests() {
         [r(1, 8), r(3, 8), r(5, 8), r(6, 8), r(7, 8)]
     );
     assert_eq!(
-        onsets(&Pattern::<Hit>::silence().invert(Hit::new(Strength::Normal)), cycles(0, 1)).len(),
+        onsets(
+            &Pattern::<Hit>::silence().invert(Hit::new(Strength::Normal)),
+            cycles(0, 1)
+        )
+        .len(),
         1
     );
 }

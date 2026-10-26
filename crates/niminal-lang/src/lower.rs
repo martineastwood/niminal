@@ -840,8 +840,9 @@ pub(crate) struct Member {
     pub channels: Vec<Arc<Table>>,
     /// The frames of the tables it plays, if not all of them.
     pub slice: Option<(usize, usize)>,
-    /// Playback speed that fits a loop to the tempo; 1 for none.
-    pub speed: f64,
+    /// Target duration of the whole source, also inherited by its slices.
+    pub duration: Option<Expr>,
+    pub repitch: bool,
     pub loop_mode: LoopMode,
     pub interp: niminal_engine::ops::SampleInterp,
 }
@@ -934,6 +935,23 @@ impl Lower<'_> {
                 name.span,
             )
         };
+        let mut wires = wires.to_vec();
+        if let Some(duration) = members.first().and_then(|m| m.duration.as_ref()) {
+            let signal = self.expr(duration)?;
+            if signal.unit != Unit::Time || signal.srcs.len() != 1 {
+                return Err(Diagnostic::new(
+                    "sample duration needs a time, such as 2sec",
+                    duration.span,
+                ));
+            }
+            if signal.konst.is_some_and(|v| !v.is_finite() || v <= 0.0) {
+                return Err(Diagnostic::new(
+                    "sample duration must be positive",
+                    duration.span,
+                ));
+            }
+            wires.push(("duration", signal.srcs[0]));
+        }
         // Members with the same channel layout share one selectable player per channel. A note
         // chooses its member once; it does not run and sum every other member's silent graph.
         let mut layouts = std::collections::BTreeMap::<usize, Vec<usize>>::new();
@@ -992,7 +1010,7 @@ impl Lower<'_> {
                             references[i].as_ref().expect("sample has channels").clone(),
                         )
                         .with_transients(transients[i].clone())
-                        .with_speed(member.speed)
+                        .with_repitch(member.repitch)
                         .with_loop(member.loop_mode)
                         .with_interp(member.interp);
                     if let Some((start, end)) = member.slice {
@@ -1002,7 +1020,7 @@ impl Lower<'_> {
                 }
                 srcs.push(
                     self.g
-                        .add(KitSampler::new(players), wires)
+                        .add(KitSampler::new(players), &wires)
                         .map_err(|e| Diagnostic::new(e.to_string(), name.span))?,
                 );
             }

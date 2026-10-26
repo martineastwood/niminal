@@ -16,6 +16,8 @@ pub enum Item {
         value: Expr,
         input: Option<ControlInput>,
     },
+    /// `on midi.note(36) beat.start`: commands to run when something arrives from outside.
+    On(OnDecl),
     Fn(FnDef),
     /// `const name = expr`: a value known while compiling, such as a number, a range or a table.
     Const {
@@ -76,6 +78,32 @@ pub enum InputSource {
     MidiLearn,
     /// `osc_in("/address")`
     Osc(String),
+    /// `midi.note(36)` or `midi.note(36, 10)`: a key pressed. Only a trigger (`on`) listens to it.
+    MidiNote { note: u8, channel: Option<u8> },
+}
+
+impl InputSource {
+    /// What it is called in a definition's key: `midi.cc(21)`, `osc_in("/fx/width")`.
+    pub fn key(&self) -> String {
+        let channel = |c: &Option<u8>| c.map_or(String::new(), |c| format!(", {c}"));
+        match self {
+            InputSource::MidiCc { cc, channel: c } => format!("midi.cc({cc}{})", channel(c)),
+            InputSource::MidiNote { note, channel: c } => {
+                format!("midi.note({note}{})", channel(c))
+            }
+            InputSource::MidiLearn => "midi.learn".into(),
+            InputSource::Osc(address) => format!("osc_in(\"{address}\")"),
+        }
+    }
+}
+
+/// `on <source> <command>` or `on <source> { <command> ... }`: the commands run when the source fires.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OnDecl {
+    pub source: InputSource,
+    /// Where each command is written, so that it can be evaluated as written.
+    pub commands: Vec<Span>,
+    pub span: Span,
 }
 
 /// `tempo 124bpm`, optionally `@ next bar over 2bars` for a change while playing.

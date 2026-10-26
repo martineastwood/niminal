@@ -613,6 +613,38 @@ fn a_loop_fitted_to_the_tempo_lasts_its_beats() {
 }
 
 #[test]
+fn fitted_pitch_is_independent_of_duration_unless_repitch_is_selected() {
+    let dir = scratch("fitpitch");
+    let audio: Vec<_> = (0..SR)
+        .map(|i| (std::f32::consts::TAU * 440.0 * i as f32 / SR as f32).sin() * 0.5)
+        .collect();
+    write_wav(&dir.join("loop.wav"), &[audio]);
+    for (mode, pitch, expected) in [
+        ("stretch", "0st", 440.0),
+        ("stretch", "+12st", 880.0),
+        ("repitch", "0st", 220.0),
+        ("repitch", "+12st", 440.0),
+    ] {
+        let out = play(
+            &dir,
+            &format!(
+                "tempo 120bpm\nl = sample(\"loop.wav\").beats(4).mode({mode})\nclip t {{ instrument: l, notes: [c4], pitch: {pitch}, stretch_mode: 1 }}\nt.start"
+            ),
+        );
+        let window = &out[0][SR / 4..SR * 3 / 4];
+        let frequency = window
+            .windows(2)
+            .filter(|w| w[0] < 0.0 && w[1] >= 0.0)
+            .count() as f64
+            * 2.0;
+        assert!(
+            (frequency - expected).abs() < 12.0,
+            "{mode}, {pitch}: {frequency}"
+        );
+    }
+}
+
+#[test]
 fn slices_of_a_fitted_loop_follow_the_tempo_too() {
     let dir = scratch("fitslices");
     write_wav(&dir.join("loop.wav"), &[block(0.5, 2400)]);
@@ -630,6 +662,10 @@ fn beats_mistakes_are_reported() {
     assert!(e.contains("isn't an option of a sample"), "{e}");
     let e = errors(&dir, "l = sample(\"loop.wav\").beats(-1)");
     assert!(e.contains("`beats` is how many beats"), "{e}");
+    let e = errors(&dir, "l = sample(\"loop.wav\").mode(tape)");
+    assert!(e.contains("sample mode is `stretch` or `repitch`"), "{e}");
+    let e = errors(&dir, "l = sample(\"loop.wav\").duration(0sec)");
+    assert!(e.contains("sample duration must be positive"), "{e}");
 }
 
 #[test]

@@ -69,6 +69,11 @@
         "category": "niminal"
       },
       {
+        "command": "niminal.openProject",
+        "title": "Open Project Folder",
+        "category": "niminal"
+      },
+      {
         "command": "niminal.hush",
         "title": "Hush",
         "category": "niminal"
@@ -267,8 +272,8 @@
         },
         "niminal.livePath": {
           "type": "string",
-          "default": "nimlive",
-          "description": "The nimlive executable: the live sequencer the editor starts, and the language server."
+          "default": "niminal-live",
+          "description": "The niminal-live executable: the live sequencer the editor starts, and the language server."
         }
       }
     },

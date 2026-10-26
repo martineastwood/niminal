@@ -86,6 +86,17 @@ impl Span {
     }
 }
 
+/// Whose event timing a combined pattern keeps (see [`Pattern::combine`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Structure {
+    /// The pattern the operation is written on.
+    Left,
+    /// The pattern given as the argument.
+    Right,
+    /// Only where both have an event, over the time they share.
+    Both,
+}
+
 /// One event: what happens, over what `whole` stretch of time, and which `part`
 /// of that was asked for. A query that cuts an event in half returns the same
 /// `whole` with different `part`s; only the piece starting where the whole
@@ -273,7 +284,7 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
 
     /// Play each cycle of this pattern within the slice `a..b` of the cycle,
     /// and nothing outside it.
-    fn compress(&self, a: Rational, b: Rational) -> Pattern<T> {
+    pub fn compress(&self, a: Rational, b: Rational) -> Pattern<T> {
         let p = self.clone();
         let len = b - a;
         Pattern::new(move |span| {
@@ -446,6 +457,30 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
         Pattern::stack(vec![rest, f(chosen)])
     }
 
+    /// Like [`Pattern::sometimes`], with a `chance` that can change as time goes on: each event uses the
+    /// chance in force where it starts.
+    pub fn sometimes_by(
+        &self,
+        chance: &Param<f64>,
+        seed: u64,
+        f: impl Fn(Pattern<T>) -> Pattern<T>,
+    ) -> Pattern<T> {
+        let chances = match chance {
+            Param::Const(c) => return self.sometimes(*c, seed, f),
+            Param::Pat(p) => p.clone(),
+        };
+        let (c1, c2) = (chances.clone(), chances);
+        let chosen = self.filter_haps(move |h| {
+            h.whole
+                .is_none_or(|w| unit_random(seed, w.start) < value_at(&c1, w.start))
+        });
+        let rest = self.filter_haps(move |h| {
+            h.whole
+                .is_none_or(|w| unit_random(seed, w.start) >= value_at(&c2, w.start))
+        });
+        Pattern::stack(vec![rest, f(chosen)])
+    }
+
     /// One of these each cycle, chosen at random: `[a | b | c]`.
     pub fn randcat(patterns: Vec<Pattern<T>>, seed: u64) -> Pattern<T> {
         if patterns.is_empty() {
@@ -533,6 +568,46 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
                 })
                 .collect()
         })
+    }
+
+    /// Join two patterns value by value, `f(mine, theirs)`. `structure` says whose
+    /// event timing the result keeps: events of the other pattern that overlap
+    /// them supply the second value, and an event that nothing overlaps is dropped.
+    pub fn combine<U: Clone + Send + Sync + 'static, V: Clone + Send + Sync + 'static>(
+        &self,
+        other: &Pattern<U>,
+        structure: Structure,
+        f: impl Fn(&T, &U) -> V + Send + Sync + 'static,
+    ) -> Pattern<V> {
+        let (a, b) = (self.clone(), other.clone());
+        match structure {
+            Structure::Left => keep_left(a, b, f),
+            Structure::Right => keep_left(b, a, move |u, t| f(t, u)),
+            Structure::Both => Pattern::new(move |span| {
+                let right = b.query(span);
+                let mut out = Vec::new();
+                for l in a.query(span) {
+                    for r in &right {
+                        let Some(part) = l.part.intersection(r.part) else {
+                            continue;
+                        };
+                        let whole = match (l.whole, r.whole) {
+                            (Some(x), Some(y)) => match x.intersection(y) {
+                                Some(w) => Some(w),
+                                None => continue,
+                            },
+                            _ => None,
+                        };
+                        out.push(Hap {
+                            whole,
+                            part,
+                            value: f(&l.value, &r.value),
+                        });
+                    }
+                }
+                out
+            }),
+        }
     }
 
     /// Give these values the rhythm of `structure`: wherever it has a `true`
@@ -639,6 +714,14 @@ fn random(seed: u64, cycle: i64, i: u64) -> f64 {
     )
 }
 
+/// The value a pattern has at `at`, or 0 where it has none.
+fn value_at(p: &Pattern<f64>, at: Rational) -> f64 {
+    p.query(Span::new(at, at))
+        .into_iter()
+        .next()
+        .map_or(0.0, |h| h.value)
+}
+
 /// A number in `0..1` that depends only on `seed` and `at`.
 pub fn unit_random(seed: u64, at: Rational) -> f64 {
     let mut x = seed
@@ -671,6 +754,35 @@ where
             .into_iter()
             .flat_map(|h| f(h.value).query(h.part))
             .collect()
+    })
+}
+
+/// The events of `a`, each given the value of whatever `b` has during it.
+fn keep_left<T, U, V>(
+    a: Pattern<T>,
+    b: Pattern<U>,
+    f: impl Fn(&T, &U) -> V + Send + Sync + 'static,
+) -> Pattern<V>
+where
+    T: Clone + Send + Sync + 'static,
+    U: Clone + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+{
+    Pattern::new(move |span| {
+        let mut out = Vec::new();
+        for l in a.query(span) {
+            let looked = l.whole.unwrap_or(l.part);
+            for r in b.query(looked) {
+                if let Some(part) = l.part.intersection(r.part) {
+                    out.push(Hap {
+                        whole: l.whole,
+                        part,
+                        value: f(&l.value, &r.value),
+                    });
+                }
+            }
+        }
+        out
     })
 }
 
@@ -725,6 +837,122 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
             changed.filter_haps(inside),
             self.filter_haps(move |h| !inside(h)),
         ])
+    }
+
+    /// Keep only the first `fraction` of each cycle.
+    pub fn trunc(&self, fraction: Rational) -> Pattern<T> {
+        let p = self.clone();
+        Pattern::new(move |span| {
+            let mut out = Vec::new();
+            for part in span.cycles() {
+                let start = Rational::int(part.start.floor());
+                let window = Span::new(start, start + fraction);
+                if let Some(inside) = part.intersection(window) {
+                    out.extend(p.query(inside));
+                }
+            }
+            out
+        })
+    }
+
+    /// Stretch the stretch `from..to` of each cycle to fill the cycle.
+    pub fn zoom(&self, from: Rational, to: Rational) -> Pattern<T> {
+        let width = to - from;
+        if width <= Rational::ZERO {
+            return Pattern::silence();
+        }
+        let p = self.clone();
+        Pattern::new(move |span| {
+            let mut out = Vec::new();
+            for part in span.cycles() {
+                let c = Rational::int(part.start.floor());
+                let ask = part.map(|t| c + from + (t - c) * width);
+                out.extend(
+                    p.query(ask)
+                        .into_iter()
+                        .map(|h| h.map_times(|t| c + (t - c - from) / width)),
+                );
+            }
+            out
+        })
+    }
+
+    /// Strum chords: of the notes that start together, each starts a little after the one
+    /// before, the last `amount` of the way through the chord's length.
+    pub fn rolled(&self, amount: Rational) -> Pattern<T> {
+        let p = self.clone();
+        Pattern::new(move |span| {
+            let mut out = Vec::new();
+            for part in span.cycles() {
+                let c = Rational::int(part.start.floor());
+                let events = p.query(Span::new(c, c + Rational::ONE));
+                let mut seen: Vec<Span> = Vec::new();
+                for h in &events {
+                    let Some(whole) = h.whole else { continue };
+                    if seen.contains(&whole) {
+                        continue;
+                    }
+                    seen.push(whole);
+                    let group: Vec<&Hap<T>> =
+                        events.iter().filter(|e| e.whole == Some(whole)).collect();
+                    let n = Rational::int(group.len() as i64);
+                    for (k, e) in group.into_iter().enumerate() {
+                        let late = whole.len() * amount * Rational::int(k as i64) / n;
+                        let moved = Span::new((whole.start + late).min(whole.end), whole.end);
+                        let Some(part) = e.part.intersection(moved) else {
+                            continue;
+                        };
+                        if let Some(shown) = part.intersection(span) {
+                            out.push(Hap {
+                                whole: Some(moved),
+                                part: shown,
+                                value: e.value.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+            out
+        })
+    }
+
+    /// Cycle `n` plays `variants[n % variants.len()]`, each seen at the same cycle number.
+    pub fn cycle_through(variants: Vec<Pattern<T>>) -> Pattern<T> {
+        if variants.is_empty() {
+            return Pattern::silence();
+        }
+        Pattern::new(move |span| {
+            span.cycles()
+                .into_iter()
+                .flat_map(|part| {
+                    let which = part.start.floor().rem_euclid(variants.len() as i64) as usize;
+                    variants[which].query(part)
+                })
+                .collect()
+        })
+    }
+
+    /// Change whole cycles at random: each is changed with probability `chance`, which can change from
+    /// cycle to cycle.
+    pub fn some_cycles(
+        &self,
+        chance: &Param<f64>,
+        seed: u64,
+        f: impl Fn(Pattern<T>) -> Pattern<T>,
+    ) -> Pattern<T> {
+        match chance {
+            Param::Const(c) => {
+                let c = *c;
+                self.when_cycle(move |n| random(seed, n, 0) < c, f)
+            }
+            Param::Pat(p) => {
+                let p = p.clone();
+                self.when_cycle(
+                    move |n| random(seed, n, 0) < value_at(&p, Rational::int(n)),
+                    f,
+                )
+            }
+        }
     }
 
     /// Delay every other slot of `1/slots` of a cycle by `amount` of a slot.

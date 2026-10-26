@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use niminal_compose::{
-    Action, Clip, CommandAction, Composition, InputSource, LanePreview, PlayInfo, Quantize,
+    Action, Clip, CommandAction, Composition, Finish, InputSource, LanePreview, PlayInfo, Quantize,
     Schedule, Scheduled, Statement, StatementData, StatementKind, analyze, compile_with,
 };
 use niminal_lang::{
@@ -162,12 +162,14 @@ pub struct ClipStatus {
     pub running: bool,
     pub muted: bool,
     pub soloed: bool,
-    /// The changes made to it live (`reverse`, `thin(25%)`), oldest first.
+    /// The changes made to it live (`reverse`, `drop(25%)`), oldest first.
     pub edits: Vec<String>,
     /// Its length in cycles (bars).
     pub length: f64,
     /// Does it start over when it ends?
     pub looped: bool,
+    /// How many times it plays before it is finished, if it is not for ever.
+    pub plays: Option<u32>,
     /// Is it free-running, never starting over?
     pub endless: bool,
     /// How many cycles it has been playing for, or `None` if it is not.
@@ -267,7 +269,28 @@ pub struct Live {
     version: u64,
     log: Vec<LiveLogEntry>,
     peaks: Vec<f32>,
+    /// Where the next evaluation lands, whatever its quantum says: a clip's `then:` lands where the
+    /// clip's last pass ends.
+    landing_at: Option<u64>,
+    /// The `then:` of clips that are about to finish, already queued.
+    armed: Vec<Armed>,
+    arming: bool,
+    /// The `on` controllers and OSC addresses that are held down, so that they set off once.
+    triggers_down: std::collections::BTreeSet<String>,
 }
+
+/// A clip's `then:` that has been queued to land where the clip finishes.
+struct Armed {
+    node: usize,
+    origin: f64,
+    /// The sample the clip finishes at.
+    at: u64,
+    /// The evaluations queued for it.
+    ids: Vec<u64>,
+}
+
+/// How far ahead of a clip's last pass its `then:` is queued, so that compiling is done in time.
+const ARM_AHEAD_SECONDS: f64 = 2.0;
 
 /// The most notices that wait to be collected, and how long before the same one is said again.
 const MAX_NOTICES: usize = 100;
@@ -328,6 +351,10 @@ impl Live {
             version: 0,
             log: Vec::new(),
             peaks: vec![0.0; layout.channels()],
+            landing_at: None,
+            armed: Vec::new(),
+            arming: false,
+            triggers_down: std::collections::BTreeSet::new(),
         }
     }
 
@@ -506,15 +533,21 @@ impl Live {
             .max(self.clock);
         // the engine knows of every change before it is sent notes that depend on one
         self.sync_pending();
-        while let Some(i) = self
-            .pending
-            .iter()
-            .position(|p| !p.done && p.lands_at <= horizon)
-        {
-            // what falls before the change is as the project was
-            self.fetch_until(self.pending[i].lands_at);
-            self.land(i);
-            self.sync_pending();
+        loop {
+            while let Some(i) = self
+                .pending
+                .iter()
+                .position(|p| !p.done && p.lands_at <= horizon)
+            {
+                // what falls before the change is as the project was
+                self.fetch_until(self.pending[i].lands_at);
+                self.land(i);
+                self.sync_pending();
+            }
+            // a clip about to play its last pass queues what comes next, which may land at once
+            if !self.arm_thens(horizon) {
+                break;
+            }
         }
         self.fetch_until(horizon);
         // a clip that plays once and has finished is no longer running, and forgets what was done to it
@@ -532,6 +565,81 @@ impl Live {
         self.written
             .retain(|w| w.start + w.dur + 1 > clock.saturating_sub(self.sample_rate as u64 * 64));
         self.sync_pending();
+    }
+
+    /// Queue the `then:` of every clip that is about to finish, to land where it does, and take back
+    /// those of clips that were stopped or replaced first. Is there something new to land?
+    fn arm_thens(&mut self, horizon: u64) -> bool {
+        if self.arming {
+            return false;
+        }
+        let finishes: Vec<(Finish, u64)> = self
+            .schedule
+            .finishes()
+            .into_iter()
+            .map(|f| {
+                let at = self.samples(f.at.max(0.0));
+                (f, at)
+            })
+            .collect();
+        // clips that no longer finish where they were going to
+        let mut taken_back = Vec::new();
+        let (clock, second) = (self.clock, self.sample_rate as u64);
+        self.armed.retain(|a| {
+            let kept = finishes.iter().any(|(f, at)| {
+                f.node == a.node && f.origin.to_bits() == a.origin.to_bits() && *at == a.at
+            });
+            if !kept && a.at > clock {
+                taken_back.extend(a.ids.iter().copied());
+            }
+            kept && a.at + second > clock
+        });
+        for id in taken_back {
+            self.cancel(Some(id));
+        }
+        let ahead = (f64::from(self.sample_rate) * ARM_AHEAD_SECONDS) as u64;
+        let mut queued = false;
+        for (f, at) in finishes {
+            let known = self
+                .armed
+                .iter()
+                .any(|a| a.node == f.node && a.origin.to_bits() == f.origin.to_bits());
+            if known || at > horizon + ahead || at + self.sample_rate as u64 <= self.clock {
+                continue;
+            }
+            self.arming = true;
+            let ids: Vec<u64> = f
+                .then
+                .iter()
+                .filter_map(|statement| self.eval_at(statement, at))
+                .collect();
+            self.arming = false;
+            queued |= !ids.is_empty();
+            self.armed.push(Armed {
+                node: f.node,
+                origin: f.origin,
+                at,
+                ids,
+            });
+        }
+        queued
+    }
+
+    /// Evaluate `statement` so that it lands at sample `at`. Its id, if it was accepted.
+    fn eval_at(&mut self, statement: &str, at: u64) -> Option<u64> {
+        self.landing_at = Some(at);
+        let result = self.eval(statement, Some("now"));
+        self.landing_at = None;
+        match result {
+            Ok(accepted) => accepted.id,
+            Err(problems) => {
+                let why = problems
+                    .first()
+                    .map_or_else(String::new, |p| format!(": {}", p.message));
+                self.notify(format!("`then: {statement}` could not run{why}"));
+                None
+            }
+        }
     }
 
     // ---- state ----------------------------------------------------------------
@@ -599,7 +707,8 @@ impl Live {
                     soloed: state.soloed,
                     edits: record.map(|p| p.edits.clone()).unwrap_or_default(),
                     length: clip.map_or(1.0, |c| c.length.to_f64()),
-                    looped: clip.is_none_or(|c| c.looped),
+                    looped: clip.is_none_or(|c| c.looped()),
+                    plays: clip.and_then(|c| c.plays),
                     endless: clip.is_some_and(|c| c.endless),
                     cycles,
                     lanes: clip

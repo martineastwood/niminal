@@ -695,7 +695,8 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             )
         });
     }
-    for (name, (channels, _)) in &samples_state.loaded {
+    for (name, sample) in &samples_state.loaded {
+        let channels = &sample.channels;
         names.sample_data.insert(name.clone(), channels.clone());
     }
     for item in &items {
@@ -1353,7 +1354,13 @@ struct SampleState {
     /// The names of choke groups.
     groups: Vec<String>,
     /// Lone samples already loaded, for `.slices` to cut up and `.data` to expose.
-    loaded: HashMap<String, (Vec<Arc<niminal_engine::Table>>, f64)>,
+    loaded: HashMap<String, LoadedSample>,
+}
+
+struct LoadedSample {
+    channels: Vec<Arc<niminal_engine::Table>>,
+    duration: Option<Expr>,
+    repitch: bool,
 }
 
 /// The kit made by cutting `data` into `count` equal pieces called `s0`, `s1`...
@@ -1364,7 +1371,7 @@ fn slice_members(
     at: &[f64],
     state: &SampleState,
 ) -> Res<Vec<Member>> {
-    let Some((data, speed)) = state.loaded.get(&sample.name) else {
+    let Some(loaded) = state.loaded.get(&sample.name) else {
         let mut d = Diagnostic::new(
             format!("no sample named `{}` to slice", sample.name),
             sample.span,
@@ -1376,6 +1383,7 @@ fn slice_members(
         }
         return Err(d);
     };
+    let data = &loaded.channels;
     let frames = data.first().map_or(0, |c| c.len());
     if count.fract() != 0.0 || count < 1.0 || count as usize > frames {
         return Err(Diagnostic::new(
@@ -1409,7 +1417,8 @@ fn slice_members(
             name: format!("s{i}"),
             channels: data.clone(),
             slice: Some((starts[i], starts.get(i + 1).copied().unwrap_or(frames))),
-            speed: *speed,
+            duration: loaded.duration.clone(),
+            repitch: loaded.repitch,
             loop_mode: niminal_engine::ops::LoopMode::None,
             interp: niminal_engine::ops::SampleInterp::Cubic,
         })
@@ -1427,7 +1436,8 @@ fn compile_sample(
 ) -> Res<Instrument> {
     let mut root = DEFAULT_ROOT_HZ;
     let mut chokes: Vec<&Arg> = Vec::new();
-    let mut duration: Option<f64> = None;
+    let mut duration: Option<Expr> = None;
+    let mut repitch = false;
     for arg in &decl.options {
         let Some(key) = &arg.name else {
             return Err(Diagnostic::new(
@@ -1449,7 +1459,13 @@ fn compile_sample(
             "choke" => chokes.push(arg),
             "beats" => match &arg.value.kind {
                 ExprKind::Num { value, unit: None } if *value > 0.0 => {
-                    duration = Some(*value * 60.0 / tempo.bpm)
+                    duration = Some(Expr {
+                        kind: ExprKind::Num {
+                            value: *value * 60.0 / tempo.bpm,
+                            unit: Some("sec".into()),
+                        },
+                        span: arg.value.span,
+                    })
                 }
                 _ => {
                     return Err(Diagnostic::new(
@@ -1458,15 +1474,18 @@ fn compile_sample(
                     ));
                 }
             },
-            "duration" => {
-                let seconds = literal_time(&arg.value)?.to_seconds(tempo);
-                if !seconds.is_finite() || seconds <= 0.0 {
-                    return Err(Diagnostic::new(
-                        "sample duration must be positive",
-                        arg.value.span,
-                    ));
-                }
-                duration = Some(seconds);
+            "duration" => duration = Some(arg.value.clone()),
+            "mode" => {
+                repitch = match &arg.value.kind {
+                    ExprKind::Name(n) if n == "stretch" => false,
+                    ExprKind::Name(n) if n == "repitch" => true,
+                    _ => {
+                        return Err(Diagnostic::new(
+                            "sample mode is `stretch` or `repitch`",
+                            arg.value.span,
+                        ));
+                    }
+                };
             }
             "loop" | "interp" => {} // validated below
             other => {
@@ -1474,11 +1493,11 @@ fn compile_sample(
                     Diagnostic::new(format!("`{other}` isn't an option of a sample"), key.span);
                 d = match closest(
                     other,
-                    ["root", "choke", "beats", "duration", "loop", "interp"],
+                    ["root", "choke", "beats", "duration", "loop", "interp", "mode"],
                 ) {
                     Some(c) => d.with_help(format!("did you mean `{c}`?")),
                     None => d.with_help(
-                        "the options are `root`, `choke`, `beats`, `duration`, `loop` and `interp`",
+                        "the options are `root`, `choke`, `beats`, `duration`, `loop`, `interp` and `mode`",
                     ),
                 };
                 return Err(d);
@@ -1501,30 +1520,28 @@ fn compile_sample(
                 name,
                 channels,
                 slice: None,
-                speed: 1.0,
+                duration: None,
+                repitch,
                 loop_mode: niminal_engine::ops::LoopMode::None,
                 interp: niminal_engine::ops::SampleInterp::Cubic,
             })
             .collect(),
         (SampleSource::Path(path), false) => {
             let channels = samples.load(path).map_err(file_error)?;
-            let frames = channels.first().map_or(0, |c| c.len());
-            let rate = channels
-                .first()
-                .map_or(48_000.0, |c| c.sample_rate_or(48_000.0));
-            // `beats` or `duration` fits the loop to that length: its own length in seconds against the time asked for.
-            let speed = match duration {
-                Some(d) => (frames as f64 / f64::from(rate)) / d,
-                None => 1.0,
-            };
-            state
-                .loaded
-                .insert(decl.name.name.clone(), (channels.clone(), speed));
+            state.loaded.insert(
+                decl.name.name.clone(),
+                LoadedSample {
+                    channels: channels.clone(),
+                    duration: duration.clone(),
+                    repitch,
+                },
+            );
             vec![Member {
                 name: decl.name.name.clone(),
                 channels,
                 slice: None,
-                speed,
+                duration: duration.clone(),
+                repitch,
                 loop_mode: loop_mode_of(&decl.options)?,
                 interp: niminal_engine::ops::SampleInterp::Cubic,
             }]
@@ -1534,6 +1551,13 @@ fn compile_sample(
             let mode = loop_mode_of(&decl.options)?;
             for m in &mut members {
                 m.loop_mode = mode;
+                if decl
+                    .options
+                    .iter()
+                    .any(|a| a.name.as_ref().is_some_and(|n| n.name == "mode"))
+                {
+                    m.repitch = repitch;
+                }
             }
             members
         }
@@ -1541,14 +1565,20 @@ fn compile_sample(
             let value = compile_const(expr, tempo, registry, names)?;
             let table = table_from_const(value, decl.source_span)?;
             let channels = vec![table];
-            state
-                .loaded
-                .insert(decl.name.name.clone(), (channels.clone(), 1.0));
+            state.loaded.insert(
+                decl.name.name.clone(),
+                LoadedSample {
+                    channels: channels.clone(),
+                    duration: None,
+                    repitch,
+                },
+            );
             vec![Member {
                 name: decl.name.name.clone(),
                 channels,
                 slice: None,
-                speed: 1.0,
+                duration: None,
+                repitch,
                 loop_mode: loop_mode_of(&decl.options)?,
                 interp: niminal_engine::ops::SampleInterp::Cubic,
             }]

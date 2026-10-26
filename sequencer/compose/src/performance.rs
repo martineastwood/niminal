@@ -73,8 +73,11 @@ pub struct Clip {
     pub length: Rational,
     /// Never starts over, because no `length` was given: `length` is only the first cycle.
     pub endless: bool,
-    /// Starts over when it ends. A clip with `loop: false` plays once and is then finished.
-    pub looped: bool,
+    /// How many passes of its length it plays before it is finished: `times: 4`. `None` starts over
+    /// for ever.
+    pub plays: Option<u32>,
+    /// What to do when it has played its last pass: statements such as `chorus.start`, from `then:`.
+    pub then: Vec<String>,
     /// `notes` is the pitch lane; other lanes set parameters or universal
     /// controls note by note.
     pub lanes: Vec<(String, Pattern<Step>)>,
@@ -126,6 +129,11 @@ impl Keys {
 }
 
 impl Clip {
+    /// Does it start over when it ends, for ever?
+    pub fn looped(&self) -> bool {
+        self.plays.is_none()
+    }
+
     pub fn curve(&self, name: &str) -> Option<&EnvLane> {
         self.curves.iter().find(|(n, _)| n == name).map(|(_, c)| c)
     }
@@ -153,8 +161,7 @@ impl Clip {
             .lanes
             .iter()
             .map(|(name, pattern)| {
-                let (haps, truncated) =
-                    with_budget(4096, || pattern.query(Span::new(base, end)));
+                let (haps, truncated) = with_budget(4096, || pattern.query(Span::new(base, end)));
                 let mut events: Vec<LaneEvent> = haps
                     .into_iter()
                     .filter_map(|hap| {

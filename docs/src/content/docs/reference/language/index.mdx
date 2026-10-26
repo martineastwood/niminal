@@ -5,7 +5,7 @@ description: The niminal language — one file, half compiled by the server, hal
 
 A `.nml` file is one language: typed parameters, named arguments, functions and opcodes you can chain, and a score you can also drive from outside.
 
-Two programs read it. **niminal**, the server, compiles instruments, effects and routing into sound. **nimlive**, the sequencer, adds tempo, clips, scenes and patterns on top, and sends the server notes stamped with a time. Every page below says which of the two runs what it describes.
+Two programs read it. **niminal**, the server, compiles instruments, effects and routing into sound. **niminal-live**, the sequencer, adds tempo, clips, scenes and patterns on top, and sends the server notes stamped with a time. Every page below says which of the two runs what it describes.
 
 niminal is in alpha. This reference describes what works today. The [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%20Spec.md) is the longer-term design; where the two disagree, trust the docs and the compiler.
 
@@ -24,7 +24,7 @@ The server's half, which becomes sound:
 | [Standard library](/reference/language/standard-library/) | Filters, delays, a reverb, ready-made sounds |
 | [Built-in opcodes](/reference/opcodes/) | Core opcode library |
 
-## Read by nimlive
+## Read by niminal-live
 
 The sequencer's half, which decides what plays when:
 

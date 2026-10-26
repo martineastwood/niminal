@@ -32,7 +32,7 @@ clip bass {
 
 clip lead {
   instrument: pluck(bright: 0.8, az: 22deg)
-  notes: [c4 e4 g4 b4].every(2, it.reverse)
+  notes: [c4 e4 g4 b4].every(2, reverse)
   gain:  [0db -3db 0db -6db]
 }
 
@@ -40,13 +40,13 @@ clip lead {
 clip shimmer {
   instrument: pad(bright: 0.55)
   length: 2bars
-  notes: [c5 e5 g5 b5].thin(25%)
+  notes: [c5 e5 g5 b5].drop(25%)
   gain:  [-14db]
 }
 
 // Derived clips keep the instrument and lanes, and add one change.
 clip backwards = lead.reverse
-clip ghost = shimmer.thin(50%)
+clip ghost = shimmer.drop(50%)
 
 scene verse  { bass, lead }
 scene chorus { bass, lead, shimmer }

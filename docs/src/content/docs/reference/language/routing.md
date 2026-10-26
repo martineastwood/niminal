@@ -84,7 +84,7 @@ The timing plan belongs to the compiled topology. Held voices keep their origina
 Signals carry a layout in their type: `mono`, `stereo`, `quad`, `surround(5.1)`, `surround(7.1)`, or `channels(N)` (1–16).
 
 - Prefer **`pan(azimuth:, spread:)`** over hard-coded channel counts so the same code works on stereo or surround.
-- Master layout: `config { channels: surround(5.1) }` (or `stereo`, `quad`, `surround(7.1)`, `mono`, `channels(N)`). A project has only one `config`; `channels` is the only setting today.
+- Master layout: `config { channels: surround(5.1) }` (or `stereo`, `quad`, `surround(7.1)`, `mono`, `channels(N)`). A project has only one `config`, which can also set [quantization defaults](/reference/language/performance/#quantized-changes).
 - Convert explicitly with **`.to_layout(stereo)`** (and other layouts) when a send or instrument layout must match a bus.
 
 The server’s `--channels` flag must match the layout you intend to hear (1, 2, 4, 6 for 5.1, or 8 for 7.1).

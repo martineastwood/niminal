@@ -660,6 +660,9 @@ impl Live {
     }
 
     pub(super) fn landing(&self, statements: &[Statement], fallback: Option<Quantize>) -> u64 {
+        if let Some(at) = self.landing_at {
+            return at.max(self.clock);
+        }
         let grid = self.grid();
         statements
             .iter()

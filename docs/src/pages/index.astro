@@ -90,7 +90,7 @@ const features = [
             <div class="player" data-src={audio('saw_lead')}>
               <button class="play" aria-label="Play"><svg viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5z"/></svg></button>
               <canvas class="scope" width="900" height="120"></canvas>
-              <span class="player-label">rendered by <b>nimlive render</b></span>
+              <span class="player-label">rendered by <b>niminal-live render</b></span>
             </div>
           </div>
         </div>
@@ -132,7 +132,7 @@ const features = [
           <div class="copy">
             <p class="eyebrow">patterns, clips and scenes</p>
             <h3>Perform with the music, not around it.</h3>
-            <p>Mini-notation for rhythm, functions like <code>every</code>, <code>euclid</code> and <code>transpose</code> for variation, and scenes you launch quantized to the bar.</p>
+            <p>Mini-notation for rhythm, functions like <code>every</code>, <code>spread_evenly</code> and <code>transpose</code> for variation, and scenes you launch quantized to the bar.</p>
           </div>
           <div class="panel">
             <div class="panel-bar"><i></i><i></i><i></i><span>groove.nml</span></div>
@@ -148,7 +148,7 @@ const features = [
           <div class="copy">
             <p class="eyebrow">arrangements and samples</p>
             <h3>From sketch to finished piece.</h3>
-            <p>Drum kits load from a folder, sections play in order, and <code>nimlive render</code> can bounce the whole song or just bars 5 to 9.</p>
+            <p>Drum kits load from a folder, sections play in order, and <code>niminal-live render</code> can bounce the whole song or just bars 5 to 9.</p>
           </div>
           <div class="panel">
             <div class="panel-bar"><i></i><i></i><i></i><span>song.nml</span></div>
@@ -170,7 +170,7 @@ const features = [
 <span class="p">$</span> niminal server examples/groove.nml --midi
 
 <span class="c"># change the music, landing four bars from now</span>
-<span class="p">$</span> nimlive send 'chorus.start' --quantize "next 4bars"
+<span class="p">$</span> niminal-live send 'chorus.start' --quantize "next 4bars"
 
 <span class="c"># later: replay the whole session, sample for sample</span>
 <span class="p">$</span> niminal replay ~/.niminal/sessions/1760112000.log --out set.wav</code></pre>
@@ -178,7 +178,7 @@ const features = [
 
       <section class="tools">
         <article><span class="num">editor</span><h3>VS Code</h3><p>Highlighting, evaluate block or file, diagnostics, and a scenes panel you can launch with Cmd+1..9.</p></article>
-        <article><span class="num">lsp</span><h3>Language server</h3><p>Completion, hover, go to definition and an outline from <code>nimlive lsp</code>, for any editor.</p></article>
+        <article><span class="num">lsp</span><h3>Language server</h3><p>Completion, hover, go to definition and an outline from <code>niminal-live lsp</code>, for any editor.</p></article>
         <article><span class="num">control</span><h3>MIDI and OSC</h3><p>Bind a control to a knob with <code>ctl x = midi.cc(21)</code> or an OSC address. Inputs are logged and replay too.</p></article>
         <article><span class="num">engine</span><h3>Rust, no allocations on the audio thread</h3><p>Compilation happens at eval time; landing a change only moves things. The engine builds for WebAssembly.</p></article>
       </section>

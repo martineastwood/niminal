@@ -82,14 +82,20 @@ impl Live {
             if starts_scene {
                 let name = target.expect("a scene start has a target");
                 let quantum = self.quantum_of(&s, fallback);
-                let (_, mine) = after.iter().find(|(n, _)| *n == name).expect("the scene exists");
+                let (_, mine) = after
+                    .iter()
+                    .find(|(n, _)| *n == name)
+                    .expect("the scene exists");
                 let mut stops: Vec<&String> = Vec::new();
                 for (other, clips) in &after {
                     if *other == name {
                         continue;
                     }
                     for clip in clips {
-                        if is_running(&playing, clip) && !mine.contains(clip) && !stops.contains(&clip) {
+                        if is_running(&playing, clip)
+                            && !mine.contains(clip)
+                            && !stops.contains(&clip)
+                        {
                             stops.push(clip);
                         }
                     }

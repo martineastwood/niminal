@@ -19,7 +19,7 @@ impl Playing {
         self.stopped_at.is_none()
     }
 
-    /// `riff.reverse.thin(25%)`
+    /// `riff.reverse.drop(25%)`
     pub(super) fn text(&self, clip: &str) -> String {
         self.edits
             .iter()
@@ -114,7 +114,7 @@ pub(super) fn change_playing(
     Ok(next)
 }
 
-/// The first name in an expression: `riff` in `riff.reverse.thin(25%)`, `thin` in `thin(25%)`.
+/// The first name in an expression: `riff` in `riff.reverse.drop(25%)`, `drop` in `drop(25%)`.
 pub(super) fn root_name(text: &str) -> &str {
     let text = text.trim_start();
     let end = text

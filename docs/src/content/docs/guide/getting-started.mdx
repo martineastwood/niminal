@@ -15,21 +15,21 @@ From a clone of the [repo](https://github.com/martineastwood/niminal):
 
 ```sh
 cargo install --path crates/niminal-cli   # niminal
-cargo install --path sequencer/nimlive    # nimlive
+cargo install --path sequencer/live-cli    # niminal-live
 ```
 
 Or install from GitHub without cloning:
 
 ```sh
 cargo install --git https://github.com/martineastwood/niminal niminal-cli
-cargo install --git https://github.com/martineastwood/niminal nimlive
+cargo install --git https://github.com/martineastwood/niminal niminal-live
 ```
 
 Check them:
 
 ```sh
 niminal --version
-nimlive --version
+niminal-live --version
 ```
 
 ## Hear something
@@ -41,7 +41,7 @@ Save this as `saw_lead.nml` (or use `examples/saw_lead.nml` in the repo):
 Render it to a WAV file:
 
 ```sh
-nimlive render saw_lead.nml --out saw_lead.wav
+niminal-live render saw_lead.nml --out saw_lead.wav
 ```
 
 Open the `.nml` file: tempo, an instrument with units (`hz`, `db`, `ms`), an envelope, and notes timed with `at`.
@@ -56,7 +56,7 @@ The [VS Code / Cursor extension](/reference/editor/) is the main way to live-cod
 cd editors/vscode && npm install && node install.js   # --cursor for Cursor
 ```
 
-Reload the window. Start the audio server — **niminal: Start Server in a Terminal** in the command palette, or `niminal server` in a terminal — then open a `.nml` file and press **Cmd+Enter** (macOS) or **Ctrl+Enter** to evaluate the block around the cursor. The status bar shows the bar and tempo, and the sidebar lists scenes and clips. The language server (`nimlive lsp`) works without a server for hover, completion, and errors.
+Reload the window. Start the audio server — **niminal: Start Server in a Terminal** in the command palette, or `niminal server` in a terminal — then open a `.nml` file and press **Cmd+Enter** (macOS) or **Ctrl+Enter** to evaluate the block around the cursor. The status bar shows the bar and tempo, and the sidebar lists scenes and clips. The language server (`niminal-live lsp`) works without a server for hover, completion, and errors.
 
 ## Live coding from a terminal
 
@@ -65,10 +65,10 @@ The same live sequencer, as its own process, with a REPL and one-shot sends:
 ```sh
 niminal server
 # in another terminal:
-nimlive live examples/groove.nml
-nimlive repl
+niminal-live live examples/groove.nml
+niminal-live repl
 # in another terminal:
-nimlive send 'chorus.start' --quantize "next 4bars"
+niminal-live send 'chorus.start' --quantize "next 4bars"
 ```
 
 See [Live coding](/guide/live-coding/) for quantization, MIDI, and session replay.
@@ -83,5 +83,5 @@ See [Live coding](/guide/live-coding/) for quantization, MIDI, and session repla
 | [Tracker](/reference/tracker/) | Grid, mixer and code in a desktop app |
 | [Language overview](/reference/language/) | Instruments, patterns, performance |
 | [Command line](/reference/server/cli/) | The server's subcommands and flags |
-| [nimlive](/reference/nimlive/cli/) | render, live, repl, send, lsp |
+| [niminal-live](/reference/niminal-live/cli/) | render, live, repl, send, lsp |
 | [Editor and LSP](/reference/editor/) | Extension settings and language server |

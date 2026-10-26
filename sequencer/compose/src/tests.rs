@@ -78,7 +78,11 @@ fn bad_control_inputs_are_explained() {
     );
     assert_eq!(
         msg("ctl a = midi.note(1)"),
-        "`midi.note` isn't supported; use `midi.cc(number)` or `midi.learn`"
+        "a control follows a controller: use `midi.cc(number)`"
+    );
+    assert_eq!(
+        msg("ctl a = midi.bend"),
+        "`midi.bend` isn't supported; use `midi.cc(number)`, `midi.note(number)` or `midi.learn`"
     );
     assert_eq!(
         msg("ctl a = midi.cc(1).range(200hz..1)"),
@@ -1241,11 +1245,15 @@ fn numeric_arguments_can_be_patterns() {
         2 + 4
     );
     assert_eq!(
-        notes_of("lead.__update([c4].euclid(hits: [<3 5>], steps: 8))", 2).len(),
+        notes_of(
+            "lead.__update([c4].spread_evenly(hits: [<3 5>], steps: 8))",
+            2
+        )
+        .len(),
         8
     );
     assert_eq!(
-        notes_of("lead.__update([c4 e4].every([<1 2>], it.fast(2)))", 2).len(),
+        notes_of("lead.__update([c4 e4].every([<1 2>], fast(2)))", 2).len(),
         4 + 2
     );
     assert_eq!(
@@ -1255,23 +1263,271 @@ fn numeric_arguments_can_be_patterns() {
 }
 
 #[test]
-fn new_pattern_operations() {
-    assert!(notes_of("lead.__update([c4*8].sometimes(50%, it.fast(2)))", 8).len() > 64);
+fn patterns_have_arithmetic() {
+    // a number moves each note, a plain number on a note counts as semitones
     assert_eq!(
-        values_of("lead.__update([c4 e4 g4 b4].rotate(4))", 2)[4..],
+        values_of("lead.__update([c4 e4] + 7st)", 1),
+        [midi(67), midi(71)]
+    );
+    assert_eq!(
+        values_of("lead.__update([c4 e4] + [<0 3>])", 2),
+        [midi(60), midi(64), midi(63), midi(67)]
+    );
+    assert_eq!(
+        values_of("lead.__update([c4 e4] - [2])", 1),
+        [midi(58), midi(62)]
+    );
+    // the left pattern's timing is kept: each note takes the value it starts on
+    assert_eq!(
+        values_of("lead.__update([c4 e4] + [0 3 5 7])", 1),
+        [midi(60), midi(69)]
+    );
+    // timing: second keeps the right timing, both only where they overlap
+    let right = notes_of("lead.__update([c4 e4].add([0 3 5 7], timing: second))", 1);
+    assert_eq!(
+        right.iter().map(|e| e.1).collect::<Vec<_>>(),
+        [midi(60), midi(63), midi(69), midi(71)]
+    );
+    assert_eq!(
+        notes_of("lead.__update([c4 e4].add([0 3 5 7], timing: both))", 1).len(),
+        4
+    );
+    assert_eq!(
+        notes_of("lead.__update([c4 ~].add([0 3], timing: both))", 1).len(),
+        1
+    );
+    assert_eq!(
+        values_of("lead.__update([c4 e4].add(12st))", 1),
+        [midi(72), midi(76)]
+    );
+    assert!(msg(&stage("lead.__update([c4 e4].add(grid[x]))")).contains("can't add"));
+}
+
+#[test]
+fn more_tidal_style_operations() {
+    // take / crop / squeeze
+    assert_eq!(
+        values_of("lead.__update([c4 e4 g4 b4].take(50%))", 1),
+        [midi(60), midi(64)]
+    );
+    assert_eq!(
+        values_of("lead.__update([c4 e4 g4 b4].crop(25%, 75%))", 1),
+        [midi(64), midi(67)]
+    );
+    let squeezed = notes_of("lead.__update([c4 e4].squeeze(50%, 100%))", 1);
+    assert_eq!(squeezed[0].0, r(1, 2));
+    assert_eq!(squeezed[1].0, r(3, 4));
+    // echo: the note and three quieter copies, each later
+    let echoed = notes_of("lead.__update([c4].echo(3, 1/8, fade: -6db))", 1);
+    assert_eq!(echoed.len(), 4);
+    assert_eq!(echoed[1].0, r(1, 8));
+    // strum: a chord's notes start one after another
+    let strum = notes_of("lead.__update([c4].chord(major).strum(50%))", 1);
+    assert_eq!(strum.len(), 3);
+    assert_eq!(strum[0].0, r(0, 1));
+    assert!(strum[2].0 > strum[1].0 && strum[1].0 > strum[0].0);
+    // in_cycles: the last cycle of every two runs twice as fast
+    assert_eq!(
+        notes_of("lead.__update([c4 e4].in_cycles(2, 1, fast(2)))", 2).len(),
+        2 + 4
+    );
+    let sped_up = notes_of("lead.__update([c4*8].often(fast(2)))", 1).len();
+    assert!(
+        sped_up > 8 && sped_up < 16,
+        "most notes doubled, got {sped_up}"
+    );
+    let often = notes_of("lead.__update([c4*16].often(transpose(+12st)))", 4);
+    let high = often.iter().filter(|e| e.1 == midi(72)).count();
+    assert!(high > 32 && high < 64, "about 75% of 64, got {high}");
+    assert!(
+        notes_of(
+            "lead.__update([c4*8].sometimes(50%, fast(2), per: cycle))",
+            16
+        )
+        .len()
+            > 128
+    );
+    // sew: the grid's hits play one pattern, its rests the other
+    assert_eq!(
+        values_of("lead.__update(if_else(grid[x. x.], [c4*4], [e4*4]))", 1),
+        [midi(60), midi(64), midi(60), midi(64)]
+    );
+    // count_to and random_int
+    assert_eq!(
+        values_of("lead.__update(count_to(4))", 1),
+        [
+            Value::Num(0.0),
+            Value::Num(1.0),
+            Value::Num(2.0),
+            Value::Num(3.0)
+        ]
+    );
+    assert!(
+        values_of("lead.__update(random_int(8).to_steps(8))", 2)
+            .iter()
+            .all(|v| matches!(v, Value::Num(n) if (0.0..8.0).contains(n) && n.fract() == 0.0))
+    );
+    assert!(msg(&stage("lead.__update([c4].crop(75%, 25%))")).contains("crop"));
+}
+
+#[test]
+fn arguments_with_units_can_be_patterns() {
+    assert_eq!(
+        values_of("lead.__update([c4 e4].transpose([<0st +7st>]))", 2),
+        [midi(60), midi(64), midi(67), midi(71)]
+    );
+    assert_eq!(
+        notes_of("lead.__update([c4*8].drop([<0% 100%>]))", 2).len(),
+        8
+    );
+    assert_eq!(
+        notes_of("lead.__update([c4 e4 g4 b4].take([<50% 100%>]))", 2).len(),
+        2 + 4
+    );
+    let late = |src: &str| notes_of(src, 1)[1].0;
+    assert_eq!(
+        late("lead.__update([c4*8].swing(amount: 25%, every: 1/4))"),
+        r(3, 16)
+    );
+    assert_eq!(
+        late("lead.__update([c4*8].swing(amount: [25%], every: 1/4))"),
+        r(3, 16)
+    );
+    assert!(msg(&stage("lead.__update([c4].transpose([<0 5>]))")).contains("semitones"));
+    assert!(msg(&stage("lead.__update([c4].drop(150%))")).contains("0% to 100%"));
+}
+
+#[test]
+fn chances_can_change_from_cycle_to_cycle() {
+    // never in one cycle, always in the next
+    let doubled = notes_of("lead.__update([c4*8].sometimes([<0% 100%>], fast(2)))", 2);
+    assert_eq!(doubled.len(), 8 + 16);
+    let cycles = notes_of(
+        "lead.__update([c4*8].sometimes([<0% 100%>], fast(2), per: cycle))",
+        4,
+    );
+    assert_eq!(cycles.len(), 8 + 16 + 8 + 16);
+    assert!(msg(&stage("lead.__update([c4].sometimes(150%, fast(2)))")).contains("0% to 100%"));
+}
+
+#[test]
+fn cycle_through_plays_one_change_per_cycle() {
+    assert_eq!(
+        values_of(
+            "lead.__update([c4 e4].cycle_through(same, reverse, transpose(+12st)))",
+            4
+        ),
+        [
+            midi(60),
+            midi(64),
+            midi(64),
+            midi(60),
+            midi(72),
+            midi(76),
+            midi(60),
+            midi(64)
+        ]
+    );
+    assert!(msg(&stage("lead.__update([c4].cycle_through)")).contains("cycle_through"));
+}
+
+#[test]
+fn a_change_leaves_the_pattern_out() {
+    // operations on the pattern being changed, without `it`
+    assert_eq!(
+        values_of("lead.__update([c4 e4].every(1, reverse))", 1),
+        [midi(64), midi(60)]
+    );
+    assert_eq!(
+        values_of("lead.__update([c4 e4].every(1, fast(2).reverse))", 1),
+        [midi(64), midi(60), midi(64), midi(60)]
+    );
+    assert_eq!(
+        values_of(
+            "lead.__update([c4 e4].overlay(transpose(+12st), after: 1/2))",
+            1
+        )
+        .len(),
+        4
+    );
+    assert_eq!(
+        values_of("lead.__update([c4 e4].cycle_through(same, reverse))", 2),
+        [midi(60), midi(64), midi(64), midi(60)]
+    );
+    // `same` is the pattern itself, for a free function such as `stack`
+    assert_eq!(
+        values_of(
+            "lead.__update([c4].every(1, stack(same, same.transpose(+7st))))",
+            1
+        )
+        .len(),
+        2
+    );
+    // a name of your own wins over an operation
+    assert_eq!(
+        values_of(
+            "reverse = [g4]\nlead.__update([c4 e4].every(1, reverse))",
+            1
+        ),
+        [midi(67)]
+    );
+    assert_eq!(
+        values_of(
+            "lead.__update([c3 e4].where(note < c4, transpose(+12st)))",
+            1
+        ),
+        [midi(60), midi(64)]
+    );
+}
+
+#[test]
+fn clips_can_play_a_different_pattern_each_cycle() {
+    assert_eq!(
+        values_of("lead.__update(take_turns([c4], [e4], [g4]))", 4),
+        [midi(60), midi(64), midi(67), midi(60)]
+    );
+    // a phrase decided by the cycle number
+    let phrase = "def phrase() {\n  take_turns(for c in 0..<4 {\n    if c.mod(4) == 3 { [g4 b4] } else { [c4] }\n  })\n}\nlead.__update(phrase())";
+    assert_eq!(
+        values_of(phrase, 4),
+        [midi(60), midi(60), midi(60), midi(67), midi(71)]
+    );
+    assert_eq!(
+        values_of("lead.__update(take_turns([c4 e4 g4 b4], [d4]))", 4),
+        [
+            midi(60),
+            midi(64),
+            midi(67),
+            midi(71),
+            midi(62),
+            midi(60),
+            midi(64),
+            midi(67),
+            midi(71),
+            midi(62)
+        ]
+    );
+    assert!(msg(&stage("lead.__update(take_turns())")).contains("take_turns"));
+}
+
+#[test]
+fn new_pattern_operations() {
+    assert!(notes_of("lead.__update([c4*8].sometimes(50%, fast(2)))", 8).len() > 64);
+    assert_eq!(
+        values_of("lead.__update([c4 e4 g4 b4].start_later(4))", 2)[4..],
         [midi(64), midi(67), midi(71), midi(60)]
     );
     assert_eq!(
-        values_of("lead.__update([c4 e4 g4 b4].repeat_start(50%))", 1),
+        values_of("lead.__update([c4 e4 g4 b4].loop_start(50%))", 1),
         [midi(60), midi(64), midi(60), midi(64)]
     );
     assert_eq!(
-        values_of("lead.__update([c4 e4].palindrome)", 2),
+        values_of("lead.__update([c4 e4].back_and_forth)", 2),
         [midi(60), midi(64), midi(64), midi(60)]
     );
     assert_eq!(
         notes_of(
-            "lead.__update([c4 e4 g4 b4].within(0%, 50%, it.fast(2)))",
+            "lead.__update([c4 e4 g4 b4].only_between(0%, 50%, fast(2)))",
             1
         )
         .len(),
@@ -1288,7 +1544,7 @@ fn new_pattern_operations() {
     shuffled.sort_by(|a, b| format!("{a}").cmp(&format!("{b}")));
     assert_eq!(shuffled.len(), 4);
     assert_eq!(
-        notes_of("lead.__update([c4 e4 g4 b4].in_turn(4, it.fast(2)))", 1).len(),
+        notes_of("lead.__update([c4 e4 g4 b4].step_through(4, fast(2)))", 1).len(),
         5
     );
     assert_eq!(
@@ -1459,14 +1715,14 @@ fn part_declarations_give_a_migration_error() {
 fn where_changes_only_the_notes_that_pass() {
     assert_eq!(
         values_of(
-            "lead.__update([c3 e4 g2 c5].where(it < c4, it.transpose(+12st)))",
+            "lead.__update([c3 e4 g2 c5].where(note < c4, transpose(+12st)))",
             1
         ),
         [midi(60), midi(64), midi(55), midi(72)]
     );
     assert_eq!(
         values_of(
-            "lead.__update([c3 e4].where(it.freq >= e4, it.transpose(-12st)))",
+            "lead.__update([c3 e4].where(note.freq >= e4, transpose(-12st)))",
             1
         ),
         [midi(48), midi(52)]
@@ -1522,7 +1778,7 @@ fn notes_carry_their_own_controls() {
 
 #[test]
 fn left_right_places_the_original_and_the_change_apart() {
-    let s = steps_of("lead.__update([c4 e4].left_right(it.reverse))", 1);
+    let s = steps_of("lead.__update([c4 e4].stereo_copy(reverse))", 1);
     assert_eq!(s.len(), 4);
     let left: Vec<_> = s
         .iter()
@@ -1536,7 +1792,7 @@ fn left_right_places_the_original_and_the_change_apart() {
         .collect();
     assert_eq!(left, [midi(60), midi(64)]);
     assert_eq!(right, [midi(64), midi(60)]);
-    let wide = steps_of("lead.__update([c4].left_right(it, angle: 60deg))", 1);
+    let wide = steps_of("lead.__update([c4].stereo_copy(same, angle: 60deg))", 1);
     assert!(wide.iter().any(|e| e.1.pan == Some(60.0)));
 }
 
@@ -1571,7 +1827,10 @@ fn chop_walks_through_the_sample() {
 
 #[test]
 fn grids_invert() {
-    let hits = notes_of("lead.__update([c4].rhythm(grid[x.x. x...].invert))", 1);
+    let hits = notes_of(
+        "lead.__update([c4].with_rhythm_of(grid[x.x. x...].invert))",
+        1,
+    );
     assert_eq!(
         hits.iter().map(|e| e.0).collect::<Vec<_>>(),
         [r(1, 8), r(3, 8), r(5, 8), r(3, 4), r(7, 8)]
@@ -1714,12 +1973,12 @@ fn time_operations() {
 
 #[test]
 fn every_applies_a_change_on_some_cycles() {
-    let n = notes_of("lead.__update([c4 e4 g4 b4].every(2, it.reverse))", 2);
+    let n = notes_of("lead.__update([c4 e4 g4 b4].every(2, reverse))", 2);
     assert_eq!(n[0].1, midi(71), "reversed on cycle 0");
     assert_eq!(n[4].1, midi(60), "plain on cycle 1");
     // the change can use any operation, including others that use `it`
     assert_eq!(
-        notes_of("lead.__update([c4 e4].every(1, it.fast(2).reverse))", 1).len(),
+        notes_of("lead.__update([c4 e4].every(1, fast(2).reverse))", 1).len(),
         4
     );
 }
@@ -1739,15 +1998,18 @@ fn value_operations() {
     };
     assert!((hz - 440.0 * 2f64.powf(0.5 / 12.0)).abs() < 1e-9);
 
-    let e = notes_of("lead.__update([c2].euclid(hits: 3, steps: 8))", 1);
+    let e = notes_of("lead.__update([c2].spread_evenly(hits: 3, steps: 8))", 1);
     assert_eq!(
         e.iter().map(|e| e.0).collect::<Vec<_>>(),
         [r(0, 1), r(3, 8), r(3, 4)]
     );
-    let rhythm = notes_of("lead.__update([c4 e4 g4].rhythm(grid[x.x. x.x.]))", 1);
+    let rhythm = notes_of(
+        "lead.__update([c4 e4 g4].with_rhythm_of(grid[x.x. x.x.]))",
+        1,
+    );
     assert_eq!(rhythm.len(), 4);
     assert_eq!(rhythm[0].0, r(0, 1));
-    let masked = notes_of("lead.__update([c4 e4 g4 b4].mask(grid[x.x.]))", 1);
+    let masked = notes_of("lead.__update([c4 e4 g4 b4].keep_where(grid[x.x.]))", 1);
     assert_eq!(
         masked.iter().map(|e| e.1).collect::<Vec<_>>(),
         [midi(60), midi(67)]
@@ -1757,7 +2019,7 @@ fn value_operations() {
         4
     );
     let layered = notes_of(
-        "lead.__update([c4].layer(after: 1/2, it.transpose(+12st)))",
+        "lead.__update([c4].overlay(after: 1/2, transpose(+12st)))",
         1,
     );
     assert_eq!(
@@ -1768,7 +2030,7 @@ fn value_operations() {
 
 #[test]
 fn thinning_is_seeded_by_the_source() {
-    let src = "lead.__update([c4*16].thin(50%))";
+    let src = "lead.__update([c4*16].drop(50%))";
     let a = notes_of(src, 8).len();
     assert_eq!(
         a,
@@ -1776,8 +2038,8 @@ fn thinning_is_seeded_by_the_source() {
         "the same source thins the same way"
     );
     assert!((40..90).contains(&a), "about half of 128 survive: {a}");
-    assert_eq!(notes_of("lead.__update([c4*4].thin(0%))", 1).len(), 4);
-    assert!(notes_of("lead.__update([c4*4].thin(100%))", 1).is_empty());
+    assert_eq!(notes_of("lead.__update([c4*4].drop(0%))", 1).len(), 4);
+    assert!(notes_of("lead.__update([c4*4].drop(100%))", 1).is_empty());
 }
 
 #[test]
@@ -1866,14 +2128,20 @@ fn lane_previews_show_a_clip_as_it_plays() {
     );
 
     // an endless clip is drawn as the cycle it is playing: `every` and `<a b>` show their turns.
-    let evolving = ok(&stage("clip riff { notes: [c2 e2].every(2, it.reverse) }"));
+    let evolving = ok(&stage("clip riff { notes: [c2 e2].every(2, reverse) }"));
     let first = &evolving.clips["riff"].lane_preview(0.0)[0];
-    assert_eq!(first.events.iter().map(|e| e.value).collect::<Vec<_>>(), [midi(40), midi(36)]);
+    assert_eq!(
+        first.events.iter().map(|e| e.value).collect::<Vec<_>>(),
+        [midi(40), midi(36)]
+    );
     let second = &evolving.clips["riff"].lane_preview(1.0)[0];
-    assert_eq!(second.events.iter().map(|e| e.value).collect::<Vec<_>>(), [midi(36), midi(40)]);
+    assert_eq!(
+        second.events.iter().map(|e| e.value).collect::<Vec<_>>(),
+        [midi(36), midi(40)]
+    );
 
     // a thinned lane has gaps, so the picture says what is left.
-    let thinned = ok(&stage("clip riff { notes: [c2 e2 g2].thin(100%) }"));
+    let thinned = ok(&stage("clip riff { notes: [c2 e2 g2].drop(100%) }"));
     assert!(thinned.clips["riff"].lane_preview(0.0)[0].events.is_empty());
 
     // lanes span the clip: two notes over two bars start a bar apart.
@@ -2188,21 +2456,18 @@ fn performance_errors_are_clear_and_located() {
         "`transpose` takes an interval in semitones"
     );
     assert_eq!(
-        msg(&stage("lead.__update([c4].thin(150%))")),
-        "`thin` takes an amount from 0% to 100%"
+        msg(&stage("lead.__update([c4].drop(150%))")),
+        "`drop` takes an amount from 0% to 100%"
     );
     assert_eq!(
         msg(&stage("lead.__update([c4].shift(1sec))")),
         "expected a length in beats or bars, found `sec`"
     );
     assert_eq!(
-        msg(&stage("lead.__update([c4].every(2, it.nonsense))")),
+        msg(&stage("lead.__update([c4].every(2, reverse.nonsense))")),
         "unknown pattern operation `nonsense`"
     );
-    assert_eq!(
-        msg(&stage("lead.__update(it)")),
-        "`it` is only available inside an argument, as in `every(4, it.reverse)`"
-    );
+    assert_eq!(msg(&stage("lead.__update(same)")), "`same` is not defined");
     assert_eq!(
         msg(&stage("lead.__update(fast(2))")),
         "`fast` works on a pattern: write it after one, as in `riff.fast`"
@@ -2365,5 +2630,68 @@ fn an_arrangement_can_hold_timed_lines() {
             .starts_with("expected a command placed"),
         "{}",
         msg("clip a { }\narrangement song {\n  at bar 3 hush\n}")
+    );
+}
+
+#[test]
+fn on_runs_commands_when_something_arrives() {
+    let p = ok(&stage(
+        "on midi.note(36) lead.start\non midi.note(37, 10) {\n  bass.start\n  lead.stop\n}\non osc_in(\"/go\") hush\n",
+    ));
+    assert_eq!(p.triggers.len(), 3);
+    assert_eq!(
+        p.triggers[0].source,
+        InputSource::MidiNote {
+            note: 36,
+            channel: None
+        }
+    );
+    assert_eq!(p.triggers[1].commands, ["bass.start", "lead.stop"]);
+    assert_eq!(p.triggers[2].source, InputSource::Osc("/go".into()));
+    assert!(msg(&stage("on midi.note(36) 5")).contains("runs commands"));
+    assert!(msg(&stage("on midi.learn lead.start")).contains("for a control"));
+    assert!(msg(&stage("ctl x = midi.note(36)")).contains("follows a controller"));
+    assert!(msg(&stage("on midi.note(200) lead.start")).contains("note number"));
+}
+
+#[test]
+fn a_clip_or_scene_can_say_which_key_launches_it() {
+    let p = ok(&stage(
+        "scene verse { lead, launch: midi.note(36) }\nscene chorus { bass\n launch: midi.note(c2, 10) }\nclip solo_line { instrument: pluck\n notes: [c4]\n launch: osc_in(\"/solo\") }\non midi.note(40) hush\n",
+    ));
+    let find = |source: InputSource| p.triggers.iter().find(|t| t.source == source).unwrap();
+    assert_eq!(
+        find(InputSource::MidiNote {
+            note: 36,
+            channel: None
+        })
+        .commands,
+        ["verse.start"]
+    );
+    // c2 is note 36 too, but on channel 10 only
+    assert_eq!(
+        find(InputSource::MidiNote {
+            note: 36,
+            channel: Some(10)
+        })
+        .commands,
+        ["chorus.start"]
+    );
+    assert_eq!(
+        find(InputSource::Osc("/solo".into())).commands,
+        ["solo_line.start"]
+    );
+    assert_eq!(p.triggers.len(), 4);
+    // the launch is not a member of the scene
+    assert!(msg(&stage("scene s { lead, launch: 5 }")).contains("`launch` takes"));
+    assert!(msg(&stage("scene s { lead, launch: midi.note(300) }")).contains("0 to 127"));
+    // keys can be named in an `on` too
+    let named = ok(&stage("on midi.note(c4) lead.start"));
+    assert_eq!(
+        named.triggers[0].source,
+        InputSource::MidiNote {
+            note: 60,
+            channel: None
+        }
     );
 }

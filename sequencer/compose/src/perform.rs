@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use niminal_engine::ops::Curve;
 use niminal_pattern::{
-    Hit, MAX_REPEATS, Param, Pattern, Rational, Strength, grid, grid_at, parse_with, unit_random,
+    Hit, MAX_REPEATS, Param, Pattern, Rational, Strength, Structure, grid, grid_at, parse_with,
+    unit_random,
 };
 use niminal_score::{Tempo, Time, Value};
 
@@ -29,7 +30,7 @@ fn curve_of(kind: Option<CurveKind>) -> Curve {
     }
 }
 
-/// A change to a pattern, such as the `it.reverse` in `every(2, it.reverse)`.
+/// A change to a pattern, such as the `reverse` in `every(2, reverse)`.
 type Change<'a, T> = Box<dyn Fn(Pattern<T>) -> Pattern<T> + 'a>;
 
 /// The parameter that notes in a clip's `notes` lane set.
@@ -375,6 +376,13 @@ const CHORDS: [(&str, &[i32]); 16] = [
 ];
 
 /// How arpeggios can run, lowest note first.
+/// Whose timing `add`, `sub`, `mul` and `div` keep.
+const TIMINGS: [(&str, &Structure); 3] = [
+    ("first", &Structure::Left),
+    ("second", &Structure::Right),
+    ("both", &Structure::Both),
+];
+
 const ARP_ORDERS: [(&str, &str); 6] = [
     ("up", "up"),
     ("down", "down"),
@@ -557,12 +565,10 @@ impl Perform<'_> {
                 .map_err(|err| at_offset(err.message, e.span, err.offset)),
             ExprKind::Rows(raw) => self.rows(raw, e.span).map(PerfValue::Pattern),
             ExprKind::Rest => Ok(PerfValue::Rest),
-            ExprKind::Name(name) if name == "it" => it.cloned().ok_or_else(|| {
-                Diagnostic::new(
-                    "`it` is only available inside an argument, as in `every(4, it.reverse)`",
-                    e.span,
-                )
-            }),
+            // inside a change, `same` is the pattern being changed
+            ExprKind::Name(name) if name == "same" && it.is_some() => {
+                Ok(it.cloned().expect("checked"))
+            }
             ExprKind::Name(name) if name == "true" => Ok(PerfValue::Num(Value::Num(1.0))),
             ExprKind::Name(name) if name == "false" => Ok(PerfValue::Num(Value::Num(0.0))),
             ExprKind::Name(name) => match self.bindings.get(name) {
@@ -597,7 +603,54 @@ impl Perform<'_> {
             },
             ExprKind::Call { name, args } if name.name == "load" => self.load(args, e.span),
             ExprKind::Call { name, args }
-                if matches!(name.name.as_str(), "stack" | "cat" | "seq")
+                if name.name == "if_else" && !args.first().is_some_and(|a| a.receiver) =>
+            {
+                // `if_else(grid[x.x.], a, b)`: a where the grid hits, b where it rests
+                let [cond, yes, no] = args.as_slice() else {
+                    return Err(Diagnostic::new(
+                        "`if_else` takes a grid and two patterns, as in `if_else(grid[x.x.], a, b)`",
+                        e.span,
+                    ));
+                };
+                let PerfValue::Grid(g) = self.eval(&cond.value, it)? else {
+                    return Err(Diagnostic::new(
+                        "`if_else` starts with a grid, such as `grid[x.x. xxx.]`",
+                        cond.value.span,
+                    ));
+                };
+                let pattern = |a: &Arg| match self.eval(&a.value, it)? {
+                    PerfValue::Pattern(p) => Ok(p),
+                    other => Err(Diagnostic::new(
+                        format!("`if_else` needs patterns, found {}", other.describe()),
+                        a.value.span,
+                    )),
+                };
+                let (yes, no) = (pattern(yes)?, pattern(no)?);
+                Ok(PerfValue::Pattern(Pattern::stack(vec![
+                    yes.mask(&g.map(|_| true)),
+                    no.mask(&g.invert(Hit::new(Strength::Normal)).map(|_| true)),
+                ])))
+            }
+            ExprKind::Call { name, args }
+                if matches!(name.name.as_str(), "count_to" | "random_int")
+                    && !args.first().is_some_and(|a| a.receiver) =>
+            {
+                let [arg] = args.as_slice() else {
+                    return Err(Diagnostic::new(
+                        format!("`{}` takes one number", name.name),
+                        e.span,
+                    ));
+                };
+                let n = self.whole(&arg.value, &name.name)?;
+                let number = |x: f64| Step::from(Value::Num(x));
+                Ok(PerfValue::Pattern(if name.name == "count_to" {
+                    Pattern::fastcat((0..n).map(|i| Pattern::pure(number(i as f64))).collect())
+                } else {
+                    Pattern::<f64>::rand().map(move |x| number((x * n as f64).floor()))
+                }))
+            }
+            ExprKind::Call { name, args }
+                if matches!(name.name.as_str(), "stack" | "cat" | "seq" | "take_turns")
                     && !args.first().is_some_and(|a| a.receiver) =>
             {
                 self.combine(name, args, e.span, it)
@@ -815,7 +868,7 @@ impl Perform<'_> {
         Ok(Pattern::fastcat(parts))
     }
 
-    /// Free functions `stack`, `cat` and `seq` over patterns.
+    /// Free functions `stack`, `cat`, `seq` and `take_turns` over patterns.
     fn combine(
         &self,
         name: &Ident,
@@ -829,6 +882,15 @@ impl Perform<'_> {
                 continue;
             }
             let v = self.eval(&arg.value, it)?;
+            // `take_turns(for c in 0..<8 { .. })`: each item of a list is one turn
+            if name.name == "take_turns"
+                && let PerfValue::List(items) = v
+            {
+                for item in items {
+                    patterns.push(self.list_pattern(vec![item], arg.value.span)?);
+                }
+                continue;
+            }
             patterns.push(match v {
                 PerfValue::Pattern(p) => p,
                 PerfValue::Num(n) => Pattern::pure(Step::from(n)),
@@ -866,6 +928,7 @@ impl Perform<'_> {
         Ok(PerfValue::Pattern(match name.name.as_str() {
             "stack" => Pattern::stack(patterns),
             "cat" | "seq" => Pattern::fastcat(patterns),
+            "take_turns" => Pattern::slowcat(patterns),
             _ => unreachable!(),
         }))
     }
@@ -1067,7 +1130,8 @@ impl Perform<'_> {
                     name: String::new(),
                     length: Rational::ONE,
                     endless: true,
-                    looped: true,
+                    plays: None,
+                    then: Vec::new(),
                     lanes: vec![("notes".to_string(), p)],
                     scored: Vec::new(),
                     keys: None,
@@ -1089,6 +1153,15 @@ impl Perform<'_> {
             PerfValue::Clip(clip) => self
                 .on_clip(name, rest, clip, span, it)
                 .map(PerfValue::Clip),
+            PerfValue::Num(Value::Num(n)) if name.name == "mod" => {
+                let by = self.arg(name, rest, "by", span)?;
+                match self.eval(by, it)?.as_num() {
+                    Some(Value::Num(m)) if m != 0.0 => {
+                        Ok(PerfValue::Num(Value::Num(n.rem_euclid(m))))
+                    }
+                    _ => Err(Diagnostic::new("`mod` takes a number above zero", by.span)),
+                }
+            }
             other => Err(self.not_for(name, other.describe())),
         }
     }
@@ -1113,19 +1186,58 @@ impl Perform<'_> {
         }
         let out = match name.name.as_str() {
             "transpose" => {
-                let arg = self.arg(name, rest, "by", span)?;
-                let (st, unit) = self.quantity(arg)?;
-                if unit.as_deref() != Some("st") {
-                    return Err(Diagnostic::new(
-                        "`transpose` takes an interval in semitones",
-                        arg.span,
-                    )
-                    .with_help("for example `transpose(+5st)`"));
-                }
-                let st = st.to_f64();
-                p.map(on_value(move |v| transpose(v, st)))
+                let by = self.value_param(
+                    self.arg(name, rest, "by", span)?,
+                    it,
+                    |v| match v {
+                        Value::Semitones(st) => Some(st),
+                        _ => None,
+                    },
+                    "`transpose` takes an interval in semitones",
+                    "for example `transpose(+5st)` or `transpose([<0st +7st>])`",
+                )?;
+                by.apply(&p, |p, st| p.map(on_value(move |v| transpose(v, st))))
             }
-            "euclid" => {
+            "add" | "sub" | "mul" | "div" => {
+                let op = match name.name.as_str() {
+                    "add" => BinOp::Add,
+                    "sub" => BinOp::Sub,
+                    "mul" => BinOp::Mul,
+                    _ => BinOp::Div,
+                };
+                let structure = match self.find(name, rest, "timing") {
+                    Some(e) => *self.word(e, "timing", &TIMINGS)?,
+                    None => Structure::Left,
+                };
+                let other = self.eval(self.arg(name, rest, "other", span)?, it)?;
+                return self.arithmetic(op, structure, PerfValue::Pattern(p), other, span);
+            }
+            "echo" => {
+                let times = self.whole(self.arg(name, rest, "times", span)?, "echo")?;
+                let gap = self.cycles(self.arg(name, rest, "time", span)?)?;
+                let fade = match self.find(name, rest, "fade") {
+                    Some(e) => match self.quantity(e)? {
+                        (d, Some(u)) if u == "db" => d.to_f64(),
+                        _ => {
+                            return Err(Diagnostic::new(
+                                "`fade` is how much quieter each echo gets, in db",
+                                e.span,
+                            )
+                            .with_help("for example `fade: -6db`"));
+                        }
+                    },
+                    None => -6.0,
+                };
+                let mut copies = vec![p.clone()];
+                for i in 1..=times {
+                    copies.push(p.shift(gap * Rational::int(i)).map(move |s| Step {
+                        gain: Some(s.gain.unwrap_or(0.0) + fade * i as f64),
+                        ..s
+                    }));
+                }
+                Pattern::stack(copies)
+            }
+            "spread_evenly" => {
                 let hits = self.num_param(self.arg(name, rest, "hits", span)?, it)?;
                 let steps_arg = self.arg(name, rest, "steps", span)?;
                 let steps = self.num_param(steps_arg, it)?;
@@ -1137,7 +1249,7 @@ impl Perform<'_> {
                     && *s > Rational::int(MAX_REPEATS)
                 {
                     return Err(Diagnostic::new(
-                        format!("`euclid` takes at most {MAX_REPEATS} steps"),
+                        format!("`spread_evenly` takes at most {MAX_REPEATS} steps"),
                         name.span,
                     ));
                 }
@@ -1153,8 +1265,10 @@ impl Perform<'_> {
                 }
                 p.rhythm(&Pattern::<bool>::euclid_with(&hits, &steps, &rotation))
             }
-            "rhythm" => p.rhythm(&self.structure(self.arg(name, rest, "structure", span)?, it)?),
-            "mask" => p.mask(&self.structure(self.arg(name, rest, "mask", span)?, it)?),
+            "with_rhythm_of" => {
+                p.rhythm(&self.structure(self.arg(name, rest, "pattern", span)?, it)?)
+            }
+            "keep_where" => p.mask(&self.structure(self.arg(name, rest, "pattern", span)?, it)?),
             "range" => {
                 let (from, to) = (
                     self.arg(name, rest, "from", span)?,
@@ -1318,23 +1432,23 @@ impl Perform<'_> {
                 })
             }
             "where" => {
-                // `where(it < c3, change)`: change only the notes that pass the test
+                // `where(note < c3, change)`: change only the notes that pass the test
                 let e = self.arg(name, rest, "when", span)?;
                 let bad = || {
                     Diagnostic::new(
-                        "`where` takes a test on the note, such as `it < c3`",
+                        "`where` takes a test on the note, such as `note < c3`",
                         e.span,
                     )
-                    .with_help("write `it` or `it.freq`, a comparison and a note or value")
+                    .with_help("write `note` or `note.freq`, a comparison and a note or value")
                 };
                 let ExprKind::Compare { op, lhs, rhs } = &e.kind else {
                     return Err(bad());
                 };
                 let subject = match &lhs.kind {
-                    ExprKind::Name(n) => n == "it",
+                    ExprKind::Name(n) => n == "note",
                     ExprKind::Call { name, args } => {
                         name.name == PITCH_PARAM
-                            && matches!(args.as_slice(), [a] if matches!(&a.value.kind, ExprKind::Name(n) if n == "it"))
+                            && matches!(args.as_slice(), [a] if matches!(&a.value.kind, ExprKind::Name(n) if n == "note"))
                     }
                     _ => false,
                 };
@@ -1399,7 +1513,7 @@ impl Perform<'_> {
                     None => *s,
                 })
             }
-            "left_right" => {
+            "stereo_copy" => {
                 // the original on the left and the changed copy on the right
                 let angle = match self.find(name, rest, "angle") {
                     Some(e) => match self.quantity(e)? {
@@ -1479,6 +1593,14 @@ impl Perform<'_> {
         if name.name == "set" {
             return self.set_lanes(rest, clip, it);
         }
+        if name.name == "times" {
+            let n = self.whole(self.arg(name, rest, "count", span)?, "times")?;
+            return Ok(Clip {
+                plays: Some(n as u32),
+                endless: false,
+                ..clip
+            });
+        }
         // The lanes span the clip, so `over` stretches them from the clip's length to the new one.
         if name.name == "over" {
             let e = self.arg(name, rest, "length", span)?;
@@ -1497,7 +1619,8 @@ impl Perform<'_> {
                 name: clip.name,
                 length,
                 endless: false,
-                looped: clip.looped,
+                plays: clip.plays,
+                then: clip.then,
                 lanes,
                 scored: clip.scored,
                 keys: clip.keys,
@@ -1510,10 +1633,18 @@ impl Perform<'_> {
         let notes_only = matches!(
             name.name.as_str(),
             "transpose"
-                | "euclid"
-                | "rhythm"
-                | "mask"
-                | "thin"
+                | "echo"
+                | "strum"
+                | "often"
+                | "rarely"
+                | "add"
+                | "sub"
+                | "mul"
+                | "div"
+                | "spread_evenly"
+                | "with_rhythm_of"
+                | "keep_where"
+                | "drop"
                 | "sometimes"
                 | "in_scale"
                 | "chord"
@@ -1526,7 +1657,7 @@ impl Perform<'_> {
                 | "gain"
                 | "pan"
                 | "begin"
-                | "left_right"
+                | "stereo_copy"
                 | "chop"
                 | "interleave_chops"
         );
@@ -1556,7 +1687,8 @@ impl Perform<'_> {
             name: clip.name,
             length,
             endless: clip.endless && name.name != "over",
-            looped: clip.looped,
+            plays: clip.plays,
+            then: clip.then,
             lanes,
             scored: clip.scored,
             keys: clip.keys,
@@ -1658,7 +1790,7 @@ impl Perform<'_> {
                 p.slow(positive(self.cycles(e)?, "over", e.span)?)
             }
             "reverse" => p.reverse(),
-            "palindrome" => p.palindrome(),
+            "back_and_forth" => p.palindrome(),
             "shift" => p.shift(self.cycles(self.arg(name, rest, "by", span)?)?),
             "repeat_each" => {
                 let e = self.arg(name, rest, "times", span)?;
@@ -1673,16 +1805,37 @@ impl Perform<'_> {
                 }
                 times.apply(&p, |p, n| p.repeat_each(n.floor()))
             }
-            "thin" => {
-                let drop = self.chance(name, rest, "amount", span)?;
+            "drop" => {
+                let amount = self.share_param(name, self.arg(name, rest, "amount", span)?, it)?;
                 // The same amount always thins the same events, wherever it is written.
-                p.thin(drop, self.seed(name, rest, drop.to_bits())?)
+                let default = match &amount {
+                    Param::Const(x) => x.to_bits(),
+                    Param::Pat(_) => 0x4452_4F50,
+                };
+                let seed = self.seed(name, rest, default)?;
+                amount.apply(&p, move |p, x| p.thin(x.clamp(0.0, 1.0), seed))
             }
             "sometimes" => {
-                let chance = self.chance(name, rest, "chance", span)?;
-                let seed = self.seed(name, rest, chance.to_bits())?;
+                let chance = self.share_param(name, self.arg(name, rest, "chance", span)?, it)?;
+                let default = match &chance {
+                    Param::Const(c) => c.to_bits(),
+                    Param::Pat(_) => 0x534F_4D45,
+                };
+                let seed = self.seed(name, rest, default)?;
                 let change = self.transformer::<T>(self.arg(name, rest, "change", span)?, &p)?;
-                p.sometimes(chance, seed, change)
+                match self.find(name, rest, "per") {
+                    None => p.sometimes_by(&chance, seed, change),
+                    Some(e) => match &e.kind {
+                        ExprKind::Name(w) if w == "note" => p.sometimes_by(&chance, seed, change),
+                        ExprKind::Name(w) if w == "cycle" => p.some_cycles(&chance, seed, change),
+                        _ => {
+                            return Err(Diagnostic::new(
+                                "`per` is `note` or `cycle`, as in `sometimes(25%, reverse, per: cycle)`",
+                                e.span,
+                            ));
+                        }
+                    },
+                }
             }
             "every" => {
                 let e = self.arg(name, rest, "n", span)?;
@@ -1698,7 +1851,7 @@ impl Perform<'_> {
                 let change = self.transformer::<T>(self.arg(name, rest, "change", span)?, &p)?;
                 p.every_by(&n, change)
             }
-            "layer" => {
+            "overlay" => {
                 let after = match self.find(name, rest, "after") {
                     Some(e) => self.cycles(e)?,
                     None => Rational::ZERO,
@@ -1707,14 +1860,14 @@ impl Perform<'_> {
                 let change = self.transformer::<T>(f, &p)?;
                 p.layer(after, change)
             }
-            "within" => {
+            "only_between" => {
                 let from = self.fraction(self.arg(name, rest, "from", span)?)?;
                 let to = self.fraction(self.arg(name, rest, "to", span)?)?;
                 let change = self.transformer::<T>(self.arg(name, rest, "change", span)?, &p)?;
                 p.within(from, to, change)
             }
             "swing" => {
-                let amount = self.fraction(self.arg(name, rest, "amount", span)?)?;
+                let amount = self.share_param(name, self.arg(name, rest, "amount", span)?, it)?;
                 let e = self.arg(name, rest, "every", span)?;
                 let every = self.cycles(e)?;
                 if every <= Rational::ZERO || every > Rational::ONE {
@@ -1723,14 +1876,15 @@ impl Perform<'_> {
                         e.span,
                     ));
                 }
-                p.swing(amount, Rational::ONE / every)
+                let slots = Rational::ONE / every;
+                amount.apply(&p, move |p, x| p.swing(Rational::from_f64(x), slots))
             }
-            "rotate" => {
+            "start_later" => {
                 let times = self.num_param(self.arg(name, rest, "parts", span)?, it)?;
                 times.apply(&p, |p, n| p.rotate(n.floor().min(MAX_REPEATS)))
             }
-            "in_turn" => {
-                let n = self.whole(self.arg(name, rest, "parts", span)?, "in_turn")?;
+            "step_through" => {
+                let n = self.whole(self.arg(name, rest, "parts", span)?, "step_through")?;
                 let change = self.transformer::<T>(self.arg(name, rest, "change", span)?, &p)?;
                 p.in_turn(n, change)
             }
@@ -1742,16 +1896,90 @@ impl Perform<'_> {
                 let n = self.whole(self.arg(name, rest, "parts", span)?, "pick_random")?;
                 p.pick_random(n, self.seed(name, rest, 0)?)
             }
-            "repeat_start" => {
+            "loop_start" => {
                 let e = self.arg(name, rest, "length", span)?;
                 let fraction = self.fraction(e)?;
                 if fraction <= Rational::ZERO || fraction > Rational::ONE {
                     return Err(Diagnostic::new(
-                        "`repeat_start` takes a share of the cycle, from above 0% to 100%",
+                        "`loop_start` takes a share of the cycle, from above 0% to 100%",
                         e.span,
                     ));
                 }
                 p.repeat_start(fraction)
+            }
+            "take" => {
+                let length = self.share_param(name, self.arg(name, rest, "length", span)?, it)?;
+                length.apply(&p, |p, x| {
+                    if x <= 0.0 {
+                        Pattern::silence()
+                    } else {
+                        p.trunc(Rational::from_f64(x.min(1.0)))
+                    }
+                })
+            }
+            "crop" | "squeeze" => {
+                let (from_e, to_e) = (
+                    self.arg(name, rest, "from", span)?,
+                    self.arg(name, rest, "to", span)?,
+                );
+                let (from, to) = (self.fraction(from_e)?, self.fraction(to_e)?);
+                if from < Rational::ZERO || to > Rational::ONE || from >= to {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "`{}` takes two points of the cycle, the first before the second, such as `{}(25%, 75%)`",
+                            name.name, name.name
+                        ),
+                        to_e.span,
+                    ));
+                }
+                if name.name == "crop" {
+                    p.zoom(from, to)
+                } else {
+                    p.compress(from, to)
+                }
+            }
+            "strum" => {
+                let amount = match self.find(name, rest, "amount") {
+                    Some(e) => self.share_param(name, e, it)?,
+                    None => Param::Const(0.25),
+                };
+                amount.apply(&p, |p, x| p.rolled(Rational::from_f64(x.clamp(0.0, 1.0))))
+            }
+            "cycle_through" => {
+                // `riff.cycle_through(same, reverse, fast(2))`: one change per cycle, in turn
+                if rest.is_empty() {
+                    return Err(Diagnostic::new(
+                        "`cycle_through` needs changes to cycle through, as in `cycle_through(same, reverse)`",
+                        name.span,
+                    ));
+                }
+                let mut variants = Vec::with_capacity(rest.len());
+                for arg in rest {
+                    variants.push(self.transformer::<T>(&arg.value, &p)?(p.clone()));
+                }
+                Pattern::cycle_through(variants)
+            }
+            "in_cycles" => {
+                let (a_e, b_e) = (
+                    self.arg(name, rest, "cycles", span)?,
+                    self.arg(name, rest, "from", span)?,
+                );
+                let (a, b) = (self.plain(a_e)?, self.plain(b_e)?);
+                if !a.is_integer() || a < Rational::ONE || !b.is_integer() || b < Rational::ZERO {
+                    return Err(Diagnostic::new(
+                        "`in_cycles` takes a whole number of cycles and where to start in them, as in `in_cycles(4, 3, fast(2))`",
+                        name.span,
+                    ));
+                }
+                let (a, b) = (a.numer(), b.numer());
+                let change = self.transformer::<T>(self.arg(name, rest, "change", span)?, &p)?;
+                p.when_cycle(move |c| c.rem_euclid(a) >= b, change)
+            }
+            "often" | "rarely" => {
+                let chance: f64 = if name.name == "often" { 0.75 } else { 0.25 };
+                let seed = self.seed(name, rest, chance.to_bits())?;
+                let change = self.transformer::<T>(self.arg(name, rest, "change", span)?, &p)?;
+                p.sometimes(chance, seed, change)
             }
             "to_steps" => {
                 let steps = self.num_param(self.arg(name, rest, "steps", span)?, it)?;
@@ -1764,6 +1992,60 @@ impl Perform<'_> {
             }
             _ => return Ok(None),
         }))
+    }
+
+    /// An argument with a unit, fixed (`5st`) or a pattern of them (`[<0st 5st>]`). `read` takes the
+    /// number out of a value, `None` if it is the wrong kind; `bad` says what the argument should be.
+    fn value_param(
+        &self,
+        e: &Expr,
+        it: Option<&PerfValue>,
+        read: impl Fn(Value) -> Option<f64> + Send + Sync + 'static,
+        bad: &str,
+        help: &str,
+    ) -> Res<Param<f64>> {
+        let wrong = || Diagnostic::new(bad.to_string(), e.span).with_help(help.to_string());
+        match self.eval(e, it)? {
+            PerfValue::Num(v) => read(v).map(Param::Const).ok_or_else(wrong),
+            PerfValue::Pattern(pattern) => {
+                // say now, not when the note plays, if a value is of the wrong kind
+                let cycle = niminal_pattern::Span::new(Rational::ZERO, Rational::ONE);
+                if pattern
+                    .query(cycle)
+                    .iter()
+                    .any(|h| read(h.value.value).is_none())
+                {
+                    return Err(wrong());
+                }
+                Ok(Param::Pat(pattern.filter_map(move |s| read(s.value))))
+            }
+            _ => Err(wrong()),
+        }
+    }
+
+    /// A share of a cycle that can change from cycle to cycle: `20%`, `1/4`, `2beats`, or a pattern of them.
+    fn share_param(&self, name: &Ident, e: &Expr, it: Option<&PerfValue>) -> Res<Param<f64>> {
+        let per_bar = self.cx.tempo.beats_per_bar;
+        let share = self.value_param(
+            e,
+            it,
+            move |v| match v {
+                Value::Num(x) | Value::Bars(x) => Some(x),
+                Value::Beats(b) => Some(b / per_bar),
+                _ => None,
+            },
+            &format!("`{}` takes a share of the cycle, such as `25%`", name.name),
+            "write a percentage, a fraction or a length in beats or bars",
+        )?;
+        if let Param::Const(x) = &share
+            && !(0.0..=1.0).contains(x)
+        {
+            return Err(Diagnostic::new(
+                format!("`{}` takes an amount from 0% to 100%", name.name),
+                e.span,
+            ));
+        }
+        Ok(share)
     }
 
     /// A number argument, fixed (`2`, `3/2`) or a pattern (`<2 4>`).
@@ -1801,29 +2083,6 @@ impl Perform<'_> {
             (r, None) => Ok(r),
             _ => self.cycles(e),
         }
-    }
-
-    /// An amount from 0% to 100%, as a chance from 0 to 1.
-    fn chance(&self, name: &Ident, rest: &[Arg], param: &str, span: Span) -> Res<f64> {
-        let e = self.arg(name, rest, param, span)?;
-        let (amount, unit) = self.quantity(e)?;
-        let chance = match unit.as_deref() {
-            Some("%") => amount.to_f64() / 100.0,
-            None => amount.to_f64(),
-            Some(u) => {
-                return Err(Diagnostic::new(
-                    format!("`{}` takes a percentage, not `{u}`", name.name),
-                    e.span,
-                ));
-            }
-        };
-        if !(0.0..=1.0).contains(&chance) {
-            return Err(Diagnostic::new(
-                format!("`{}` takes an amount from 0% to 100%", name.name),
-                e.span,
-            ));
-        }
-        Ok(chance)
     }
 
     /// A whole number of pieces, from 1 to the most a step can be divided into.
@@ -1889,10 +2148,12 @@ impl Perform<'_> {
             })
     }
 
-    /// An argument such as `it.reverse`, as a function from pattern to pattern.
+    /// An argument such as `reverse` or `transpose(+7st)`, as a function from pattern to pattern.
     /// It is tried once on `sample` so that mistakes are reported now.
     fn transformer<'a, T: Kind>(&'a self, e: &'a Expr, sample: &Pattern<T>) -> Res<Change<'a, T>> {
+        let written = self.implicit_it(e);
         let apply = move |p: Pattern<T>| -> Res<Pattern<T>> {
+            let e = written.as_ref().unwrap_or(e);
             let out = self.eval(e, Some(&T::wrap(p)))?;
             T::unwrap(out).ok_or_else(|| {
                 Diagnostic::new("this change must give the same kind of pattern", e.span)
@@ -1900,6 +2161,66 @@ impl Perform<'_> {
         };
         apply(sample.clone())?;
         Ok(Box::new(move |p: Pattern<T>| apply(p.clone()).unwrap_or(p)))
+    }
+
+    /// A change is written as operations on the pattern with the pattern itself left out:
+    /// `reverse`, `fast(2).reverse`. This puts `same` in front.
+    /// `None` if the change already starts from something else, such as `same` itself.
+    fn implicit_it(&self, e: &Expr) -> Option<Expr> {
+        let it = |span| Expr {
+            kind: ExprKind::Name("same".to_string()),
+            span,
+        };
+        let is_op = |n: &str| {
+            !self.bindings.contains_key(n) && crate::ide::pattern_ops().iter().any(|o| o.name == n)
+        };
+        match &e.kind {
+            ExprKind::Name(n) if is_op(n) => Some(Expr {
+                kind: ExprKind::Call {
+                    name: Ident {
+                        name: n.clone(),
+                        span: e.span,
+                    },
+                    args: vec![Arg {
+                        name: None,
+                        value: it(e.span),
+                        receiver: true,
+                    }],
+                },
+                span: e.span,
+            }),
+            ExprKind::Call { name, args } => match args.first() {
+                Some(first) if first.receiver => {
+                    let value = self.implicit_it(&first.value)?;
+                    let mut args = args.clone();
+                    args[0].value = value;
+                    Some(Expr {
+                        kind: ExprKind::Call {
+                            name: name.clone(),
+                            args,
+                        },
+                        span: e.span,
+                    })
+                }
+                _ if is_op(&name.name) => {
+                    let mut with_it = vec![Arg {
+                        name: None,
+                        value: it(name.span),
+                        receiver: true,
+                    }];
+                    with_it.extend(args.iter().cloned());
+                    Some(Expr {
+                        kind: ExprKind::Call {
+                            name: name.clone(),
+                            args: with_it,
+                        },
+                        span: e.span,
+                    })
+                }
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     fn unknown_op(&self, name: &str, span: Span) -> Diagnostic {
@@ -1927,22 +2248,22 @@ impl Perform<'_> {
             "fast" | "slow" | "shift" | "transpose" => &["by"],
             "over" => &["length"],
             "repeat_each" => &["times"],
-            "thin" => &["amount", "seed"],
-            "sometimes" => &["chance", "change", "seed"],
+            "drop" => &["amount", "seed"],
+            "sometimes" => &["chance", "change", "per", "seed"],
             "every" => &["n", "change"],
-            "layer" => &["after", "change"],
-            "within" => &["from", "to", "change"],
+            "overlay" => &["change", "after"],
+            "only_between" => &["from", "to", "change"],
             "swing" => &["amount", "every"],
-            "rotate" | "shuffle" | "pick_random" => &["parts", "seed"],
-            "in_turn" => &["parts", "change"],
-            "repeat_start" => &["length"],
+            "start_later" | "shuffle" | "pick_random" => &["parts", "seed"],
+            "step_through" => &["parts", "change"],
+            "loop_start" => &["length"],
             "to_steps" => &["steps"],
             "range" => &["from", "to"],
             "where" => &["when", "change"],
             "gain" => &["level"],
             "pan" => &["angle"],
             "begin" => &["share"],
-            "left_right" => &["change", "angle"],
+            "stereo_copy" => &["change", "angle"],
             "chop" | "interleave_chops" => &["pieces"],
             "in_scale" => &["scale", "root"],
             "chord" => &["kind"],
@@ -1950,9 +2271,18 @@ impl Perform<'_> {
             "invert_melody" => &["around"],
             "markov" => &["seed"],
             "random_walk" => &["step", "seed"],
-            "euclid" => &["hits", "steps", "rotation"],
-            "rhythm" => &["structure"],
-            "mask" => &["mask"],
+            "spread_evenly" => &["hits", "steps", "rotation"],
+            "with_rhythm_of" => &["pattern"],
+            "keep_where" => &["pattern"],
+            "add" | "sub" | "mul" | "div" => &["other", "timing"],
+            "take" => &["length"],
+            "mod" => &["by"],
+            "times" => &["count"],
+            "crop" | "squeeze" => &["from", "to"],
+            "strum" => &["amount"],
+            "in_cycles" => &["cycles", "from", "change"],
+            "often" | "rarely" => &["change", "seed"],
+            "echo" => &["times", "time", "fade"],
             _ => &[],
         }
     }
@@ -1999,6 +2329,9 @@ impl Perform<'_> {
         it: Option<&PerfValue>,
     ) -> Res<PerfValue> {
         let (l, r) = (self.eval(lhs, it)?, self.eval(rhs, it)?);
+        if matches!(l, PerfValue::Pattern(_)) || matches!(r, PerfValue::Pattern(_)) {
+            return self.arithmetic(op, Structure::Left, l, r, span);
+        }
         match (l.as_num(), r.as_num(), op) {
             (Some(a), Some(b), BinOp::Add) => Ok(PerfValue::Num(add_values(a, b, span)?)),
             (Some(a), Some(b), BinOp::Sub) => Ok(PerfValue::Num(sub_values(a, b, span)?)),
@@ -2009,6 +2342,49 @@ impl Perform<'_> {
                 span,
             )),
         }
+    }
+
+    /// `riff + 7st`, `riff * [1 2]`, `a.add(b, structure: both)`: do the sum for every
+    /// note. A pattern on both sides is joined by `structure`; a plain number on one
+    /// side changes each note of the other.
+    fn arithmetic(
+        &self,
+        op: BinOp,
+        structure: Structure,
+        l: PerfValue,
+        r: PerfValue,
+        span: Span,
+    ) -> Res<PerfValue> {
+        let sum = move |a: Value, b: Value| step_arithmetic(op, a, b);
+        let out = match (l, r) {
+            (PerfValue::Pattern(a), PerfValue::Pattern(b)) => {
+                a.combine(&b, structure, move |x, y| match structure {
+                    Structure::Right => y.with(sum(x.value, y.value).unwrap_or(y.value)),
+                    _ => x.with(sum(x.value, y.value).unwrap_or(x.value)),
+                })
+            }
+            (PerfValue::Pattern(a), other) if other.as_num().is_some() => {
+                let n = other.as_num().expect("checked");
+                a.map(move |x| x.with(sum(x.value, n).unwrap_or(x.value)))
+            }
+            (other, PerfValue::Pattern(b)) if other.as_num().is_some() => {
+                let n = other.as_num().expect("checked");
+                b.map(move |y| y.with(sum(n, y.value).unwrap_or(y.value)))
+            }
+            (l, r) => {
+                return Err(Diagnostic::new(
+                    format!(
+                        "can't {} {} and {}",
+                        op_name(op),
+                        l.describe(),
+                        r.describe()
+                    ),
+                    span,
+                )
+                .with_help("one side must be a pattern, the other a pattern or a number"));
+            }
+        };
+        Ok(PerfValue::Pattern(out))
     }
 
     fn block_value(&self, body: &[Stmt], it: Option<&PerfValue>) -> Res<PerfValue> {
@@ -2183,7 +2559,8 @@ impl Perform<'_> {
         let mut lanes: Vec<(String, Pattern<Step>)> = Vec::new();
         let mut curves: Vec<(String, EnvLane)> = Vec::new();
         let mut scored = Vec::new();
-        let mut looped = true;
+        let mut plays = None;
+        let mut then = Vec::new();
         for (key, value) in &block.entries {
             if key.name == "keys" {
                 if keys.is_some() {
@@ -2203,14 +2580,15 @@ impl Perform<'_> {
                 length = Some(cycles);
                 continue;
             }
-            if key.name == "loop" {
-                looped = match &value.kind {
-                    ExprKind::Name(n) if n == "true" => true,
-                    ExprKind::Name(n) if n == "false" => false,
-                    _ => {
-                        return Err(Diagnostic::new("`loop` is `true` or `false`", value.span));
-                    }
-                };
+            if key.name == "times" {
+                if plays.is_some() {
+                    return Err(Diagnostic::new("`times` is given twice", key.span));
+                }
+                plays = Some(self.whole(value, "times")? as u32);
+                continue;
+            }
+            if key.name == "then" {
+                then.push(self.then_command(value)?);
                 continue;
             }
             if key.name == "events" {
@@ -2275,12 +2653,13 @@ impl Perform<'_> {
                 .map(|(name, p)| (name, p.slow(length)))
                 .collect();
         }
-        let endless = length.is_none() && looped;
+        let endless = length.is_none() && plays.is_none();
         Ok(Clip {
             name: block.name.name.clone(),
             length: length.unwrap_or(Rational::ONE),
             endless,
-            looped,
+            plays,
+            then,
             lanes,
             scored,
             keys,
@@ -2288,6 +2667,27 @@ impl Perform<'_> {
             signals: Vec::new(),
             fx_params: Vec::new(),
         })
+    }
+
+    /// `then: chorus.start`: what to do when a clip has played its last time, as the statement to run.
+    fn then_command(&self, e: &Expr) -> Res<String> {
+        const VERBS: [&str; 6] = ["start", "stop", "mute", "unmute", "solo", "unsolo"];
+        match &e.kind {
+            ExprKind::Name(n) if n == "hush" => return Ok("hush".to_string()),
+            ExprKind::Call { name, args } if VERBS.contains(&name.name.as_str()) => {
+                if let [receiver] = args.as_slice()
+                    && receiver.receiver
+                    && let ExprKind::Name(target) = &receiver.value.kind
+                {
+                    return Ok(format!("{target}.{}", name.name));
+                }
+            }
+            _ => {}
+        }
+        Err(
+            Diagnostic::new("`then` takes a command on a clip or scene", e.span)
+                .with_help("for example `then: chorus.start` or `then: hush`"),
+        )
     }
 
     /// `midi.keys()` or `midi.keys(channel: 1)`
@@ -2382,7 +2782,8 @@ impl Perform<'_> {
                 name: hint.to_string(),
                 length: Rational::ONE,
                 endless: true,
-                looped: true,
+                plays: None,
+                then: Vec::new(),
                 lanes: vec![("notes".to_string(), p)],
                 scored: Vec::new(),
                 keys: None,
@@ -2394,7 +2795,8 @@ impl Perform<'_> {
                 name: hint.to_string(),
                 length: Rational::ONE,
                 endless: true,
-                looped: true,
+                plays: None,
+                then: Vec::new(),
                 lanes: vec![("notes".to_string(), Pattern::pure(Step::from(v)))],
                 scored: Vec::new(),
                 keys: None,
@@ -2485,7 +2887,7 @@ impl Perform<'_> {
                         ),
                         name.span,
                     )
-                    .with_help(format!("render it with `nimlive render file.nml {}`", name.name)));
+                    .with_help(format!("render it with `niminal-live render file.nml {}`", name.name)));
                 }
                 let tempo = self.cx.tempo;
                 let base = at.to_seconds(tempo);
@@ -3395,6 +3797,25 @@ fn cmp_values(op: CmpOp, a: Value, b: Value) -> bool {
     }
 }
 
+/// One note's value combined with another's. A plain number added to a note moves it
+/// by that many semitones, so `[c4 e4] + [0 7]` works. `None` if the units don't mix,
+/// which leaves the note as it was.
+fn step_arithmetic(op: BinOp, a: Value, b: Value) -> Option<Value> {
+    let (a, b) = match (op, a, b) {
+        (BinOp::Add | BinOp::Sub, Value::Note(_), Value::Num(n)) => (a, Value::Semitones(n)),
+        (BinOp::Add, Value::Num(n), Value::Note(_)) => (Value::Semitones(n), b),
+        _ => (a, b),
+    };
+    let at = Span::default();
+    match op {
+        BinOp::Add => add_values(a, b, at),
+        BinOp::Sub => sub_values(a, b, at),
+        BinOp::Mul => mul_values(a, b, at),
+        BinOp::Div => div_values(a, b, at),
+    }
+    .ok()
+}
+
 fn add_values(a: Value, b: Value, span: Span) -> Res<Value> {
     match (a, b) {
         (Value::Note(n), Value::Semitones(st)) | (Value::Semitones(st), Value::Note(n)) => {
@@ -3468,7 +3889,7 @@ pub(crate) fn transpose_public(v: Value, st: f64) -> Value {
 
 fn transpose(v: Value, st: f64) -> Value {
     match v {
-        Value::Note(m) if st.fract() == 0.0 => Value::Note(m + st as i32),
+        Value::Note(m) if st.fract() == 0.0 => Value::Note(m.saturating_add(st as i32)),
         Value::Note(_) | Value::Hz(_) => {
             let hz = v.as_hz().expect("notes and frequencies have a frequency");
             Value::Hz(hz * 2f64.powf(st / 12.0))
@@ -3618,7 +4039,8 @@ fn section_to_clip(section: crate::Section, tempo: Tempo) -> Res<Clip> {
             Rational::ONE
         },
         endless: false,
-        looped: true,
+        plays: None,
+        then: Vec::new(),
         lanes: Vec::new(),
         scored,
         keys: None,

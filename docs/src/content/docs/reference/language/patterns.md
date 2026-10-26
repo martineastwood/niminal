@@ -3,7 +3,7 @@ title: Patterns
 description: Mini-notation, grids, and pattern transforms.
 ---
 
-**Read by nimlive.** Patterns are evaluated by the sequencer while a piece plays; the server only sees the notes that come out of them. Finite event lists from outside niminal use [`.nms` scores](/reference/score-model/).
+**Read by niminal-live.** Patterns are evaluated by the sequencer while a piece plays; the server only sees the notes that come out of them. Finite event lists from outside niminal use [`.nms` scores](/reference/score-model/).
 
 ## Shared symbols
 
@@ -120,46 +120,89 @@ Every event accepts:
 
 ## Pattern operations
 
-Numbers in `fast`, `slow`, `every`, `repeat_each`, `euclid` and `rotate` can be patterns: `fast([<1 2>])`, `euclid(hits: [<3 5>], steps: 8)`. A pattern in an argument is written in brackets.
+Numbers in `fast`, `slow`, `every`, `repeat_each`, `spread_evenly` and `start_later` can be patterns: `fast([<1 2>])`, `spread_evenly(hits: [<3 5>], steps: 8)`. A pattern in an argument is written in brackets. So can the amounts in `transpose`, `drop`, `swing`, `take`, `strum` and the chance in `sometimes`: `transpose([<0st +7st>])`, `drop([<10% 50%>])`, `sometimes([<10% 50%>], fast(2))`.
+
+Some operations take a **change**: `every`, `sometimes`, `often`, `rarely`, `overlay`, `only_between`, `step_through`, `in_cycles`, `cycle_through`, `where` and `stereo_copy`. A change is written as operations on the pattern, with the pattern itself left out: `every(2, reverse)`, `sometimes(25%, transpose(+12st))`, `overlay(fast(2).reverse, after: 1/8beat)`. `same` is the change that does nothing, as in `cycle_through(same, reverse)`.
+
+Arithmetic is an operation too: `sometimes(25%, add(7st))`.
 
 | Operation | What it does |
 | --- | --- |
 | `fast(2)`, `slow(2)` | Change speed |
 | `reverse` | Play each cycle backwards |
 | `shift(1/8beat)` | Move earlier or later |
-| `every(4, it.reverse)` | Change every nth cycle |
-| `sometimes(25%, it.fast(2))` | Change a random share of the notes |
-| `thin(20%)` | Randomly drop events |
-| `euclid(hits: 5, steps: 8)` | Evenly spaced hits |
-| `layer(after: 1/8beat, it.transpose(+12st))` | Delayed copy |
-| `rhythm(grid[x..x ..x.])` | Values to a rhythm |
+| `every(4, reverse)` | Change every nth cycle |
+| `sometimes(25%, fast(2))` | Change a random share of the notes |
+| `drop(20%)` | Randomly drop notes |
+| `spread_evenly(hits: 5, steps: 8)` | Evenly spaced hits |
+| `overlay(transpose(+12st), after: 1/8beat)` | Delayed copy |
+| `with_rhythm_of(grid[x..x ..x.])` | Give the notes the rhythm of a grid |
 | `repeat_each(2)` | Repeat every event |
 | `swing(amount: 20%, every: 1/8)` | Delay every other slot by a share of the slot |
-| `within(0%, 50%, it.fast(2))` | Change the part of the cycle between two points |
+| `only_between(0%, 50%, fast(2))` | Change the part of the cycle between two points |
 | `shuffle(4)` | Play the four parts in a new order each cycle, each once |
 | `pick_random(4)` | Fill each of four slots with a random part |
-| `rotate(4)` | Start a quarter later each cycle |
-| `in_turn(4, it.fast(2))` | Change one quarter per cycle, in turn |
-| `mask(grid[x.x. xxxx])` | Silence where mask empty |
+| `start_later(4)` | Start a quarter later each cycle |
+| `step_through(4, fast(2))` | Change one quarter per cycle, in turn |
+| `keep_where(grid[x.x. xxxx])` | Silence where the grid rests |
 | `to_steps(16)` | Read a signal 16 times a cycle |
-| `repeat_start(25%)` | Loop the start of the cycle |
-| `where(it < c3, it.transpose(+12st))` | Change the notes that pass a test on `it` (or `it.freq`) |
+| `loop_start(25%)` | Loop the start of the cycle |
+| `where(note < c3, transpose(+12st))` | Change the notes that pass a test on `note` (or `note.freq`) |
 | `grid[x.x.].invert` | Swap hits and rests in a grid |
-| `palindrome` | Forwards one cycle, backwards the next |
+| `back_and_forth` | Forwards one cycle, backwards the next |
+| `take(75%)` | Play only the first part of each cycle |
+| `crop(25%, 75%)` | Stretch part of each cycle to fill it |
+| `squeeze(25%, 75%)` | Squeeze each cycle into part of it, silent elsewhere |
+| `echo(3, 1/8beat, fade: -6db)` | Repeat each note, quieter each time |
+| `strum(25%)` | Strum chords: each note starts a little after the one before |
+| `cycle_through(same, reverse, fast(2))` | A different change each cycle, in turn (`same` is no change) |
+| `in_cycles(4, 3, fast(2))` | Change the cycles at or past the third of every four |
+| `sometimes(25%, reverse, per: cycle)` | Change a random share of whole cycles instead of notes |
+| `often(f)`, `rarely(f)` | `sometimes` at 75% and 25% |
+| `if_else(grid[x.x. xxx.], a, b)` | Play `a` where the grid hits and `b` where it rests |
+| `take_turns(a, b, c)` | One pattern per cycle, in turn. Give it a `for` to decide each turn from its number (below) |
+| `count_to(8)`, `random_int(8)` | The numbers 0 to 7 in order, or a random whole number from 0 to 7 (read it with `to_steps`) |
 | `set(bright: 0.9)` | Give a clip lanes in place of its own |
 
-Random operations take an optional `seed`, as in `thin(20%, seed: 2)`; a different seed chooses differently.
+Random operations take an optional `seed`, as in `drop(20%, seed: 2)`; a different seed chooses differently.
+
+## Deciding by cycle number
+
+`take_turns` plays one pattern per cycle, and each pattern gets one of its own cycles per turn. Build the turns with `for` and `if`, using `c.mod(4)` for the remainder, to write a phrase that depends on the cycle number:
+
+```nml
+def phrase(groove, fill) {
+  take_turns(for c in 0..<16 {
+    if c.mod(4) == 3 { fill } else { groove }
+  })
+}
+
+clip lead { instrument: pluck, notes: phrase([c4 e4 g4 e4], [g4 b4 d5 b4]) }
+```
+
+The clip plays the 16 turns, then starts again. For a simple repeating change use `every`, `in_cycles` or `cycle_through` instead.
+
+## Arithmetic
+
+`+`, `-`, `*` and `/` work on patterns. A plain number or interval changes every note (`riff + 7st`, `riff * 2`). Between two patterns, each note of the left one is combined with the value of the right one where it starts, and keeps the left timing:
+
+```nml
+riff = [c3 e3 g3 e3]
+clip bass_up = riff + [<0 3 5 7>]
+```
+
+A plain number added to a note moves it by that many semitones. For other timing use the methods `add`, `sub`, `mul` and `div` with `timing`: `first` (the default), `second` or `both` (only where they overlap): `riff.add([0 3 5 7], timing: second)`.
 
 ## Controls that belong to one note
 
-A lane such as `gain: [..]` is read where each note starts. These operations instead set a control on each note itself, so it stays with the note through `reverse`, `shuffle`, `layer` and the rest. The value can be one thing or a pattern; each note takes the value in force where it starts.
+A lane such as `gain: [..]` is read where each note starts. These operations instead set a control on each note itself, so it stays with the note through `reverse`, `shuffle`, `overlay` and the rest. The value can be one thing or a pattern; each note takes the value in force where it starts.
 
 | Operation | What it does |
 | --- | --- |
 | `gain(-6db)`, `gain([0db -6db])` | How loud each note is |
 | `pan(-30deg)`, `pan([-30deg 30deg])` | Where each note sits among the speakers: 0 is straight ahead, positive is right. A note's own pan mixes it down and places it, so it suits mono instruments best |
 | `begin(25%)` | Start each sample note a quarter of the way in |
-| `left_right(it.reverse)` | The original on the left and the changed copy on the right (`angle: 45deg` sets how far out; the default is 30deg, a hard pan in stereo) |
+| `stereo_copy(reverse)` | The original on the left and the changed copy on the right (`angle: 45deg` sets how far out; the default is 30deg, a hard pan in stereo) |
 | `chop(8)` | Cut each sample note into 8 pieces, each playing the next part of the sample |
 | `interleave_chops(4)` | Play the pattern once for each of 4 parts of the sample, in turn |
 

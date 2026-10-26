@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { EditorView } from '@codemirror/view';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // The app against a backend that answers like the engine does, so a mistake in what it does with a
@@ -112,5 +113,36 @@ describe('the stage app', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', metaKey: true }));
     await new Promise(resolve => setTimeout(resolve, 50));
     expect(sent.at(-1)!.source).toBe('verse.stop');
+  });
+
+  it('keeps each tab\'s text apart and evaluates them left to right', async () => {
+    const tabs = () => [...document.querySelectorAll('.tab')].map(t => t.querySelector('.tab-name')!.textContent);
+    const first = tabs().length;
+    document.getElementById('new')!.click();
+    expect(tabs().length).toBe(first + 1);
+    expect(document.getElementById('evaluate-all')!.hidden).toBe(false);
+    const editor = EditorView.findFromDOM(document.querySelector<HTMLElement>('.cm-editor')!)!;
+    editor.dispatch({ changes: { from: 0, insert: 'bus a: stereo' } });
+    expect(document.querySelector('.tab.active')!.classList.contains('dirty')).toBe(true);
+
+    document.querySelector<HTMLElement>('.tab:not(.active)')!.click();
+    expect(editor.state.doc.toString()).not.toContain('bus a: stereo');
+
+    sent.length = 0;
+    document.getElementById('evaluate-all')!.click();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(sent.length).toBe(first + 1);
+    expect(sent.at(-1)!.source).toBe('bus a: stereo');
+  });
+
+  it('moves a tab to where it is dropped', async () => {
+    const names = () => [...document.querySelectorAll('.tab-name')].map(t => t.textContent);
+    const before = names();
+    const last = before.length - 1;
+    const items = () => [...document.querySelectorAll<HTMLElement>('.tab')];
+    items()[last].dispatchEvent(new Event('dragstart', { bubbles: true }));
+    items()[0].getBoundingClientRect = () => ({ left: 0, width: 100 }) as DOMRect;
+    items()[0].dispatchEvent(Object.assign(new Event('drop', { bubbles: true, cancelable: true }), { clientX: 10 }));
+    expect(names()).toEqual([before[last], ...before.slice(0, last)]);
   });
 });

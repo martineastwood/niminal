@@ -97,7 +97,9 @@ impl Server {
             let mut reader = BufReader::new(child.stdout.as_mut().unwrap());
             loop {
                 line.clear();
-                if reader.read_line(&mut line).unwrap() == 0 || line.contains("niminal-live listening") {
+                if reader.read_line(&mut line).unwrap() == 0
+                    || line.contains("niminal-live listening")
+                {
                     break;
                 }
             }

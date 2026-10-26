@@ -1,4 +1,8 @@
+import { EditorState } from '@codemirror/state';
+import { redo, undo } from '@codemirror/commands';
 import { EditorView } from '@codemirror/view';
+import { isTauri } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { demoSource } from './demo';
 import { Scope, connectLanguageServer, niminalEditor } from './editor';
 import { blockAround } from '../../editors/codemirror/blocks';
@@ -7,6 +11,7 @@ import { Highlighter, evaluated, flashLines, markProblems } from './highlight';
 import { mod } from './shortcuts';
 import { sceneCommand, sceneStates } from './scenes';
 import { Action, EvalOutcome, Problem, Scene, Snapshot, stage } from './live';
+import { StoredTabs, loadTabs, moveItem, tabTitle, tabsKey } from './tabs';
 import './style.css';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -52,15 +57,19 @@ app.innerHTML = `
         <span id="landing" class="landing" aria-live="polite"></span>
         <div class="editor-actions">
           <span class="file-actions">
-            <button id="open" title="Open a .nml file">Open</button>
+            <button id="new" title="A new empty tab (Cmd/Ctrl+T)">New</button>
+            <button id="open" title="Open a .nml file in a tab">Open</button>
+            <button id="open-project" title="Open a folder: main.nml and what it uses, or every .nml file, as tabs">Project</button>
             <button id="save" title="Save the file">Save</button>
             <button id="demo" title="Load the stage's opening piece">Demo</button>
           </span>
           <label class="quantize" title="When an evaluation lands">land <input id="quantize" placeholder="next 4bars" /></label>
-          <button id="evaluate-file" title="Evaluate the whole file (Cmd/Ctrl+Shift+Enter)">File <kbd>⇧⌘↩</kbd></button>
+          <button id="evaluate-all" title="Evaluate every tab, left to right" hidden>All</button>
+          <button id="evaluate-file" title="Evaluate the whole tab (Cmd/Ctrl+Shift+Enter)">File <kbd>⇧⌘↩</kbd></button>
           <button id="evaluate" class="primary" title="Evaluate the selection, or the block the cursor is in (Cmd/Ctrl+Enter)">Evaluate <kbd>⌘↩</kbd></button>
         </div>
       </div>
+      <div id="tabs" class="tabs" role="tablist"></div>
       <div id="banner" role="alert" hidden></div>
       <div id="editor"></div>
       <div id="problems" aria-live="polite"></div>
@@ -104,15 +113,16 @@ const editorStatus = $('editor-status');
 const footerStatus = $('footer-status');
 const stageHint = $('stage-hint');
 
-const storageKey = 'niminal-stage:source';
-const pathKey = 'niminal-stage:path';
 const portKey = 'niminal-stage:port';
 
 let view: EditorView | null = null;
 // numbered by the clock, so what the engine remembers from an earlier run never matches a new one
 let evaluations = Date.now();
-let filePath: string | null = localStorage.getItem(pathKey);
-let fileDir: string | null = null;
+/** A file in the window: each has its own editor state, so its cursor, undo history and highlights are its own. */
+type Tab = { id: number; path: string | null; title: string; state: EditorState; saved: string };
+let tabs: Tab[] = [];
+let current: Tab;
+let tabCount = 0;
 let connected = false;
 let connectedOnce = false;
 let lastSceneSignature = '';
@@ -154,26 +164,140 @@ function setConnection(ok: boolean) {
   connection.querySelector('span')!.textContent = ok ? 'engine connected' : 'offline';
 }
 
-function installEditor(source: string, path: string | null) {
-  const state = niminalEditor(
-    source,
-    uriFor(path ?? '/niminal-stage/piece.nml'),
-    scope => void evaluate(scope),
-    saveLocal,
-  );
-  if (view) view.setState(state);
-  else {
-    view = new EditorView({ state, parent: $('editor') });
-  }
-  filePath = path;
-  if (path) localStorage.setItem(pathKey, path);
-  else localStorage.removeItem(pathKey);
+function makeTab(source: string, path: string | null, title: string, saved = source): Tab {
+  const id = ++tabCount;
+  const uri = uriFor(path ?? `/niminal-stage/${title}-${id}.nml`);
+  const state = niminalEditor(source, uri, scope => void evaluate(scope), () => changed(id));
+  return { id, path, title: tabTitle(path, title), state, saved };
+}
+
+/** The directory `use` and samples are found from: the folder of the file in the current tab. */
+function fileDir() {
+  return current.path ? current.path.replace(/[\\/][^\\/]*$/, '') : null;
+}
+
+/** Keep the current tab's state with the tab, as the editor is about to show another. */
+function sync() {
+  if (view) current.state = view.state;
+}
+
+function show(tab: Tab) {
+  sync();
+  current = tab;
+  if (view) view.setState(tab.state);
+  else view = new EditorView({ state: tab.state, parent: $('editor') });
+  highlighter.reset();
+  showProblems([]);
+  renderTabs();
+  persist();
   view.focus();
 }
 
-function saveLocal() {
-  if (!view) return;
-  localStorage.setItem(storageKey, view.state.doc.toString());
+function addTab(source: string, path: string | null, title: string) {
+  const tab = makeTab(source, path, title);
+  tabs.push(tab);
+  show(tab);
+}
+
+function closeTab(tab: Tab) {
+  const index = tabs.indexOf(tab);
+  if (isDirty(tab) && !confirm(`${tab.title} has changes that are not saved. Close it anyway?`)) return;
+  tabs.splice(index, 1);
+  if (tabs.length === 0) tabs.push(makeTab('', null, 'untitled'));
+  if (tab === current) show(tabs[Math.max(0, index - 1)]);
+  else {
+    renderTabs();
+    persist();
+  }
+}
+
+function step(direction: 1 | -1) {
+  if (tabs.length > 1) show(tabs[(tabs.indexOf(current) + direction + tabs.length) % tabs.length]);
+}
+
+function isDirty(tab: Tab) {
+  return (tab === current && view ? view.state.doc.toString() : tab.state.doc.toString()) !== tab.saved;
+}
+
+let dragging: Tab | null = null;
+
+function droppedBefore(event: DragEvent, item: HTMLElement) {
+  const box = item.getBoundingClientRect();
+  return event.clientX < box.left + box.width / 2;
+}
+
+function clearDropMarks() {
+  for (const item of $('tabs').children) item.classList.remove('drop-before', 'drop-after');
+}
+
+function renderTabs() {
+  $('evaluate-all').hidden = tabs.length < 2;
+  $('tabs').replaceChildren(
+    ...tabs.map(tab => {
+      const item = document.createElement('div');
+      item.className = 'tab';
+      item.dataset.id = String(tab.id);
+      item.setAttribute('role', 'tab');
+      item.classList.toggle('active', tab === current);
+      item.classList.toggle('dirty', isDirty(tab));
+      item.title = tab.path ?? 'not saved to a file yet';
+      const name = document.createElement('span');
+      name.className = 'tab-name';
+      name.textContent = tab.title;
+      const close = document.createElement('button');
+      close.className = 'tab-close';
+      close.textContent = '×';
+      close.title = 'Close this tab';
+      close.addEventListener('click', event => {
+        event.stopPropagation();
+        closeTab(tab);
+      });
+      item.append(name, close);
+      item.addEventListener('click', () => tab !== current && show(tab));
+      // a middle click closes, as in a browser
+      item.addEventListener('auxclick', event => event.button === 1 && closeTab(tab));
+      // drag a tab to reorder: it lands before the tab it is dropped on's midpoint, else after it
+      item.draggable = true;
+      item.addEventListener('dragstart', event => {
+        dragging = tab;
+        event.dataTransfer?.setData('text/plain', tab.title);
+      });
+      item.addEventListener('dragend', () => {
+        dragging = null;
+        clearDropMarks();
+      });
+      item.addEventListener('dragover', event => {
+        if (!dragging) return;
+        event.preventDefault();
+        clearDropMarks();
+        item.classList.add(droppedBefore(event, item) ? 'drop-before' : 'drop-after');
+      });
+      item.addEventListener('drop', event => {
+        if (!dragging) return;
+        event.preventDefault();
+        const from = tabs.indexOf(dragging);
+        moveItem(tabs, from, tabs.indexOf(tab) + (droppedBefore(event, item) ? 0 : 1));
+        dragging = null;
+        renderTabs();
+        persist();
+      });
+      return item;
+    }),
+  );
+}
+
+function changed(id: number) {
+  if (current.id === id) $('tabs').querySelector(`[data-id="${id}"]`)?.classList.toggle('dirty', isDirty(current));
+  persist();
+}
+
+function persist() {
+  sync();
+  const stored: StoredTabs = {
+    tabs: tabs.map(tab => ({ path: tab.path, title: tab.title, text: tab.state.doc.toString(), saved: tab.saved })),
+    active: tabs.indexOf(current),
+  };
+  localStorage.setItem(tabsKey, JSON.stringify(stored));
 }
 
 async function ensureConnected() {
@@ -326,6 +450,11 @@ function updateNotices(snapshot: Snapshot) {
   for (const notice of snapshot.notices) {
     noticeLog.push(notice);
     status(notice);
+    // the engine can turn down a change that compiled, when it lands: that must not pass unseen
+    if (/was refused by the engine/.test(notice)) {
+      showBanner([{ message: notice, help: null, line: null, column: null, in_definition: null }], 'not applied');
+      flash('refused');
+    }
   }
   for (const landed of snapshot.landed) {
     noticeLog.push(`landed: ${landed.changes.join(' · ')}`);
@@ -365,7 +494,7 @@ let bannerTimer: ReturnType<typeof setTimeout> | undefined;
 /** How long the banner stays up; the problems list below the code keeps the detail. */
 const BANNER_SECONDS = 6;
 
-function showBanner(list: Problem[]) {
+function showBanner(list: Problem[], heading = 'not sent') {
   const banner = $('banner');
   clearTimeout(bannerTimer);
   if (!list.length) {
@@ -374,7 +503,7 @@ function showBanner(list: Problem[]) {
   }
   const first = list[0];
   const where = first.line ? ` · line ${first.line}` : '';
-  banner.textContent = `✕ not sent${where} · ${first.message}${list.length > 1 ? ` (+${list.length - 1} more)` : ''}`;
+  banner.textContent = `✕ ${heading}${where} · ${first.message}${list.length > 1 ? ` (+${list.length - 1} more)` : ''}`;
   banner.hidden = false;
   bannerTimer = setTimeout(() => showBanner([]), BANNER_SECONDS * 1000);
 }
@@ -433,15 +562,16 @@ async function evaluate(scope: Scope = 'chunk') {
     return;
   }
   const { text, from, to } = code;
+  const tab = current;
   const id = ++evaluations;
   if (view) {
     view.dispatch({ effects: evaluated.of({ id, base: from, text }) });
     flashLines(view, from, to);
   }
   try {
-    const outcome = await stage.evaluate(text, input('quantize').value.trim(), fileDir, id);
+    const outcome = await stage.evaluate(text, input('quantize').value.trim(), fileDir(), id);
     showOutcome(outcome);
-    if (view && outcome.problems.length) markProblems(view, from, text, outcome.problems);
+    if (view && tab === current && outcome.problems.length) markProblems(view, from, text, outcome.problems);
     await refresh();
   } catch (error) {
     status(String(error));
@@ -472,42 +602,74 @@ async function openFile() {
   try {
     const opened = await stage.openFile();
     if (!opened) return;
-    installEditor(opened.source, opened.path);
-    fileDir = opened.dir;
-    localStorage.setItem(storageKey, opened.source);
-    status(`opened ${opened.path}`);
-    showProblems([]);
+    const open = tabs.find(tab => tab.path === opened.path);
+    if (open) show(open);
+    else addTab(opened.source, opened.path, 'untitled');
     status(`opened ${opened.path}; evaluate it when you are ready`);
   } catch (error) {
     status(String(error));
   }
 }
 
-async function saveFile() {
-  if (!view) return;
+/** Open a folder's files as tabs: `main.nml` and what it uses, or every file in the folder without one. */
+async function openProject() {
   try {
-    if (!filePath) {
-      const path = await stage.saveFileAs(view.state.doc.toString());
-      if (!path) return;
-      filePath = path;
-      fileDir = path.replace(/[\\/][^\\/]*$/, '');
-      localStorage.setItem(pathKey, path);
-    } else {
-      await stage.saveFile(filePath, view.state.doc.toString());
+    const project = await stage.openProject();
+    if (!project) return;
+    let first: Tab | null = null;
+    for (const file of project.files) {
+      let tab = tabs.find(t => t.path === file.path);
+      if (!tab) {
+        tab = makeTab(file.source, file.path, 'untitled');
+        tabs.push(tab);
+      }
+      first ??= tab;
     }
-    localStorage.setItem(storageKey, view.state.doc.toString());
-    status(`saved ${filePath}`);
+    if (first) show(first);
+    const what = project.entry ? `evaluate ${tabTitle(project.entry, 'main.nml')} to play it` : 'evaluate the tabs left to right with All';
+    status(`opened ${project.files.length} file${project.files.length === 1 ? '' : 's'} from ${project.dir}; ${what}`);
   } catch (error) {
     status(String(error));
   }
 }
 
+async function saveFile(tab = current) {
+  if (!view) return;
+  const text = tab === current ? view.state.doc.toString() : tab.state.doc.toString();
+  try {
+    if (!tab.path) {
+      const path = await stage.saveFileAs(text);
+      if (!path) return;
+      tab.path = path;
+      tab.title = tabTitle(path, tab.title);
+    } else {
+      await stage.saveFile(tab.path, text);
+    }
+    tab.saved = text;
+    renderTabs();
+    persist();
+    status(`saved ${tab.path}`);
+  } catch (error) {
+    status(String(error));
+  }
+}
+
+/** Save every tab that has a file and has changed. */
+async function saveAll() {
+  for (const tab of tabs) if (tab.path && isDirty(tab)) await saveFile(tab);
+}
+
 function loadDemo() {
-  installEditor(demoSource, null);
-  fileDir = null;
-  localStorage.setItem(storageKey, demoSource);
-  showProblems([]);
+  addTab(demoSource, null, 'demo');
   status('the opening piece is loaded; evaluate it when you are ready');
+}
+
+/** Send every tab in turn, left to right, so a tab of instruments goes before the clips that play them. */
+async function evaluateAll() {
+  for (const tab of tabs) {
+    if (tab !== current) show(tab);
+    await evaluate('file');
+  }
 }
 
 let linkLost = false;
@@ -719,7 +881,10 @@ const laneView = new LaneView($('lanes'), (action, target, change) => {
 
 $('evaluate').addEventListener('click', () => void evaluate());
 $('evaluate-file').addEventListener('click', () => void evaluate('file'));
+$('new').addEventListener('click', () => addTab('', null, 'untitled'));
+$('evaluate-all').addEventListener('click', () => void evaluateAll());
 $('open').addEventListener('click', () => void openFile());
+$('open-project').addEventListener('click', () => void openProject());
 $('save').addEventListener('click', () => void saveFile());
 $('demo').addEventListener('click', loadDemo);
 $('hush').addEventListener('click', () => void act({ action: 'hush' }));
@@ -754,6 +919,15 @@ window.addEventListener('keydown', event => {
   } else if (event.key.toLowerCase() === 'p' && event.shiftKey) {
     event.preventDefault();
     $('perform').click();
+  } else if (event.key.toLowerCase() === 't' && !event.shiftKey) {
+    event.preventDefault();
+    $('new').click();
+  } else if (event.shiftKey && (event.key === '[' || event.key === '{')) {
+    event.preventDefault();
+    step(-1);
+  } else if (event.shiftKey && (event.key === ']' || event.key === '}')) {
+    event.preventDefault();
+    step(1);
   } else if (event.key.toLowerCase() === 'b' && !event.shiftKey) {
     event.preventDefault();
     $('rail-toggle').click();
@@ -775,9 +949,35 @@ window.addEventListener('keydown', event => {
   }
 });
 
-const stored = localStorage.getItem(storageKey);
-fileDir = filePath ? filePath.replace(/[\\/][^\\/]*$/, '') : null;
-installEditor(stored ?? demoSource, filePath);
+/** The menu bar: each item runs what its button or key already does. */
+const menuActions: Record<string, () => void> = {
+  new: () => $('new').click(),
+  open: () => void openFile(),
+  'open-project': () => void openProject(),
+  save: () => void saveFile(),
+  'save-all': () => void saveAll(),
+  'close-tab': () => closeTab(current),
+  undo: () => view && undo(view),
+  redo: () => view && redo(view),
+  sidebar: () => $('rail-toggle').click(),
+  perform: () => $('perform').click(),
+  'zoom-in': () => stepZoom(1),
+  'zoom-out': () => stepZoom(-1),
+  'zoom-reset': () => setZoom(1),
+  'previous-tab': () => step(-1),
+  'next-tab': () => step(1),
+};
+if (isTauri()) {
+  listen<string>('menu', event => menuActions[event.payload]?.()).catch(error => status(`The menu is not connected: ${error}`));
+}
+
+const stored = loadTabs(localStorage.getItem(tabsKey));
+if (stored) {
+  tabs = stored.tabs.map(tab => makeTab(tab.text, tab.path, tab.title, tab.saved));
+  show(tabs[stored.active]);
+} else {
+  addTab(demoSource, null, 'demo');
+}
 input('port').value = localStorage.getItem(portKey) ?? '7401';
 setConnection(false);
 void connectLanguageServer(message => status(message));

@@ -28,15 +28,15 @@ clip bass {
 
 clip lead {
   instrument: pluck(bright: 0.8)
-  notes: [c4 e4 g4 b4].every(2, it.reverse)
+  notes: [c4 e4 g4 b4].every(2, reverse)
 }
 
 // A clip can be made from another: it keeps the instrument and lanes, and applies the change.
 clip bass_chorus = bass.transpose(+5st)
 
 // A pattern is just notes. Give it to a clip as its `notes:`.
-answer = [c4 e4 g4 b4].every(2, it.reverse).transpose(+5st).thin(25%)
-spread = [c5].euclid(hits: 4, steps: 8)
+answer = [c4 e4 g4 b4].every(2, reverse).transpose(+5st).drop(25%)
+spread = [c5].spread_evenly(hits: 4, steps: 8)
 
 clip lead_chorus {
   instrument: pluck(bright: 0.8)

@@ -18,10 +18,10 @@ The sidebar in `astro.config.mjs` is ordered for people using niminal, not for t
 
 - **Guide** — tasks, in the order you meet them.
 - **Language** — the `.nml` file: what the server compiles, then what the sequencer reads, then what both share.
-- **niminal (server)**, **nimlive (sequencer)** — one program each: command line, API, editor.
+- **niminal (server)**, **niminal-live (sequencer)** — one program each: command line, API, editor.
 - **Tracker** — the desktop app's manual. It lives here; `tracker/README.md` is build and architecture notes only.
 
-Each section's landing page says which program runs it, and every page in **Language** does, because the server's half and the sequencer's half sit side by side there: **Compiled by niminal**, **Read by nimlive**, or **Read by both programs**. Write from the user's side — what a program does and what you type — not crates, repo modules or internal design. `reference/opcodes.md` is generated, so it carries no such line.
+Each section's landing page says which program runs it, and every page in **Language** does, because the server's half and the sequencer's half sit side by side there: **Compiled by niminal**, **Read by niminal-live**, or **Read by both programs**. Write from the user's side — what a program does and what you type — not crates, repo modules or internal design. `reference/opcodes.md` is generated, so it carries no such line.
 
 ## One-time Cloudflare setup
 

@@ -1,5 +1,5 @@
 // Clips select instruments. Fx declarations own persistent effects. Buses collect shared sends.
-// Render with:  nimlive render examples/fx.nml --out fx.wav
+// Render with:  niminal-live render examples/fx.nml --out fx.wav
 config { channels: stereo }
 tempo 110bpm
 
@@ -42,7 +42,7 @@ instr lead_voice(freq: hz) {
 }
 clip lead {
   instrument: lead_voice
-  notes: [c4 e4 g4 b4].every(2, it.reverse)
+  notes: [c4 e4 g4 b4].every(2, reverse)
 }
 
 bass.start

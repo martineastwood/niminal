@@ -64,8 +64,9 @@ A sample is a plain binding, and its settings are chained methods: `amen = sampl
 
 | Method | Effect |
 | --- | --- |
-| `.beats(N)` | The loop is N beats long: it is sped up or down to last N beats at the current tempo |
-| `.duration(2sec)` | The same, to a fixed length that ignores the tempo; also available directly in DSP definitions |
+| `.beats(N)` | Fit the sample to N beats, preserving pitch; sounding samples follow live tempo changes without restarting |
+| `.duration(2sec)` | Fit to a fixed length, preserving pitch and ignoring tempo; also available directly in DSP definitions |
+| `.mode(stretch)` | Preserve pitch when fitting (the default); `.mode(repitch)` changes speed and pitch together |
 | `.root(c4)` | The note (or frequency) at which the sample plays as recorded |
 | `.interp(sinc)` | Rate-aware windowed sinc playback; `.interp(cubic)` is the faster default |
 | `.loop(forward)` | Sustain a loop while a note is held; `.loop(bidirectional)` alternates direction |
@@ -94,7 +95,9 @@ instr smooth_pad(freq: hz, loop_start: 0..1 = 0.2, loop_end: 0..1 = 0.8) {
 
 Automate the forwarded loop parameters to reshape a held note without restarting it or its envelope.
 
-Fitting changes the playback speed (and so the pitch). Use `amen(stretch: 2)` to double the playback duration without changing the selected pitch, or `stretch: 0.5` to halve it. The duration multiplier ranges from 0.25 to 4 and works with samples, kits, slices, reverse playback and loops. The tracker exposes the duration as **Stretch ×** and the algorithm as **Granular / WSOLA** in the Sample panel. Both algorithms use overlapping 50 ms grains:
+Fitting preserves pitch by default: `amen = sample("amen.wav").beats(4)` lasts four beats even when played with `pitch: +3st`. Live tempo changes move the sample through its remaining audio at the new tempo without restarting it. For tape-style playback, use `.beats(4).mode(repitch)`: tempo changes also change pitch, and transposing the sample changes its duration. Unfitted samples still change speed and duration when transposed.
+
+Use `amen(stretch: 2)` to double the playback duration without changing the selected pitch, or `stretch: 0.5` to halve it. This multiplier also applies on top of a fitted duration, so `stretch: 2` makes a four-beat sample last eight beats. The manual duration multiplier ranges from 0.25 to 4 and works with samples, kits, slices, reverse playback and loops. Automatic fitting is not clamped to that range; extreme fits can sound unnatural. The tracker exposes the manual duration as **Stretch ×** and the algorithm as **Granular / WSOLA** in the Sample panel. The stretching algorithms use overlapping 50 ms grains:
 
 | `stretch_mode` | Algorithm | Tradeoff |
 | --- | --- | --- |
@@ -108,9 +111,9 @@ instr slowed(freq: hz) {
 }
 ```
 
-WSOLA searches up to 10 ms of source audio on either side of the expected grain position (capped at 2048 frames). All channels use the same analysis channel, chosen by its energy, so alignment preserves stereo timing even with a silent channel or opposite-polarity channels. Ordinary WSOLA does not protect attacks, so drums can still smear or repeat. **Transient WSOLA** uses the same amplitude-onset detector as Find hits. It protects up to 15 ms after each detected onset and compensates in the body so onset timing and overall duration stay fitted. Protection is shortened for short segments or extreme compression. Grain reads and interpolation stay out of neighbouring attack regions. Reverse playback (including the reverse leg of ping-pong loops) uses ordinary WSOLA. Detection can miss quiet or closely spaced attacks, and large stretch ratios can still sound unnatural. At `stretch: 1`, both modes use ordinary sample playback. Algorithm changes take effect when the next grain starts.
+WSOLA searches up to 10 ms of source audio on either side of the expected grain position (capped at 2048 frames). All channels use the same analysis channel, chosen by its energy, so alignment preserves stereo timing even with a silent channel or opposite-polarity channels. Ordinary WSOLA does not protect attacks, so drums can still smear or repeat. **Transient WSOLA** uses the same amplitude-onset detector as Find hits. It protects up to 15 ms after each detected onset and compensates in the body so onset timing and overall duration stay fitted. Protection is shortened for short segments or extreme compression. Grain reads and interpolation stay out of neighbouring attack regions. Reverse playback (including the reverse leg of ping-pong loops) uses ordinary WSOLA. Detection can miss quiet or closely spaced attacks, and large stretch ratios can still sound unnatural. When the fitted duration and selected pitch require no stretching, all modes use ordinary sample playback. Algorithm changes take effect when the next grain starts.
 
-Slice-fitting is not supported yet.
+Slices inherit their source's fitted timing and playback mode: each slice lasts its share of the fitted sample's duration. Fitting a slice kit to a new length with `.beats(...)` or `.duration(...)` is not supported.
 
 ### Playing samples
 
@@ -223,4 +226,4 @@ A sample's audio is a table. `kick.data` is that table (or an array of channel t
 
 ## Built-in DSP
 
-For filters, delay, reverb, noise, compress, chorus, pan and math on any signal (including sample output), see [Built-in opcodes](/reference/opcodes/). Spectral processing and SFZ multisamples are not in the language yet.
+For filters, delay, reverb, compression, chorus, pan and math on any signal (including sample output), see [Built-in opcodes](/reference/opcodes/). Convolution (`convolve`), real-time pitch shifting (`pitch_shift`), spectral freeze (`spectral_freeze`) and spectral delay (`spectral_delay`) are also available. SFZ multisamples are not in the language yet.

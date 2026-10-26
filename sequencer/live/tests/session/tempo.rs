@@ -175,3 +175,75 @@ fn cancelling_a_ramp_by_its_id_cancels_every_step_of_it() {
     assert_eq!(s.cancel(again.id), left - 1);
     assert_eq!(s.pending().len(), 1);
 }
+
+/// A sustained sample must follow tempo changes without restarting or changing pitch.
+#[test]
+fn fitted_audio_follows_live_tempo_and_replays() {
+    let path = std::env::temp_dir().join(format!("niminal-tempo-fit-{}.wav", std::process::id()));
+    let mut wav = hound::WavWriter::create(
+        &path,
+        hound::WavSpec {
+            channels: 1,
+            sample_rate: SR as u32,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        },
+    )
+    .unwrap();
+    for i in 0..96_000 {
+        wav.write_sample((std::f32::consts::TAU * 440.0 * i as f32 / SR).sin() * 0.5)
+            .unwrap();
+    }
+    wav.finalize().unwrap();
+    for mode in ["stretch", "repitch"] {
+        let mut s = session();
+        s.eval(&format!(
+            "tempo 120bpm\ns = sample(\"{}\").beats(4).mode({mode})\nclip audio {{ instrument: s, notes: [c4], length: 8bars }}\naudio.start",
+            path.display()
+        ), Some("now")).unwrap();
+        let mut audio = run(&mut s, 24_000);
+        s.eval("tempo 240bpm", Some("now")).unwrap();
+        let after = run(&mut s, 48_000);
+        let expected = if mode == "stretch" { 440.0 } else { 880.0 };
+        assert!(
+            (hz(&after[8_000..24_000]) - expected).abs() < 12.0,
+            "{mode}: {}",
+            hz(&after[8_000..24_000])
+        );
+        // One beat played at 120bpm; the remaining three take 0.75s at 240bpm.
+        assert!(rms(&after[30_000..34_000]) > 0.1, "{mode}: ended early");
+        assert!(
+            peak(&after[37_000..]) < 1e-6,
+            "{mode}: failed to finish in four beats"
+        );
+        audio.extend(after);
+        let replay =
+            niminal_server::Session::replay(SR, Layout::Mono, &s.log(), audio.len() as u64, false);
+        assert_eq!(audio, replay[0], "{mode}: replay");
+    }
+    let mut s = session();
+    s.eval(
+        &format!(
+            "tempo 120bpm\ns = sample(\"{}\").beats(4).loop(forward)\nclip audio {{ instrument: s, notes: [c4], length: 16bars, stretch_mode: 2 }}\naudio.start",
+            path.display()
+        ),
+        Some("now"),
+    ).unwrap();
+    let mut audio = run(&mut s, 12_000);
+    s.eval("tempo 180bpm @ now over 2beats", Some("now"))
+        .unwrap();
+    let ramp = run(&mut s, 180_000);
+    assert_eq!(s.transport().bpm, 180.0);
+    for window in ramp[6_000..].as_chunks::<12_000>().0 {
+        assert!(
+            (hz(window) - 440.0).abs() < 20.0,
+            "ramp pitch: {}",
+            hz(window)
+        );
+    }
+    audio.extend(ramp);
+    let replay =
+        niminal_server::Session::replay(SR, Layout::Mono, &s.log(), audio.len() as u64, false);
+    assert_eq!(audio, replay[0], "looped tempo ramp replay");
+    std::fs::remove_file(path).unwrap();
+}

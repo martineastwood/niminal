@@ -4,12 +4,12 @@
 
 niminal is an audio server with its own DSP language. It compiles instruments, effects and routing, and plays timestamped events sent to it by any client. It knows nothing of clips, scenes, patterns or tempo.
 
-`nimlive` is the first client: a live-coding sequencer that adds clips, scenes, mini-notation patterns, tempo and quantized changes on top, and a VS Code extension to drive it. The [tracker](tracker/) is a second client of the same API.
+`niminal-live` is the first client: a live-coding sequencer that adds clips, scenes, mini-notation patterns, tempo and quantized changes on top, and a VS Code extension to drive it. The [tracker](tracker/) is a second client of the same API.
 
 ```
 crates/      the audio server: engine, DSP language, WebSocket API, `niminal` CLI
-sequencer/   a client: the composition language, patterns, `nimlive`
-editors/     the VS Code extension, a client of `nimlive`
+sequencer/   a client: the composition language, patterns, `niminal-live`
+editors/     the VS Code extension, a client of `niminal-live`
 clients/     JS and Python SDKs for the server's API
 ```
 
@@ -25,7 +25,7 @@ From a clone of this repo, install the audio server and the live sequencer:
 
 ```sh
 cargo install --path crates/niminal-cli      # niminal
-cargo install --path sequencer/nimlive       # nimlive
+cargo install --path sequencer/live-cli       # niminal-live
 ```
 
 ## Hear something quickly
@@ -33,7 +33,7 @@ cargo install --path sequencer/nimlive       # nimlive
 The repo includes examples under `examples/`. Render one to a WAV file:
 
 ```sh
-nimlive render examples/saw_lead.nml --out saw_lead.wav
+niminal-live render examples/saw_lead.nml --out saw_lead.wav
 ```
 
 Try [spectral_delay.nml](examples/spectral_delay.nml) for plucks with frequency-dependent echoes:
@@ -48,10 +48,10 @@ Start the audio server, then the live sequencer client:
 ```sh
 niminal server
 # in another terminal:
-nimlive live examples/groove.nml
-nimlive repl
+niminal-live live examples/groove.nml
+niminal-live repl
 # in another terminal:
-nimlive send 'chorus.start' --quantize "next 4bars"
+niminal-live send 'chorus.start' --quantize "next 4bars"
 ```
 
 Sessions are logged sample-accurately, so you can replay them:
@@ -60,13 +60,13 @@ Sessions are logged sample-accurately, so you can replay them:
 niminal replay ~/.niminal/sessions/<log> --out set.wav
 ```
 
-For MIDI / OSC controls, start the live client with `--midi` and/or `--osc-port` (see `examples/midi_osc.nml`). Use `--help` for flags (`niminal`: `server`, `replay`, `docs`; `nimlive`: `render`, `live`, `repl`, `send`, `lsp`).
+For MIDI / OSC controls, start the live client with `--midi` and/or `--osc-port` (see `examples/midi_osc.nml`). Use `--help` for flags (`niminal`: `server`, `replay`, `docs`; `niminal-live`: `render`, `live`, `repl`, `send`, `lsp`).
 
 ## Editor
 
 The [VS Code / Cursor extension](editors/vscode/) adds syntax highlighting, diagnostics, and evaluate-while-playing against a running server. Install it from `editors/vscode` (see that folder’s README), run `niminal server`, the extension starts its own private live sequencer, then evaluate with **Cmd+Enter** (macOS) or **Ctrl+Enter**.
 
-The language server (`nimlive lsp`) works without a server for hover, completion, and errors.
+The language server (`niminal-live lsp`) works without a server for hover, completion, and errors.
 
 ## Tracker
 
@@ -76,7 +76,7 @@ The language server (`nimlive lsp`) works without a server for hover, completion
 
 - **Live** — WebSocket server, REPL, `send`, and editor integration; quantize changes to musical time. `niminal server` is the audio server (the engine), with the live sequencer as one client of its event API, so other programs can play through it too. Clients own tempo, meter and all musical scheduling.
 - **Frontend API** — Browser, Node and Python clients can own private fx definitions and instances, route and modulate them, stream WAV files, inspect voice lifecycle and DSP reports, view waveform scopes, capture live output and run independent offline exports. See the [engine API](https://niminal.dev/reference/engine-api/) and [client examples](clients/examples/).
-- **Offline** — `nimlive render` renders a piece to audio; `niminal replay` plays a log of timestamped engine events to identical samples.
+- **Offline** — `niminal-live render` renders a piece to audio; `niminal replay` plays a log of timestamped engine events to identical samples.
 - **Musical** — Rational time, mini-notation, clips, scenes, and arrangements; one pattern cycle is one bar.
 - **Routing** — Independent fx instances, private buses and sample-timed connection edits; client-owned mixer models.
 - **Extensible** — Write functions (down to the sample, with state) and instruments in the language, with the same tooling as built-ins.

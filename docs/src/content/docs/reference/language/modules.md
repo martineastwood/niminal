@@ -3,7 +3,7 @@ title: Modules
 description: Split a project across files with use.
 ---
 
-**Read by both programs.** The server and nimlive each follow `use` when they read a file.
+**Read by both programs.** The server and niminal-live each follow `use` when they read a file.
 
 A module is a file. `use rig` loads `rig.nml` and adds its definitions to yours.
 
@@ -36,7 +36,7 @@ Installed packages are the `.nml` files in `$NIMINAL_PACKAGES`, or in `~/.nimina
 ## Errors and reloading
 
 - An error in a module is reported on the `use` line, with the module's own file and line.
-- `nimlive live file.nml` watches every module the file uses and evaluates it again, as a whole, when any of them changes.
+- `niminal-live live file.nml` watches every module the file uses and evaluates it again, as a whole, when any of them changes.
 - The evaluation log keeps the joined code, so a log replays without the module files.
 - The language server completes, hovers and jumps to names from modules. After `r::` it offers what `r` defines.
 

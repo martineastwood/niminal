@@ -1,5 +1,5 @@
 // A sustained chord chopped by a transport-synced grid, without retriggering its notes.
-// Render: nimlive render examples/trance_gate.nml --bars 4 --out trance_gate.wav
+// Render: niminal-live render examples/trance_gate.nml --bars 4 --out trance_gate.wav
 config { channels: stereo }
 tempo 138bpm
 

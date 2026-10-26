@@ -8,12 +8,11 @@ use std::time::{Duration, Instant};
 
 use niminal_lang::{Layout, Problem};
 use niminal_live::{
-    Accepted, Begin, ClipStatus, Landed, Live, LiveServer, ParsedEval, PendingInfo, SceneStatus, Transport,
+    Accepted, Begin, ClipStatus, Landed, Live, LiveServer, ParsedEval, PendingInfo, SceneStatus,
+    Transport, WsLink,
 };
-use niminal_server::{EngineError, EngineReply, EngineRequest, PROTOCOL_VERSION};
-use niminal_ws::Client;
+use niminal_server::EngineReply;
 use serde::Serialize;
-use serde_json::{Value, json};
 
 /// The stage's one sequencer, shared by the worker that advances it and the window that asks about it.
 pub struct Shared {
@@ -50,7 +49,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Keep the sequencer a little ahead of the engine's clock. Every 25ms is what `nimlive live` uses.
+/// Keep the sequencer a little ahead of the engine's clock. Every 25ms is what `niminal-live live` uses.
 pub fn start_worker(shared: Arc<Shared>) {
     std::thread::Builder::new()
         .name("niminal-stage".into())
@@ -63,63 +62,6 @@ pub fn start_worker(shared: Arc<Shared>) {
             }
         })
         .expect("the stage worker starts");
-}
-
-/// The engine across a WebSocket. Unlike `nimlive`'s link, a lost engine is reported in a notice and the
-/// app stays up: the stage is a window first, and a session can be opened again from it.
-struct StageLink {
-    client: Client,
-}
-
-impl StageLink {
-    fn connect(port: u16, token: Option<&str>) -> Result<(StageLink, EngineReply), String> {
-        let (mut client, reply) = Client::connect_as(port, token, "niminal-stage")?;
-        let hello = EngineReply::from_json(
-            &EngineRequest::Hello {
-                protocol: PROTOCOL_VERSION,
-                client: None,
-                token: None,
-            },
-            &reply,
-        )?;
-        client.call("subscribe", json!({ "topics": ["notices"] }))?;
-        Ok((StageLink { client }, hello))
-    }
-}
-
-impl niminal_live::EngineLink for StageLink {
-    fn request(&mut self, request: EngineRequest) -> Result<EngineReply, EngineError> {
-        let wire = serde_json::to_value(&request).map_err(|e| EngineError {
-            code: -32603,
-            message: e.to_string(),
-            data: None,
-        })?;
-        let method = wire["method"].as_str().unwrap_or_default().to_string();
-        let params = wire.get("params").cloned().unwrap_or_else(|| json!({}));
-        match self.client.call_raw(&method, params) {
-            Ok(Ok(result)) => {
-                EngineReply::from_json(&request, &result).map_err(|message| EngineError {
-                    code: -32603,
-                    message,
-                    data: None,
-                })
-            }
-            Ok(Err(error)) => Err(EngineError::from_json(&error)),
-            Err(message) => Err(EngineError {
-                code: -32603,
-                message,
-                data: None,
-            }),
-        }
-    }
-
-    fn notifications(&mut self) -> Vec<(String, Value)> {
-        self.client
-            .take_notifications()
-            .into_iter()
-            .filter_map(|m| Some((m["method"].as_str()?.to_string(), m["params"].clone())))
-            .collect()
-    }
 }
 
 /// The `niminal` program: on the search path, in cargo's install folder, or beside the stage.
@@ -178,13 +120,13 @@ pub fn connect(shared: &Shared, port: u16, token: Option<&str>) -> Result<(), St
         return Ok(());
     }
     let mut started = None;
-    let (link, hello) = match StageLink::connect(port, token) {
+    let link = match WsLink::connect(port, token, "niminal-stage") {
         Ok(connected) => connected,
         Err(_) => {
             started = open_engine(port)?;
             let deadline = Instant::now() + Duration::from_secs(5);
             loop {
-                match StageLink::connect(port, token) {
+                match WsLink::connect(port, token, "niminal-stage") {
                     Ok(connected) => break connected,
                     Err(e) if Instant::now() >= deadline => {
                         if let Some(mut child) = started.take() {
@@ -198,6 +140,7 @@ pub fn connect(shared: &Shared, port: u16, token: Option<&str>) -> Result<(), St
             }
         }
     };
+    let hello = link.hello.clone();
     let EngineReply::Hello {
         sample_rate,
         channels,
@@ -209,12 +152,11 @@ pub fn connect(shared: &Shared, port: u16, token: Option<&str>) -> Result<(), St
     let layout = Layout::standard(channels as u16)?;
     let live = Live::new(Box::new(link), sample_rate, layout)
         .with_clock_sync(Duration::from_millis(100));
-    if let Some(child) = started {
-        if let Some(old) = lock(&shared.engine).replace(child) {
-            let mut old = old;
-            let _ = old.kill();
-            let _ = old.wait();
-        }
+    if let Some(child) = started
+        && let Some(mut old) = lock(&shared.engine).replace(child)
+    {
+        let _ = old.kill();
+        let _ = old.wait();
     }
     *lock(&shared.session) = Some(LiveServer::new(live));
     shared.bump();

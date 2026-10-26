@@ -56,7 +56,7 @@ instr acid(freq: hz) {
 }
 ```
 
-- **Time is a control step's.** A scope runs once every 64 samples by default (750 times a second at 48khz), whatever `--block-size` is; `--control-step N` changes that, from 1 to 1024, and a step can begin anywhere inside a block. Inside the scope `sample_rate` is the control rate, so `osc(sine, 0.3hz)` is still 0.3hz and `env[...]` times are still seconds. Keep a scope to slow movement: the highest usable frequency is half the control rate (375hz at the default), and an envelope segment shorter than a step (1.3ms) is a single jump. `nimlive explain` warns about both, for the step it is given with `--control-step`.
+- **Time is a control step's.** A scope runs once every 64 samples by default (750 times a second at 48khz), whatever `--block-size` is; `--control-step N` changes that, from 1 to 1024, and a step can begin anywhere inside a block. Inside the scope `sample_rate` is the control rate, so `osc(sine, 0.3hz)` is still 0.3hz and `env[...]` times are still seconds. Keep a scope to slow movement: the highest usable frequency is half the control rate (375hz at the default), and an envelope segment shorter than a step (1.3ms) is a single jump. `niminal-live explain` warns about both, for the step it is given with `--control-step`.
 - **Inputs are read when the scope runs.** A parameter, `ctl` or other value from outside the scope is seen once per block, as with `.control`. In a `fn` with state, only parameters can be read this way and anything else that changes every sample is an error.
 - **The result has the `control` rate** and is held until the next run. A bare held value steps every 64 samples; where that is audible (a cutoff sweep, a gain) smooth it:
 
@@ -88,7 +88,7 @@ instr acid(freq: hz = 110hz) {
 }
 ```
 
-Use `nimlive explain FILE` to see what an instrument runs every sample and what runs once per block (it also suggests a `control` scope for an LFO or envelope that only sets a parameter, and warns about what a scope can't do), and the editor's rate hints to see the rate of each value in an instrument body. See [Editor and LSP](/reference/editor/).
+Use `niminal-live explain FILE` to see what an instrument runs every sample and what runs once per block (it also suggests a `control` scope for an LFO or envelope that only sets a parameter, and warns about what a scope can't do), and the editor's rate hints to see the rate of each value in an instrument body. See [Editor and LSP](/reference/editor/).
 
 ## Tuning
 

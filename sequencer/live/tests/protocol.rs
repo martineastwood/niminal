@@ -556,6 +556,7 @@ fn status_lists_scenes_clips_and_what_each_node_is_doing() {
             "edits": [],
             "length": 1.0,
             "looped": true,
+            "plays": null,
             "endless": true,
             "cycles": null,
             "lanes": [{
@@ -594,10 +595,10 @@ fn status_lists_scenes_clips_and_what_each_node_is_doing() {
         c,
         6,
         "eval",
-        json!({"source": "bass.reverse\nbass.thin(25%)", "quantize": "now"}),
+        json!({"source": "bass.reverse\nbass.drop(25%)", "quantize": "now"}),
     );
     let edited = call(&mut d, c, 7, "status", json!({}))["result"].clone();
-    assert_eq!(edited["clips"][1]["edits"], json!(["reverse", "thin(25%)"]));
+    assert_eq!(edited["clips"][1]["edits"], json!(["reverse", "drop(25%)"]));
 }
 
 #[test]
@@ -920,7 +921,13 @@ fn a_chair_needs_a_server_that_seats_them() {
 fn lane_sources_stay_on_the_notes_as_the_project_changes() {
     let mut d = server();
     let c = d.connect();
-    call(&mut d, c, 1, "hello", json!({"protocol": PROTOCOL_VERSION, "client": "test"}));
+    call(
+        &mut d,
+        c,
+        1,
+        "hello",
+        json!({"protocol": PROTOCOL_VERSION, "client": "test"}),
+    );
     let source = include_str!("../../../examples/synth_drums.nml")
         .replace("at +4bars hush", "")
         .replace("config { channels: stereo }", "")
@@ -928,7 +935,13 @@ fn lane_sources_stay_on_the_notes_as_the_project_changes() {
     let mut id = 1;
     let mut eval = |d: &mut Server, src: &str, origin: u64| {
         id += 1;
-        let r = call(d, c, id, "eval", json!({"source": src, "quantize": "now", "origin": origin}));
+        let r = call(
+            d,
+            c,
+            id,
+            "eval",
+            json!({"source": src, "quantize": "now", "origin": origin}),
+        );
         assert!(r["result"].is_object(), "{r}");
     };
     // `eval` number to the text that evaluation sent
@@ -938,25 +951,39 @@ fn lane_sources_stay_on_the_notes_as_the_project_changes() {
     };
     let check = |d: &mut Server, what: &str, reversed: Option<bool>| {
         let status = call(d, c, 99, "status", json!({}))["result"].clone();
-        let beat = status["clips"].as_array().unwrap().iter().find(|c| c["name"] == "beat").unwrap().clone();
+        let beat = status["clips"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "beat")
+            .unwrap()
+            .clone();
         let events = beat["lanes"][0]["events"].as_array().unwrap();
         assert!(!events.is_empty(), "{what}");
         for e in events {
             let (src, origin) = (&e["src"], e["eval"].as_u64().unwrap());
-            let (a, b) = (src[0].as_u64().unwrap() as usize, src[1].as_u64().unwrap() as usize);
+            let (a, b) = (
+                src[0].as_u64().unwrap() as usize,
+                src[1].as_u64().unwrap() as usize,
+            );
             assert_eq!(&sent(origin)[a..b], "x", "{what}: {e}");
         }
         if let Some(reversed) = reversed {
             // the first hat of the bar is the last `x` of its row when the clip is reversed
             let first = events[0]["src"][0].as_u64().unwrap();
-            let last_x = source.find("xxxx xxxx xxxx xxxx").unwrap() + "xxxx xxxx xxxx xxxx".len() - 1;
+            let last_x =
+                source.find("xxxx xxxx xxxx xxxx").unwrap() + "xxxx xxxx xxxx xxxx".len() - 1;
             assert_eq!(first as usize == last_x, reversed, "{what}: {}", events[0]);
         }
     };
     eval(&mut d, &source, 5);
     check(&mut d, "started", Some(false));
     // an earlier definition changes length, so the project is laid out differently now
-    eval(&mut d, "instr sd(freq: hz = 180hz) {\n  // a longer comment that moves everything after it\n  tone = osc(tri, freq) * perc(decay: 120ms) * 0.4\n  out = tone\n  glue += out\n}", 9);
+    eval(
+        &mut d,
+        "instr sd(freq: hz = 180hz) {\n  // a longer comment that moves everything after it\n  tone = osc(tri, freq) * perc(decay: 120ms) * 0.4\n  out = tone\n  glue += out\n}",
+        9,
+    );
     check(&mut d, "after redefining an instrument", None);
     eval(&mut d, "beat.reverse", 6);
     check(&mut d, "reversed", Some(true));
@@ -1003,7 +1030,13 @@ impl Groove {
     fn new() -> Groove {
         let mut d = server();
         let c = d.connect();
-        call(&mut d, c, 1, "hello", json!({"protocol": PROTOCOL_VERSION, "client": "test"}));
+        call(
+            &mut d,
+            c,
+            1,
+            "hello",
+            json!({"protocol": PROTOCOL_VERSION, "client": "test"}),
+        );
         let source = include_str!("../../../examples/groove.nml")
             .replace("song.start", "")
             .replace("config { channels: stereo }", "")
@@ -1016,7 +1049,13 @@ impl Groove {
 
     fn run(&mut self, source: &str) -> Value {
         self.id += 1;
-        let r = call(&mut self.d, self.c, self.id, "eval", json!({"source": source, "quantize": "now"}));
+        let r = call(
+            &mut self.d,
+            self.c,
+            self.id,
+            "eval",
+            json!({"source": source, "quantize": "now"}),
+        );
         assert!(r["result"].is_object(), "{r}");
         r
     }
@@ -1090,8 +1129,19 @@ fn a_switch_is_one_change_that_lands_together() {
     g.run("verse.start");
     // it is accepted as a single change, whose stops and start land at the same moment
     g.id += 1;
-    let r = call(&mut g.d, g.c, g.id, "eval", json!({"source": "chorus.start"}));
-    let changes: Vec<&str> = r["result"]["changes"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
+    let r = call(
+        &mut g.d,
+        g.c,
+        g.id,
+        "eval",
+        json!({"source": "chorus.start"}),
+    );
+    let changes: Vec<&str> = r["result"]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
     assert_eq!(changes, ["bass.stop", "lead.stop", "chorus.start"]);
     assert!(r["result"]["id"].is_u64(), "{r}");
 }

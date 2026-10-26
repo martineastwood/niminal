@@ -63,6 +63,13 @@ impl ControlBinding {
     }
 }
 
+/// Commands to run when something arrives from outside, as they are written.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Trigger {
+    pub source: InputSource,
+    pub commands: Vec<String>,
+}
+
 /// A composition: the program its definitions make, and what the client sequences on it.
 #[derive(Clone)]
 pub struct Composition {
@@ -74,6 +81,8 @@ pub struct Composition {
     pub quantize: QuantizeConfig,
     /// The controls that MIDI or OSC drive, by control name.
     pub inputs: Vec<(String, ControlBinding)>,
+    /// Commands that run when a key, controller or OSC message arrives: `on midi.note(36) beat.start`.
+    pub triggers: Vec<Trigger>,
     /// Notes written directly in the source.
     pub notes: Vec<Event>,
     /// Commands that play clips and scenes, in source order.
@@ -169,6 +178,25 @@ pub fn compile_with(
             tuning: Tuning::default(),
         }
     });
+    // `launch: midi.note(36)` on a clip or scene is a trigger that starts it, and is not a lane or a member.
+    let mut launches = Vec::new();
+    for item in &mut items {
+        if let Item::Clip(block) | Item::Scene(block) = item
+            && let Some(at) = block
+                .entries
+                .iter()
+                .position(|(key, _)| key.name == "launch")
+        {
+            let (_, value) = block.entries.remove(at);
+            match launch_source(&value) {
+                Ok(source) => launches.push(Trigger {
+                    source,
+                    commands: vec![format!("{}.start", block.name.name)],
+                }),
+                Err(d) => errors.push(d),
+            }
+        }
+    }
     // Instrument selection is lowered to DSP nodes, leaving just the clip lanes.
     for item in &mut items {
         if let Item::Clip(block) = item
@@ -240,6 +268,14 @@ pub fn compile_with(
         }
     };
 
+    let triggers = match triggers(source, &items, launches) {
+        Ok(triggers) => triggers,
+        Err(d) => {
+            errors.push(d);
+            Vec::new()
+        }
+    };
+
     errors.retain(|d| !d.message.is_empty());
     if !errors.is_empty() {
         return Err(errors);
@@ -250,6 +286,7 @@ pub fn compile_with(
         tempo,
         quantize,
         inputs,
+        triggers,
         notes,
         performance,
         arrangements,
@@ -270,6 +307,113 @@ fn locate(dsp: &DspSource, mut d: Diagnostic) -> Diagnostic {
     }
     d.message = d.message.replace("`__niminal_rhythm_gate`", "`gate`");
     d
+}
+
+/// `midi.note(36)`, `midi.note(c1, 10)`, `midi.cc(64)` or `osc_in("/go")`, written as an expression.
+fn launch_source(e: &Expr) -> Res<InputSource> {
+    let bad = || {
+        Diagnostic::new(
+            "`launch` takes a key, a controller or an OSC address",
+            e.span,
+        )
+        .with_help("for example `launch: midi.note(36)` or `launch: osc_in(\"/verse\")`")
+    };
+    let ExprKind::Call { name, args } = &e.kind else {
+        return Err(bad());
+    };
+    let number = |a: &Arg, max: u8, what: &str| -> Res<u8> {
+        let value = match &a.value.kind {
+            ExprKind::Num { value, unit: None } if value.fract() == 0.0 => *value as i64,
+            ExprKind::Name(n) => match n.parse::<niminal_score::Value>() {
+                Ok(niminal_score::Value::Note(m)) => i64::from(m),
+                _ => return Err(bad()),
+            },
+            _ => return Err(bad()),
+        };
+        u8::try_from(value)
+            .ok()
+            .filter(|v| *v <= max)
+            .ok_or_else(|| Diagnostic::new(format!("{what} is from 0 to {max}"), a.value.span))
+    };
+    match (name.name.as_str(), args.as_slice()) {
+        ("osc_in", [address]) if !address.receiver => match &address.value.kind {
+            ExprKind::Str(a) if a.starts_with('/') => Ok(InputSource::Osc(a.clone())),
+            _ => Err(Diagnostic::new(
+                "an OSC address starts with `/`",
+                address.value.span,
+            )),
+        },
+        (which @ ("note" | "cc"), [receiver, first, rest @ ..])
+            if receiver.receiver
+                && matches!(&receiver.value.kind, ExprKind::Name(m) if m == "midi")
+                && rest.len() <= 1 =>
+        {
+            let (max, what) = if which == "note" {
+                (127, "a note number")
+            } else {
+                (127, "a CC number")
+            };
+            let number_value = number(first, max, what)?;
+            let channel = match rest {
+                [c] => match number(c, 16, "a channel")? {
+                    0 => return Err(Diagnostic::new("MIDI channels count from 1", c.value.span)),
+                    c => Some(c),
+                },
+                _ => None,
+            };
+            Ok(if which == "note" {
+                InputSource::MidiNote {
+                    note: number_value,
+                    channel,
+                }
+            } else {
+                InputSource::MidiCc {
+                    cc: number_value,
+                    channel,
+                }
+            })
+        }
+        _ => Err(bad()),
+    }
+}
+
+/// The `on` lines: what to run when each source fires. Each must be a command.
+fn triggers(source: &str, items: &[Item], launches: Vec<Trigger>) -> Res<Vec<Trigger>> {
+    let mut out: Vec<Trigger> = Vec::new();
+    for launch in launches {
+        match out.iter_mut().find(|t| t.source == launch.source) {
+            Some(existing) => existing.commands.extend(launch.commands),
+            None => out.push(launch),
+        }
+    }
+    for item in items {
+        let Item::On(decl) = item else { continue };
+        let mut commands = Vec::new();
+        for span in &decl.commands {
+            let text = &source[span.start..span.end];
+            let not_a_command = || {
+                Diagnostic::new("an `on` runs commands", *span)
+                    .with_help("for example `on midi.note(36) beat.start`")
+            };
+            let statements = crate::analysis::analyze(text).map_err(|_| not_a_command())?;
+            if statements.is_empty()
+                || statements
+                    .iter()
+                    .any(|s| s.kind() != crate::StatementKind::Command)
+            {
+                return Err(not_a_command());
+            }
+            commands.push(text.to_string());
+        }
+        match out.iter_mut().find(|t| t.source == decl.source) {
+            Some(existing) => existing.commands.extend(commands),
+            None => out.push(Trigger {
+                source: decl.source.clone(),
+                commands,
+            }),
+        }
+    }
+    Ok(out)
 }
 
 /// The controls that MIDI or OSC drive: `ctl cutoff = midi.cc(21).range(200hz..4khz)`.

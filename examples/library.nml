@@ -1,7 +1,7 @@
 // The filters in the standard library, and a waveshaper from a table. The ladder is swept by an
 // envelope and made to sing; a band-pass picks out a vowel-like formant; a Chebyshev table adds
 // harmonics to a sine.
-// Render with:  nimlive render examples/library.nml --out library.wav
+// Render with:  niminal-live render examples/library.nml --out library.wav
 use std/filters
 
 tempo 108bpm

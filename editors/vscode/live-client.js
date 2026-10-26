@@ -1,4 +1,4 @@
-// The client of `nimlive live`, the sequencer this extension starts: it speaks nimlive's own API
+// The client of `niminal-live live`, the sequencer this extension starts: it speaks niminal-live's own API
 // (clips, scenes, quantized edits) over the generic connection that niminal-client provides.
 const { Client } = require("niminal-client");
 

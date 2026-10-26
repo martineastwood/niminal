@@ -8,7 +8,7 @@ use niminal_engine::{Graph, KernelStats};
 /// An oscillator at or below this many hz that only sets a parameter is an LFO.
 const LFO_HZ: f32 = 30.0;
 
-/// `explain` works at the rate `niminal server` and `nimlive render` default to.
+/// `explain` works at the rate `niminal server` and `niminal-live render` default to.
 const SAMPLE_RATE: f32 = 48_000.0;
 
 use crate::program::Program;

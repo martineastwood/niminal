@@ -107,6 +107,11 @@ impl FromStr for Value {
             return Ok(Value::Note(midi));
         }
 
+        // a percentage is a plain share: `25%` is 0.25
+        if let Some(n) = s.strip_suffix('%').and_then(parse_number) {
+            return Ok(Value::Num(n / 100.0));
+        }
+
         let split = s.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(s.len());
         let (number, unit) = s.split_at(split);
         let n = parse_number(number)
@@ -331,7 +336,10 @@ pub struct Tempo {
 impl Tempo {
     /// The meter as written, such as `(6, 8)`.
     pub fn meter(&self) -> (u32, u32) {
-        ((self.beats_per_bar * f64::from(self.beat_unit) / 4.0).round() as u32, self.beat_unit)
+        (
+            (self.beats_per_bar * f64::from(self.beat_unit) / 4.0).round() as u32,
+            self.beat_unit,
+        )
     }
 
     /// `bpm` in 4/4.

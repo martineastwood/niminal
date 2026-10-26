@@ -12,6 +12,7 @@ mod offline;
 mod protocol;
 mod quantize;
 mod service;
+mod ws_link;
 
 pub use link::{EngineLink, InProcess};
 pub use live::{
@@ -23,3 +24,4 @@ pub use log::{Expression, LiveInput, LiveLogEntry};
 pub use offline::Offline;
 pub use protocol::{CompileTicket, CompiledTicket, LiveServer, MAIN_CHAIR, Request, TOPICS};
 pub use quantize::QuantizeDefaults;
+pub use ws_link::WsLink;

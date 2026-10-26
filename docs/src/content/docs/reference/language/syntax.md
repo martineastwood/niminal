@@ -3,7 +3,7 @@ title: Syntax
 description: Comments, blocks, bindings, calls and control flow in the orchestra language.
 ---
 
-**Read by both programs.** The syntax is the same in the server's half and in nimlive's.
+**Read by both programs.** The syntax is the same in the server's half and in niminal-live's.
 
 ## Comments and blocks
 
@@ -59,8 +59,8 @@ From the tightest to the loosest:
 
 - **`out`:** the result of an instrument or function (see [Instruments](/reference/language/instruments/)).
 - **`in`:** the audio coming into an `fx`. It pairs with `out`: `out = in.lpf(cutoff: 1khz)`.
-- **`it`:** the current value in a one-argument context: a function given to `map` or a pattern transform such as `every(2, it.reverse)`.
-- **`note`:** the running voice in an instrument: `note.time`, `note.released`.
+- **`it`:** the current value in a one-argument context: a function given to `map`.
+- **`note`:** the running voice in an instrument (`note.time`, `note.released`), or the note being tested in a pattern's `where(note < c3, transpose(+12st))`.
 
 ## Control flow
 

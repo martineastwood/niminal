@@ -3,7 +3,7 @@ title: Live coding
 description: Change the music while it plays, from the editor or a terminal.
 ---
 
-A `niminal` server makes the sound. A **live sequencer** holds the clips, scenes, patterns and tempo, and drives that server. The [VS Code / Cursor extension](/reference/editor/) is a live sequencer with an editor attached, and is the usual way to live-code. `nimlive live` is the same sequencer as a terminal client, for when you'd rather not use an editor.
+A `niminal` server makes the sound. A **live sequencer** holds the clips, scenes, patterns and tempo, and drives that server. The [VS Code / Cursor extension](/reference/editor/) is a live sequencer with an editor attached, and is the usual way to live-code. `niminal-live live` is the same sequencer as a terminal client, for when you'd rather not use an editor.
 
 Either way, code compiles immediately and the sound changes on a musical boundary — see [When changes land](#when-changes-land).
 
@@ -13,7 +13,7 @@ Either way, code compiles immediately and the sound changes on a musical boundar
 
 ```sh
 cargo install --path crates/niminal-cli   # niminal: the audio server
-cargo install --path sequencer/nimlive    # nimlive: live sequencer and language server
+cargo install --path sequencer/live-cli    # niminal-live: live sequencer and language server
 cd editors/vscode && npm install && node install.js      # add --cursor for Cursor
 ```
 
@@ -61,14 +61,14 @@ The same sequencer, running as its own process, with a REPL and a one-shot `send
 ```sh
 niminal server
 # another terminal:
-nimlive live examples/groove.nml
-nimlive repl
-nimlive send 'chorus.start' --quantize "next 4bars"
+niminal-live live examples/groove.nml
+niminal-live repl
+niminal-live send 'chorus.start' --quantize "next 4bars"
 ```
 
 With a file argument the live client watches that file and every module it `use`s, and evaluates the file again when you save. Its live-control API defaults to `ws://127.0.0.1:7400/` and it talks to the server on `--engine-port` (7401). Add `--midi` and `--osc-port` as described below. `:quit` leaves the REPL.
 
-Useful live commands once a scene is running (see [Performance](/reference/language/performance/)). A scene starts and stops its clips and leaves the others alone, so to swap one for another stop one and start the other:
+Useful live commands once a scene is running (see [Performance](/reference/language/performance/)). Starting another scene stops the running clips of other scenes that it does not use. Shared clips keep playing, and clips that belong to no scene are left alone:
 
 ```nml
 verse.start
@@ -76,7 +76,6 @@ bass.reverse
 lead.transpose(+5st)
 bass.set(bright: 0.9)
 bass.undo
-verse.stop
 chorus.start @ next 4bars
 hush
 ```
@@ -92,7 +91,7 @@ Defaults when you omit a quantum: plays on the next cycle, instrument redefiniti
 For a terminal session, start the live client with the inputs you want:
 
 ```sh
-nimlive live examples/midi_osc.nml --midi --osc-port 9000
+niminal-live live examples/midi_osc.nml --midi --osc-port 9000
 ```
 
 - `--midi [NAME]` — every MIDI input whose name contains `NAME`, or all inputs if you omit the name.
@@ -144,7 +143,7 @@ An fx can read the sound card's input with `input(1)`, or `input(1..2)` for two 
 fx voice { out = input(1).lpf(cutoff: 3khz) }
 ```
 
-Start the server with `--audio-input` to listen to the default input device (at the output's sample rate). `nimlive render file.nml --input take.wav` plays a WAV file into those fx declarations instead, for as long as the file lasts unless you say otherwise with `--bars` or `--seconds`.
+Start the server with `--audio-input` to listen to the default input device (at the output's sample rate). `niminal-live render file.nml --input take.wav` plays a WAV file into those fx declarations instead, for as long as the file lasts unless you say otherwise with `--bars` or `--seconds`.
 
 ## Session replay
 

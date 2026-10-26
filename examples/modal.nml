@@ -1,6 +1,6 @@
 // Struck things (a short noise burst has little energy for a narrow resonator, hence the big gains). The drum, bar and bell come from the standard library; the glass is a bank of
 // resonators written here in a dozen lines, using one vector line for all sixteen modes.
-// Render with:  nimlive render examples/modal.nml --out modal.wav
+// Render with:  niminal-live render examples/modal.nml --out modal.wav
 use std/physical
 
 config { channels: stereo }

@@ -1,5 +1,5 @@
 // Slow modulation in a `control { ... }` scope runs once per block instead of every sample.
-// `nimlive explain examples/control_rate.nml` shows what moved.
+// `niminal-live explain examples/control_rate.nml` shows what moved.
 
 instr acid(freq: hz = 110hz) {
   // a 0.3hz sweep: one value per block, ramped so the cutoff doesn't step

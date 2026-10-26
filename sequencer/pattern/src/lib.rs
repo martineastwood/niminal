@@ -8,6 +8,7 @@ mod rational;
 
 pub use mini::{Hit, MiniError, Strength, grid, grid_at, parse, parse_with};
 pub use pattern::{
-    Hap, MAX_REPEATS, Param, Pattern, Span, euclid_steps, inner_join, unit_random, with_budget,
+    Hap, MAX_REPEATS, Param, Pattern, Span, Structure, euclid_steps, inner_join, unit_random,
+    with_budget,
 };
 pub use rational::Rational;

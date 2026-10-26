@@ -1,6 +1,6 @@
 # niminal tracker
 
-A Tauri desktop tracker with CodeMirror 6 instrument/effect editors. It connects directly to niminal, independently of nimlive.
+A Tauri desktop tracker with CodeMirror 6 instrument/effect editors. It connects directly to niminal, independently of niminal-live.
 
 **The manual lives in the docs site: <https://niminal.dev/reference/tracker/>.** Keep it there — this file is build and architecture notes only.
 
@@ -15,7 +15,7 @@ npm run tauri -- dev
 
 It starts `niminal server` itself if nothing is listening on port 7401, and stops it again when it closes; an engine you started yourself is left running. `npm run dev` is a browser-only layout preview, with no LSP or audio connection.
 
-No separately installed `nimlive` is needed: the Rust backend embeds the same niminal LSP implementation used by `nimlive lsp`, and CodeMirror talks JSON-RPC to it through an ordered Tauri transport. [ARCHITECTURE.md](ARCHITECTURE.md) describes how the tracker maps its tracks, strips and automation onto the engine.
+No separately installed `niminal-live` is needed: the Rust backend embeds the same niminal LSP implementation used by `niminal-live lsp`, and CodeMirror talks JSON-RPC to it through an ordered Tauri transport. [ARCHITECTURE.md](ARCHITECTURE.md) describes how the tracker maps its tracks, strips and automation onto the engine.
 
 On macOS the installed release opens with:
 

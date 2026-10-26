@@ -212,8 +212,8 @@ fn thin_drops_the_same_notes_wherever_it_is_written() {
         s.eval(code, Some("now")).unwrap();
         run(&mut s, 4 * BAR)
     };
-    let a = thinned("lead.__update([c4 e4 g4 b4 c5 e5 g5 b5].thin(50%))");
-    let b = thinned("riff = [c3]\nlead.__update([c4 e4 g4 b4 c5 e5 g5 b5].thin(50%))");
+    let a = thinned("lead.__update([c4 e4 g4 b4 c5 e5 g5 b5].drop(50%))");
+    let b = thinned("riff = [c3]\nlead.__update([c4 e4 g4 b4 c5 e5 g5 b5].drop(50%))");
     assert_eq!(a, b);
 }
 
@@ -284,7 +284,11 @@ fn starting_a_scene_stops_the_clips_of_other_scenes_that_it_does_not_use() {
         .iter()
         .map(|t| (t.name.as_str(), t.running))
         .collect();
-    assert_eq!(names, [("lead", true), ("bass", false)], "bridge has no bass");
+    assert_eq!(
+        names,
+        [("lead", true), ("bass", false)],
+        "bridge has no bass"
+    );
     let scenes: Vec<_> = s
         .scenes()
         .iter()
@@ -413,18 +417,18 @@ fn undo_can_name_the_change_to_take_off() {
     let mut s = ready();
     s.eval(&format!("{RIFF}verse.start"), Some("now")).unwrap();
     s.eval(
-        "lead.reverse\nlead.transpose(+12st)\nlead.thin(10%)",
+        "lead.reverse\nlead.transpose(+12st)\nlead.drop(10%)",
         Some("now"),
     )
     .unwrap();
     assert_eq!(
         s.clips()[0].edits,
-        ["reverse", "transpose(+12st)", "thin(10%)"]
+        ["reverse", "transpose(+12st)", "drop(10%)"]
     );
     s.eval("lead.undo(reverse)", Some("now")).unwrap();
     assert_eq!(
         s.clips()[0].edits,
-        ["transpose(+12st)", "thin(10%)"],
+        ["transpose(+12st)", "drop(10%)"],
         "the middle one went, order kept"
     );
     let problems = s.eval("lead.undo(reverse)", Some("now")).unwrap_err();
@@ -569,7 +573,7 @@ fn mute_and_solo_survive_stop_and_hush_and_go_with_reset() {
 fn a_clip_that_plays_once_stops_running_when_it_is_over() {
     let mut s = ready();
     s.eval(
-        "clip once { instrument: pluck\n notes: [c4]\n length: 1bar\n loop: false }\nonce.start",
+        "clip once { instrument: pluck\n notes: [c4]\n length: 1bar\n times: 1 }\nonce.start",
         Some("now"),
     )
     .unwrap();
@@ -586,6 +590,88 @@ fn a_clip_that_plays_once_stops_running_when_it_is_over() {
     run(&mut s, 2000);
     assert!(status(&s).running, "it can be started again");
     assert!(status(&s).edits.is_empty(), "from the clip as written");
+}
+
+#[test]
+fn a_clip_can_play_a_number_of_times_and_then_start_another() {
+    let mut s = session();
+    s.eval(
+        "\ntempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip intro { instrument: pluck\n notes: [c4]\n length: 1bar\n times: 2\n then: verse.start }\nclip verse { instrument: pluck\n notes: [e4] }\nintro.start",
+        Some("now"),
+    )
+    .unwrap();
+    let running = |s: &Offline| {
+        s.clips()
+            .into_iter()
+            .filter(|c| c.running)
+            .map(|c| c.name)
+            .collect::<Vec<_>>()
+    };
+    run(&mut s, BAR / 2);
+    assert_eq!(running(&s), ["intro"], "the intro plays first");
+    run(&mut s, BAR);
+    assert_eq!(running(&s), ["intro"], "and again, its second time");
+    run(&mut s, BAR);
+    s.advance();
+    assert_eq!(running(&s), ["verse"], "the verse follows the last pass");
+}
+
+#[test]
+fn times_can_be_added_to_a_running_clip() {
+    let mut s = ready();
+    s.eval("lead.__update([c4])", Some("now")).unwrap();
+    run(&mut s, BAR / 2);
+    let running = |s: &Offline| {
+        s.clips()
+            .into_iter()
+            .find(|c| c.name == "lead")
+            .unwrap()
+            .running
+    };
+    assert!(running(&s));
+    s.eval("lead.times(2)", Some("now")).unwrap();
+    run(&mut s, 3 * BAR);
+    s.advance();
+    assert!(!running(&s), "it played its two times and finished");
+}
+
+#[test]
+fn a_clip_stopped_before_its_last_pass_starts_nothing() {
+    let mut s = session();
+    s.eval(
+        "\ntempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip intro { instrument: pluck\n notes: [c4]\n length: 1bar\n times: 2\n then: verse.start }\nclip verse { instrument: pluck\n notes: [e4] }\nintro.start",
+        Some("now"),
+    )
+    .unwrap();
+    run(&mut s, BAR);
+    s.eval("intro.stop", Some("now")).unwrap();
+    run(&mut s, 3 * BAR);
+    s.advance();
+    assert!(s.clips().iter().all(|c| !c.running), "nothing is playing");
+}
+
+#[test]
+fn clips_can_hand_over_in_a_loop() {
+    let mut s = session();
+    s.eval(
+        "\ntempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip a { instrument: pluck\n notes: [c4]\n length: 1bar\n times: 1\n then: b.start }\nclip b { instrument: pluck\n notes: [e4]\n length: 1bar\n times: 1\n then: a.start }\na.start",
+        Some("now"),
+    )
+    .unwrap();
+    let running = |s: &Offline| {
+        s.clips()
+            .into_iter()
+            .filter(|c| c.running)
+            .map(|c| c.name)
+            .collect::<Vec<_>>()
+    };
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        run(&mut s, BAR / 2);
+        seen.push(running(&s));
+        run(&mut s, BAR / 2);
+    }
+    assert_eq!(seen, [["a"], ["b"], ["a"], ["b"]]);
 }
 
 const SONG_PARTS: &str = "\ntempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip a { instrument: pluck\n notes: [c4] }\nclip b { instrument: pluck\n notes: [e4] }\nscene one { a }\nscene two { b }\narrangement song {\n  at +0bars one.start\n  at +1bar one.stop\n  at +1bar two.start\n  at +3bars two.stop\n}\n";

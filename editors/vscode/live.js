@@ -7,7 +7,7 @@ function startLive({ path, port, token, midi, oscPort }, log, spawnProcess = spa
   if (midi !== null && midi !== undefined) args.push("--midi", midi);
   if (oscPort !== null && oscPort !== undefined) args.push("--osc-port", String(oscPort));
   // An editor's sequencer is not the server, so it says so in the process list.
-  const child = spawnProcess(path, args, { stdio: ["pipe", "pipe", "pipe"], argv0: "nimlive" });
+  const child = spawnProcess(path, args, { stdio: ["pipe", "pipe", "pipe"], argv0: "niminal-live" });
   const ready = new Promise((resolve, reject) => {
     let output = "";
     let reason = "";
@@ -30,7 +30,7 @@ function startLive({ path, port, token, midi, oscPort }, log, spawnProcess = spa
     });
     child.stdout.on("data", (data) => {
       output += data.toString();
-      const match = output.match(/nimlive listening on ws:\/\/127\.0\.0\.1:(\d+)\r?\n/);
+      const match = output.match(/niminal-live listening on ws:\/\/127\.0\.0\.1:(\d+)\r?\n/);
       if (match) {
         clearTimeout(timer);
         resolve(Number(match[1]));

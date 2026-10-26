@@ -9,7 +9,7 @@ const clip: Clip = {
   running: true,
   muted: false,
   soloed: false,
-  edits: ['reverse', 'thin(25%)', 'reverse'],
+  edits: ['reverse', 'drop(25%)', 'reverse'],
   length: 1,
   looped: true,
   endless: true,
@@ -31,7 +31,7 @@ describe('a clip in the sidebar', () => {
     const el = document.createElement('div');
     new LaneView(el, () => {}).update(snapshot());
     const chips = [...el.querySelectorAll('.chip')].map(c => c.textContent);
-    expect(chips).toEqual(['reverse', 'thin(25%)', 'reverse']);
+    expect(chips).toEqual(['reverse', 'drop(25%)', 'reverse']);
     expect(el.querySelectorAll('.chip.newest').length).toBe(1);
     expect(el.querySelector('.clip-lanes')).toBeNull();
     expect(el.querySelector('.undo-stack')).toBeNull();
@@ -47,7 +47,7 @@ describe('a clip in the sidebar', () => {
     // newest first, then what it was written as
     expect(lines[0]).toContain('reverse');
     expect(lines[0]).toContain('next undo');
-    expect(lines[1]).toContain('thin(25%)');
+    expect(lines[1]).toContain('drop(25%)');
     expect(lines[3]).toBe('as written');
     expect(el.querySelector('.clip-lanes')).not.toBeNull();
     el.querySelector<HTMLButtonElement>('.undo-actions button')!.click();

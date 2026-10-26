@@ -3,7 +3,7 @@ title: Performance
 description: Clips, scenes, live commands, quantization, and control.
 ---
 
-**Read by nimlive.** Clips, scenes and arrangements are the sequencer's; the server only receives the notes and changes they produce.
+**Read by niminal-live.** Clips, scenes and arrangements are the sequencer's; the server only receives the notes and changes they produce.
 
 The performance layer is built around **clips**. A clip is bound to an instrument and holds **lanes** on a timeline: notes that trigger it, and parameters it automates. You start, stop, mute, solo and transform clips, and a **scene** is a list of clips to do that to several at once. An **arrangement** is a timeline of those commands.
 
@@ -62,8 +62,16 @@ Define shared grids and patterns outside the clip, then reference them as `notes
 - Lane targets: `notes`, instrument parameters, qualified fx parameters (set as each note starts, gliding by the control's smoothing), universal controls. Unknown lanes are errors. Bare lanes target the clip’s notes. Qualified lanes can target an fx shared by several clips.
 - **Step lanes** read at note start and cycle (polymeter); **`.per_note`** maps nth note → nth value.
 - Envelope/signal lanes run on the clip timeline, restart on launch, loop with the clip. A signal lane is a signal naming an fx parameter, as in `bass_filter.tone: sine.range(300hz, 3khz)`: the parameter follows it continuously (50 readings a second), one cycle per clip length, with or without notes.
-- **Length:** `length:` is a number of bars or beats (`2bars`, `6beats`, `3/2bars`; seconds are not accepted). Every lane spans the whole length, and the clip loops at that length, or plays once with `loop: false` and is then finished (not running, and free to be started again). Without a `length:` the clip runs freely, one bar per cycle, and `<a b>` alternates every bar. `riff.over(4bars)` stretches a clip without changing its definition, as a live change you can `undo`.
+- **Length:** `length:` is a number of bars or beats (`2bars`, `6beats`, `3/2bars`; seconds are not accepted). Every lane spans the whole length, and the clip loops at that length, or plays a number of times with `times: 4` and is then finished (not running, and free to be started again). Without a `length:` the clip runs freely, one bar per cycle, and `<a b>` alternates every bar. `riff.over(4bars)` stretches a clip without changing its definition, as a live change you can `undo`.
 - **`riff.set(bright: [0.9])`** — lanes are fields.
+- **Times and what comes next:** `times: 2` plays the clip's length twice and is then finished; `riff.times(2)` does the same to a running clip as a live change. `then: verse.start` runs a command when the last pass ends, on a clip or a scene: `then: hush`, `then: chorus.start`, `then: bass.stop`. A clip can have several `then:` lines. They are read when the clip is about to finish, so they name clips defined anywhere in the file, and clips can hand over to each other in a loop:
+
+```nml
+clip intro { instrument: pluck, notes: [c4 e4], times: 4, then: verse.start }
+clip verse { instrument: pluck, notes: [g4 b4], times: 8, then: intro.start }
+```
+
+  A clip that is stopped, or replaced by another, before its last pass starts nothing.
 - **Longer than a bar:** with `length: 2bars` every lane spans the two bars, so `[c2 ~ eb2 g1]` is four steps over two bars and lanes with the same number of steps line up. A lane `<a b>` is one cycle of the clip, so it plays `a` every time the clip loops; to alternate bar by bar write the bars out (`[<a b>*2]`).
 
 ## Scenes
@@ -132,7 +140,7 @@ arrangement song {
 }
 ```
 
-A section's bars are its own: `over(8bars)` in `7/8` is eight bars of three and a half beats, at that section's tempo, and its clips cycle with that bar. The change is a step at the start of the section. For a tempo that moves gradually, write `tempo: env[84bpm 64bars 84bpm 8bars.log 96bpm]` instead of the list: an envelope over the whole piece, with levels in bpm and times in bars of music. It is played as steps of an eighth of a bar, and a clip playing through a change speeds up with it. Arrangements can also move an fx parameter over the whole piece (`bass_filter.tone: env[800hz 88bars 3khz]`). Per-section tempo and meter, and these envelopes, apply when an arrangement is rendered (`nimlive render file.nml song`); a live session takes the tempo from `tempo` commands. Notes whose lengths are written in beats (a `dur` lane, an instrument time in beats) still count beats at the file's tempo. `--from` and `--to` positions also count bars at the file's tempo.
+A section's bars are its own: `over(8bars)` in `7/8` is eight bars of three and a half beats, at that section's tempo, and its clips cycle with that bar. The change is a step at the start of the section. For a tempo that moves gradually, write `tempo: env[84bpm 64bars 84bpm 8bars.log 96bpm]` instead of the list: an envelope over the whole piece, with levels in bpm and times in bars of music. It is played as steps of an eighth of a bar, and a clip playing through a change speeds up with it. Arrangements can also move an fx parameter over the whole piece (`bass_filter.tone: env[800hz 88bars 3khz]`). Per-section tempo and meter, and these envelopes, apply when an arrangement is rendered (`niminal-live render file.nml song`); a live session takes the tempo from `tempo` commands. Notes whose lengths are written in beats (a `dur` lane, an instrument time in beats) still count beats at the file's tempo. `--from` and `--to` positions also count bars at the file's tempo.
 
 See [Score model](/reference/score-model/) for arrangement-level lanes.
 
@@ -143,15 +151,15 @@ While a clip is playing you can change what it plays by writing the change after
 ```nml
 bass.start
 bass.reverse            // the bass clip now plays backwards
-lead.transpose(+5st).thin(25%)
+lead.transpose(+5st).drop(25%)
 verse.stop              // every clip in the scene stops together
 ```
 
-Each change builds on what the clip is playing, in the order you made them, and the clips panel shows the stack (`▶ · reverse → thin(25%)`):
+Each change builds on what the clip is playing, in the order you made them, and the clips panel shows the stack (`▶ · reverse → drop(25%)`):
 
 ```nml
 bass.reverse
-bass.thin(25%)          // reversed, then thinned
+bass.drop(25%)          // reversed, then thinned
 bass.set(bright: 0.9)   // a lane for every note: a number or a pattern
 bass.set(gain: -6db)    // gain lane (replaces the clip's own gain lane)
 bass.undo               // takes off the last change you made (here, the gain)
@@ -159,10 +167,10 @@ bass.clear              // takes off all of them
 ```
 
 - `set` gives the clip a lane in place of its own, so typing `bass.set(` offers the lanes the clip's instrument has. Setting the same lane again just replaces the earlier value, and `undo` brings the earlier one back.
-- One line is one change, so `lead.transpose(+5st).thin(10%)` is undone in one `undo`. A clip carries at most 16.
+- One line is one change, so `lead.transpose(+5st).drop(10%)` is undone in one `undo`. A clip carries at most 16.
 - These changes are the one way the clip's source and what plays can differ, and they are always visible in the panel and one `clear` away from gone. To change what a clip plays for good, edit the clip and evaluate it: the clip carries on in place, with your changes on top. Evaluating a pattern the clip uses does the same.
 - Stopping a clip and starting it again begins from the clip as written, with no changes.
-- `thin` drops the same notes for the same amount wherever it is written, so undoing something else doesn't change which notes it drops.
+- `drop` drops the same notes for the same amount wherever it is written, so undoing something else doesn't change which notes it drops.
 - A scene is a list of clips and takes no changes: change one of its clips.
 - Only a live session can do this. In a file these lines do nothing, so you can keep them in a scratch file next to your song: put the change into the clip to make it part of the piece.
 
@@ -248,7 +256,7 @@ tempo 100bpm
 tempo 140bpm @ next 4bars over 8bars
 ```
 
-`nimlive render` plays a file like that through a session, as the server would, so you say how long to render (`--bars 16` or `--seconds 30`). `--stems`, `--arrangement`, `--score`, `--from` and `--to` aren't available for it.
+`niminal-live render` plays a file like that through a session, as the server would, so you say how long to render (`--bars 16` or `--seconds 30`). `--stems`, `--arrangement`, `--score`, `--from` and `--to` aren't available for it.
 
 ## Score functions
 
@@ -323,6 +331,29 @@ ctl filth = midi.cc(21).range(200hz..4khz)     // ...and the line becomes this
 ```
 
 With several `midi.learn` controls waiting, each takes the next control change in the order they appear. Enable MIDI on the live client (`--midi` in a terminal, `niminal.midi` in the editor) to listen to a controller.
+
+**Pads and triggers:** `on` runs commands when a key, a controller or an OSC message arrives, so a pad can launch a scene or a footswitch can stop everything:
+
+```nml
+on midi.note(36) beat.start              // pad C1, any channel
+on midi.note(37, 10) {                   // pad on channel 10: two commands
+  fill.start
+  beat.stop
+}
+on midi.cc(64) bass.reverse              // sustain pedal goes down
+on osc_in("/panic") hush                 // a message with a value above 0.5
+```
+
+**Launching a scene or clip from a pad:** the usual case has a shorter form. Say which key launches it where it is defined, and `launch:` is the same as an `on` line that starts it:
+
+```nml
+scene verse  { drums, bass, lead,  launch: midi.note(36) }
+scene chorus { drums, bass, pad,   launch: midi.note(37) }
+```
+
+Scenes play one at a time, so the pad for the chorus also switches the verse off, and the clips they share carry on. Keys can be given by name (`midi.note(c2)`, which is note 36 in this language's numbering) or number, and a channel as the second argument. `launch:` also takes `midi.cc(64)` and `osc_in("/verse")`.
+
+The commands are the ones you would type, and they land on their usual boundary: `start` waits for the next cycle, so a pad hit a little early still plays in time. A key sets it off as it goes down; a controller or OSC value as it goes down too (64 or more, or above one half) and not again until it has come back up, so holding a pedal runs the command once. `on midi.note(36)` takes keys on every channel, `midi.note(36, 10)` only channel 10. Like controls, triggers listen when MIDI is enabled on the live client (`--midi`, or `niminal.midi` in the editor) or an OSC port is open (`--osc-port`). A command that can't run (a clip that isn't defined yet) is reported as a notice.
 
 **Keyboards:** a clip with `keys:` instead of `notes:` is played from a MIDI keyboard. Start it like any clip, then play:
 

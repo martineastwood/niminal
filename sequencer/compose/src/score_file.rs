@@ -337,7 +337,7 @@ impl ClipDef {
             lines.push(format!("  length: {length}"));
         }
         if !self.r#loop {
-            lines.push("  loop: false".into());
+            lines.push("  times: 1".into());
         }
         for (lane, text) in &self.lanes {
             let body = if text.trim_start().starts_with('[')

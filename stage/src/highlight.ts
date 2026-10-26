@@ -185,6 +185,12 @@ export class Highlighter {
     requestAnimationFrame(frame);
   }
 
+  /** The editor now shows another tab: forget what was drawn so the next frame draws this one's. */
+  reset() {
+    this.shown = '';
+    this.headed = '';
+  }
+
   update(snapshot: Snapshot) {
     this.snapshot = snapshot;
     this.updatedAt = performance.now();

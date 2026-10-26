@@ -2,7 +2,7 @@
 // settings chosen, and a note tunes it: c3 plays a preset as designed, other notes transpose it.
 // Each preset has the same controls (`decay`, `drive`, `mix`, `noise_freq`, `eq_gain`...), so any
 // lane can reshape any sound, and the open and closed hats choke each other. `my_snare` shows `drum` called directly, with the settings you pick.
-// Render with:  nimlive render examples/drum_voice.nml --out drum_voice.wav --bars 4
+// Render with:  niminal-live render examples/drum_voice.nml --out drum_voice.wav --bars 4
 use std/drums
 
 config { channels: stereo }

@@ -1,6 +1,6 @@
 // Delay lines. A string is plucked into a multitap delay from the standard library, and a delay line
 // written here reads many taps at once and filters its output with a 16-tap FIR in one line each.
-// Render with:  nimlive render examples/multitap.nml --out multitap.wav
+// Render with:  niminal-live render examples/multitap.nml --out multitap.wav
 use std/physical
 use std/delays
 

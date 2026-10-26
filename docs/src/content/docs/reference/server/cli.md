@@ -3,7 +3,7 @@ title: Command line
 description: Every niminal subcommand and flag, and what it logs.
 ---
 
-**Compiled by niminal.** This page is the audio server: the program that makes the sound, and the only one you always need. It knows nothing of tempo, clips or patterns — those belong to a [sequencer](/reference/nimlive/cli/) or to another [client](/reference/engine-api/).
+**Compiled by niminal.** This page is the audio server: the program that makes the sound, and the only one you always need. It knows nothing of tempo, clips or patterns — those belong to a [sequencer](/reference/niminal-live/cli/) or to another [client](/reference/engine-api/).
 
 Install it from a clone of the [repo](https://github.com/martineastwood/niminal) (needs a [Rust toolchain](https://rustup.rs/)):
 
@@ -24,7 +24,7 @@ cargo install --path crates/niminal-cli
 
 ## `niminal server`
 
-Default listen `127.0.0.1:7401`, stereo output. `--channels` supports 1, 2, 4, 6 (5.1), 8 (7.1). `--sample-rate HZ` defaults to the output device's rate. `--block-size N` sets the samples the server works through at a time (a power of two from 16 to 1024, default 64): control changes and bus sends land on those boundaries, so smaller is tighter and larger is cheaper. It is fixed at start-up, and `late`, bus mappings and the partition size of `convolve` all scale with it; session logs don't record it, so replay with the same value for identical audio. `--control-step N` (default 64, from 1 to 1024) is the number of samples between the runs of a [`control` scope](/reference/language/units-and-rates/#control-scopes), whatever the block size, like a control period; smaller tracks fast modulation more closely and costs more. It is also fixed at start-up and not recorded in session logs: pass the same value to `niminal replay --control-step` and `nimlive render --control-step`. Session logs default to `~/.niminal/sessions/` (newest 20 kept) unless `--no-log` or `--log PATH`. Crashes append to `~/.niminal/crash.log`.
+Default listen `127.0.0.1:7401`, stereo output. `--channels` supports 1, 2, 4, 6 (5.1), 8 (7.1). `--sample-rate HZ` defaults to the output device's rate. `--block-size N` sets the samples the server works through at a time (a power of two from 16 to 1024, default 64): control changes and bus sends land on those boundaries, so smaller is tighter and larger is cheaper. It is fixed at start-up, and `late`, bus mappings and the partition size of `convolve` all scale with it; session logs don't record it, so replay with the same value for identical audio. `--control-step N` (default 64, from 1 to 1024) is the number of samples between the runs of a [`control` scope](/reference/language/units-and-rates/#control-scopes), whatever the block size, like a control period; smaller tracks fast modulation more closely and costs more. It is also fixed at start-up and not recorded in session logs: pass the same value to `niminal replay --control-step` and `niminal-live render --control-step`. Session logs default to `~/.niminal/sessions/` (newest 20 kept) unless `--no-log` or `--log PATH`. Crashes append to `~/.niminal/crash.log`.
 
 | Flag | Default | Meaning |
 |---|---|---|
@@ -50,4 +50,4 @@ Default listen `127.0.0.1:7401`, stereo output. `--channels` supports 1, 2, 4, 6
 
 ## What plays it
 
-The server only plays what it is sent. For the commands that keep time — `nimlive render`, `live`, `repl`, `send` — see [nimlive's command line](/reference/nimlive/cli/). To send notes yourself, see the [engine API](/reference/engine-api/).
+The server only plays what it is sent. For the commands that keep time — `niminal-live render`, `live`, `repl`, `send` — see [niminal-live's command line](/reference/niminal-live/cli/). To send notes yourself, see the [engine API](/reference/engine-api/).

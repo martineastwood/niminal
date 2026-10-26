@@ -1,6 +1,6 @@
 // Spectral delay: each frequency bin has its own delay line. At spread: 0 they echo together;
 // raising spread makes the low frequencies arrive before the highs, smearing each pluck in time.
-// Render with: nimlive render examples/spectral_delay.nml --out spectral_delay.wav
+// Render with: niminal-live render examples/spectral_delay.nml --out spectral_delay.wav
 config { channels: stereo }
 tempo 100bpm
 

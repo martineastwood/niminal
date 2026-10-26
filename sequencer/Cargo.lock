@@ -748,6 +748,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "niminal-live-cli"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "hound",
+ "midir",
+ "niminal-cli",
+ "niminal-compose",
+ "niminal-engine",
+ "niminal-lang",
+ "niminal-live",
+ "niminal-lsp",
+ "niminal-score",
+ "niminal-server",
+ "niminal-ws",
+ "rtrb",
+ "serde_json",
+]
+
+[[package]]
 name = "niminal-lsp"
 version = "0.0.1"
 dependencies = [
@@ -788,26 +808,6 @@ dependencies = [
  "niminal-server",
  "serde_json",
  "tungstenite",
-]
-
-[[package]]
-name = "nimlive"
-version = "0.0.1"
-dependencies = [
- "clap",
- "hound",
- "midir",
- "niminal-cli",
- "niminal-compose",
- "niminal-engine",
- "niminal-lang",
- "niminal-live",
- "niminal-lsp",
- "niminal-score",
- "niminal-server",
- "niminal-ws",
- "rtrb",
- "serde_json",
 ]
 
 [[package]]

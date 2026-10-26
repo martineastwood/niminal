@@ -3,13 +3,13 @@ title: Sequencer protocol
 description: JSON-RPC 2.0 over WebSocket for live evaluation, clips and scenes, and the state of a live session.
 ---
 
-**Read by nimlive.** This is the sequencer's API, not the server's: what a program uses to start clips, set tempo and make quantized changes.
+**Read by niminal-live.** This is the sequencer's API, not the server's: what a program uses to start clips, set tempo and make quantized changes.
 
 `niminal server` is the generic audio server on port 7401: its API is the [Engine API](/reference/engine-api/). Clips, scenes, lanes, transforms, looping and quantized edits belong to the **live sequencer client**, which owns tempo, meter and musical position and turns them into events stamped in absolute samples.
 
-VS Code starts and owns a private `nimlive live --port 0 --parent-stdio` process, connected to the configured server. Closing the editor stops its sequencer. For terminal use, start `nimlive live [FILE]`: its live-control API defaults to `ws://127.0.0.1:7400/`, with `--engine-port 7401` selecting the server. Each live process owns its own performance state. Other clients can use the generic engine directly without using these abstractions.
+VS Code starts and owns a private `niminal-live live --port 0 --parent-stdio` process, connected to the configured server. Closing the editor stops its sequencer. For terminal use, start `niminal-live live [FILE]`: its live-control API defaults to `ws://127.0.0.1:7400/`, with `--engine-port 7401` selecting the server. Each live process owns its own performance state. Other clients can use the generic engine directly without using these abstractions.
 
-This page describes the live client's **JSON-RPC 2.0** protocol over **WebSocket**. It is separate from **`nimlive lsp`**, which speaks LSP on stdio for editing.
+This page describes the live client's **JSON-RPC 2.0** protocol over **WebSocket**. It is separate from **`niminal-live lsp`**, which speaks LSP on stdio for editing.
 
 ## Connection
 
@@ -60,8 +60,8 @@ Limits: up to **16** clients; maximum message size **64 MiB** (large `eval` sour
 A chair is one player's seat in a shared room: a full sequencer with clips, scenes, mute, solo, quantized changes and a connection to the engine of its own. Name one in `hello` with `chair` and it is created if it is new; clients that name the same chair share it, as clients of one session always did. Everything a client does (`eval`, `launch`, `mute`, `status`, `cancel`, `hush`, `panic`) and every notification it receives is about its own chair. `hush` and `panic` silence only that chair, so a mistake on one chair does not stop the others.
 
 - **Tempo.** A new chair starts at the tempo and meter that `main` has when the chair is created, and keeps its own from there. Bars of chairs at the same tempo and meter line up, because they count from the same sample. Chairs do not follow each other's later changes: the engine has no tempo, so one chair is the tempo authority by agreement, and the others evaluate the same `tempo` line when it changes.
-- **Controls.** The keyboard, MIDI and OSC controls of `nimlive live` play in `main`.
-- **Limits.** Up to eight chairs. A server that was not started with chairs (the in-process one used by `nimlive render`) has only `main` and refuses another name.
+- **Controls.** The keyboard, MIDI and OSC controls of `niminal-live live` play in `main`.
+- **Limits.** Up to eight chairs. A server that was not started with chairs (the in-process one used by `niminal-live render`) has only `main` and refuses another name.
 
 ## Subscriptions
 
@@ -206,4 +206,4 @@ The [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%
 ← {"jsonrpc":"2.0","method":"landed","params":{"id":2,"at":96000,"changes":["t.transpose(+12st)"],...}}
 ```
 
-See [Command line](/reference/nimlive/cli/) (`send`, `repl`), [Editor and LSP](/reference/editor/), and [Live coding](/guide/live-coding/).
+See [Command line](/reference/niminal-live/cli/) (`send`, `repl`), [Editor and LSP](/reference/editor/), and [Live coding](/guide/live-coding/).

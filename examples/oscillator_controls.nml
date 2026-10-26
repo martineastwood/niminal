@@ -1,5 +1,5 @@
 // PWM pad, hard-sync lead, and a phase ramp controlling stereo movement.
-// Render: nimlive render examples/oscillator_controls.nml --bars 4 --out oscillator_controls.wav
+// Render: niminal-live render examples/oscillator_controls.nml --bars 4 --out oscillator_controls.wav
 config { channels: stereo }
 tempo 128bpm
 

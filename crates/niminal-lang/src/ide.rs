@@ -328,7 +328,7 @@ pub fn builtin_ops() -> Vec<OpInfo> {
             .collect();
         ops.extend(envelope_ops());
         ops.extend(array_ops());
-        ops.push(op_info("gate", "In nimlive DSP, rhythmically chop audio with an inline grid. Width includes attack and release; short pulses shrink both edges proportionally. Defaults: width 100%, attack 2ms, release 8ms.", false, &[("audio", "signal", true), ("grid", "grid", true), ("width", "number", false), ("attack", "time", false), ("release", "time", false)]));
+        ops.push(op_info("gate", "In DSP, rhythmically chop audio with an inline grid. Width includes attack and release; short pulses shrink both edges proportionally. Defaults: width 100%, attack 2ms, release 8ms.", false, &[("audio", "signal", true), ("grid", "grid", true), ("width", "number", false), ("attack", "time", false), ("release", "time", false)]));
         ops.push(op_info("spawn", "Start an independent layer on each positive trigger edge: `spawn(trigger, dur: 100ms, max: 8) { ... }`. Inputs are captured at the trigger; a full pool drops new triggers.", false, &[("trigger", "number", true), ("dur", "time", true), ("max", "constant integer", false), ("body", "function", true)]));
         for (name, doc) in crate::prelude::DOCS {
             let params: &[(&str, &str, bool)] = match name {

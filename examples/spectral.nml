@@ -2,7 +2,7 @@
 // with `fft` to get at the spectrum and `ifft` to come back. One is written here (a tilt that darkens
 // the sound); the others come from the standard library. Each is 1024 samples late, which the
 // compiler makes up for wherever a signal is mixed with its own dry copy.
-// Render with:  nimlive render examples/spectral.nml --out spectral.wav
+// Render with:  niminal-live render examples/spectral.nml --out spectral.wav
 use std/spectral
 use std/reverb
 

@@ -355,7 +355,8 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
     /// A number after `op`: written out (`2`, `3/2`) or a pattern (`<2 4>`).
     fn number(&mut self, op: char) -> Res<Param<Rational>> {
         if matches!(self.peek(), Some('<' | '[')) {
-            let convert = |a: &str, _: usize| parse_factor(a).ok_or_else(|| format!("`{a}` isn't a number"));
+            let convert =
+                |a: &str, _: usize| parse_factor(a).ok_or_else(|| format!("`{a}` isn't a number"));
             let mut sub = Parser {
                 src: self.src,
                 chars: self.chars,
@@ -561,7 +562,10 @@ pub struct Hit {
 
 impl Hit {
     pub fn new(strength: Strength) -> Hit {
-        Hit { strength, src: None }
+        Hit {
+            strength,
+            src: None,
+        }
     }
 }
 
@@ -579,10 +583,12 @@ pub fn grid_at(
 ) -> Res<Pattern<Hit>> {
     let mut steps = Vec::new();
     for (offset, c) in src.char_indices() {
-        let hit = |strength| Pattern::pure(Hit {
-            strength,
-            src: place(offset, offset + 1),
-        });
+        let hit = |strength| {
+            Pattern::pure(Hit {
+                strength,
+                src: place(offset, offset + 1),
+            })
+        };
         let step = match c {
             c if c.is_whitespace() => continue,
             'x' => hit(Strength::Normal),

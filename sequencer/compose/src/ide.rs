@@ -42,6 +42,7 @@ pub const RESERVED_WORDS: &[&str] = &[
     "mono",
     "new",
     "next",
+    "on",
     "not",
     "note",
     "now",
@@ -61,6 +62,11 @@ pub const RESERVED_WORDS: &[&str] = &[
     "true",
     "unsolo",
     "use",
+    "cycle",
+    "def",
+    "events",
+    "grid",
+    "node",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -331,7 +337,7 @@ fn op_info(
     }
 }
 
-/// The operations on patterns, clips and grids, written after one: `riff.every(2, it.reverse)`.
+/// The operations on patterns, clips and grids, written after one: `riff.every(2, reverse)`.
 /// The pattern itself is the receiver, so it is not among the parameters.
 pub fn pattern_ops() -> Vec<OpInfo> {
     static OPS: OnceLock<Vec<OpInfo>> = OnceLock::new();
@@ -346,18 +352,18 @@ pub fn pattern_ops() -> Vec<OpInfo> {
         op("shift", "Move it later by this many bars (earlier if negative).", &[("by", "bars", true)]),
         op("repeat_each", "Play each note this many times within its own length.", &[("times", "number", true)]),
         op(
-            "thin",
-            "Drop some notes at random, the same ones every time: `thin(25%)`. A different `seed` drops different ones.",
+            "drop",
+            "Drop some notes at random, the same ones every time: `drop(25%)`. A different `seed` drops different ones.",
             &[("amount", "percent", true), ("seed", "number", false)],
         ),
         op(
             "sometimes",
-            "Change a random share of the notes: `sometimes(25%, it.transpose(+12st))`.",
-            &[("chance", "percent", true), ("change", "transform", true), ("seed", "number", false)],
+            "Change a random share of the notes: `sometimes(25%, transpose(+12st))`. With `per: cycle`, change a random share of whole cycles instead.",
+            &[("chance", "percent", true), ("change", "transform", true), ("per", "note or cycle", false), ("seed", "number", false)],
         ),
         op(
-            "within",
-            "Change only the notes that start between two points of the bar: `within(0%, 50%, it.fast(2))`.",
+            "only_between",
+            "Change only the notes that start between two points of the bar: `only_between(0%, 50%, fast(2))`.",
             &[("from", "percent", true), ("to", "percent", true), ("change", "transform", true)],
         ),
         op(
@@ -366,13 +372,13 @@ pub fn pattern_ops() -> Vec<OpInfo> {
             &[("amount", "percent", true), ("every", "bars", true)],
         ),
         op(
-            "rotate",
-            "Start a clip later each cycle: `rotate(4)` moves the start on by a quarter every cycle, wrapping after four.",
+            "start_later",
+            "Start a clip later each cycle: `start_later(4)` moves the start on by a quarter every cycle, wrapping after four.",
             &[("parts", "number", true)],
         ),
         op(
-            "in_turn",
-            "Change a different part of the cycle each cycle: `in_turn(4, it.fast(2))`.",
+            "step_through",
+            "Change a different part of the cycle each cycle: `step_through(4, fast(2))`.",
             &[("parts", "number", true), ("change", "transform", true)],
         ),
         op(
@@ -385,18 +391,18 @@ pub fn pattern_ops() -> Vec<OpInfo> {
             "Cut each cycle into parts and fill each slot with a randomly chosen part, repeats allowed.",
             &[("parts", "number", true), ("seed", "number", false)],
         ),
-        op("repeat_start", "Loop the start of each cycle to fill it: `repeat_start(25%)`.", &[("length", "percent", true)]),
+        op("loop_start", "Loop the start of each cycle to fill it: `loop_start(25%)`.", &[("length", "percent", true)]),
         op(
             "where",
-            "Change only the notes that pass a test: `where(it < c3, it.transpose(+12st))`. The test compares `it` (or `it.freq`) with a note or value.",
+            "Change only the notes that pass a test: `where(note < c3, transpose(+12st))`. The test compares `note` (or `note.freq`) with a note or value.",
             &[("when", "test", true), ("change", "transform", true)],
         ),
         op("gain", "Set how loud each note is: `gain(-6db)` or `gain([0db -6db])`.", &[("level", "db", true)]),
         op("pan", "Place each note among the speakers: `pan(-30deg)` or `pan([-30deg 30deg])`.", &[("angle", "degrees", true)]),
         op("begin", "Start each sample note part way in: `begin(25%)`.", &[("share", "percent", true)]),
         op(
-            "left_right",
-            "Play the original on the left and a changed copy on the right: `left_right(it.reverse)`. `angle` sets how far out.",
+            "stereo_copy",
+            "Play the original on the left and a changed copy on the right: `stereo_copy(reverse)`. `angle` sets how far out.",
             &[("change", "transform", true), ("angle", "degrees", false)],
         ),
         op(
@@ -409,7 +415,37 @@ pub fn pattern_ops() -> Vec<OpInfo> {
             "Play the pattern once for each part of the sample, in turn: `interleave_chops(4)`.",
             &[("pieces", "number", true)],
         ),
-        op("palindrome", "Play forwards one cycle, backwards the next.", &[]),
+        op("take", "Play only the first part of each cycle: `take(75%)`.", &[("length", "percent", true)]),
+        op("crop", "Stretch part of each cycle to fill it: `crop(25%, 75%)`.", &[("from", "percent", true), ("to", "percent", true)]),
+        op("squeeze", "Squeeze each cycle into part of it, silent elsewhere: `squeeze(25%, 75%)`.", &[("from", "percent", true), ("to", "percent", true)]),
+        op(
+            "echo",
+            "Repeat each note, quieter each time: `echo(3, 1/8beat, fade: -6db)`.",
+            &[("times", "number", true), ("time", "bars", true), ("fade", "db", false)],
+        ),
+        op(
+            "strum",
+            "Strum chords: each note of a chord starts a little later than the one before, up to this share of the chord's length (default 25%).",
+            &[("amount", "percent", false)],
+        ),
+        op(
+            "cycle_through",
+            "Play a different change each cycle, in turn: `cycle_through(same, reverse, fast(2))`. `same` is no change.",
+            &[("change", "transform", true)],
+        ),
+        op(
+            "times",
+            "Play a clip this many times and then finish it: `times(4)`.",
+            &[("count", "number", true)],
+        ),
+        op(
+            "in_cycles",
+            "Change the cycles whose number, counted in groups of `cycles`, is at or past `from`: `in_cycles(4, 3, fast(2))` changes the last cycle of every four.",
+            &[("cycles", "number", true), ("from", "number", true), ("change", "transform", true)],
+        ),
+        op("often", "Change about 75% of the notes, at random: `often(transpose(+12st))`.", &[("change", "transform", true), ("seed", "number", false)]),
+        op("rarely", "Change about 25% of the notes, at random: `rarely(fast(2))`.", &[("change", "transform", true), ("seed", "number", false)]),
+        op("back_and_forth", "Play forwards one cycle, backwards the next.", &[]),
         op("to_steps", "Read a signal such as `sine` at this many steps a cycle.", &[("steps", "number", true)]),
         op("invert", "On a grid: hit where it rests, rest where it hits.", &[]),
         op("range", "Scale a 0 to 1 signal or pattern to a range: `sine.range(300hz, 3khz)`.", &[("from", "value", true), ("to", "value", true)]),
@@ -438,22 +474,30 @@ pub fn pattern_ops() -> Vec<OpInfo> {
         ),
         op(
             "every",
-            "Apply a change on every nth cycle, starting with the first: `every(2, it.reverse)`. `it` is the pattern.",
+            "Apply a change on every nth cycle, starting with the first: `every(2, reverse)`.",
             &[("n", "number", true), ("change", "transform", true)],
         ),
         op(
-            "layer",
-            "Play it together with a changed copy, optionally later: `layer(change: it.transpose(+7st))`.",
-            &[("after", "bars", false), ("change", "transform", true)],
+            "overlay",
+            "Play it together with a changed copy, optionally later: `overlay(transpose(+7st), after: 1/8beat)`.",
+            &[("change", "transform", true), ("after", "bars", false)],
         ),
+        op(
+            "add",
+            "Add to each note: `add(7st)`, or another pattern, `add([0 3 5], timing: second)`. The same as `+`. `timing` says whose timing is kept: first (default), second or both. A plain number added to a note moves it by that many semitones.",
+            &[("other", "pattern", true), ("timing", "word", false)],
+        ),
+        op("sub", "Subtract from each note, like `add`. The same as `-`.", &[("other", "pattern", true), ("timing", "word", false)]),
+        op("mul", "Multiply each note, like `add`: `mul(2)`. The same as `*`.", &[("other", "pattern", true), ("timing", "word", false)]),
+        op("div", "Divide each note, like `add`. The same as `/`.", &[("other", "pattern", true), ("timing", "word", false)]),
         op("transpose", "Move the notes by an interval: `transpose(+5st)`.", &[("by", "semitones", true)]),
         op(
-            "euclid",
+            "spread_evenly",
             "Spread this many hits over this many steps as evenly as possible, and place the notes on them.",
             &[("hits", "number", true), ("steps", "number", true), ("rotation", "number", false)],
         ),
-        op("rhythm", "Give the notes the rhythm of a grid or pattern.", &[("structure", "grid", true)]),
-        op("mask", "Keep only the notes where a grid or pattern has a hit.", &[("mask", "grid", true)]),
+        op("with_rhythm_of", "Give the notes the rhythm of a grid or pattern.", &[("pattern", "grid", true)]),
+        op("keep_where", "Keep only the notes where a grid or pattern has a hit.", &[("pattern", "grid", true)]),
         op(
             "set",
             "Give the clip these lanes instead of its own, a number or a pattern each: `set(bright: 0.9)`, `set(gain: [0db -6db])`.",

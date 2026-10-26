@@ -73,6 +73,73 @@ impl Live {
     /// A message from a MIDI device or OSC sender. Every control bound to it moves. Returns how many
     /// controls took it.
     pub fn control_input(&mut self, signal: &ControlSignal) -> usize {
+        let ran = self.fire_triggers(signal);
+        ran + self.drive_controls(signal)
+    }
+
+    /// Run the commands of every `on` this signal sets off. A controller or OSC value sets it off as it
+    /// goes down (64 or more, or above one half), not again until it has come back up. Returns how many
+    /// went off.
+    fn fire_triggers(&mut self, signal: &ControlSignal) -> usize {
+        let program = self.program.clone();
+        let mut went_off = 0;
+        for trigger in &program.triggers {
+            let key = trigger.source.key();
+            let hit = match (&trigger.source, signal) {
+                (
+                    InputSource::MidiNote { note, channel },
+                    ControlSignal::MidiNote {
+                        note: got,
+                        channel: on,
+                        velocity,
+                    },
+                ) => note == got && channel.is_none_or(|c| c == *on) && *velocity > 0,
+                (
+                    InputSource::MidiCc { cc, channel },
+                    ControlSignal::MidiCc {
+                        cc: got,
+                        channel: on,
+                        value,
+                    },
+                ) if cc == got && channel.is_none_or(|c| c == *on) => {
+                    self.goes_down(&key, *value >= 64)
+                }
+                (
+                    InputSource::Osc(address),
+                    ControlSignal::Osc {
+                        address: got,
+                        value,
+                    },
+                ) if address == got => self.goes_down(&key, *value > 0.5),
+                _ => false,
+            };
+            if !hit {
+                continue;
+            }
+            went_off += 1;
+            for command in &trigger.commands {
+                if let Err(problems) = self.eval(command, None) {
+                    let why = problems
+                        .first()
+                        .map_or_else(String::new, |p| format!(": {}", p.message));
+                    self.notify(format!("`on {key}` could not run `{command}`{why}"));
+                }
+            }
+        }
+        went_off
+    }
+
+    /// Is `down` a change from up to down for the trigger `key`?
+    fn goes_down(&mut self, key: &str, down: bool) -> bool {
+        if down {
+            self.triggers_down.insert(key.to_string())
+        } else {
+            self.triggers_down.remove(key);
+            false
+        }
+    }
+
+    fn drive_controls(&mut self, signal: &ControlSignal) -> usize {
         match signal {
             ControlSignal::MidiNote {
                 note,

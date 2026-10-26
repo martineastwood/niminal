@@ -181,19 +181,39 @@ impl Parser {
         }
     }
 
-    /// The rest of `ctl name = midi.cc(21).range(200hz..4khz).smooth(10ms)` or
-    /// `ctl name = osc_in("/fx/width").range(0..1)`.
-    fn input_control(&mut self, name: Ident) -> Res<Item> {
+    /// `midi.cc(21)`, `midi.note(36)`, `midi.learn` or `osc_in("/fx/width")`.
+    fn input_source(&mut self) -> Res<InputSource> {
         let start = self.span();
-        let source = if self.is_keyword("midi") {
+        Ok(if self.is_keyword("midi") {
             self.bump();
             self.expect(&Tok::Dot)?;
-            let method = self.ident("`cc` or `learn`")?;
+            let method = self.ident("`cc`, `note` or `learn`")?;
             match method.name.as_str() {
                 "learn" => InputSource::MidiLearn,
-                "cc" => {
+                "cc" | "note" => {
+                    let what = if method.name == "cc" {
+                        "a CC number from 0 to 127"
+                    } else {
+                        "a note number from 0 to 127"
+                    };
                     self.expect(&Tok::LParen)?;
-                    let cc = self.small_number("a CC number from 0 to 127", 127)?;
+                    // a key can be given by name: `midi.note(c1)`
+                    let named = match self.peek().clone() {
+                        Tok::Ident(n) if method.name == "note" => {
+                            match n.parse::<niminal_score::Value>() {
+                                Ok(niminal_score::Value::Note(m)) if (0..=127).contains(&m) => {
+                                    self.bump();
+                                    Some(m as u8)
+                                }
+                                _ => return Err(self.unexpected(what)),
+                            }
+                        }
+                        _ => None,
+                    };
+                    let number = match named {
+                        Some(n) => n,
+                        None => self.small_number(what, 127)?,
+                    };
                     let channel = if self.eat(&Tok::Comma) {
                         Some(self.small_number("a channel from 1 to 16", 16)?)
                     } else {
@@ -206,12 +226,22 @@ impl Parser {
                         ));
                     }
                     self.expect(&Tok::RParen)?;
-                    InputSource::MidiCc { cc, channel }
+                    if method.name == "cc" {
+                        InputSource::MidiCc {
+                            cc: number,
+                            channel,
+                        }
+                    } else {
+                        InputSource::MidiNote {
+                            note: number,
+                            channel,
+                        }
+                    }
                 }
                 other => {
                     return Err(Diagnostic::new(
                         format!(
-                            "`midi.{other}` isn't supported; use `midi.cc(number)` or `midi.learn`"
+                            "`midi.{other}` isn't supported; use `midi.cc(number)`, `midi.note(number)` or `midi.learn`"
                         ),
                         method.span,
                     ));
@@ -232,7 +262,61 @@ impl Parser {
             }
             self.expect(&Tok::RParen)?;
             InputSource::Osc(address)
+        })
+    }
+
+    /// `on midi.note(36) beat.start`, or several commands in braces.
+    fn on(&mut self) -> Res<Item> {
+        let start = self.span();
+        self.bump();
+        if !(self.is_keyword("midi") || self.is_keyword("osc_in")) {
+            return Err(self.unexpected("`midi.note(36)`, `midi.cc(64)` or `osc_in(\"/address\")`"));
+        }
+        let source_start = self.span();
+        let source = self.input_source()?;
+        if source == InputSource::MidiLearn {
+            return Err(Diagnostic::new(
+                "`midi.learn` is for a control; name the note or controller for an `on`",
+                source_start.to(self.prev_span()),
+            ));
+        }
+        let mut commands = Vec::new();
+        let mut command = |p: &mut Parser| -> Res<()> {
+            let first = p.span();
+            p.expr()?;
+            commands.push(first.to(p.prev_span()));
+            Ok(())
         };
+        if self.eat(&Tok::LBrace) {
+            loop {
+                self.skip_newlines();
+                if self.eat(&Tok::RBrace) {
+                    break;
+                }
+                command(self)?;
+            }
+        } else {
+            command(self)?;
+        }
+        Ok(Item::On(OnDecl {
+            source,
+            commands,
+            span: start.to(self.prev_span()),
+        }))
+    }
+
+    /// The rest of `ctl name = midi.cc(21).range(200hz..4khz).smooth(10ms)` or
+    /// `ctl name = osc_in("/fx/width").range(0..1)`.
+    fn input_control(&mut self, name: Ident) -> Res<Item> {
+        let start = self.span();
+        let source = self.input_source()?;
+        if matches!(source, InputSource::MidiNote { .. }) {
+            return Err(Diagnostic::new(
+                "a control follows a controller: use `midi.cc(number)`",
+                start.to(self.prev_span()),
+            )
+            .with_help("to run commands from a key, write `on midi.note(36) beat.start`"));
+        }
         let number = |value: f64, span| Expr {
             kind: ExprKind::Num { value, unit: None },
             span,
@@ -322,7 +406,11 @@ impl Parser {
     // ---- items -------------------------------------------------------
 
     fn item(&mut self) -> Res<Item> {
-        if self.is_keyword("ctl") {
+        if self.is_keyword("on")
+            && matches!(self.peek_at(1), Tok::Ident(s) if s == "midi" || s == "osc_in")
+        {
+            self.on()
+        } else if self.is_keyword("ctl") {
             self.bump();
             let name = self.ident("a control name")?;
             self.expect(&Tok::Eq)?;
@@ -1290,7 +1378,7 @@ impl Parser {
         matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1) == &Tok::Dot
     }
 
-    /// `bass.reverse`, `lead.transpose(+5st).thin(10%)`, or a command such as `bass.mute` or `verse.start`.
+    /// `bass.reverse`, `lead.transpose(+5st).drop(10%)`, or a command such as `bass.mute` or `verse.start`.
     fn edit(&mut self, at: Option<AtPos>) -> Res<CommandStmt> {
         let start = self.span();
         let node = self.ident("a node")?;
