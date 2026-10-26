@@ -34,6 +34,8 @@ pub struct PlayInfo {
 pub struct Statement {
     pub text: String,
     pub offset: usize,
+    /// Which evaluation sent it, as numbered by the client; 0 when it did not say.
+    pub origin: u64,
     /// The `@ ...` written after the statement, if any.
     pub quantize: Option<Quantize>,
     /// Pending writes to this destination supersede older pending writes.
@@ -191,6 +193,7 @@ fn definition(text: String, offset: usize, key: String, parts: DefParts) -> Stat
     Statement {
         text,
         offset,
+        origin: 0,
         quantize: parts.quantize,
         write_key: Some(key.clone()),
         data: StatementData::Definition {
@@ -338,6 +341,7 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             Item::For { .. } | Item::If { .. } => Statement {
                 text,
                 offset,
+                origin: 0,
                 quantize: None,
                 write_key: None,
                 data: StatementData::Note { has_at: false },
@@ -426,6 +430,7 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             Item::Command(c) => Statement {
                 text,
                 offset,
+                origin: 0,
                 quantize: c.quantize,
                 write_key: command_write_key(c),
                 data: StatementData::Command {
@@ -439,6 +444,7 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             Item::Note(n) => Statement {
                 text,
                 offset,
+                origin: 0,
                 quantize: None,
                 write_key: None,
                 data: StatementData::Note {

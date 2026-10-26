@@ -458,6 +458,16 @@ impl Schedule {
         Some(s.clock.seconds_at(cycles))
     }
 
+    /// The clip playing on `node` at `at` seconds, after any changes made to it live.
+    pub fn clip_at(&self, node: usize, at: f64) -> Option<&Clip> {
+        self.segments
+            .iter()
+            .rev()
+            .find(|s| s.node == node && s.start <= at && s.end.is_none_or(|e| at < e))
+            .filter(|s| !s.finished(at))
+            .map(|s| &s.clip)
+    }
+
     /// What `node` is doing at `at` seconds: the clip playing on it, and
     /// whether it was muted or soloed.
     pub fn node_state(&self, node: usize, at: f64) -> PartState {

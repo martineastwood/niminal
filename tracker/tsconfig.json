@@ -6,7 +6,9 @@
     "moduleResolution": "bundler",
     "strict": true,
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": { "@codemirror/language": ["node_modules/@codemirror/language"], "@lezer/highlight": ["node_modules/@lezer/highlight"] }
   },
-  "include": ["src"]
+  "include": ["src", "../editors/codemirror"]
 }

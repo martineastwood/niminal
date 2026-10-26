@@ -2,7 +2,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { renderMixer, renderInstrument, type FxActions } from './mixer';
 import { newProject, readProject } from './project';
-import { addDevice, duplicateEffect, effectUsers, moveDevice, newEffect, removeDevice, removeEffect } from './effects';
+import { addDevice, addMacro, linkParameter, removeMacro, duplicateEffect, effectUsers, moveDevice, newEffect, removeDevice, removeEffect } from './effects';
 
 vi.stubGlobal('Option', function (text: string, value: string) {
   const option = document.createElement('option'); option.textContent = text; option.value = value; return option;
@@ -10,7 +10,7 @@ vi.stubGlobal('Option', function (text: string, value: string) {
 afterEach(() => document.body.replaceChildren());
 
 function actions(overrides: Partial<FxActions> = {}): FxActions {
-  return { selected: null, select: vi.fn(), add: vi.fn(), remove: vi.fn(), move: vi.fn(), changed: vi.fn(), ...overrides };
+  return { selected: null, select: vi.fn(), add: vi.fn(), remove: vi.fn(), move: vi.fn(), changed: vi.fn(), lanesRemoved: vi.fn(), ...overrides };
 }
 
 /** The names of the presets the Add effect browser lists (not the project's own effects), which it then closes. */
@@ -201,4 +201,50 @@ it('adds, edits and removes an LFO on an instrument parameter by rewriting its c
   expect(changed.mock.calls[1][0]).toContain('// mod amp: sine 2hz 100%');
   parent.querySelector<HTMLButtonElement>('[aria-label="Toggle amp LFO"]')!.click();
   expect(changed.mock.calls[2][0]).not.toContain('mod amp');
+});
+
+it('adds macros, links effect parameters to them, and tidies up when a device or the last macro goes', () => {
+  const project = newProject(); const a = addDevice(project, 0, 'echo')!, b = addDevice(project, 0, 'echo')!;
+  const knob = addMacro(project, 0)!; addMacro(project, 0);
+  expect(knob).toEqual({ name: 'Macro 1', value: 0, links: [] });
+  linkParameter(project, 0, a.device.id, 'mix', 0); linkParameter(project, 0, b.device.id, 'mix', 0);
+  linkParameter(project, 0, a.device.id, 'mix', 1); // a parameter has one driver
+  expect(project.tracks[0].macros!.map(m => m.links.map(l => `${l.device}.${l.parameter}`))).toEqual([[`${b.device.id}.mix`], [`${a.device.id}.mix`]]);
+  project.patterns[0].fx[0][0].target = { kind: 'macro', index: 1 };
+  expect(readProject(JSON.stringify(project))).toEqual(project);
+  project.patterns[0].fx[0].push({ target: { kind: 'macro', index: 1 }, values: Array(32).fill('0.5') }, { target: { kind: 'volume' }, values: Array(32).fill(null) });
+  expect(removeMacro(project, 0)).toBe(true);
+  expect(project.tracks[0].macros).toHaveLength(1);
+  expect(project.patterns[0].fx[0].map(lane => lane.target)).toEqual([{ kind: 'volume' }]); // both macro lanes went, with their values
+  removeDevice(project, 0, b.device.id);
+  expect(project.tracks[0].macros![0].links).toEqual([]);
+  for (let i = 0; i < 10; i++) addMacro(project, 0);
+  expect(project.tracks[0].macros).toHaveLength(8);
+  project.tracks[0].macros![0].links = [{ device: a.device.id, parameter: 'mix', min: 0, max: 1 }, { device: a.device.id, parameter: 'mix', min: 0, max: 1 }];
+  expect(() => readProject(JSON.stringify(project))).toThrow();
+});
+
+it('shows macros in the mixer: a knob moves its value, a linked parameter hands over to it', () => {
+  const project = newProject(); const a = addDevice(project, 0, 'echo')!;
+  addMacro(project, 0);
+  const edited = vi.fn(), write = vi.fn(), parent = document.body.appendChild(document.createElement('div'));
+  const draw = () => renderMixer(parent, project, 0, edited, { [a.definition.id]: [{ name: 'mix', min: 0, max: 1, default: 0.5, unit: null }] }, write, actions({ selected: a.device.id }));
+  draw();
+  const knob = parent.querySelector<HTMLInputElement>('[aria-label="Macro 1 name"]')!; knob.value = 'Open'; knob.dispatchEvent(new Event('change'));
+  expect(project.tracks[0].macros![0].name).toBe('Open');
+  const slider = parent.querySelector<HTMLInputElement>('[aria-label="Lead macro 1"]')!; slider.value = '0.25'; slider.dispatchEvent(new Event('input'));
+  expect(project.tracks[0].macros![0].value).toBe(0.25);
+  const pick = parent.querySelector<HTMLSelectElement>('[aria-label="mix macro"]')!; pick.value = '0'; pick.dispatchEvent(new Event('change'));
+  expect(project.tracks[0].macros![0].links).toEqual([{ device: a.device.id, parameter: 'mix', min: 0, max: 1 }]);
+  expect(parent.querySelector<HTMLInputElement>('[aria-label="Lead FX mix"]')!.disabled).toBe(true);
+  const low = parent.querySelector<HTMLInputElement>('[aria-label="mix macro At 0%"]')!; low.value = '25'; low.dispatchEvent(new Event('change'));
+  expect(project.tracks[0].macros![0].links[0].min).toBe(0.25);
+});
+
+it('keeps one empty lane when the last macro takes the strip\'s only lane', () => {
+  const project = newProject(); addMacro(project, 0);
+  project.patterns[0].fx[0][0] = { target: { kind: 'macro', index: 0 }, values: Array(32).fill('1') };
+  expect(removeMacro(project, 0)).toBe(true);
+  expect(project.patterns[0].fx[0]).toEqual([{ target: { kind: 'volume' }, values: Array(32).fill(null) }]);
+  expect(removeMacro(project, 0)).toBe(false);
 });

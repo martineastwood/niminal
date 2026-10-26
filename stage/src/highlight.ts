@@ -1,0 +1,200 @@
+import { ChangeSet, StateEffect, StateField } from '@codemirror/state';
+import { Decoration, DecorationSet, EditorView } from '@codemirror/view';
+import { Snapshot, sinceOnset } from './live';
+
+/** How long a note stays lit after it starts, in seconds. */
+const DECAY = 0.45;
+/** Brightness steps; each is a CSS class, so a frame only rebuilds when a step changes. */
+const STEPS = 6;
+/** One colour per clip, so the code, the lane and the meter read as the same thing. */
+export const CLIP_COLOURS = ['#e9b66e', '#8cbce7', '#c6a1e8', '#a5c98d', '#e08b8b', '#74c7c3'];
+
+type Evaluated = {
+  /** The number the stage gave this evaluation, which the engine reports back with each note. */
+  id: number;
+  /** Where the evaluated text begins in the document: the selection start, or 0. */
+  base: number;
+  text: string;
+};
+
+/** Marks that the editor's text was just sent to the engine, so the engine's byte offsets apply to it. */
+export const evaluated = StateEffect.define<Evaluated>();
+const lit = StateEffect.define<DecorationSet>();
+
+type Drift = {
+  base: number;
+  /** Byte offset in the evaluated text to its position in the editor. */
+  unit: (byte: number) => number;
+  /** How much text the evaluation sent, so a range outside it is ignored. */
+  length: number;
+  /** Edits made since the evaluation, so a highlight follows its note as the text moves. */
+  changes: ChangeSet;
+};
+
+function unitMap(text: string): (byte: number) => number {
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length === text.length) return byte => byte;
+  // multi-byte characters: map each byte to the UTF-16 index of the character it belongs to
+  const map = new Uint32Array(bytes.length + 1);
+  let byte = 0;
+  let unit = 0;
+  for (const char of text) {
+    const size = new TextEncoder().encode(char).length;
+    for (let i = 0; i < size; i++) map[byte + i] = unit;
+    byte += size;
+    unit += char.length;
+  }
+  map[byte] = unit;
+  return b => map[Math.min(b, bytes.length)];
+}
+
+/** How many evaluations to remember: a clip keeps the text of whichever one last defined it. */
+const REMEMBERED = 32;
+
+const drift = StateField.define<Map<number, Drift>>({
+  create: () => new Map(),
+  update(value, tr) {
+    let next = value;
+    if (tr.docChanged) {
+      next = new Map();
+      for (const [id, d] of value) next.set(id, { ...d, changes: d.changes.compose(tr.changes) });
+    }
+    for (const effect of tr.effects) {
+      if (!effect.is(evaluated)) continue;
+      if (next === value) next = new Map(value);
+      next.set(effect.value.id, {
+        base: effect.value.base,
+        unit: unitMap(effect.value.text),
+        length: new TextEncoder().encode(effect.value.text).length,
+        changes: ChangeSet.empty(tr.state.doc.length),
+      });
+      for (const id of next.keys()) {
+        if (next.size > REMEMBERED) next.delete(id);
+        else break;
+      }
+    }
+    return next;
+  },
+});
+
+const hits = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    for (const effect of tr.effects) if (effect.is(lit)) return effect.value;
+    return tr.docChanged ? value.map(tr.changes) : value;
+  },
+  provide: field => EditorView.decorations.from(field),
+});
+
+/** Lines of code just evaluated, shown briefly so it is clear what was sent. */
+const flashed = StateEffect.define<DecorationSet>();
+const flash = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    for (const effect of tr.effects) if (effect.is(flashed)) return effect.value;
+    return tr.docChanged ? value.map(tr.changes) : value;
+  },
+  provide: field => EditorView.decorations.from(field),
+});
+
+export const highlightExtensions = [drift, hits, flash];
+
+/** Flash the lines from `from` to `to`, which fade on their own and are then taken off. */
+export function flashLines(view: EditorView, from: number, to: number) {
+  const marks = [];
+  for (let line = view.state.doc.lineAt(from); ; line = view.state.doc.line(line.number + 1)) {
+    marks.push(Decoration.line({ class: 'cm-flash' }).range(line.from));
+    if (line.to >= to || line.number >= view.state.doc.lines) break;
+  }
+  view.dispatch({ effects: flashed.of(Decoration.set(marks)) });
+  setTimeout(() => view.dispatch({ effects: flashed.of(Decoration.none) }), 700);
+}
+
+/** The ranges lit now, for tests. */
+export function litRanges(view: EditorView) {
+  const out: { from: number; to: number; text: string; class: string }[] = [];
+  const cursor = view.state.field(hits).iter();
+  for (; cursor.value; cursor.next()) {
+    out.push({
+      from: cursor.from,
+      to: cursor.to,
+      text: view.state.sliceDoc(cursor.from, cursor.to),
+      class: String(cursor.value.spec.class),
+    });
+  }
+  return out;
+}
+
+/** Lights the source of each note as it plays, in the order the clip plays them. */
+export class Highlighter {
+  private snapshot: Snapshot | null = null;
+  private updatedAt = 0;
+  private shown = '';
+
+  constructor(private view: () => EditorView | undefined) {
+    const frame = () => {
+      this.paint();
+      requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  }
+
+  update(snapshot: Snapshot) {
+    this.snapshot = snapshot;
+    this.updatedAt = performance.now();
+  }
+
+  paint() {
+    try {
+      this.light();
+    } catch (error) {
+      // one bad range must not end the frame loop, or nothing would light again
+      console.error('lighting the notes failed', error);
+    }
+  }
+
+  private light() {
+    const view = this.view();
+    const snapshot = this.snapshot;
+    if (!view || !snapshot?.transport) return;
+    const beats = snapshot.beats_per_bar || 4;
+    const secondsPerCycle = (60 / snapshot.transport.bpm) * beats;
+    const elapsed = (performance.now() - this.updatedAt) / 1000;
+    const evals = view.state.field(drift);
+    const ranges: { from: number; to: number; step: number; colour: string }[] = [];
+
+    snapshot.clips.forEach((clip, index) => {
+      if (!clip.running || clip.cycles == null) return;
+      const now = clip.cycles + elapsed / secondsPerCycle;
+      for (const lane of clip.lanes) {
+        for (const event of lane.events) {
+          const text = event.eval == null ? undefined : evals.get(event.eval);
+          if (!event.src || !text) continue;
+          const { base, unit, changes, length } = text;
+          if (event.src[1] > length) continue;
+          const age = sinceOnset(clip, event, now);
+          if (age === null) continue;
+          const seconds = age * secondsPerCycle;
+          if (seconds >= DECAY) continue;
+          const from = changes.mapPos(base + unit(event.src[0]), 1);
+          const to = changes.mapPos(base + unit(event.src[1]), -1);
+          if (to <= from || to > view.state.doc.length) continue;
+          const step = Math.max(1, Math.ceil((1 - seconds / DECAY) * STEPS));
+          ranges.push({ from, to, step, colour: CLIP_COLOURS[index % CLIP_COLOURS.length] });
+        }
+      }
+    });
+
+    ranges.sort((a, b) => a.from - b.from || a.to - b.to);
+    const signature = ranges.map(r => `${r.from}:${r.to}:${r.step}:${r.colour}`).join(',');
+    if (signature === this.shown) return;
+    this.shown = signature;
+    const marks = ranges.map(r =>
+      Decoration.mark({
+        class: `cm-hit cm-hit-${r.step}`,
+        attributes: { style: `--hit:${r.colour}` },
+      }).range(r.from, r.to),
+    );
+    view.dispatch({ effects: lit.of(Decoration.set(marks, true)) });
+  }
+}

@@ -360,4 +360,11 @@ footer input { height: 16px; font-size: 10px; }
 .expression-problem { min-height: 12px; color: #e0705a; font-size: 10px; }
 .expression-buttons { display: flex; gap: 4px; justify-content: flex-end; }
 
+.parameter-row.with-macro { grid-template-columns: 62px minmax(40px, 1fr) 70px 18px auto; }
+.row-extras { display: flex; gap: 2px; align-items: center; }
+.macro-link { height: 16px; width: 34px; font-size: 10px; padding: 0; }
+.parameter-row.driven { opacity: 0.7; }
+.macro-controls { border-left-color: #a8895f; }
+.macro-name { width: 100%; min-width: 0; height: 16px; font-size: 11px; padding: 0 2px; background: transparent; border: 1px solid transparent; color: var(--text); }
+.macro-name:hover, .macro-name:focus { border-color: #3a4450; background: #1f252c; }
 .parameter-row.with-lfo { grid-template-columns: 62px minmax(40px, 1fr) 70px 18px 18px 18px; }

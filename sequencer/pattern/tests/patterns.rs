@@ -1,5 +1,5 @@
 use niminal_pattern::{
-    Hap, Hit, Param, Pattern, Rational, Span, euclid_steps, grid, parse, parse_with,
+    Hap, Hit, Param, Strength, Pattern, Rational, Span, euclid_steps, grid, parse, parse_with,
 };
 
 fn r(n: i64, d: i64) -> Rational {
@@ -413,12 +413,12 @@ fn grids_read_hits_accents_and_ghosts() {
     assert_eq!(
         e.iter().map(|e| e.2).collect::<Vec<_>>(),
         [
-            Hit::Normal,
-            Hit::Ghost,
-            Hit::Accent,
-            Hit::Ghost,
-            Hit::Ghost,
-            Hit::Accent
+            Hit::new(Strength::Normal),
+            Hit::new(Strength::Ghost),
+            Hit::new(Strength::Accent),
+            Hit::new(Strength::Ghost),
+            Hit::new(Strength::Ghost),
+            Hit::new(Strength::Accent)
         ]
     );
     assert_eq!(e[2].0, r(1, 2), "eight steps, the fifth is half way");
@@ -431,14 +431,14 @@ fn grids_read_hits_accents_and_ghosts() {
 
 #[test]
 fn atoms_are_converted_as_they_are_read_and_bad_ones_are_located() {
-    let numbers = parse_with("1 2 [3 4]*2", |a| {
+    let numbers = parse_with("1 2 [3 4]*2", |a, _| {
         a.parse::<i32>()
             .map_err(|_| format!("`{a}` isn't a number"))
     })
     .unwrap();
     assert_eq!(values_of(&numbers, cycles(0, 1)), [1, 2, 3, 4, 3, 4]);
 
-    let err = parse_with("1 [2 x] 3", |a| {
+    let err = parse_with("1 [2 x] 3", |a, _| {
         a.parse::<i32>()
             .map_err(|_| format!("`{a}` isn't a number"))
     })
@@ -448,7 +448,7 @@ fn atoms_are_converted_as_they_are_read_and_bad_ones_are_located() {
     assert_eq!(err.offset, 5, "at the atom, not the end of the pattern");
 
     // atoms inside an alternation are checked even though they only play in later cycles
-    let err = parse_with("<1 2 oops>", |a| {
+    let err = parse_with("<1 2 oops>", |a, _| {
         a.parse::<i32>()
             .map_err(|_| format!("`{a}` isn't a number"))
     })
@@ -456,7 +456,7 @@ fn atoms_are_converted_as_they_are_read_and_bad_ones_are_located() {
     .unwrap();
     assert_eq!(err.offset, 5);
     // and in parenthesised groups
-    let err = parse_with("(1 q)", |a| a.parse::<i32>().map_err(|_| "bad".to_string()))
+    let err = parse_with("(1 q)", |a, _| a.parse::<i32>().map_err(|_| "bad".to_string()))
         .err()
         .unwrap();
     assert_eq!(err.offset, 0);
@@ -652,13 +652,13 @@ fn repeat_start_loops_the_front_of_the_cycle() {
 #[test]
 fn invert_swaps_hits_and_rests() {
     let g = grid("x.x. x...").unwrap();
-    let e = onsets(&g.invert(Hit::Normal), cycles(0, 1));
+    let e = onsets(&g.invert(Hit::new(Strength::Normal)), cycles(0, 1));
     assert_eq!(
         e.iter().map(|x| x.0).collect::<Vec<_>>(),
         [r(1, 8), r(3, 8), r(5, 8), r(6, 8), r(7, 8)]
     );
     assert_eq!(
-        onsets(&Pattern::<Hit>::silence().invert(Hit::Normal), cycles(0, 1)).len(),
+        onsets(&Pattern::<Hit>::silence().invert(Hit::new(Strength::Normal)), cycles(0, 1)).len(),
         1
     );
 }
@@ -733,7 +733,7 @@ fn params_can_be_patterns_or_numbers() {
     let fixed = Param::Const(Rational::int(2)).apply(&p, |p, f| p.fast(f));
     assert_eq!(onsets(&fixed, cycles(0, 1)).len(), 4);
     let varying = Param::Pat(
-        parse_with("<1 2>", |a| {
+        parse_with("<1 2>", |a, _| {
             a.parse::<i64>()
                 .map(Rational::int)
                 .map_err(|e| e.to_string())
@@ -759,7 +759,7 @@ fn rewrite_cycles_sees_each_cycles_events_in_order() {
 #[test]
 fn euclid_with_pattern_arguments() {
     let hits = Param::Pat(
-        parse_with("<3 5>", |a| {
+        parse_with("<3 5>", |a, _| {
             a.parse::<i64>()
                 .map(Rational::int)
                 .map_err(|e| e.to_string())

@@ -1,6 +1,6 @@
-import { builtInEffects, returnIndex, sendPreset, stripOf } from './effects';
-import type { EffectParameters, Definition, Device, Lfo, Parameter, Project, FxTarget } from './project';
-import { maxDevices } from './project';
+import { addMacro, builtInEffects, linkParameter, removeMacro, returnIndex, sendPreset, stripOf } from './effects';
+import type { EffectParameters, Definition, Device, Lfo, MacroLink, Parameter, Project, FxTarget } from './project';
+import { maxDevices, maxMacros } from './project';
 import { trackColour, masterColour } from './grid';
 import { openBrowser } from './browser';
 import { readLfos, setLfo, lfoShapes, modulatable, type SourceLfo } from './modulation';
@@ -57,6 +57,8 @@ export interface FxActions {
   remove(id: string): void;
   move(id: string, delta: number): void;
   changed(): void;
+  /** Lanes were deleted from the pattern grid, so what it remembers of them is out of date. */
+  lanesRemoved(): void;
 }
 
 export function renderMixer(parent: HTMLElement, project: Project, activeTrack: number, edited: () => void, parameters: EffectParameters = {}, write: (target: FxTarget, value: number) => void = () => {}, fx: FxActions) {
@@ -70,6 +72,7 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
   volume.querySelector('input')!.setAttribute('aria-label', `${track.name} volume in dB`); output.append(volume);
   const pan = slider('Pan', track.pan, -1, 1, '', value => { track.pan = value; edited(); }, () => write({ kind: 'pan' }, track.pan));
   pan.querySelector('input')!.setAttribute('aria-label', `${track.name} pan`); output.append(pan); parent.append(output);
+  parent.append(macrosCard(project, activeTrack, edited, write, refresh, fx.lanesRemoved));
   const effects = document.createElement('section'); effects.className = 'device-card effect-device';
   const title = document.createElement('div'); title.className = 'device-heading';
   const label = document.createElement('span'); label.className = 'section-title'; label.textContent = 'FX';
@@ -128,16 +131,62 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
           else device.modulations[parameter.name] = { enabled: true, shape: 'sine', period: 16, min: 0, max: 1 };
           edited(); refresh();
         }); toggle.setAttribute('aria-pressed', String(!!lfo?.enabled));
+        const macros = track.macros ?? [];
+        const driver = macros.findIndex(knob => knob.links.some(link => link.device === device.id && link.parameter === parameter.name));
+        const link = driver < 0 ? undefined : macros[driver].links.find(link => link.device === device.id && link.parameter === parameter.name);
+        const pick = document.createElement('select'); pick.className = 'macro-link'; pick.setAttribute('aria-label', `${parameter.name} macro`);
+        pick.title = macros.length ? 'The macro that moves this parameter' : 'Add a macro to drive this parameter from';
+        pick.add(new Option('—', '')); macros.forEach((knob, i) => pick.add(new Option(String(i + 1), String(i)))); pick.value = driver < 0 ? '' : String(driver); pick.disabled = !macros.length;
+        pick.onchange = () => { linkParameter(project, activeTrack, device.id, parameter.name, pick.value === '' ? null : Number(pick.value)); edited(); refresh(); };
+        const extras = document.createElement('span'); extras.className = 'row-extras'; extras.append(toggle, pick);
         const row = slider(parameter.name, value, parameter.min, parameter.max, parameter.unit ?? '', value => { device.values[parameter.name] = value; edited(); }, () => {
           write({ kind: 'effect', device: device.id, parameter: parameter.name }, Math.min(parameter.max, Math.max(parameter.min, device.values[parameter.name] ?? parameter.default)));
-        }, toggle);
-        row.querySelector('input')!.setAttribute('aria-label', `${track.name} FX ${parameter.name}`); card.append(row);
-        if (lfo) card.append(lfoControls(device, parameter, lfo, edited));
+        }, extras);
+        row.querySelector('input')!.setAttribute('aria-label', `${track.name} FX ${parameter.name}`); row.classList.add('with-macro'); card.append(row);
+        if (link) {
+          // the macro sets the parameter, so its own slider, lanes and LFO have nothing to say
+          row.classList.add('driven'); row.querySelectorAll('input, button:not(.macro-link)').forEach(control => { if (control.parentElement !== extras) (control as HTMLInputElement).disabled = true; });
+          toggle.disabled = true; toggle.title = 'A macro drives this parameter';
+          card.append(macroLinkControls(link, parameter, edited));
+        } else if (lfo) card.append(lfoControls(device, parameter, lfo, edited));
       });
     }
     effects.append(card);
   });
   parent.append(effects);
+}
+
+/** The macro knobs of a strip: a slider each, named, that the effect parameters below can follow. */
+function macrosCard(project: Project, activeTrack: number, edited: () => void, write: (target: FxTarget, value: number) => void, refresh: () => void, lanesRemoved: () => void) {
+  const track = stripOf(project, activeTrack), macros = track.macros ?? [];
+  const card = document.createElement('section'); card.className = 'device-card macro-device';
+  const title = document.createElement('div'); title.className = 'device-heading';
+  const label = document.createElement('span'); label.className = 'section-title'; label.textContent = 'MACROS';
+  const add = button('+ Add macro', 'Add macro', () => { if (addMacro(project, activeTrack)) { edited(); refresh(); } });
+  add.disabled = macros.length >= maxMacros; title.append(label, add); card.append(title);
+  if (!macros.length) { const hint = document.createElement('p'); hint.className = 'device-note'; hint.textContent = 'A macro moves several effect parameters at once'; card.append(hint); }
+  macros.forEach((knob, index) => {
+    const row = slider(knob.name, knob.value, 0, 1, '', value => { knob.value = value; edited(); }, () => write({ kind: 'macro', index }, knob.value),
+      index === macros.length - 1 ? button('×', 'Remove the last macro', () => { if (removeMacro(project, activeTrack)) lanesRemoved(); edited(); refresh(); }) : undefined);
+    const name = document.createElement('input'); name.className = 'macro-name'; name.value = knob.name; name.maxLength = 40; name.setAttribute('aria-label', `Macro ${index + 1} name`);
+    name.onchange = () => { knob.name = name.value.trim(); edited(); };
+    row.firstElementChild!.replaceWith(name);
+    row.querySelector('input[type=range]')!.setAttribute('aria-label', `${track.name} macro ${index + 1}`);
+    card.append(row);
+  });
+  return card;
+}
+
+/** How far a macro moves a parameter: where its range sits at the knob's two ends. */
+function macroLinkControls(link: MacroLink, parameter: Parameter, edited: () => void) {
+  const panel = document.createElement('div'); panel.className = 'lfo-controls macro-controls';
+  for (const [name, field] of [['At 0%', 'min'], ['At 100%', 'max']] as const) {
+    const label = document.createElement('label'); label.textContent = name;
+    const input = document.createElement('input'); input.type = 'number'; input.min = '0'; input.max = '100'; input.step = 'any'; input.value = String(Number((link[field] * 100).toPrecision(4))); input.setAttribute('aria-label', `${parameter.name} macro ${name}`);
+    input.onchange = () => { if (Number.isFinite(input.valueAsNumber)) link[field] = Math.min(100, Math.max(0, input.valueAsNumber)) / 100; input.value = String(Number((link[field] * 100).toPrecision(4))); edited(); };
+    label.append(input); panel.append(label);
+  }
+  return panel;
 }
 
 function button(text: string, label: string, click: () => void) { const button = document.createElement('button'); button.textContent = text; button.title = label; button.setAttribute('aria-label', label); button.onclick = click; return button; }

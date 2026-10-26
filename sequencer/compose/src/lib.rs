@@ -32,8 +32,8 @@ pub use lexer::{Tok, Token, lex};
 pub use modules::expand;
 pub use perform::PITCH_PARAM;
 pub use performance::{
-    Action, Arrangement, Clip, EnvLane, Keys, Quantize, QuantizeRelation, QuantizeUnit, Scene,
-    Scheduled,
+    Action, Arrangement, Clip, EnvLane, Keys, LaneEvent, LanePreview, Quantize, QuantizeRelation,
+    QuantizeUnit, Scene, Scheduled,
 };
 pub use schedule::{ControlSet, Found, PartState, Schedule, ScheduleError};
 pub use score_file::{

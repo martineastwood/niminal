@@ -110,7 +110,20 @@ export class PatternGrid {
     this.playhead.className = 'playhead'; this.playhead.hidden = true; this.frame.className = 'track-frame'; this.frame.hidden = true;
     parent.parentElement?.append(this.playhead, this.frame);
     parent.addEventListener('scroll', () => this.placeFrame());
-    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => this.placeFrame()).observe(parent);
+    // the first render can happen before the grid has a size, so centre again once it does
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => { if (parent.clientHeight && this.playing === null && !this.keepView) this.centre(this.row); this.placeFrame(); }).observe(parent);
+    // the wheel moves the cursor row like the arrow keys, so the row stays central and the grid scrolls beneath it
+    let wheel = 0;
+    parent.addEventListener('wheel', event => {
+      if (this.live || this.playing !== null || Math.abs(event.deltaY) < Math.abs(event.deltaX) || (event.target as HTMLElement).closest('input')) return;
+      event.preventDefault();
+      const line = parent.querySelector<HTMLElement>('.grid-row[data-row]')?.offsetHeight || 20;
+      wheel += event.deltaMode === 1 ? event.deltaY * line : event.deltaY;
+      const rows = Math.trunc(wheel / line); if (!rows) return;
+      wheel -= rows * line;
+      const row = Math.max(0, Math.min(this.pattern().rows - 1, this.row + rows)); if (row === this.row) return;
+      this.row = row; this.anchor = { row, column: this.column }; this.render();
+    }, { passive: false });
     parent.addEventListener('pointerdown', event => {
       const cell = (event.target as HTMLElement).closest<HTMLElement>('[data-column]');
       if (!cell || event.button !== 0 || (event.target as HTMLElement).closest('input, .value-drag')) return;
@@ -426,7 +439,9 @@ export class PatternGrid {
     const listed = new Set(track < project.tracks.length ? [...instrumentsOnTrack(project, track), ...this.pattern().fx[track].flatMap(lane => lane.target?.kind === 'instrument' ? [lane.target.instrument] : [])] : []);
     const choices: { target: FxTarget; owner: string; name: string }[] = [{ target: { kind: 'volume' }, owner: 'Track', name: 'Vol' }, { target: { kind: 'pan' }, owner: 'Track', name: 'Pan' }];
     for (const definition of project.definitions) if (definition.kind === 'instr' && listed.has(definition.id)) for (const p of this.parameters()[definition.id] ?? []) choices.push({ target: { kind: 'instrument', instrument: definition.id, parameter: p.name }, owner: definition.name, name: p.name });
-    for (const device of strip.fx) for (const p of this.parameters()[device.definition] ?? []) choices.push({ target: { kind: 'effect', device: device.id, parameter: p.name }, owner: project.definitions.find(d => d.id === device.definition)?.name ?? 'Effect', name: p.name });
+    strip.macros?.forEach((knob, index) => choices.push({ target: { kind: 'macro', index }, owner: 'Macros', name: knob.name || `Macro ${index + 1}` }));
+    const driven = (device: string, parameter: string) => strip.macros?.some(knob => knob.links.some(link => link.device === device && link.parameter === parameter));
+    for (const device of strip.fx) for (const p of (this.parameters()[device.definition] ?? []).filter(p => !driven(device.id, p.name))) choices.push({ target: { kind: 'effect', device: device.id, parameter: p.name }, owner: project.definitions.find(d => d.id === device.definition)?.name ?? 'Effect', name: p.name });
     return choices;
   }
   /** Points a lane at a parameter. Says why and returns false if the lane has values to lose or the parameter already has a lane on this track. */
@@ -558,13 +573,13 @@ export class PatternGrid {
     const bottom = this.playing !== null || end === undefined ? this.parent.clientHeight : Math.min(this.parent.clientHeight, end - box.top);
     this.frame.style.cssText = `left:${left}px;width:${right - left}px;top:0;height:${Math.max(0, bottom)}px;--c:${columnColour(this.project(), this.activeTrack)};--side:${header.offsetHeight}px`;
   }
-  /** Scrolls `row` to the middle of the view; the padding above and below lets the first and last rows get there too. */
+  /** Scrolls `row` to a third of the way down the view, as Renoise does; the padding below lets the last row get there too. */
   private centre(row: number) {
     const header = this.parent.querySelector<HTMLElement>('.grid-header')?.offsetHeight ?? 0;
-    const pad = Math.round((this.parent.clientHeight - header) / 2); if (pad !== this.pad) this.setPad(pad);
+    const body = this.parent.clientHeight - header, above = Math.round(body / 3), pad = body - above; if (pad !== this.pad) this.setPad(pad);
     const top = this.contentTop(row); if (top === null) return null;
     const half = (this.parent.querySelector<HTMLElement>(`[data-row="${row}"]`)?.offsetHeight ?? 0) / 2;
-    this.parent.scrollTop = top + half - header - pad;
+    this.parent.scrollTop = top + half - header - above;
     return top;
   }
   private setPad(pad: number) { this.pad = pad; for (const spacer of this.parent.querySelectorAll<HTMLElement>('.grid-pad')) spacer.style.height = `${pad}px`; }

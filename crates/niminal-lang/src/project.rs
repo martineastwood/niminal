@@ -9,6 +9,8 @@ pub struct Entry {
     /// `instr:pluck`, `clip:riff`, `config`... Defining a key again replaces it.
     pub key: String,
     pub text: String,
+    /// Which evaluation sent it and where in what that sent it began, so an editor can find it again.
+    pub origin: Option<(u64, usize)>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -109,15 +111,31 @@ impl Project {
             }
             if let Some(w) = waiting.iter_mut().find(|x| x.key == e.key) {
                 w.text.clone_from(&e.text);
+                w.origin = e.origin;
             } else if let Some(at) = self.entries.iter().position(|x| x.key == e.key) {
                 let count = waiting.len();
                 self.entries.splice(at..at, waiting.drain(..));
                 self.entries[at + count].text.clone_from(&e.text);
+                self.entries[at + count].origin = e.origin;
             } else {
                 waiting.push(e.clone());
             }
         }
         self.entries.append(&mut waiting);
+    }
+
+    /// Where each definition sits in [`Project::source`] (start, end), and the evaluation and offset
+    /// it was sent from, so a position in the compiled source can be put back in the editor's terms.
+    pub fn origins(&self) -> Vec<(usize, usize, u64, usize)> {
+        let mut at = 0;
+        let mut out = Vec::new();
+        for e in &self.entries {
+            if let Some((eval, offset)) = e.origin {
+                out.push((at, at + e.text.len(), eval, offset));
+            }
+            at += e.text.len() + 1;
+        }
+        out
     }
 
     pub fn text_of(&self, key: &str) -> Option<&str> {
@@ -273,6 +291,7 @@ mod tests {
         Entry {
             key: key.into(),
             text: text.into(),
+            origin: None,
         }
     }
 
@@ -341,6 +360,7 @@ mod tests {
         let entry = |key: &str| Entry {
             key: key.into(),
             text: key.into(),
+            origin: None,
         };
         let mut project = Project::default();
         project.apply(&[

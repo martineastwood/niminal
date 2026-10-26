@@ -162,11 +162,11 @@
     },
     {
       "name": "keyword.control.niminal",
-      "match": "\\b(instr|mono|fn|def|const|bus|buffer|ctl|node|fx|config|clip|scene|arrangement|midi_out|over|meter|tempo|state|use|unsolo|hush|panic|reset|reset_on|after|new|at|next|now|if|else|match|for|in|and|or|not|init|control|as|capture|last|spawn|oversample|env|cycle)\\b"
+      "match": "\\b(instr|mono|fn|def|const|bus|buffer|ctl|node|fx|config|clip|scene|arrangement|kit|events|midi_out|over|meter|tempo|state|use|unsolo|hush|panic|reset|reset_on|after|new|at|next|now|if|else|match|for|in|and|or|not|init|control|as|capture|last|spawn|oversample|env|cycle)\\b"
     },
     {
       "name": "keyword.control.command.niminal",
-      "match": "(?<=\\.)(start|stop|play|mute|unmute|solo|unsolo|undo|clear|set)\\b"
+      "match": "(?<=\\.)(start|stop|play|mute|unmute|solo|unsolo|undo|clear|set|reverse|thin)\\b"
     },
     {
       "name": "variable.language.niminal",

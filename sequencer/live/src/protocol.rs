@@ -514,11 +514,11 @@ impl LiveServer {
         if let Some(dir) = dir {
             live.set_sample_dir(dir);
         }
-        let result = live.eval_parsed(ParsedEval::from_dir(
-            source,
-            dir.unwrap_or(std::path::Path::new(".")),
-            quantize,
-        ));
+        let origin = params.get("origin").and_then(Value::as_u64).unwrap_or(0);
+        let result = live.eval_parsed(
+            ParsedEval::from_dir(source, dir.unwrap_or(std::path::Path::new(".")), quantize)
+                .with_origin(origin),
+        );
         let chair = self.clients[&client].chair.clone();
         self.eval_outcome(&chair, result)
     }
@@ -852,10 +852,33 @@ fn status_json(live: &mut Live) -> Value {
         "defined_clips": live.defined("clip"),
         "clips": live.clips().iter().map(|c| json!({
             "name": c.name,
+            "instrument": c.instrument,
             "running": c.running,
             "muted": c.muted,
             "soloed": c.soloed,
             "edits": c.edits,
+            "length": c.length,
+            "looped": c.looped,
+            "endless": c.endless,
+            "cycles": c.cycles,
+            "lanes": c.lanes.iter().map(lane_json).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+/// A clip lane, as an editor draws it: events in cycles from the clip's start.
+fn lane_json(lane: &niminal_compose::LanePreview) -> Value {
+    json!({
+        "name": lane.name,
+        "truncated": lane.truncated,
+        "events": lane.events.iter().map(|e| json!({
+            "start": e.start,
+            "dur": e.dur,
+            "value": e.value,
+            "gain": e.gain,
+            "pan": e.pan,
+            "src": e.src.map(|(start, end)| [start, end]),
+            "eval": e.eval,
         })).collect::<Vec<_>>(),
     })
 }

@@ -34,11 +34,20 @@ pub fn fx_node(slot: impl std::fmt::Display, device: &str) -> String {
     format!("fx_{slot}_{device}")
 }
 
+/// The engine node that holds one macro knob's value, and the bus that carries it to the parameters it drives.
+pub fn macro_node(slot: impl std::fmt::Display, index: usize) -> String {
+    format!("macro_{slot}_{index}")
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum FxTarget {
     Volume,
     Pan,
+    /// The strip's macro knob of this number.
+    Macro {
+        index: usize,
+    },
     Effect {
         device: String,
         parameter: String,
@@ -72,13 +81,16 @@ impl FxTarget {
             .find(|p| p.name == *parameter)
     }
 
-    /// Whether the lane can drive anything right now: a bypassed device has no engine node.
+    /// Whether the lane can drive anything right now: a bypassed device has no engine node, and a
+    /// parameter a macro drives takes its value from the macro.
     pub fn available(&self, track: &Track, parameters: &EffectParameters) -> bool {
         match self {
-            Self::Effect { .. } => {
+            Self::Effect { device, parameter } => {
                 self.device(track).is_some_and(|device| !device.bypass)
                     && self.parameter(track, parameters).is_some()
+                    && track.macro_of(device, parameter).is_none()
             }
+            Self::Macro { index } => *index < track.macros.len(),
             _ => true,
         }
     }
@@ -130,6 +142,15 @@ pub fn edit(
             bounded(-1.0, 1.0)?;
             Ok(
                 json!({"op":"set", "id":format!("track_{slot}"), "args":{"balance":value}, "glide":0.0}),
+            )
+        }
+        FxTarget::Macro { index } => {
+            bounded(0.0, 1.0)?;
+            if *index >= track.macros.len() {
+                return Err(format!("{}: lane addresses a missing macro", track.name));
+            }
+            Ok(
+                json!({"op":"set", "id":macro_node(slot, *index), "args":{"value":value}, "glide":0.0}),
             )
         }
         FxTarget::Instrument { .. } => Err(format!(
@@ -195,5 +216,26 @@ mod tests {
             "2345.6789hz"
         );
         assert!(edit(&target, "20001", 0, &track, &parameters).is_err());
+    }
+
+    #[test]
+    fn macro_lanes_set_the_knob_and_replace_a_linked_parameters_own_lane() {
+        use crate::pattern::{Macro, MacroLink};
+        let mut track = Track { fx: vec![Device { id: "d0".into(), definition: "filter".into(), ..Default::default() }], ..Default::default() };
+        let parameters: EffectParameters = [("filter".into(), vec![Parameter { name: "cutoff".into(), min: 20.0, max: 20000.0, default: 2400.0, unit: Some("hz".into()) }])].into();
+        let knob = FxTarget::Macro { index: 0 };
+        let cutoff = FxTarget::Effect { device: "d0".into(), parameter: "cutoff".into() };
+        assert!(!knob.available(&track, &parameters), "no such macro yet");
+        assert!(edit(&knob, "0.5", 3, &track, &parameters).is_err());
+        track.macros = vec![Macro { name: "Open".into(), value: 0.0, links: vec![] }];
+        assert!(knob.available(&track, &parameters) && cutoff.available(&track, &parameters));
+        let set = edit(&knob, "0.25", 3, &track, &parameters).unwrap();
+        assert_eq!((set["id"].as_str(), set["args"]["value"].as_f64()), (Some("macro_3_0"), Some(0.25)));
+        assert!(edit(&knob, "1.5", 3, &track, &parameters).is_err());
+        track.macros[0].links.push(MacroLink { device: "d0".into(), parameter: "cutoff".into(), min: 0.0, max: 1.0 });
+        assert!(!cutoff.available(&track, &parameters), "the macro drives it now");
+        assert!(!track.invalid());
+        track.macros.push(Macro { name: "Again".into(), value: 0.0, links: track.macros[0].links.clone() });
+        assert!(track.invalid(), "one parameter, two macros");
     }
 }

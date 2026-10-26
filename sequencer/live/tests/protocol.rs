@@ -523,6 +523,11 @@ fn status_lists_scenes_clips_and_what_each_node_is_doing() {
     let code = format!(
         "{SETUP}\\nclip lead {{ instrument: pluck\\n notes: [c4 e4] }}\\nclip bass {{ instrument: pluck\\n notes: [c2 ~] }}\\nclip riff {{ notes: [c2 ~] }}\\nscene verse {{ lead, bass }}"
     );
+    // where the notes are written, which the editor lights as they play
+    let (c4, e4) = (
+        code.replace("\\n", "\n").find("c4").unwrap(),
+        code.replace("\\n", "\n").find("e4").unwrap(),
+    );
     assert!(
         call(
             &mut d,
@@ -542,7 +547,26 @@ fn status_lists_scenes_clips_and_what_each_node_is_doing() {
     assert_eq!(before["defined_clips"], json!(["lead", "bass", "riff"]));
     assert_eq!(
         before["clips"][0],
-        json!({"name": "lead", "running": false, "muted": false, "soloed": false, "edits": []})
+        json!({
+            "name": "lead",
+            "instrument": "pluck",
+            "running": false,
+            "muted": false,
+            "soloed": false,
+            "edits": [],
+            "length": 1.0,
+            "looped": true,
+            "endless": true,
+            "cycles": null,
+            "lanes": [{
+                "name": "notes",
+                "truncated": false,
+                "events": [
+                    {"start": 0.0, "dur": 0.5, "value": "c4", "gain": null, "pan": null, "src": [c4, c4 + 2], "eval": 0},
+                    {"start": 0.5, "dur": 0.5, "value": "e4", "gain": null, "pan": null, "src": [e4, e4 + 2], "eval": 0}
+                ]
+            }]
+        })
     );
 
     call(
@@ -888,4 +912,86 @@ fn a_chair_needs_a_server_that_seats_them() {
             .unwrap()
             .contains("one chair")
     );
+}
+
+/// Every note of the beat's lane points at an `x` in the text the stage sent, however the clip has
+/// been changed since: reversed, undone, or compiled again because an earlier definition changed.
+#[test]
+fn lane_sources_stay_on_the_notes_as_the_project_changes() {
+    let mut d = server();
+    let c = d.connect();
+    call(&mut d, c, 1, "hello", json!({"protocol": PROTOCOL_VERSION, "client": "test"}));
+    let source = include_str!("../../../examples/synth_drums.nml")
+        .replace("at +4bars hush", "")
+        .replace("config { channels: stereo }", "")
+        .replace("bus glue: stereo", "bus glue: mono");
+    let mut id = 1;
+    let mut eval = |d: &mut Server, src: &str, origin: u64| {
+        id += 1;
+        let r = call(d, c, id, "eval", json!({"source": src, "quantize": "now", "origin": origin}));
+        assert!(r["result"].is_object(), "{r}");
+    };
+    // `eval` number to the text that evaluation sent
+    let sent = |origin: u64| match origin {
+        5 => source.clone(),
+        other => panic!("no evaluation {other}"),
+    };
+    let check = |d: &mut Server, what: &str, reversed: Option<bool>| {
+        let status = call(d, c, 99, "status", json!({}))["result"].clone();
+        let beat = status["clips"].as_array().unwrap().iter().find(|c| c["name"] == "beat").unwrap().clone();
+        let events = beat["lanes"][0]["events"].as_array().unwrap();
+        assert!(!events.is_empty(), "{what}");
+        for e in events {
+            let (src, origin) = (&e["src"], e["eval"].as_u64().unwrap());
+            let (a, b) = (src[0].as_u64().unwrap() as usize, src[1].as_u64().unwrap() as usize);
+            assert_eq!(&sent(origin)[a..b], "x", "{what}: {e}");
+        }
+        if let Some(reversed) = reversed {
+            // the first hat of the bar is the last `x` of its row when the clip is reversed
+            let first = events[0]["src"][0].as_u64().unwrap();
+            let last_x = source.find("xxxx xxxx xxxx xxxx").unwrap() + "xxxx xxxx xxxx xxxx".len() - 1;
+            assert_eq!(first as usize == last_x, reversed, "{what}: {}", events[0]);
+        }
+    };
+    eval(&mut d, &source, 5);
+    check(&mut d, "started", Some(false));
+    // an earlier definition changes length, so the project is laid out differently now
+    eval(&mut d, "instr sd(freq: hz = 180hz) {\n  // a longer comment that moves everything after it\n  tone = osc(tri, freq) * perc(decay: 120ms) * 0.4\n  out = tone\n  glue += out\n}", 9);
+    check(&mut d, "after redefining an instrument", None);
+    eval(&mut d, "beat.reverse", 6);
+    check(&mut d, "reversed", Some(true));
+    eval(&mut d, "beat.undo", 7);
+    check(&mut d, "undone", Some(false));
+}
+
+#[test]
+fn repro_whole_file_reversals() {
+    let mut d = server();
+    let c = d.connect();
+    call(&mut d, c, 1, "hello", json!({"protocol": PROTOCOL_VERSION, "client": "test"}));
+    let base = include_str!("../../../examples/synth_drums.nml")
+        .replace("at +4bars hush", "")
+        .replace("config { channels: stereo }", "")
+        .replace("bus glue: stereo", "bus glue: mono");
+    let bar = (SR as f64 * 60.0 / 128.0 * 4.0) as u64;
+    let mut sent: Vec<String> = vec![String::new()];
+    for round in 1..=6u64 {
+        let src = format!("{base}\nbeat.reverse\n");
+        sent.push(src.clone());
+        let r = call(&mut d, c, 10 + round, "eval", json!({"source": src, "origin": round}));
+        assert!(r["result"].is_object(), "{r}");
+        for step in 1..=3u64 {
+            d.advance_to(bar * (round * 3 + step));
+            let status = call(&mut d, c, 100, "status", json!({}))["result"].clone();
+            let beat = status["clips"].as_array().unwrap().iter().find(|c| c["name"] == "beat").unwrap().clone();
+            let events = beat["lanes"][0]["events"].as_array().unwrap();
+            let bad = events.iter().filter(|e| {
+                match (e["src"].as_array(), e["eval"].as_u64()) {
+                    (Some(s), Some(o)) => &sent[o as usize][s[0].as_u64().unwrap() as usize..s[1].as_u64().unwrap() as usize] != "x",
+                    _ => true,
+                }
+            }).count();
+            println!("round {round} step {step}: edits {} cycles {} events {} bad {} first {}", beat["edits"], beat["cycles"], events.len(), bad, events.first().map_or(Value::Null, |e| e["src"].clone()));
+        }
+    }
 }

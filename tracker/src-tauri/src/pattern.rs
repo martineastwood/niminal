@@ -18,6 +18,30 @@ pub struct Track {
     /// Where the strip's finished signal goes. A return can only feed a later return; the master has no output.
     #[serde(default)]
     pub output: Output,
+    /// Knobs that each move several of this strip's effect parameters together.
+    #[serde(default)]
+    pub macros: Vec<Macro>,
+}
+
+/// One macro knob: `value` (0 to 1) moves every linked parameter along its own range. The value is
+/// a plain engine node that feeds a bus, so lanes and the mixer move it like any parameter.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct Macro {
+    pub name: String,
+    #[serde(default)]
+    pub value: f64,
+    #[serde(default)]
+    pub links: Vec<MacroLink>,
+}
+
+/// A parameter a macro drives: at 0 the parameter sits at `min` of its range, at 1 at `max`, both
+/// fractions of the range. `min` above `max` runs the parameter backwards.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct MacroLink {
+    pub device: String,
+    pub parameter: String,
+    pub min: f64,
+    pub max: f64,
 }
 
 /// The destination of a track's signal: the master, one return track (making it a group), or nowhere,
@@ -67,6 +91,7 @@ impl Track {
             || self.fx.len() > MAX_DEVICES
             || matches!(self.output, Output::Return { index } if index >= MAX_RETURNS)
             || self.fx.iter().any(|d| d.target.is_some_and(|t| t >= MAX_RETURNS))
+            || self.macros_invalid()
             || self.fx.iter().enumerate().any(|(i, device)| {
                 device.id.is_empty()
                     || device.id.len() > 40
@@ -80,6 +105,30 @@ impl Track {
             })
     }
 
+    /// Macros out of range, or two of them driving one parameter.
+    fn macros_invalid(&self) -> bool {
+        let fraction = |x: f64| (0.0..=1.0).contains(&x);
+        let mut linked = BTreeSet::new();
+        self.macros.len() > MAX_MACROS
+            || self.macros.iter().any(|m| {
+                m.name.len() > 40
+                    || !fraction(m.value)
+                    || m.links.len() > 64
+                    || m.links.iter().any(|link| {
+                        !fraction(link.min)
+                            || !fraction(link.max)
+                            || !linked.insert((link.device.as_str(), link.parameter.as_str()))
+                    })
+            })
+    }
+
+    /// The macro that drives this device parameter, with its link.
+    pub fn macro_of(&self, device: &str, parameter: &str) -> Option<(usize, &MacroLink)> {
+        self.macros.iter().enumerate().find_map(|(index, m)| {
+            m.links.iter().find(|l| l.device == device && l.parameter == parameter).map(|l| (index, l))
+        })
+    }
+
     pub fn device(&self, id: &str) -> Option<&Device> {
         self.fx.iter().find(|device| device.id == id)
     }
@@ -91,6 +140,7 @@ impl Track {
 
 pub const MAX_DEVICES: usize = 8;
 pub const MAX_RETURNS: usize = 8;
+pub const MAX_MACROS: usize = 8;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Lfo {
@@ -1251,6 +1301,7 @@ impl Playback {
                     .parameter(strip, &self.parameters)
                     .is_some_and(|p| p.unit.as_deref() == Some("db")),
                 crate::commands::FxTarget::Pan
+                | crate::commands::FxTarget::Macro { .. }
                 | crate::commands::FxTarget::Instrument { .. } => false,
             };
             for pair in breaks.windows(2) {

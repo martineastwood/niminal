@@ -1,0 +1,26 @@
+[package]
+name = "niminal-stage"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+description = "A live stage for niminal: clip lanes that light up as they play"
+
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+niminal-compose = { path = "../../sequencer/compose" }
+niminal-lang = { path = "../../crates/niminal-lang" }
+niminal-live = { path = "../../sequencer/live" }
+niminal-lsp = { path = "../../sequencer/lsp" }
+niminal-server = { path = "../../crates/niminal-server" }
+niminal-ws = { path = "../../crates/niminal-ws" }
+rfd = "0.17"
+
+[profile.dev]
+debug = "line-tables-only"

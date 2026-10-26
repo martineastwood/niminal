@@ -79,6 +79,8 @@ pub struct Composition {
     /// Commands that play clips and scenes, in source order.
     pub performance: Vec<Scheduled>,
     pub arrangements: Vec<Arrangement>,
+    /// Every clip the source defines, by name, whether or not a command plays it.
+    pub clips: std::collections::BTreeMap<String, crate::Clip>,
 }
 
 impl Deref for Composition {
@@ -207,16 +209,17 @@ pub fn compile_with(
         failed: &[],
         sample_names: &program.sample_names,
         samples: &options.samples,
+        origins: options.origins.as_deref(),
     };
     let quantize = quantize_config(&items).unwrap_or_else(|d| {
         errors.push(d);
         Default::default()
     });
-    let (performance, arrangements) = match compile_performance(&items, &cx) {
-        Ok(compiled) => (compiled.actions, compiled.arrangements),
+    let (performance, arrangements, clips) = match compile_performance(&items, &cx) {
+        Ok(compiled) => (compiled.actions, compiled.arrangements, compiled.clips),
         Err(mut found) => {
             errors.append(&mut found);
-            (Vec::new(), Vec::new())
+            (Vec::new(), Vec::new(), Default::default())
         }
     };
 
@@ -249,6 +252,7 @@ pub fn compile_with(
         notes,
         performance,
         arrangements,
+        clips,
     })
 }
 

@@ -6,6 +6,10 @@ export function laneParameter(target: FxTarget | null, track: number, project: P
   if (!target) return null;
   if (target.kind === 'volume') return { label: 'Track volume', name: 'volume', min: -60, max: 6, default: 0, unit: 'db' };
   if (target.kind === 'pan') return { label: 'Track pan', name: 'pan', min: -1, max: 1, default: 0, unit: '%' };
+  if (target.kind === 'macro') {
+    const knob = columnStrip(project, track).macros?.[target.index];
+    return knob ? { label: `Macro → ${knob.name || target.index + 1}`, name: 'macro', min: 0, max: 1, default: knob.value, unit: null } : null;
+  }
   if (target.kind === 'instrument') {
     const parameter = parameters[target.instrument]?.find(p => p.name === target.parameter);
     if (!parameter) return null;

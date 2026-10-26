@@ -1804,6 +1804,88 @@ fn clips_have_a_length_and_lanes() {
 }
 
 #[test]
+fn lane_events_know_where_they_were_written() {
+    let source = stage("clip riff { notes: [c2 e2 g2].reverse }");
+    let program = ok(&source);
+    let lane = &program.clips["riff"].lane_preview(0.0)[0];
+    // the notes play right to left; each still points at its own text in the source
+    let written: Vec<&str> = lane
+        .events
+        .iter()
+        .map(|e| {
+            let (start, end) = e.src.expect("a written note has a source range");
+            &source[start..end]
+        })
+        .collect();
+    assert_eq!(written, ["g2", "e2", "c2"]);
+}
+
+#[test]
+fn grid_hits_know_where_they_were_written() {
+    let source = "instr bd(freq: hz = 50hz) { osc(sine, freq) }\ninstr sd(freq: hz = 200hz) { osc(sine, freq) }\ndrums = kit {\n  kick: bd\n  snare: sd\n}\nclip beat {\n  instrument: drums\n  notes: grid {\n    kick:  x..x\n    snare: [~ x ~ x]\n  }\n}\n";
+    let program = ok(source);
+    let lane = &program.clips["beat"].lane_preview(0.0)[0];
+    let mut written: Vec<(f64, &str)> = lane
+        .events
+        .iter()
+        .map(|e| {
+            let (start, end) = e.src.expect("a hit has a source range");
+            (e.start, &source[start..end])
+        })
+        .collect();
+    written.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // the kick's first and last steps and the snare's two `x` in the repeated bracket
+    assert_eq!(written.iter().filter(|(_, t)| *t == "x").count(), 4);
+    assert!(written.iter().all(|(_, t)| *t == "x"));
+}
+
+#[test]
+fn lane_previews_show_a_clip_as_it_plays() {
+    let plain = ok(&stage("clip riff { notes: [c2 e2 g2] }"));
+    let lane = &plain.clips["riff"].lane_preview(0.0)[0];
+    assert_eq!(lane.name, "notes");
+    assert_eq!(
+        lane.events.iter().map(|e| e.start).collect::<Vec<_>>(),
+        [0.0, 1.0 / 3.0, 2.0 / 3.0]
+    );
+    assert_eq!(
+        lane.events.iter().map(|e| e.value).collect::<Vec<_>>(),
+        [midi(36), midi(40), midi(43)]
+    );
+
+    // reverse is where the notes are, not just a label: the lane is read from the right.
+    let reversed = ok(&stage("clip riff { notes: [c2 e2 g2].reverse }"));
+    let lane = &reversed.clips["riff"].lane_preview(0.0)[0];
+    assert_eq!(
+        lane.events.iter().map(|e| e.start).collect::<Vec<_>>(),
+        [0.0, 1.0 / 3.0, 2.0 / 3.0]
+    );
+    assert_eq!(
+        lane.events.iter().map(|e| e.value).collect::<Vec<_>>(),
+        [midi(43), midi(40), midi(36)]
+    );
+
+    // an endless clip is drawn as the cycle it is playing: `every` and `<a b>` show their turns.
+    let evolving = ok(&stage("clip riff { notes: [c2 e2].every(2, it.reverse) }"));
+    let first = &evolving.clips["riff"].lane_preview(0.0)[0];
+    assert_eq!(first.events.iter().map(|e| e.value).collect::<Vec<_>>(), [midi(40), midi(36)]);
+    let second = &evolving.clips["riff"].lane_preview(1.0)[0];
+    assert_eq!(second.events.iter().map(|e| e.value).collect::<Vec<_>>(), [midi(36), midi(40)]);
+
+    // a thinned lane has gaps, so the picture says what is left.
+    let thinned = ok(&stage("clip riff { notes: [c2 e2 g2].thin(100%) }"));
+    assert!(thinned.clips["riff"].lane_preview(0.0)[0].events.is_empty());
+
+    // lanes span the clip: two notes over two bars start a bar apart.
+    let long = ok(&stage("clip riff { length: 2bars\nnotes: [c2 e2] }"));
+    let lane = &long.clips["riff"].lane_preview(0.0)[0];
+    assert_eq!(
+        lane.events.iter().map(|e| e.start).collect::<Vec<_>>(),
+        [0.0, 1.0]
+    );
+}
+
+#[test]
 fn operations_apply_to_whole_clips() {
     let sped = played(
         "clip c { length: 2bars\nnotes: [c4 e4]\nbright: [0.1 0.9] }\nlead.__update(c.fast(2))",

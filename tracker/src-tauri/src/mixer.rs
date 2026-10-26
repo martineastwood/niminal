@@ -11,7 +11,7 @@
 //! `sendout_<s>_<device>`. Post-fader (the default) it listens to the tap; pre-fader it listens at its
 //! place in the chain, and may *mute the source*, so nothing after it carries sound on.
 use crate::{
-    commands::{EffectParameters, fx_node},
+    commands::{EffectParameters, fx_node, macro_node},
     pattern::{Device, Output, Track},
 };
 use serde_json::{Value, json};
@@ -179,6 +179,7 @@ pub fn reset(
     let mut edits = Vec::new();
     for (label, strip) in strips(tracks, returns, master) {
         edits.push(base(&label, strip));
+        edits.extend(strip.macros.iter().enumerate().map(|(index, m)| macro_value(&label, index, m.value)));
         for device in strip.active() {
             let args = arguments(device, parameters);
             if !args.is_empty() {
@@ -190,6 +191,10 @@ pub fn reset(
     }
     edits.extend(links(tracks, returns).iter().map(|(id, link)| gain(id, link.gain)));
     vec![json!({"op":"routing", "at":"now", "edits":edits})]
+}
+
+fn macro_value(label: &str, index: usize, value: f64) -> Value {
+    json!({"op":"set", "id":macro_node(label, index), "args":{"value":value}, "glide":0.01})
 }
 
 fn find<'a>(strips: &[(String, &'a Track)], label: &str) -> Option<&'a Track> {
@@ -282,6 +287,12 @@ pub fn events(
         }
         if before.is_none_or(|o| o.volume_db != strip.volume_db || o.pan != strip.pan) {
             controls.push(base(&label, strip));
+        }
+        // a new macro starts at its value, so only one that was already there is moved
+        for (index, m) in strip.macros.iter().enumerate() {
+            if before.and_then(|o| o.macros.get(index)).is_some_and(|o| o.value != m.value) {
+                controls.push(macro_value(&label, index, m.value));
+            }
         }
     }
     // links come after the nodes they join; one that is new or points somewhere else is connected, one that

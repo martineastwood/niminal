@@ -37,17 +37,18 @@ use crate::MAX_REPEATS as MAX_REPEAT;
 /// Parse mini-notation into a pattern of atom text. What an atom means (a note,
 /// a number with a unit) is up to the caller.
 pub fn parse(src: &str) -> Res<Pattern<String>> {
-    parse_with(src, |atom| Ok(atom.to_string()))
+    parse_with(src, |atom, _| Ok(atom.to_string()))
 }
 
-/// Parse mini-notation, turning each atom into a value as it is read. An atom
+/// Parse mini-notation, turning each atom into a value as it is read; `convert` is given the
+/// atom and where it starts in `src`. An atom
 /// that `convert` rejects is an error at that atom's position, so a typo is
 /// reported when the pattern is written rather than when it is first played.
 pub fn parse_with<T: Clone + Send + Sync + 'static>(
     src: &str,
-    convert: impl Fn(&str) -> Result<T, String>,
+    convert: impl Fn(&str, usize) -> Result<T, String>,
 ) -> Res<Pattern<T>> {
-    let convert: &dyn Fn(&str) -> Result<T, String> = &convert;
+    let convert: &dyn Fn(&str, usize) -> Result<T, String> = &convert;
     let chars: Vec<(usize, char)> = src.char_indices().collect();
     let mut p = Parser {
         src,
@@ -73,7 +74,7 @@ struct Parser<'a, T> {
     depth: usize,
     /// Counts the random choices (`?`, `|`) so each one chooses differently.
     seed: u64,
-    convert: &'a dyn Fn(&str) -> Result<T, String>,
+    convert: &'a dyn Fn(&str, usize) -> Result<T, String>,
 }
 
 /// Characters that end an atom.
@@ -354,7 +355,7 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
     /// A number after `op`: written out (`2`, `3/2`) or a pattern (`<2 4>`).
     fn number(&mut self, op: char) -> Res<Param<Rational>> {
         if matches!(self.peek(), Some('<' | '[')) {
-            let convert = |a: &str| parse_factor(a).ok_or_else(|| format!("`{a}` isn't a number"));
+            let convert = |a: &str, _: usize| parse_factor(a).ok_or_else(|| format!("`{a}` isn't a number"));
             let mut sub = Parser {
                 src: self.src,
                 chars: self.chars,
@@ -490,7 +491,7 @@ impl<T: Clone + Send + Sync + 'static> Parser<'_, T> {
     }
 
     fn atom_value(&self, text: String, offset: usize) -> Res<Pattern<T>> {
-        match (self.convert)(&text) {
+        match (self.convert)(&text, offset) {
             Ok(value) => Ok(Pattern::pure(value)),
             Err(message) => Err(MiniError { message, offset }),
         }
@@ -544,22 +545,49 @@ fn parse_factor(text: &str) -> Option<Rational> {
 
 /// How hard a grid step is hit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Hit {
+pub enum Strength {
     Normal,
     Accent,
     Ghost,
 }
 
+/// One hit of a grid: how hard, and where it was written when the grid says so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hit {
+    pub strength: Strength,
+    /// Where the step was written, as (evaluation, start, end), so an editor can light it as it plays.
+    pub src: Option<(u64, usize, usize)>,
+}
+
+impl Hit {
+    pub fn new(strength: Strength) -> Hit {
+        Hit { strength, src: None }
+    }
+}
+
 /// A grid: each character is one step. `x` is a hit, `X` an accent, `o` a
 /// ghost note and `.` a rest; spaces only group steps for reading.
 pub fn grid(src: &str) -> Res<Pattern<Hit>> {
+    grid_at(src, &|_, _| None)
+}
+
+/// [`grid`], with each hit remembering where it is written: `place` turns its byte range in `src`
+/// into the range the editor knows.
+pub fn grid_at(
+    src: &str,
+    place: &dyn Fn(usize, usize) -> Option<(u64, usize, usize)>,
+) -> Res<Pattern<Hit>> {
     let mut steps = Vec::new();
     for (offset, c) in src.char_indices() {
+        let hit = |strength| Pattern::pure(Hit {
+            strength,
+            src: place(offset, offset + 1),
+        });
         let step = match c {
             c if c.is_whitespace() => continue,
-            'x' => Pattern::pure(Hit::Normal),
-            'X' => Pattern::pure(Hit::Accent),
-            'o' => Pattern::pure(Hit::Ghost),
+            'x' => hit(Strength::Normal),
+            'X' => hit(Strength::Accent),
+            'o' => hit(Strength::Ghost),
             '.' => Pattern::silence(),
             other => {
                 return Err(MiniError {

@@ -1,5 +1,5 @@
-import type { Definition, Device, Project, Track } from './project';
-import { columnLanes, maxDevices } from './project';
+import type { Definition, Device, Macro, Project, Track } from './project';
+import { columnLanes, emptyFxLane, maxDevices, maxMacros } from './project';
 import send from './presets/send.nml?raw';
 import { effectPresets } from './library';
 import { codeNameOf, freeCodeName, renameInSource, slug, uniqueName } from './naming';
@@ -66,11 +66,47 @@ export function addDevice(project: Project, track: number, choice: string): { de
   return { device, definition };
 }
 
+/** Adds a macro knob to a strip, or returns null when it has all it can. */
+export function addMacro(project: Project, track: number): Macro | null {
+  const strip = stripOf(project, track), macros = strip.macros ??= [];
+  if (macros.length >= maxMacros) return null;
+  const knob: Macro = { name: `Macro ${macros.length + 1}`, value: 0, links: [] };
+  macros.push(knob);
+  return knob;
+}
+
+/** Removes a strip's last macro (the others keep their numbers, which lanes refer to), and the lanes on it. A strip keeps at least one lane, which is left empty. Says whether lanes went. */
+export function removeMacro(project: Project, track: number): boolean {
+  const macros = stripOf(project, track).macros, index = (macros?.length ?? 0) - 1;
+  if (!macros || index < 0) return false;
+  macros.pop();
+  const column = stripToColumn(project, track);
+  let removed = false;
+  for (const pattern of project.patterns) {
+    const lanes = columnLanes(project, pattern, column);
+    for (let i = lanes.length - 1; i >= 0; i--) {
+      const target = lanes[i].target;
+      if (target?.kind !== 'macro' || target.index !== index) continue;
+      removed = true;
+      if (lanes.length > 1) lanes.splice(i, 1); else lanes[i] = emptyFxLane(lanes[i].values.length);
+    }
+  }
+  return removed;
+}
+
+/** Has macro `index` (or none, for null) drive an effect parameter, over its whole range to begin with. A parameter has one driver. */
+export function linkParameter(project: Project, track: number, device: string, parameter: string, index: number | null) {
+  const macros = stripOf(project, track).macros ?? [];
+  for (const knob of macros) knob.links = knob.links.filter(link => link.device !== device || link.parameter !== parameter);
+  if (index !== null) macros[index]?.links.push({ device, parameter, min: 0, max: 1 });
+}
+
 /** Removes a device from a chain. The effect stays in the library. Lanes that pointed at it are cleared, or kept as "missing" when they hold values. */
 export function removeDevice(project: Project, track: number, deviceId: string): Device | null {
   const chain = stripOf(project, track).fx, index = chain.findIndex(d => d.id === deviceId);
   if (index < 0) return null;
   const [device] = chain.splice(index, 1);
+  for (const knob of stripOf(project, track).macros ?? []) knob.links = knob.links.filter(link => link.device !== deviceId);
   const column = stripToColumn(project, track);
   for (const pattern of project.patterns) for (const lane of columnLanes(project, pattern, column)) {
     if (lane.target?.kind === 'effect' && lane.target.device === deviceId && !lane.values.some(v => v !== null) && !lane.envelope?.points.length) lane.target = null;

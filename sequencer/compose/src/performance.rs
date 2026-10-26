@@ -3,7 +3,7 @@
 //! lives in `perform.rs`; turning it into notes lives in `schedule.rs`.
 
 use niminal_engine::ops::Curve;
-use niminal_pattern::{Pattern, Rational};
+use niminal_pattern::{Pattern, Rational, Span, with_budget};
 use niminal_score::{Time, Value};
 
 /// One step of a pattern: a value, and the controls that belong to this note alone
@@ -21,6 +21,9 @@ pub struct Step {
     pub pitch: Option<f64>,
     /// Play this note on another node (a grid row that names a drum strip).
     pub node: Option<usize>,
+    /// Where the note was written, as (evaluation, start, end) byte offsets in what that evaluation sent,
+    /// so an editor can light it as it plays.
+    pub src: Option<(u64, usize, usize)>,
 }
 
 impl From<Value> for Step {
@@ -32,6 +35,7 @@ impl From<Value> for Step {
             begin: None,
             pitch: None,
             node: None,
+            src: None,
         }
     }
 }
@@ -129,6 +133,101 @@ impl Clip {
     pub fn lane(&self, name: &str) -> Option<&Pattern<Step>> {
         self.lanes.iter().find(|(n, _)| n == name).map(|(_, p)| p)
     }
+
+    /// This clip's lanes over one pass, for drawing: each note's place in the clip, in cycles from
+    /// the start of the window, in the order and with the gaps the patterns (and any changes made to
+    /// them) give. An endless clip has no end to draw, so the cycle it is playing now is drawn.
+    pub fn lane_preview(&self, cycles: f64) -> Vec<LanePreview> {
+        // A finite clip starts its patterns again each pass, so the window is the whole clip. An
+        // endless one keeps counting, so draw the cycle it is in: `every` and `<a b>` are visible.
+        let (base, end) = if self.endless {
+            let base = cycles.floor().max(0.0);
+            let base = Rational::int(base as i64);
+            (base, base + Rational::ONE)
+        } else {
+            (Rational::ZERO, self.length)
+        };
+        let offset = base.to_f64();
+        let window = (end - base).to_f64();
+        let mut lanes: Vec<LanePreview> = self
+            .lanes
+            .iter()
+            .map(|(name, pattern)| {
+                let (haps, truncated) =
+                    with_budget(4096, || pattern.query(Span::new(base, end)));
+                let mut events: Vec<LaneEvent> = haps
+                    .into_iter()
+                    .filter_map(|hap| {
+                        let whole = hap.whole?;
+                        if whole.start < base || whole.start >= end {
+                            return None;
+                        }
+                        let start = (whole.start.to_f64() - offset).clamp(0.0, window);
+                        let stop = (whole.end.to_f64() - offset).clamp(start, window);
+                        Some(LaneEvent {
+                            start,
+                            dur: stop - start,
+                            value: hap.value.value,
+                            gain: hap.value.gain,
+                            pan: hap.value.pan,
+                            src: hap.value.src.map(|(_, start, end)| (start, end)),
+                            eval: hap.value.src.map(|(eval, ..)| eval),
+                        })
+                    })
+                    .collect();
+                events.sort_by(|a, b| a.start.total_cmp(&b.start));
+                LanePreview {
+                    name: name.clone(),
+                    events,
+                    truncated,
+                }
+            })
+            .collect();
+        if !self.scored.is_empty() && offset == 0.0 {
+            lanes.push(LanePreview {
+                name: "notes".into(),
+                events: self
+                    .scored
+                    .iter()
+                    .map(|note| LaneEvent {
+                        start: note.at.to_f64(),
+                        dur: note.dur.to_f64(),
+                        value: note.step.value,
+                        gain: note.step.gain,
+                        pan: note.step.pan,
+                        src: note.step.src.map(|(_, start, end)| (start, end)),
+                        eval: note.step.src.map(|(eval, ..)| eval),
+                    })
+                    .collect(),
+                truncated: false,
+            });
+        }
+        lanes
+    }
+}
+
+/// One lane of a clip, as an editor draws it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct LanePreview {
+    pub name: String,
+    /// The lane's events, earliest first, in cycles from the start of the clip.
+    pub events: Vec<LaneEvent>,
+    /// There were more events than an editor can draw.
+    pub truncated: bool,
+}
+
+/// One event in a lane preview: where it starts and how long it lasts, in cycles.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct LaneEvent {
+    pub start: f64,
+    pub dur: f64,
+    pub value: Value,
+    pub gain: Option<f64>,
+    pub pan: Option<f64>,
+    /// Where the note is written in the source, as byte offsets.
+    pub src: Option<(usize, usize)>,
+    /// Which evaluation sent that text.
+    pub eval: Option<u64>,
 }
 
 /// A named list of clips, started and stopped together. Clips are nodes, by index.

@@ -42,6 +42,9 @@ pub struct CompileOptions {
     pub samples: Samples,
     /// Existing shared resources to retain when a definition keeps its name, length and rate.
     pub buffers: HashMap<String, Arc<niminal_engine::Buffer>>,
+    /// Where each definition in the source was sent from (`Project::origins`), so that a note can
+    /// remember where it was written in what the client sent. `None` keeps positions as they are.
+    pub origins: Option<Vec<(usize, usize, u64, usize)>>,
 }
 
 impl Default for CompileOptions {
@@ -57,6 +60,7 @@ impl Default for CompileOptions {
             node_outputs: HashMap::new(),
             samples: Samples::default(),
             buffers: HashMap::new(),
+            origins: None,
         }
     }
 }

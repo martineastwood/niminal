@@ -55,6 +55,17 @@ impl Uses {
 }
 
 impl ParsedEval {
+    /// Number this evaluation, as the client counts them, so the notes it defines can be found in
+    /// the text that was sent.
+    pub fn with_origin(mut self, origin: u64) -> Self {
+        if let Ok((statements, _)) = &mut self.parsed {
+            for s in statements {
+                s.origin = origin;
+            }
+        }
+        self
+    }
+
     pub fn new(source: &str, quantize: Option<&str>) -> Self {
         Self::from_text(source, quantize, None)
     }
@@ -333,6 +344,7 @@ pub(super) fn prepare_pending(
         .map(|s| Entry {
             key: s.key().expect("definitions have keys").to_string(),
             text: s.text.clone(),
+            origin: Some((s.origin, s.offset)),
         })
         .collect();
     let from_snippet: HashMap<String, usize> = definitions
@@ -369,7 +381,10 @@ pub(super) fn prepare_pending(
     });
     let check = |project: &Project, extra: &[Piece]| -> Result<Composition, Vec<Problem>> {
         let (full, map) = project.source(&from_snippet, extra);
-        compile_with(&full, &options(cfg.layout, &cfg.samples)).map_err(|diags| {
+        // notes remember where they were written, in the terms of the client that sent them
+        let mut options = options(cfg.layout, &cfg.samples);
+        options.origins = Some(project.origins());
+        compile_with(&full, &options).map_err(|diags| {
             diags
                 .iter()
                 .map(|d| Problem::from_diagnostic(d, snippet, map.locate(d.span)))

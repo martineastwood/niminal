@@ -39,3 +39,11 @@ it('can leave the unit off a dB value, for a lane cell, and keeps it for other u
   expect(formatValue('-47.54', db, false, true)).toBe('-47.5'); expect(formatValue('-12', db, true)).toBe('-12 db');
   expect(formatValue('1200', hz, false, true)).toBe('1.2 kHz');
 });
+
+it('addresses a macro knob by its number, showing its name', () => {
+  const project = newProject();
+  project.tracks[0].macros = [{ name: 'Open', value: 0.5, links: [] }];
+  const info = laneParameter({ kind: 'macro', index: 0 }, 0, project, {});
+  expect([info?.label, info?.min, info?.max, info?.default]).toEqual(['Macro → Open', 0, 1, 0.5]);
+  expect(laneParameter({ kind: 'macro', index: 1 }, 0, project, {})).toBeNull();
+});

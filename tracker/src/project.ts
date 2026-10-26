@@ -12,12 +12,17 @@ export interface Lfo { enabled: boolean; shape: 'sine' | 'triangle' | 'saw' | 's
 export interface Device { id: string; definition: string; bypass: boolean; values: Record<string, number>; modulations: Record<string, Lfo>; target?: number; pre?: boolean; mute_source?: boolean }
 export const maxDevices = 8;
 export const maxReturns = 8;
+export const maxMacros = 8;
+/** A parameter a macro drives: at 0 it sits at `min` of its range, at 1 at `max` (both fractions of the range; `min` above `max` runs it backwards). */
+export interface MacroLink { device: string; parameter: string; min: number; max: number }
+/** A knob (`value` from 0 to 1) that moves several of a strip's effect parameters together. */
+export interface Macro { name: string; value: number; links: MacroLink[] }
 /** Where a track's or return's signal goes: the master, a return (a return can only feed a later one), or nowhere, leaving only its sends. */
 export type Output = { kind: 'master' } | { kind: 'return'; index: number } | { kind: 'none' };
-export interface Track { output?: Output; solo?: boolean; colour?: string; show?: Partial<Record<SubColumn, boolean>>; name: string; fx: Device[]; muted: boolean; volume_db: number; pan: number }
+export interface Track { macros?: Macro[]; output?: Output; solo?: boolean; colour?: string; show?: Partial<Record<SubColumn, boolean>>; name: string; fx: Device[]; muted: boolean; volume_db: number; pan: number }
 export interface Parameter { name: string; min: number; max: number; default: number; unit: string | null }
 export type EffectParameters = Record<string, Parameter[]>;
-export type FxTarget = { kind: 'volume' } | { kind: 'pan' } | { kind: 'effect'; device: string; parameter: string } | { kind: 'instrument'; instrument: string; parameter: string };
+export type FxTarget = { kind: 'volume' } | { kind: 'pan' } | { kind: 'macro'; index: number } | { kind: 'effect'; device: string; parameter: string } | { kind: 'instrument'; instrument: string; parameter: string };
 export interface EnvelopePoint { row: number; value: number }
 export interface Envelope { enabled: boolean; mode: 'hold' | 'linear'; points: EnvelopePoint[] }
 export interface FxLane { target: FxTarget | null; values: (string | null)[]; envelope?: Envelope }
@@ -324,7 +329,7 @@ function validLanes(lanes: FxLane[], rows: number) {
   return Array.isArray(lanes) && lanes.length >= 1 && lanes.length <= 4 && lanes.every(column => column && validEnvelope(column.envelope) && validTarget(column.target) && Array.isArray(column.values) && column.values.length >= rows && column.values.length <= 256 && column.values.every(v => v === null || typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) && (column.target !== null || column.values.every(v => v === null) && !column.envelope?.points.length));
 }
 export function validTarget(target: FxTarget | null): boolean {
-  return target === null || !!target && (target.kind === 'volume' || target.kind === 'pan' || target.kind === 'effect' && validDeviceId(target.device) && typeof target.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(target.parameter) || target.kind === 'instrument' && typeof target.instrument === 'string' && typeof target.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(target.parameter));
+  return target === null || !!target && (target.kind === 'volume' || target.kind === 'pan' || target.kind === 'macro' && Number.isInteger(target.index) && target.index >= 0 && target.index < maxMacros || target.kind === 'effect' && validDeviceId(target.device) && typeof target.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(target.parameter) || target.kind === 'instrument' && typeof target.instrument === 'string' && typeof target.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(target.parameter));
 }
 const integerWithin = (max: number) => (v: unknown) => v === null || typeof v === 'string' && /^\d{1,3}$/.test(v) && Number(v) <= max;
 function validColumn(column: NoteColumn, rows: number, definitions: Definition[]) {
@@ -341,8 +346,14 @@ function validTrack(t: Track, definitions: Definition[]): boolean {
     Array.isArray(t.fx) && t.fx.length <= maxDevices && t.fx.every((d, i) => !!d && validDeviceId(d.id) && t.fx.findIndex(other => other.id === d.id) === i && typeof d.bypass === 'boolean' && definitions.some((def: Definition) => def.id === d.definition && def.kind === 'fx') && !!d.values && Object.values(d.values).every(Number.isFinite) && !!d.modulations && Object.values(d.modulations).every(validLfo)) &&
     Number.isFinite(t.pan) && t.pan >= -1 && t.pan <= 1 &&
     (t.output === undefined || validOutput(t.output)) && t.fx.every(d => (d.target === undefined || Number.isInteger(d.target) && d.target >= 0 && d.target < maxReturns) && [d.pre, d.mute_source].every(flag => flag === undefined || typeof flag === 'boolean')) &&
+    (t.macros === undefined || validMacros(t.macros)) &&
     (t.solo === undefined || typeof t.solo === 'boolean') && typeof t.muted === 'boolean' && Number.isFinite(t.volume_db) && t.volume_db >= -60 && t.volume_db <= 6
   );
+}
+function validMacros(macros: Macro[]) {
+  const fraction = (x: number) => Number.isFinite(x) && x >= 0 && x <= 1, linked = new Set<string>();
+  return Array.isArray(macros) && macros.length <= maxMacros && macros.every(m => !!m && typeof m.name === 'string' && m.name.length <= 40 && fraction(m.value) && Array.isArray(m.links) && m.links.length <= 64 &&
+    m.links.every(l => !!l && validDeviceId(l.device) && typeof l.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(l.parameter) && fraction(l.min) && fraction(l.max) && !linked.has(`${l.device}.${l.parameter}`) && !!linked.add(`${l.device}.${l.parameter}`)));
 }
 const validOutput = (o: Output) => !!o && (o.kind === 'master' || o.kind === 'none' || o.kind === 'return' && Number.isInteger(o.index) && o.index >= 0 && o.index < maxReturns);
 export const validDeviceId = (id: unknown) => typeof id === 'string' && /^[a-zA-Z0-9_]{1,40}$/.test(id);

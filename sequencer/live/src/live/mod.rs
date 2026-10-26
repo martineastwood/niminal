@@ -14,8 +14,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use niminal_compose::{
-    Action, Clip, CommandAction, Composition, InputSource, PlayInfo, Quantize, Schedule, Scheduled,
-    Statement, StatementData, StatementKind, analyze, compile_with,
+    Action, Clip, CommandAction, Composition, InputSource, LanePreview, PlayInfo, Quantize,
+    Schedule, Scheduled, Statement, StatementData, StatementKind, analyze, compile_with,
 };
 use niminal_lang::{
     CompileOptions, Entry, Expanded, Layout, Located, Origin, Piece, Problem, Project, Samples,
@@ -118,7 +118,7 @@ pub(crate) struct Pending {
 }
 
 /// What came of an accepted evaluation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Accepted {
     /// `None` if the snippet had nothing to do.
     pub id: Option<u64>,
@@ -129,7 +129,7 @@ pub struct Accepted {
 }
 
 /// A change that has landed.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Landed {
     pub id: u64,
     pub at: u64,
@@ -138,7 +138,7 @@ pub struct Landed {
 }
 
 /// A change waiting to land.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct PendingInfo {
     pub id: u64,
     pub lands_at: u64,
@@ -149,19 +149,31 @@ pub struct PendingInfo {
 }
 
 /// A clip as an editor shows it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ClipStatus {
     pub name: String,
+    /// The instrument it plays.
+    pub instrument: String,
     /// Is it playing? A clip that plays once is not, once it has finished.
     pub running: bool,
     pub muted: bool,
     pub soloed: bool,
     /// The changes made to it live (`reverse`, `thin(25%)`), oldest first.
     pub edits: Vec<String>,
+    /// Its length in cycles (bars).
+    pub length: f64,
+    /// Does it start over when it ends?
+    pub looped: bool,
+    /// Is it free-running, never starting over?
+    pub endless: bool,
+    /// How many cycles it has been playing for, or `None` if it is not.
+    pub cycles: Option<f64>,
+    /// Its lanes over one pass, for drawing, including any live changes.
+    pub lanes: Vec<LanePreview>,
 }
 
 /// A scene as an editor shows it: a list of clips. It has no state of its own.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SceneStatus {
     pub name: String,
     pub clips: Vec<String>,
@@ -175,7 +187,7 @@ impl SceneStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Transport {
     pub sample: u64,
     pub seconds: f64,
@@ -563,12 +575,32 @@ impl Live {
                 let state = self.schedule.node_state(i, now);
                 let running = state.clip.is_some();
                 let record = self.playing.get(&t.name).filter(|p| running && p.running());
+                // what it is playing now, or the definition it would play if started
+                let clip = self
+                    .schedule
+                    .clip_at(i, now)
+                    .or_else(|| self.program.clips.get(&t.name));
+                let cycles = self
+                    .schedule
+                    .loop_position(i, now)
+                    .map(|(cycles, _)| cycles);
                 ClipStatus {
                     name: t.name.clone(),
+                    instrument: t
+                        .instrument
+                        .map(|i| self.program.instruments[i].name.clone())
+                        .unwrap_or_default(),
                     running,
                     muted: state.muted,
                     soloed: state.soloed,
                     edits: record.map(|p| p.edits.clone()).unwrap_or_default(),
+                    length: clip.map_or(1.0, |c| c.length.to_f64()),
+                    looped: clip.is_none_or(|c| c.looped),
+                    endless: clip.is_some_and(|c| c.endless),
+                    cycles,
+                    lanes: clip
+                        .map(|c| c.lane_preview(cycles.unwrap_or(0.0)))
+                        .unwrap_or_default(),
                 }
             })
             .collect()

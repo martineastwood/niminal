@@ -1,10 +1,12 @@
 //! Evaluating the performance layer: pattern literals and their operations,
 //! clips, scenes, and the commands that play them.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use niminal_engine::ops::Curve;
-use niminal_pattern::{Hit, MAX_REPEATS, Param, Pattern, Rational, grid, parse_with, unit_random};
+use niminal_pattern::{
+    Hit, MAX_REPEATS, Param, Pattern, Rational, Strength, grid, grid_at, parse_with, unit_random,
+};
 use niminal_score::{Tempo, Time, Value};
 
 use crate::ast::*;
@@ -125,6 +127,9 @@ impl Kind for Hit {
 pub(crate) struct Compiled {
     pub actions: Vec<Scheduled>,
     pub arrangements: Vec<Arrangement>,
+    /// Every clip the source defines, by name, whether or not a command plays it. Editors draw
+    /// these as lanes before they are started.
+    pub clips: BTreeMap<String, Clip>,
 }
 
 pub(crate) struct Context<'a> {
@@ -140,6 +145,9 @@ pub(crate) struct Context<'a> {
     pub sample_names: &'a [String],
     /// Where `load("…")` looks for `.nms` files.
     pub samples: &'a niminal_lang::Samples,
+    /// Where each definition was sent from, if the host wants notes to remember where they were
+    /// written: (start, end) in the source, the evaluation that sent it, and where it began there.
+    pub origins: Option<&'a [(usize, usize, u64, usize)]>,
 }
 
 struct Perform<'a> {
@@ -216,10 +224,20 @@ pub(crate) fn compile_performance(
         }
     }
 
+    let clips = p
+        .bindings
+        .into_iter()
+        .filter_map(|(name, value)| match value {
+            PerfValue::Clip(clip) => Some((name, clip)),
+            _ => None,
+        })
+        .collect();
+
     if errors.is_empty() {
         Ok(Compiled {
             actions,
             arrangements,
+            clips,
         })
     } else {
         Err(errors)
@@ -733,21 +751,38 @@ impl Perform<'_> {
         }
     }
 
+    /// A range of the source as the client that sent it knows it: which evaluation, and where in it.
+    fn sent(&self, start: usize, end: usize) -> Option<(u64, usize, usize)> {
+        let Some(origins) = self.cx.origins else {
+            return Some((0, start, end));
+        };
+        origins
+            .iter()
+            .find(|(from, to, ..)| start >= *from && end <= *to)
+            .map(|&(from, _, eval, offset)| (eval, offset + start - from, offset + end - from))
+    }
+
     fn pattern(&self, raw: &str, span: Span) -> Res<Pattern<Step>> {
-        parse_with(raw, |atom| {
+        parse_with(raw, |atom, at| {
+            // the token's text starts after its opening bracket
+            let start = span.start + 1 + at;
+            let written = |v: Value| Step {
+                src: self.sent(start, start + atom.len()),
+                ..Step::from(v)
+            };
             if let Ok(v) = atom_value(atom, self.cx.sample_names) {
-                return Ok(Step::from(v));
+                return Ok(written(v));
             }
             // Score `def` params and lets: `[root ~]` resolves `root` from bindings.
             // A lone note name is stored as a one-step pattern; take its value.
             match self.bindings.get(atom).and_then(|v| v.as_num()) {
-                Some(v) => Ok(Step::from(v)),
+                Some(v) => Ok(written(v)),
                 None => match self.bindings.get(atom) {
                     Some(other) => Err(format!(
                         "`{atom}` is {}, not a note or value for a pattern",
                         other.describe()
                     )),
-                    None => atom_value(atom, self.cx.sample_names).map(Step::from),
+                    None => atom_value(atom, self.cx.sample_names).map(written),
                 },
             }
         })
@@ -900,15 +935,26 @@ impl Perform<'_> {
                 return Err(here(row.name_offset, message));
             };
             let hits = if row.mini {
-                parse_with(row.body, |atom| match atom {
-                    "x" => Ok(Hit::Normal),
-                    "X" => Ok(Hit::Accent),
-                    "o" => Ok(Hit::Ghost),
-                    other => Err(format!("`{other}` isn't a hit: use x, X, o, or ~")),
+                parse_with(row.body, |atom, offset| {
+                    let strength = match atom {
+                        "x" => Strength::Normal,
+                        "X" => Strength::Accent,
+                        "o" => Strength::Ghost,
+                        other => return Err(format!("`{other}` isn't a hit: use x, X, o, or ~")),
+                    };
+                    let start = at + row.body_offset + offset;
+                    Ok(Hit {
+                        strength,
+                        src: self.sent(start, start + atom.len()),
+                    })
                 })
                 .map_err(|e| here(row.body_offset + e.offset, e.message))?
             } else {
-                grid(row.body).map_err(|e| here(row.body_offset + e.offset, e.message))?
+                grid_at(row.body, &|from, to| {
+                    let base = at + row.body_offset;
+                    self.sent(base + from, base + to)
+                })
+                .map_err(|e| here(row.body_offset + e.offset, e.message))?
             };
             let id = id as u32;
             let gain = row.gain;
@@ -921,10 +967,11 @@ impl Perform<'_> {
                 step.pan = pan;
                 step.begin = begin;
                 step.pitch = pitch;
-                step.gain = match hit {
-                    Hit::Normal => gain,
-                    Hit::Accent => Some(gain.unwrap_or(0.0) + ACCENT_DB),
-                    Hit::Ghost => Some(gain.unwrap_or(0.0) + GHOST_DB),
+                step.src = hit.src;
+                step.gain = match hit.strength {
+                    Strength::Normal => gain,
+                    Strength::Accent => Some(gain.unwrap_or(0.0) + ACCENT_DB),
+                    Strength::Ghost => Some(gain.unwrap_or(0.0) + GHOST_DB),
                 };
                 step
             }));
@@ -1033,7 +1080,7 @@ impl Perform<'_> {
             }
             PerfValue::Pattern(p) => self.on_pattern(name, rest, p, span, it),
             PerfValue::Grid(g) if name.name == "invert" => {
-                Ok(PerfValue::Grid(g.invert(Hit::Normal)))
+                Ok(PerfValue::Grid(g.invert(Hit::new(Strength::Normal))))
             }
             PerfValue::Grid(g) => match self.generic(name, rest, g, span, it)? {
                 Some(g) => Ok(PerfValue::Grid(g)),

@@ -2,12 +2,10 @@ import { basicSetup } from 'codemirror';
 import { EditorState, Prec } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { indentWithTab } from '@codemirror/commands';
-import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
-import { tags } from '@lezer/highlight';
 import { LSPClient, serverDiagnostics, serverCompletion, hoverTooltips, signatureHelp, formatKeymap } from '@codemirror/lsp-client';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import DOMPurify from 'dompurify';
-import { niminal } from './language';
+import { colours, niminal } from '../../editors/codemirror/language';
 import { languageTransport } from './transport';
 
 export const lsp = new LSPClient({
@@ -32,15 +30,6 @@ const theme = EditorView.theme({
   '.cm-tooltip': { backgroundColor: '#23272d', color: '#e1e7ed', border: '1px solid #3d434b', maxWidth: '550px' },
   '.cm-tooltip pre': { whiteSpace: 'pre-wrap' },
 }, { dark: true });
-const colours = syntaxHighlighting(HighlightStyle.define([
-  { tag: tags.keyword, color: '#c6a1e8' },
-  { tag: tags.comment, color: '#819184' },
-  { tag: tags.string, color: '#a5c98d' },
-  { tag: [tags.number, tags.atom], color: '#e9b66e' },
-  { tag: tags.typeName, color: '#74c7c3' },
-  { tag: tags.function(tags.variableName), color: '#8cbce7' },
-]));
-
 /** `apply` runs on Cmd/Ctrl+Enter, which stands in for the editor's own "insert blank line". */
 export function editorState(uri: string, source: string, changed: (source: string) => void, apply: () => void) {
   return EditorState.create({ doc: source, extensions: [

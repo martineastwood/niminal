@@ -278,6 +278,7 @@ impl Session {
                 .map(|s| Entry {
                     key: scoped_key(meta.client, &s.key),
                     text: s.text.clone(),
+                    origin: None,
                 })
                 .collect();
             let from_snippet: HashMap<String, usize> = definitions

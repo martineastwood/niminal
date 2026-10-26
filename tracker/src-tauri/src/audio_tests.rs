@@ -1203,6 +1203,60 @@ fn song_playback_completes_and_leaves_the_final_release_audible() {
 }
 
 #[test]
+fn macro_knob_drives_linked_parameters_and_follows_updates() {
+    use crate::pattern::{Macro, MacroLink};
+    let engine = Arc::new(Mutex::new(EngineServer::new(
+        Session::new(48000.0, Layout::Stereo).without_limiter(),
+    )));
+    let server = Server::start(engine.clone(), ServerConfig { port: 0, ..ServerConfig::default() }).unwrap();
+    let mut worker = Worker::default();
+    worker.command(Command::Connect { port: server.port(), token: None }).unwrap();
+    worker.command(Command::Apply {
+        id: "tone".into(),
+        source: "instr constant(freq: hz) { [0.25, 0.25].to_layout(stereo) }".into(),
+        kind: Kind::Instr,
+        dir: None,
+    }).unwrap();
+    worker.command(Command::Apply {
+        id: "level".into(),
+        source: "fx level(amount: 0..1 = 1) { out = in * amount }".into(),
+        kind: Kind::Fx,
+        dir: None,
+    }).unwrap();
+    let mut song = test_song(Some("C-4"));
+    song.tracks[0].fx = vec![Device { id: "d0".into(), definition: "level".into(), ..Device::default() }];
+    song.tracks[0].macros = vec![Macro {
+        name: "Gain".into(),
+        value: 0.5,
+        links: vec![MacroLink { device: "d0".into(), parameter: "amount".into(), min: 0.0, max: 1.0 }],
+    }];
+    let peak_of = |worker: &mut Worker| {
+        worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track: 0, ms: 200, start: None, retrigger: None }).unwrap();
+        let audio = engine.lock().unwrap().session_mut().process(8000);
+        audio[0][2000..6000].iter().fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
+    };
+    worker.command(Command::Update { song: song.clone() }).unwrap();
+    let peak = peak_of(&mut worker);
+    assert!((peak - 0.125).abs() < 0.001, "the macro sits at half: {peak}");
+    song.tracks[0].macros[0].value = 1.0;
+    worker.command(Command::Update { song: song.clone() }).unwrap();
+    let peak = peak_of(&mut worker);
+    assert!((peak - 0.25).abs() < 0.001, "the macro moved to full: {peak}");
+    song.tracks[0].macros[0].links[0].min = 1.0;
+    song.tracks[0].macros[0].links[0].max = 0.0;
+    worker.command(Command::Update { song: song.clone() }).unwrap();
+    let peak = peak_of(&mut worker);
+    assert!(peak < 0.001, "a backwards link turns it off at full: {peak}");
+    song.tracks[0].macros.clear();
+    worker.command(Command::Update { song }).unwrap();
+    let peak = peak_of(&mut worker);
+    assert!((peak - 0.25).abs() < 0.001, "without the macro the parameter holds its own value: {peak}");
+    worker.command(Command::Disconnect).unwrap();
+    drop(worker);
+    server.stop();
+}
+
+#[test]
 fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
     use crate::pattern::Lfo;
     let engine = Arc::new(Mutex::new(EngineServer::new(
