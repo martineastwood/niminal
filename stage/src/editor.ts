@@ -53,8 +53,13 @@ const theme = EditorView.theme(
     '.cm-scroller': { overflow: 'auto', fontFamily: '"SF Mono", "SFMono-Regular", Consolas, monospace' },
     '.cm-content': { padding: '6px 0', caretColor: '#e9b66e' },
     '.cm-gutters': { backgroundColor: '#14161a', color: '#5f6670', border: 'none' },
-    '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: '#1d2025' },
-    '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: '#3a4350' },
+    // translucent, so a selection on the cursor's line still shows through it
+    '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: 'rgba(255, 255, 255, 0.045)' },
+    '.cm-selectionBackground': { backgroundColor: 'rgba(140, 188, 231, 0.22)' },
+    '&.cm-focused .cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
+      backgroundColor: 'rgba(140, 188, 231, 0.45)',
+    },
+    '.cm-selectionMatch': { backgroundColor: 'rgba(233, 182, 110, 0.25)', outline: '1px solid rgba(233, 182, 110, 0.4)' },
     '.cm-tooltip': { backgroundColor: '#23272d', color: '#e1e7ed', border: '1px solid #3d434b', maxWidth: '560px' },
     '.cm-tooltip pre': { whiteSpace: 'pre-wrap' },
     '.cm-diagnostic-error': { borderLeft: '2px solid #d86a6a' },

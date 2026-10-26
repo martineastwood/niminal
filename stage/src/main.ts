@@ -52,6 +52,8 @@ app.innerHTML = `
       <div id="editor-status"></div>
     </section>
 
+    <div id="divider" role="separator" aria-orientation="vertical" aria-label="Resize the sidebar" tabindex="0" title="Drag to resize · double-click to reset"></div>
+
     <section id="stage">
       <div class="stage-head">
         <div class="scenes" id="scenes"></div>
@@ -492,6 +494,51 @@ async function poll() {
   }
   setTimeout(poll, 90);
 }
+
+// The divider between the code and the sidebar: drag it, or use the arrow keys, to give either more room.
+const railKey = 'niminal-stage-rail';
+const mainPane = document.querySelector<HTMLElement>('main')!;
+function setRail(width: number | null, save = true) {
+  if (width === null) {
+    mainPane.style.removeProperty('--rail');
+    localStorage.removeItem(railKey);
+    return;
+  }
+  const rail = Math.round(Math.min(Math.max(width, 220), Math.max(220, mainPane.clientWidth - 320)));
+  mainPane.style.setProperty('--rail', `${rail}px`);
+  if (save) localStorage.setItem(railKey, String(rail));
+}
+const savedRail = Number(localStorage.getItem(railKey));
+if (savedRail) setRail(savedRail, false);
+const divider = $('divider');
+divider.addEventListener('pointerdown', event => {
+  // without this the drag also selects the text and controls it passes over
+  event.preventDefault();
+  divider.setPointerCapture(event.pointerId);
+  divider.classList.add('dragging');
+  document.body.classList.add('resizing');
+});
+divider.addEventListener('pointermove', event => {
+  if (divider.hasPointerCapture(event.pointerId)) setRail(mainPane.getBoundingClientRect().right - event.clientX);
+});
+divider.addEventListener('pointerup', event => {
+  divider.releasePointerCapture(event.pointerId);
+  divider.classList.remove('dragging');
+  document.body.classList.remove('resizing');
+});
+divider.addEventListener('pointercancel', () => {
+  divider.classList.remove('dragging');
+  document.body.classList.remove('resizing');
+});
+divider.addEventListener('dblclick', () => setRail(null));
+divider.addEventListener('keydown', event => {
+  const step = event.shiftKey ? 80 : 20;
+  const width = $('stage').getBoundingClientRect().width;
+  if (event.key === 'ArrowLeft') setRail(width + step);
+  else if (event.key === 'ArrowRight') setRail(width - step);
+  else return;
+  event.preventDefault();
+});
 
 const highlighter = new Highlighter(() => view ?? undefined);
 const laneView = new LaneView($('lanes'), (action, target, change) => {

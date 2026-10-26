@@ -103,7 +103,7 @@ kbd { font: inherit; color: inherit; opacity: 0.6; margin-left: 3px; }
 main {
   display: grid;
   /* the code takes most of the screen; clips, scenes and what is pending sit in a strip beside it */
-  grid-template-columns: minmax(0, 1fr) clamp(300px, 27vw, 420px);
+  grid-template-columns: minmax(0, 1fr) 5px var(--rail, clamp(300px, 27vw, 420px));
   min-height: 0;
 }
 
@@ -114,7 +114,12 @@ main {
   overflow: hidden;
   background: var(--bg-panel);
 }
-#stage { position: relative; border-left: 1px solid var(--line); }
+#stage { position: relative; }
+
+#divider { cursor: col-resize; background: var(--line); touch-action: none; transition: background 0.1s; }
+/* while dragging, nothing the pointer passes over is selected, and the cursor stays a resize cursor */
+body.resizing, body.resizing * { user-select: none; cursor: col-resize !important; }
+#divider:hover, #divider.dragging, #divider:focus-visible { background: var(--accent); outline: none; }
 
 .pane-head, .stage-head {
   display: flex;
@@ -250,7 +255,7 @@ footer .hint { color: var(--faint); }
 ::-webkit-scrollbar-thumb { background: #373c43; border: 2px solid var(--bg-grid); border-radius: 5px; }
 
 @media (max-width: 1100px) {
-  main { grid-template-columns: minmax(0, 1fr) 300px; }
+  main { grid-template-columns: minmax(0, 1fr) 5px var(--rail, 300px); }
   .transport { gap: 8px; padding: 0 6px; }
   #token { display: none; }
 }
