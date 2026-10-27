@@ -143,6 +143,18 @@ export const stage = {
   openMidi(filter: string) {
     return invoke<string[]>('midi_open', { filter: filter || null });
   },
+  /** The names of the MIDI inputs and outputs there are. */
+  midiPorts() {
+    return invoke<{ inputs: string[]; outputs: string[] }>('midi_ports');
+  },
+  /** Send MIDI clock to the output called `name` (made if there is none), or stop with `null`. */
+  clockOut(name: string | null) {
+    return invoke<void>('clock_out', { name });
+  },
+  /** Follow the MIDI clock of the input called `name`, or stop with `null`. */
+  clockIn(name: string | null) {
+    return invoke<void>('clock_in', { name });
+  },
   disconnect() {
     return invoke<void>('disconnect');
   },
@@ -165,6 +177,9 @@ export const stage = {
   },
   openFile() {
     return invoke<OpenedFile | null>('open_file');
+  },
+  openPath(path: string) {
+    return invoke<OpenedFile>('open_path', { path });
   },
   openProject() {
     return invoke<OpenedProject | null>('open_project');

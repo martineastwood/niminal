@@ -76,7 +76,7 @@ describe('the stage app', () => {
     document.body.innerHTML = '<div id="app"></div>';
     await import('./main');
     await new Promise(resolve => setTimeout(resolve, 600));
-    expect(document.getElementById('connection')!.textContent).toContain('engine connected');
+    expect(document.getElementById('connection')!.textContent).toContain('engine');
     expect(document.getElementById('bar')!.textContent).toBe('2');
     expect(calls.filter(c => c === 'snapshot').length).toBeGreaterThan(3);
     // it connects, but sends nothing until the player asks
@@ -85,13 +85,12 @@ describe('the stage app', () => {
   });
 
   it('changes the text size, remembers it, and keeps the mode controls working', async () => {
-    document.getElementById('zoom-in')!.click();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '=', metaKey: true }));
     expect(document.documentElement.style.getPropertyValue('--z')).toBe('1.15');
-    expect(document.getElementById('zoom-reset')!.textContent).toBe('115%');
     expect(localStorage.getItem('niminal-stage-zoom')).toBe('1.15');
     window.dispatchEvent(new KeyboardEvent('keydown', { key: '-', metaKey: true }));
     window.dispatchEvent(new KeyboardEvent('keydown', { key: '-', metaKey: true }));
-    expect(document.getElementById('zoom-reset')!.textContent).toBe('85%');
+    expect(document.documentElement.style.getPropertyValue('--z')).toBe('0.85');
     window.dispatchEvent(new KeyboardEvent('keydown', { key: '0', metaKey: true }));
     expect(document.documentElement.style.getPropertyValue('--z')).toBe('1');
 

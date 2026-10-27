@@ -19,3 +19,33 @@ it('draws snapped points, edits exact values, and undoes a whole gesture', () =>
   parent.querySelector<HTMLButtonElement>('[data-undo]')!.click(); expect(lane.envelope).toBeUndefined();
   parent.querySelector<HTMLButtonElement>('[data-redo]')!.click(); expect(lane.envelope?.points[0].row).toBe(16);
 });
+
+it('chooses a lane\'s parameter, adds and removes lanes, and refuses what would lose an envelope', () => {
+  const project = newProject(), parent = document.createElement('div'), changed = vi.fn(); document.body.append(parent);
+  project.definitions.push({ id: 'bell', name: 'Bell', kind: 'instr', source: 'instr bell(freq: hz) { osc(sine, freq) }' });
+  const parameters = { tone: [{ name: 'cutoff', min: 200, max: 8000, default: 2000, unit: 'hz' }], bell: [{ name: 'ring', min: 0, max: 1, default: 0.5, unit: null }] };
+  const editor = new EnvelopeEditor(parent, () => project, () => project.patterns[0], () => parameters, changed); editor.render();
+  const lanes = () => project.patterns[0].fx[0];
+  const options = () => [...parent.querySelectorAll<HTMLOptionElement>('[data-target] option')].map(o => o.textContent);
+  expect(options()).toEqual(['Choose a parameter…', 'Vol', 'Pan', 'cutoff']); // Lead plays the Warm saw, which has a cutoff; Bell is on no track
+  const target = parent.querySelector<HTMLSelectElement>('[data-target]')!;
+  target.value = JSON.stringify({ kind: 'pan' }); target.dispatchEvent(new Event('change'));
+  expect(lanes()[0].target).toEqual({ kind: 'pan' }); expect(changed).toHaveBeenCalledOnce();
+  // another lane, and the same parameter is not offered twice
+  parent.querySelector<HTMLButtonElement>('[data-add-lane]')!.click();
+  expect(lanes()).toHaveLength(2); expect(lanes()[1].target).toBeNull();
+  parent.querySelector<HTMLSelectElement>('[data-target]')!.value = JSON.stringify({ kind: 'pan' }); parent.querySelector<HTMLSelectElement>('[data-target]')!.dispatchEvent(new Event('change'));
+  expect(lanes()[1].target).toBeNull(); expect(parent.querySelector('[data-help]')!.textContent).toContain('already has a lane');
+  parent.querySelector<HTMLSelectElement>('[data-target]')!.value = JSON.stringify({ kind: 'volume' }); parent.querySelector<HTMLSelectElement>('[data-target]')!.dispatchEvent(new Event('change'));
+  expect(lanes()[1].target).toEqual({ kind: 'volume' });
+  // a lane with an envelope keeps its parameter and cannot be removed until cleared
+  lanes()[1].envelope = { enabled: true, mode: 'linear', points: [{ row: 2, value: -6 }] };
+  parent.querySelector<HTMLSelectElement>('[data-target]')!.value = ''; parent.querySelector<HTMLSelectElement>('[data-target]')!.dispatchEvent(new Event('change'));
+  expect(lanes()[1].target).toEqual({ kind: 'volume' }); expect(parent.querySelector('[data-help]')!.textContent).toContain('Clear this lane');
+  parent.querySelector<HTMLButtonElement>('[data-remove-lane]')!.click(); expect(lanes()).toHaveLength(2);
+  delete lanes()[1].envelope; editor.render();
+  parent.querySelector<HTMLButtonElement>('[data-remove-lane]')!.click(); expect(lanes()).toHaveLength(1);
+  expect(parent.querySelector<HTMLButtonElement>('[data-remove-lane]')!.disabled).toBe(true); // the last one stays
+  for (let i = 0; i < 3; i++) parent.querySelector<HTMLButtonElement>('[data-add-lane]')!.click();
+  expect(lanes()).toHaveLength(4); expect(parent.querySelector<HTMLButtonElement>('[data-add-lane]')!.disabled).toBe(true);
+});

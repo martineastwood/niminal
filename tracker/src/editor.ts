@@ -22,7 +22,7 @@ export async function connectLanguageServer(status: (message: string) => void) {
 }
 
 const theme = EditorView.theme({
-  '&': { height: '100%', backgroundColor: '#14161a', color: '#d3d7de', fontSize: '12px' },
+  '&': { height: '100%', backgroundColor: '#14161a', color: '#d3d7de', fontSize: 'var(--code-font, 12px)' },
   '.cm-scroller': { overflow: 'auto', fontFamily: '"SFMono-Regular", Consolas, monospace' },
   '.cm-content': { padding: '4px 0', caretColor: '#e9b66e' },
   '.cm-gutters': { backgroundColor: '#14161a', color: '#5f6670', border: 'none' },

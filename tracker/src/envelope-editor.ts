@@ -1,5 +1,5 @@
 import { columnCount, columnLanes, columnStrip, type EffectParameters, type Envelope, type FxLane, type Pattern, type Project } from './project';
-import { envelopeValue, formatValue, laneParameter, parseValue, targetKey } from './automation';
+import { envelopeValue, formatValue, laneChoices, laneParameter, parseValue, targetKey } from './automation';
 
 const svgNS = 'http://www.w3.org/2000/svg';
 const blank = (): Envelope => ({ enabled: false, mode: 'linear', points: [] });
@@ -51,10 +51,32 @@ export class EnvelopeEditor {
     if (this.dragging) { if (this.key !== this.dragKey) this.cancelDrag?.(); else return; }
     this.track = Math.min(this.track, columnCount(this.project()) - 1); this.lane = Math.min(this.lane, this.lanes.length - 1);
     const info = this.info, envelope = this.envelope;
-    this.parent.innerHTML = `<div class="automation-toolbar"><strong data-track-name></strong><select data-lane aria-label="Automation parameter lane"></select><label><input data-enabled type="checkbox"> Use envelope</label><label>Shape <select data-mode aria-label="Envelope shape"><option value="linear">Linear</option><option value="hold">Hold</option></select></label><label>Tool <select data-tool aria-label="Envelope tool"><option value="points">Points</option><option value="draw">Draw</option></select></label><label>Snap <select data-snap aria-label="Envelope snap"><option value="1">Row</option><option value="beat">Beat</option><option value="0.0625">1/16 row</option></select></label><button data-undo>Undo</button><button data-redo>Redo</button><button data-clear>Clear</button></div><div class="automation-graph" tabindex="0" role="group" aria-label="Automation envelope editor"></div><div class="automation-point"><label>Row <input data-row type="number" step="0.0625" min="0" aria-label="Automation point row"></label><label>Value <input data-value aria-label="Automation point value"></label><button data-delete>Delete</button><span data-help></span></div>`;
+    this.parent.innerHTML = `<div class="automation-toolbar"><strong data-track-name></strong><select data-lane aria-label="Automation lane"></select><select data-target aria-label="Automation parameter"></select><button data-add-lane aria-label="Add automation lane" title="Add an automation lane to this track">+</button><button data-remove-lane aria-label="Remove automation lane" title="Remove this lane">−</button><label><input data-enabled type="checkbox"> Use envelope</label><label>Shape <select data-mode aria-label="Envelope shape"><option value="linear">Linear</option><option value="hold">Hold</option></select></label><label>Tool <select data-tool aria-label="Envelope tool"><option value="points">Points</option><option value="draw">Draw</option></select></label><label>Snap <select data-snap aria-label="Envelope snap"><option value="1">Row</option><option value="beat">Beat</option><option value="0.0625">1/16 row</option></select></label><button data-undo>Undo</button><button data-redo>Redo</button><button data-clear>Clear</button></div><div class="automation-graph" tabindex="0" role="group" aria-label="Automation envelope editor"></div><div class="automation-point"><label>Row <input data-row type="number" step="0.0625" min="0" aria-label="Automation point row"></label><label>Value <input data-value aria-label="Automation point value"></label><button data-delete>Delete</button><span data-help></span></div>`;
     const find = <T extends HTMLElement>(selector: string) => this.parent.querySelector<T>(selector)!;
     find('[data-track-name]').textContent = columnStrip(this.project(), this.track).name;
-    const lanes = find<HTMLSelectElement>('[data-lane]'); this.lanes.forEach((lane, i) => lanes.add(new Option(laneParameter(lane.target, this.track, this.project(), this.parameters())?.label ?? 'Choose a lane parameter above', String(i)))); lanes.value = String(this.lane); lanes.onchange = () => this.select(this.track, Number(lanes.value));
+    const lanes = find<HTMLSelectElement>('[data-lane]'); this.lanes.forEach((lane, i) => lanes.add(new Option(laneParameter(lane.target, this.track, this.project(), this.parameters())?.label ?? 'Choose a parameter', String(i)))); lanes.value = String(this.lane); lanes.onchange = () => this.select(this.track, Number(lanes.value));
+    const choices = laneChoices(this.project(), this.pattern(), this.track, this.parameters()), groups = new Map<string, HTMLOptGroupElement>();
+    const target = find<HTMLSelectElement>('[data-target]'); target.add(new Option('Choose a parameter…', ''));
+    for (const choice of choices) {
+      if (!groups.has(choice.owner)) { const group = document.createElement('optgroup'); group.label = choice.owner; groups.set(choice.owner, group); target.append(group); }
+      groups.get(choice.owner)!.append(new Option(choice.name, targetKey(choice.target)));
+    }
+    if (this.column.target && !choices.some(choice => targetKey(choice.target) === targetKey(this.column.target))) target.add(new Option(`Missing/unapplied parameter: ${this.column.target.kind === 'effect' || this.column.target.kind === 'instrument' ? this.column.target.parameter : 'parameter'}`, targetKey(this.column.target)));
+    target.value = targetKey(this.column.target);
+    const refuse = (text: string) => { this.render(); this.parent.querySelector('[data-help]')!.textContent = text; };
+    target.onchange = () => {
+      const chosen = target.value ? JSON.parse(target.value) : null;
+      if (this.column.envelope?.points.length) { refuse('Clear this lane’s envelope before choosing a different parameter.'); return; }
+      if (chosen && this.lanes.some(other => other !== this.column && targetKey(other.target) === targetKey(chosen))) { refuse('That parameter already has a lane on this track.'); return; }
+      this.column.target = chosen; this.changed(); this.render();
+    };
+    const add = find<HTMLButtonElement>('[data-add-lane]'); add.disabled = this.lanes.length >= 4;
+    add.onclick = () => { this.lanes.push({ target: null }); this.lane = this.lanes.length - 1; this.changed(); this.render(); };
+    const remove = find<HTMLButtonElement>('[data-remove-lane]'); remove.disabled = this.lanes.length <= 1;
+    remove.onclick = () => {
+      if (this.column.envelope?.points.length) { refuse('Clear this lane’s envelope before removing it.'); return; }
+      this.lanes.splice(this.lane, 1); this.lane = Math.min(this.lane, this.lanes.length - 1); this.changed(); this.render();
+    };
     const enabled = find<HTMLInputElement>('[data-enabled]'); enabled.checked = envelope.enabled; enabled.disabled = !info; enabled.onchange = () => this.mutate(e => { e.enabled = enabled.checked; });
     const mode = find<HTMLSelectElement>('[data-mode]'); mode.value = envelope.mode; mode.onchange = () => this.mutate(e => { e.mode = mode.value as Envelope['mode']; });
     const tool = find<HTMLSelectElement>('[data-tool]'); tool.value = this.tool; tool.onchange = () => { this.tool = tool.value; };
@@ -68,7 +90,7 @@ export class EnvelopeEditor {
     row.onchange = () => { const n = row.valueAsNumber; if (!Number.isFinite(n) || n < 0 || n > this.pattern().rows || envelope.points.some((p,i) => i !== this.selected && p.row === n)) { this.render(); return; } this.mutate(e => { const p = e.points[this.selected]; p.row = n; e.points.sort((a,b) => a.row-b.row); this.selected = e.points.indexOf(p); }); };
     value.onchange = () => { const parsed = info && parseValue(value.value, info); if (parsed === null || !info) { this.render(); return; } this.mutate(e => { e.points[this.selected].value = Number(parsed); }); };
     find<HTMLButtonElement>('[data-delete]').disabled = !point; find('[data-delete]').onclick = () => this.removePoint();
-    find('[data-help]').textContent = info ? '' : 'Choose a parameter in a pattern lane.';
+    find('[data-help]').textContent = info ? '' : 'Choose a parameter for this lane.';
     const area = find('[aria-label="Automation envelope editor"]');
     area.onkeydown = event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); this.undo(event.shiftKey); } else if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); this.removePoint(); } };
     this.graph = document.createElementNS(svgNS, 'svg'); area.append(this.graph);

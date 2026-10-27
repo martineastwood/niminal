@@ -1,10 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod project;
-mod samples;
+mod browse;
 mod session;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -38,6 +38,32 @@ async fn connect(state: State<'_, AppState>, port: u16, token: Option<String>) -
 async fn midi_open(state: State<'_, AppState>, filter: Option<String>) -> Result<Vec<String>, String> {
     let shared = state.shared.clone();
     tauri::async_runtime::spawn_blocking(move || session::open_midi(&shared, filter.as_deref().unwrap_or("")))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// The MIDI inputs and outputs there are.
+#[tauri::command]
+async fn midi_ports() -> Result<session::MidiPorts, String> {
+    tauri::async_runtime::spawn_blocking(session::midi_ports)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Send MIDI clock to the output called `name`, or stop when there is none.
+#[tauri::command]
+async fn clock_out(state: State<'_, AppState>, name: Option<String>) -> Result<(), String> {
+    let shared = state.shared.clone();
+    tauri::async_runtime::spawn_blocking(move || session::set_clock_out(&shared, name.as_deref()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Follow the MIDI clock of the input called `name`, or stop when there is none.
+#[tauri::command]
+async fn clock_in(state: State<'_, AppState>, name: Option<String>) -> Result<(), String> {
+    let shared = state.shared.clone();
+    tauri::async_runtime::spawn_blocking(move || session::set_clock_in(&shared, name.as_deref()))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -164,6 +190,18 @@ async fn open_file() -> Result<Option<OpenedFile>, String> {
     }))
 }
 
+/// A `.nml` file chosen in the file browse panel.
+#[tauri::command]
+async fn open_path(path: String) -> Result<OpenedFile, String> {
+    let path = PathBuf::from(path);
+    let source = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(OpenedFile {
+        dir: path.parent().unwrap_or_else(|| Path::new(".")).to_string_lossy().into_owned(),
+        path: path.to_string_lossy().into_owned(),
+        source,
+    })
+}
+
 /// A folder of `.nml` files: what to open as tabs, and the file to evaluate to play them.
 #[derive(Serialize)]
 struct OpenedProject {
@@ -257,10 +295,10 @@ async fn render_take(state: State<'_, AppState>, from: u64, to: u64) -> Result<O
         .map(Some)
 }
 
-/// The audio files under a folder, for the sample browser.
+/// The piece and audio files under a folder, for the file browse panel.
 #[tauri::command]
-async fn list_samples(dir: String) -> Result<Vec<samples::SampleFile>, String> {
-    tauri::async_runtime::spawn_blocking(move || samples::list(Path::new(&dir)))
+async fn list_files(dir: String) -> Result<Vec<browse::BrowseFile>, String> {
+    tauri::async_runtime::spawn_blocking(move || browse::list(Path::new(&dir)))
         .await
         .map_err(|e| e.to_string())
 }
@@ -268,7 +306,7 @@ async fn list_samples(dir: String) -> Result<Vec<samples::SampleFile>, String> {
 /// An audio file as WAV bytes, sent as they are rather than as a list of numbers.
 #[tauri::command]
 async fn read_sample(path: String) -> Result<tauri::ipc::Response, String> {
-    tauri::async_runtime::spawn_blocking(move || samples::read(Path::new(&path)))
+    tauri::async_runtime::spawn_blocking(move || browse::read(Path::new(&path)))
         .await
         .map_err(|e| e.to_string())?
         .map(tauri::ipc::Response::new)
@@ -330,6 +368,7 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .select_all()
         .build()?;
     let view = SubmenuBuilder::new(app, "View")
+        .item(&item("browse", "Browse (⇧⌘L)", None)?)
         .item(&item("sidebar", "Sidebar (⌘B)", None)?)
         .item(&item("perform", "Performance Mode (⇧⌘P)", None)?)
         .separator()
@@ -375,6 +414,9 @@ fn main() {
             connect,
             disconnect,
             midi_open,
+            midi_ports,
+            clock_out,
+            clock_in,
             snapshot,
             eval,
             perform,
@@ -383,7 +425,8 @@ fn main() {
             open_project,
             save_file,
             save_file_as,
-            list_samples,
+            list_files,
+            open_path,
             read_sample,
             pick_folder,
             save_transcript,

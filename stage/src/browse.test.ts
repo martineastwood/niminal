@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nameFor, peaksOf, relativePath, rowsFor, snippetFor } from './browse';
+import { nameFor, parentFolder, peaksOf, relativePath, rowsFor, snippetFor } from './browse';
 
 describe('naming samples in a piece', () => {
   it('writes a path from the folder of the file', () => {
@@ -54,4 +54,13 @@ describe('the rows of the file browse panel', () => {
   it('lists what matches a search, wherever it is', () => {
     expect(paths([], ['hats'])).toEqual(['drums/hats/open.wav']);
   });
+});
+
+ it('finds parent folders and stops at filesystem roots', () => {
+  expect(parentFolder('/music/set/')).toBe('/music');
+  expect(parentFolder('/music')).toBe('/');
+  expect(parentFolder('/')).toBeNull();
+  expect(parentFolder('C:\\samples\\drums')).toBe('C:/samples');
+  expect(parentFolder('C:/samples')).toBe('C:/');
+  expect(parentFolder('C:/')).toBeNull();
 });

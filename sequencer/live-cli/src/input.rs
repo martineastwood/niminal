@@ -3,10 +3,10 @@
 
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use midir::{MidiInput, MidiInputConnection};
-use niminal_live::{ControlSignal, LiveServer};
+use midir::{Ignore, MidiInput, MidiInputConnection};
+use niminal_live::{ControlSignal, LiveServer, Realtime};
 
 use niminal_ws::lock;
 use niminal_ws::worker::Worker;
@@ -166,6 +166,36 @@ pub fn open_midi(
     filter: &str,
     deliver: impl Fn(&ControlSignal) + Clone + Send + 'static,
 ) -> Result<(Vec<MidiInputConnection<()>>, Vec<String>), String> {
+    open_inputs(filter, Ignore::SysexAndTime, move |bytes| {
+        if let Some(signal) = parse_midi(bytes) {
+            deliver(&signal);
+        }
+    })
+}
+
+/// Open every MIDI input whose name contains `filter` for its clock: `deliver` gets each tick, start,
+/// continue and stop with the Unix time in microseconds at which it arrived.
+pub fn open_clock_in(
+    filter: &str,
+    deliver: impl Fn(Realtime, u64) + Clone + Send + 'static,
+) -> Result<(Vec<MidiInputConnection<()>>, Vec<String>), String> {
+    open_inputs(filter, Ignore::SysexAndActiveSense, move |bytes| {
+        let arrived = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_micros() as u64);
+        if let [byte] = bytes
+            && let Some(message) = Realtime::from_byte(*byte)
+        {
+            deliver(message, arrived);
+        }
+    })
+}
+
+fn open_inputs(
+    filter: &str,
+    ignore: Ignore,
+    callback: impl Fn(&[u8]) + Clone + Send + 'static,
+) -> Result<(Vec<MidiInputConnection<()>>, Vec<String>), String> {
     let probe = MidiInput::new("niminal").map_err(|e| format!("can't use MIDI: {e}"))?;
     let mut connections = Vec::new();
     let mut names = Vec::new();
@@ -176,19 +206,11 @@ pub fn open_midi(
         if !name.contains(filter) {
             continue;
         }
-        let input = MidiInput::new("niminal").map_err(|e| format!("can't use MIDI: {e}"))?;
-        let deliver = deliver.clone();
+        let mut input = MidiInput::new("niminal").map_err(|e| format!("can't use MIDI: {e}"))?;
+        input.ignore(ignore);
+        let callback = callback.clone();
         let connection = input
-            .connect(
-                &port,
-                "niminal-in",
-                move |_, bytes, _| {
-                    if let Some(signal) = parse_midi(bytes) {
-                        deliver(&signal);
-                    }
-                },
-                (),
-            )
+            .connect(&port, "niminal-in", move |_, bytes, _| callback(bytes), ())
             .map_err(|e| format!("can't open MIDI input `{name}`: {e}"))?;
         connections.push(connection);
         names.push(name);

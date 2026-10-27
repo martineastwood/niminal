@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it, vi } from 'vitest';
+import { addDevice } from './effects';
 import { MixPanel } from './mix';
 import { drawScope, meterLevel } from './scope';
 import { newProject } from './project';
@@ -12,7 +13,7 @@ afterEach(() => document.body.replaceChildren());
 
 function setup() {
   const parent = document.createElement('div'); document.body.append(parent);
-  const project = newProject(), actions = { selectTrack: vi.fn(), openFx: vi.fn(), edited: vi.fn(), addReturn: vi.fn(), removeReturn: vi.fn() };
+  const project = newProject(), actions = { openFx: vi.fn(), edited: vi.fn(), addReturn: vi.fn(), removeReturn: vi.fn() };
   const panel = new MixPanel(parent, () => project, actions); panel.render();
   return { parent, project, actions, panel };
 }
@@ -25,7 +26,8 @@ it('shows a strip for every track and the master, and each strip acts on its own
   expect(parent.querySelector('[aria-label="Mute Bass"]')!.getAttribute('aria-pressed')).toBe('true');
   parent.querySelector<HTMLButtonElement>('[aria-label="Solo Drums"]')!.click(); expect(project.tracks[2].solo).toBe(true);
   parent.querySelector<HTMLButtonElement>('[aria-label="Bass effect chain"]')!.click(); expect(actions.openFx).toHaveBeenCalledWith(1);
-  parent.querySelectorAll<HTMLButtonElement>('.mix-name')[3].click(); expect(actions.selectTrack).toHaveBeenCalledWith(3);
+  parent.querySelectorAll<HTMLButtonElement>('.mix-name')[3].click(); expect(actions.openFx).toHaveBeenCalledWith(3);
+  parent.querySelectorAll<HTMLElement>('.mix-strip')[2].click(); expect(actions.openFx).toHaveBeenCalledWith(2);
   parent.querySelector<HTMLButtonElement>('.mix-strip.master .mix-name')!.click(); expect(actions.openFx).toHaveBeenCalledWith(-1);
   expect(parent.querySelector('.mix-strip.master [aria-label^="Mute"]')).toBeNull();
 });
@@ -79,4 +81,13 @@ it('reads levels on a decibel scale and tolerates a missing scope', () => {
   expect(meterLevel(undefined)).toBe(0); expect(meterLevel([0, 0])).toBe(0);
   expect(meterLevel([1])).toBeCloseTo(60 / 66); expect(meterLevel([0.001])).toBeCloseTo(0);
   expect(() => drawScope(document.createElement('canvas'), [0.1, -0.1])).not.toThrow(); expect(() => drawScope(document.createElement('canvas'), undefined)).not.toThrow();
+});
+
+it('lists each strip\'s effects by name, and a click on one opens the chain at that effect', () => {
+  const { parent, project, actions, panel } = setup();
+  const added = addDevice(project, 1, 'echo')!; added.device.bypass = true; panel.render();
+  const slots = parent.querySelectorAll<HTMLButtonElement>('.mix-strip[data-track="1"] .mix-device');
+  expect(slots).toHaveLength(1); expect(slots[0].textContent).toBe(added.definition.name); expect(slots[0].classList.contains('bypassed')).toBe(true);
+  slots[0].click(); expect(actions.openFx).toHaveBeenCalledWith(1, added.device.id);
+  expect(parent.querySelectorAll('.mix-strip[data-track="2"] .mix-device')).toHaveLength(0);
 });

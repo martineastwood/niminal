@@ -2,7 +2,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { renderMixer, renderInstrument, type FxActions } from './mixer';
 import { newProject, readProject } from './project';
-import { addDevice, addMacro, linkParameter, removeMacro, duplicateEffect, effectUsers, moveDevice, newEffect, removeDevice, removeEffect } from './effects';
+import { addDevice, addMacro, commandsFor, linkParameter, removeMacro, duplicateEffect, effectUsers, moveDevice, newEffect, removeDevice, removeEffect } from './effects';
 
 vi.stubGlobal('Option', function (text: string, value: string) {
   const option = document.createElement('option'); option.textContent = text; option.value = value; return option;
@@ -67,7 +67,7 @@ it('adds sends to tracks only, targeting the first return, and picks the return 
 
 it('keeps lanes that hold values when their effect is removed', () => {
   const project = newProject(); const { device } = addDevice(project, 0, 'echo')!;
-  const lane = project.patterns[0].fx[0][0]; lane.target = { kind: 'effect', device: device.id, parameter: 'mix' }; lane.values[4] = '0.5';
+  const lane = project.patterns[0].fx[0][0]; lane.target = { kind: 'effect', device: device.id, parameter: 'mix' }; lane.envelope = { enabled: true, mode: 'hold', points: [{ row: 4, value: 0.5 }] };
   removeDevice(project, 0, device.id);
   expect(lane.target).toEqual({ kind: 'effect', device: device.id, parameter: 'mix' });
 });
@@ -212,7 +212,7 @@ it('adds macros, links effect parameters to them, and tidies up when a device or
   expect(project.tracks[0].macros!.map(m => m.links.map(l => `${l.device}.${l.parameter}`))).toEqual([[`${b.device.id}.mix`], [`${a.device.id}.mix`]]);
   project.patterns[0].fx[0][0].target = { kind: 'macro', index: 1 };
   expect(readProject(JSON.stringify(project))).toEqual(project);
-  project.patterns[0].fx[0].push({ target: { kind: 'macro', index: 1 }, values: Array(32).fill('0.5') }, { target: { kind: 'volume' }, values: Array(32).fill(null) });
+  project.patterns[0].fx[0].push({ target: { kind: 'macro', index: 1 }, envelope: { enabled: true, mode: 'hold', points: [{ row: 0, value: 0.5 }] } }, { target: { kind: 'volume' } });
   expect(removeMacro(project, 0)).toBe(true);
   expect(project.tracks[0].macros).toHaveLength(1);
   expect(project.patterns[0].fx[0].map(lane => lane.target)).toEqual([{ kind: 'volume' }]); // both macro lanes went, with their values
@@ -243,8 +243,28 @@ it('shows macros in the mixer: a knob moves its value, a linked parameter hands 
 
 it('keeps one empty lane when the last macro takes the strip\'s only lane', () => {
   const project = newProject(); addMacro(project, 0);
-  project.patterns[0].fx[0][0] = { target: { kind: 'macro', index: 0 }, values: Array(32).fill('1') };
+  project.patterns[0].fx[0][0] = { target: { kind: 'macro', index: 0 }, envelope: { enabled: true, mode: 'hold', points: [{ row: 0, value: 1 }] } };
   expect(removeMacro(project, 0)).toBe(true);
-  expect(project.patterns[0].fx[0]).toEqual([{ target: { kind: 'volume' }, values: Array(32).fill(null) }]);
+  expect(project.patterns[0].fx[0]).toEqual([{ target: { kind: 'volume' } }]);
   expect(removeMacro(project, 0)).toBe(false);
+});
+
+it('keeps a strip\'s effect commands on the effects they were written for as its chain changes', () => {
+  const project = newProject();
+  const a = addDevice(project, 0, 'echo')!, b = addDevice(project, 0, 'echo')!, c = addDevice(project, 0, 'echo')!;
+  const cells = project.patterns[0].notes[0][0].fx;
+  Object.assign(cells[0], { 0: '13FF', 1: '2100', 2: '31AA', 3: 'L80', 4: '4100' }); // effect 4 does not exist yet; L80 is not an effect command
+  expect(commandsFor(project, 0, b.device.id)).toBe(1);
+  // moving the second effect up takes its command to place 1, and the first effect's to place 2
+  expect(moveDevice(project, 0, b.device.id, -1)).toBe(true);
+  expect(project.tracks[0].fx.map(d => d.id)).toEqual([b.device.id, a.device.id, c.device.id]);
+  expect(cells[0].slice(0, 5)).toEqual(['23FF', '1100', '31AA', 'L80', '4100']);
+  // removing the first effect clears its commands and moves the later ones up a place
+  expect(removeDevice(project, 0, b.device.id)).toBeTruthy();
+  expect(cells[0].slice(0, 5)).toEqual(['13FF', null, '21AA', 'L80', '4100']);
+  // removing the last effect clears only its own
+  expect(commandsFor(project, 0, c.device.id)).toBe(1);
+  removeDevice(project, 0, c.device.id);
+  expect(cells[0].slice(0, 5)).toEqual(['13FF', null, null, 'L80', '4100']);
+  expect(commandsFor(project, 0, 'missing')).toBe(0);
 });

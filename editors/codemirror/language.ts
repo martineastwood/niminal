@@ -12,7 +12,7 @@ export const commands = new Set('start stop play mute unmute solo unsolo undo cl
 /** Words that name what they define, and how the name is coloured: `clip beat`, `bus pad_audio`. */
 const definers: Record<string, string> = {
   clip: 'typeName',
-  scene: 'typeName',
+  scene: 'className',
   arrangement: 'typeName',
   bus: 'variableName.definition',
   buffer: 'variableName.definition',
@@ -128,6 +128,8 @@ export const colours = syntaxHighlighting(
     { tag: tags.string, color: '#a5c98d' },
     { tag: [tags.number, tags.atom], color: '#e9b66e' },
     { tag: tags.typeName, color: '#74c7c3' },
+    // scenes read apart from the clips they list
+    { tag: tags.className, color: '#a6d189' },
     { tag: tags.function(tags.variableName), color: '#8cbce7' },
     { tag: tags.propertyName, color: '#e8a0a8' },
     { tag: tags.local(tags.variableName), color: '#e8a0a8' },

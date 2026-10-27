@@ -8,13 +8,14 @@ use serde_json::{Value, json};
 use crate::{Document, text};
 
 /// The token types semantic highlighting uses, in the order the legend lists them.
-pub const TOKEN_TYPES: [&str; 6] = [
+pub const TOKEN_TYPES: [&str; 7] = [
     "function",
     "class",
     "variable",
     "parameter",
     "enumMember",
     "namespace",
+    "enum",
 ];
 const FUNCTION: u32 = 0;
 const CLASS: u32 = 1;
@@ -22,6 +23,7 @@ const VARIABLE: u32 = 2;
 const PARAMETER: u32 = 3;
 const ENUM_MEMBER: u32 = 4;
 const NAMESPACE: u32 = 5;
+const ENUM: u32 = 6;
 
 fn is_name(s: &str) -> bool {
     let mut chars = s.chars();
@@ -674,6 +676,7 @@ fn local_kinds(tokens: &[Token]) -> Vec<Option<u32>> {
 /// one it is (lines, then columns), its length, its type and its modifiers.
 pub fn semantic_tokens(doc: &Document) -> Vec<u32> {
     let (tokens, _) = lex_lenient(&doc.text);
+    let transforms: Vec<String> = pattern_ops().into_iter().map(|o| o.name).collect();
     let builtins: Vec<String> = builtin_ops()
         .into_iter()
         .chain(pattern_ops())
@@ -701,11 +704,20 @@ pub fn semantic_tokens(doc: &Document) -> Vec<u32> {
                 | SymbolKind::Kit
                 | SymbolKind::Pattern => CLASS,
                 SymbolKind::Control => VARIABLE,
-                SymbolKind::Clip | SymbolKind::Scene | SymbolKind::Arrangement => NAMESPACE,
+                SymbolKind::Clip | SymbolKind::Arrangement => NAMESPACE,
+                // a scene is a list of clips, and reads differently from one in a column of them
+                SymbolKind::Scene => ENUM,
             })
         } else if (after == Some(&Tok::LParen) || before == Some(&Tok::Dot))
             && builtins.contains(name)
         {
+            Some(FUNCTION)
+        } else if matches!(before, Some(Tok::LParen | Tok::Comma | Tok::Colon))
+            && matches!(after, Some(Tok::Comma | Tok::RParen))
+            && locals[i].is_none()
+            && transforms.contains(name)
+        {
+            // a transform handed over by name: `.every(2, reverse)`
             Some(FUNCTION)
         } else if before == Some(&Tok::LParen)
             && after == Some(&Tok::Comma)

@@ -1,6 +1,19 @@
-import { columnStrip, type EffectParameters, type FxTarget, type Parameter, type Envelope, type Project } from './project';
+import { columnStrip, type EffectParameters, type FxTarget, type Parameter, type Envelope, type Pattern, type Project } from './project';
+import { instrumentsOnTrack } from './instruments';
 
 export interface LaneParameter extends Parameter { label: string }
+/** What a lane on `track` can drive: its volume and pan, its effects' parameters, and those of the instruments it plays (and any a lane already points at). */
+export function laneChoices(project: Project, pattern: Pattern, track: number, parameters: EffectParameters): { target: FxTarget; owner: string; name: string }[] {
+  const strip = columnStrip(project, track);
+  // only a track has notes, so only a track has instruments to automate
+  const listed = new Set(track < project.tracks.length ? [...instrumentsOnTrack(project, track), ...pattern.fx[track].flatMap(lane => lane.target?.kind === 'instrument' ? [lane.target.instrument] : [])] : []);
+  const choices: { target: FxTarget; owner: string; name: string }[] = [{ target: { kind: 'volume' }, owner: 'Track', name: 'Vol' }, { target: { kind: 'pan' }, owner: 'Track', name: 'Pan' }];
+  for (const definition of project.definitions) if (definition.kind === 'instr' && listed.has(definition.id)) for (const p of parameters[definition.id] ?? []) choices.push({ target: { kind: 'instrument', instrument: definition.id, parameter: p.name }, owner: definition.name, name: p.name });
+  strip.macros?.forEach((knob, index) => choices.push({ target: { kind: 'macro', index }, owner: 'Macros', name: knob.name || `Macro ${index + 1}` }));
+  const driven = (device: string, parameter: string) => strip.macros?.some(knob => knob.links.some(link => link.device === device && link.parameter === parameter));
+  for (const device of strip.fx) for (const p of (parameters[device.definition] ?? []).filter(p => !driven(device.id, p.name))) choices.push({ target: { kind: 'effect', device: device.id, parameter: p.name }, owner: project.definitions.find(d => d.id === device.definition)?.name ?? 'Effect', name: p.name });
+  return choices;
+}
 export function targetKey(target: FxTarget | null) { return target ? JSON.stringify(target) : ''; }
 export function laneParameter(target: FxTarget | null, track: number, project: Project, parameters: EffectParameters): LaneParameter | null {
   if (!target) return null;

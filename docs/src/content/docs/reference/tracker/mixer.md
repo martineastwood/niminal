@@ -5,7 +5,7 @@ description: Levels, scopes, groups and parallel effects in the tracker.
 
 ## The mixer
 
-**Mixer** in the toolbar opens a tab with a strip for every track, return and the master: a scope of the channel's finished signal (after its effects), pan, a fader with a level meter (double-click resets it to 0 dB, arrow keys nudge it), **M** mute on tracks and returns, **S** solo on tracks, and **FX** on every strip. A thin scope of the master runs across the top of the window. Scopes need the engine connected, and update about twenty times a second.
+**Mixer** in the toolbar (or the bar above the grid) replaces the grid with a strip for every track, return and the master: a scope of the channel's finished signal (after its effects), pan, a fader with a level meter (double-click resets it to 0 dB, arrow keys nudge it), **M** mute on tracks and returns, **S** solo on tracks, and **FX** on every strip. A thin scope of the master runs across the top of the window. Scopes need the engine connected, and update about twenty times a second.
 
 While any track is soloed, only soloed tracks feed the mix and the returns.
 
@@ -29,6 +29,6 @@ A send's amount is an ordinary parameter, so it has lanes, envelopes and an LFO 
 
 ## Returns and the master in the grid
 
-After the tracks, the grid draws a narrow column for each return and one for the master (white), with parameter lanes only: no notes, no sub-columns. Automate a return's reverb mix, its level and pan, or the master's level, the same way as on a track: **P** on a lane picks the parameter (its **Vol**, **Pan** or one of its own effects' parameters, with no instruments), **⌁** opens an envelope, and the **⋯** menu adds or hides up to four lanes. A return column also has **M**; the master has no mute.
+After the tracks, the grid draws a narrow column for each return and one for the master (white), with track commands only: no notes, no sub-columns. Set a return's or the master's level and pan with `Lxx` and `Pxx`, and an effect's parameter with `xyzz` (see [Track commands](/reference/tracker/automation/#track-commands)); draw anything else in the **Automation** tab, with **Vol**, **Pan** or one of the strip's own effects' parameters (no instruments). A return column also has **M**; the master has no mute.
 
-Selecting one of these columns makes it the strip the code pane's FX view and the **↳** buttons work on, and **Tab** walks through them after the last track. Every pattern has its own lanes for each, copied into a variation.
+Selecting one of these columns makes it the strip the dock's FX tab, the **↳** buttons and the Automation tab work on, and **Tab** walks through them after the last track. Every pattern has its own commands and lanes for each, copied into a variation.

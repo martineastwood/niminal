@@ -19,7 +19,7 @@ cargo install --path sequencer/live-cli    # niminal-live
 | Command | What it does |
 | --- | --- |
 | `niminal-live render` | Render a `.nml` file (or an `arrangement` in it) to WAV; optional `--score`, `--from` / `--to`, `--stems` (one file per node and bus into the `--out` folder). |
-| `niminal-live live [FILE]` | Live sequencer client: clips, scenes, quantized edits, file watch, `--midi`, `--osc-port`. Connects to `--engine-port` (7401); the live-control API on `--port` (7400). |
+| `niminal-live live [FILE]` | Live sequencer client: clips, scenes, quantized edits, file watch, `--midi`, `--osc-port`, `--clock-in`, `--clock-out`. Connects to `--engine-port` (7401); the live-control API on `--port` (7400). |
 | `niminal-live repl` | REPL connected to a running server (`--port`, `--quantize`, `--token`). |
 | `niminal-live send` | One-shot eval to the server (code argument, `--file`, or stdin). |
 | `niminal-live explain FILE` | Compile a `.nml` file and list, for each instrument and node chain, the ops that run every sample and the ones that run once per block (see [control scopes](/reference/language/units-and-rates/#control-scopes)). |
@@ -33,7 +33,7 @@ Pass the same `--block-size` and `--control-step` the server runs with when you 
 
 ## Live, send and the REPL
 
-`niminal-live live [FILE]` loads a project and reloads it on save. Add `--midi` and/or `--osc-port` to play from a keyboard or another program; see `examples/midi_osc.nml`.
+`niminal-live live [FILE]` loads a project and reloads it on save. Add `--midi` and/or `--osc-port` to play from a keyboard or another program; see `examples/midi_osc.nml`. `--clock-in NAME` follows another device's MIDI clock and `--clock-out NAME` sends one; see [Live coding](/guide/live-coding/).
 
 `--quantize` accepts values like `now`, `next bar`, `next 4bars` (same as in source `@ next 4bars`), and works with `niminal-live send` and in the REPL. In the REPL you can also set or clear the default with `:quantize WHEN` or `:quantize off`, and leave with `:quit`.
 

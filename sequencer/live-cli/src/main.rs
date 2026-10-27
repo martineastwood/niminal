@@ -84,6 +84,13 @@ struct LiveArgs {
     /// Take OSC over UDP on this local port, for `ctl x = osc_in("/address")`.
     #[arg(long, value_name = "PORT")]
     osc_port: Option<u16>,
+    /// Send MIDI clock (24 a beat, with start and stop) to the output whose name contains this,
+    /// making an output of that name if there is none.
+    #[arg(long, value_name = "NAME")]
+    clock_out: Option<String>,
+    /// Follow the MIDI clock of the input whose name contains this: its tempo, and the bar line at its start.
+    #[arg(long, value_name = "NAME")]
+    clock_in: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -393,6 +400,8 @@ fn run_live(args: LiveArgs) -> Result<(), String> {
         parent_stdio,
         midi,
         osc_port,
+        clock_out,
+        clock_in,
     } = args;
     let link = niminal_live::WsLink::connect(engine_port, token.as_deref(), "niminal-live")?
         .exit_when_lost();
@@ -435,6 +444,23 @@ fn run_live(args: LiveArgs) -> Result<(), String> {
     let _osc = osc_port
         .map(|port| niminal_live_cli::input::OscInput::start(live.clone(), port))
         .transpose()?;
+    let clock_out = clock_out
+        .as_deref()
+        .map(niminal_live_cli::clock::ClockOutput::open)
+        .transpose()?;
+    if clock_out.is_some() {
+        lock(&live).live_mut().set_clock_out(true);
+    }
+    let _clock_in = clock_in
+        .as_deref()
+        .map(|filter| {
+            lock(&live).live_mut().set_clock_in(true);
+            let live = live.clone();
+            niminal_live_cli::input::open_clock_in(filter, move |message, arrived| {
+                lock(&live).live_mut().midi_clock(message, arrived);
+            })
+        })
+        .transpose()?;
     let mut watched = file.as_deref().map(|path| load(&live, path, Some("now")));
     if parent_stdio {
         std::thread::spawn(|| {
@@ -448,7 +474,13 @@ fn run_live(args: LiveArgs) -> Result<(), String> {
     // Events go to the server every 25ms; the files are looked at a tenth as often.
     let mut ticks = 0u32;
     loop {
-        lock(&live).advance();
+        {
+            let mut server = lock(&live);
+            server.advance();
+            if let Some(out) = &clock_out {
+                niminal_live_cli::clock::pump_clock_out(server.live_mut(), out);
+            }
+        }
         ticks = ticks.wrapping_add(1);
         if ticks.is_multiple_of(10)
             && let (Some(path), Some((files, last))) = (file.as_deref(), watched.as_mut())

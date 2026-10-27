@@ -25,6 +25,15 @@ pub struct Shared {
     health: Mutex<Option<(Instant, Option<Health>)>>,
     /// The MIDI inputs that are open, and the last message that came in on them.
     midi: Mutex<Midi>,
+    /// MIDI clock sent to an output, and followed from an input.
+    clock: Mutex<Clock>,
+}
+
+#[derive(Default)]
+struct Clock {
+    out: Option<niminal_live_cli::clock::ClockOutput>,
+    /// Held so that the input stays open until it is replaced.
+    _input: Vec<midir::MidiInputConnection<()>>,
 }
 
 #[derive(Default)]
@@ -43,6 +52,7 @@ impl Shared {
             revision: AtomicU64::new(0),
             health: Mutex::new(None),
             midi: Mutex::new(Midi::default()),
+            clock: Mutex::new(Clock::default()),
         }
     }
 
@@ -71,6 +81,9 @@ pub fn start_worker(shared: Arc<Shared>) {
             loop {
                 if let Some(session) = lock(&shared.session).as_mut() {
                     session.advance();
+                    if let Some(out) = &lock(&shared.clock).out {
+                        niminal_live_cli::clock::pump_clock_out(session.live_mut(), out);
+                    }
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
@@ -209,6 +222,62 @@ pub fn open_midi(shared: &Arc<Shared>, filter: &str) -> Result<Vec<String>, Stri
         Err(e) if e.starts_with("no MIDI input") => Ok(Vec::new()),
         Err(e) => Err(e),
     }
+}
+
+/// The names of the MIDI inputs and outputs, for choosing where the clock comes from and goes to.
+#[derive(Serialize)]
+pub struct MidiPorts {
+    inputs: Vec<String>,
+    outputs: Vec<String>,
+}
+
+pub fn midi_ports() -> Result<MidiPorts, String> {
+    let input = midir::MidiInput::new("niminal").map_err(|e| format!("can't use MIDI: {e}"))?;
+    let output = midir::MidiOutput::new("niminal").map_err(|e| format!("can't use MIDI: {e}"))?;
+    Ok(MidiPorts {
+        inputs: input.ports().iter().filter_map(|p| input.port_name(p).ok()).collect(),
+        outputs: output.ports().iter().filter_map(|p| output.port_name(p).ok()).collect(),
+    })
+}
+
+/// Send MIDI clock to the output called `name` (making one of that name if there is none), or stop sending.
+pub fn set_clock_out(shared: &Shared, name: Option<&str>) -> Result<(), String> {
+    let mut session = lock(&shared.session);
+    let live = session.as_mut().ok_or("the stage is not connected to an engine")?.live_mut();
+    let mut clock = lock(&shared.clock);
+    match name {
+        None => {
+            live.set_clock_out(false);
+            if let Some(out) = &clock.out {
+                niminal_live_cli::clock::pump_clock_out(live, out);
+            }
+            clock.out = None;
+        }
+        Some(name) => {
+            clock.out = Some(niminal_live_cli::clock::ClockOutput::open(name)?);
+            live.set_clock_out(true);
+        }
+    }
+    Ok(())
+}
+
+/// Follow the MIDI clock of the input called `name`, or stop following.
+pub fn set_clock_in(shared: &Arc<Shared>, name: Option<&str>) -> Result<(), String> {
+    let mut session = lock(&shared.session);
+    let live = session.as_mut().ok_or("the stage is not connected to an engine")?.live_mut();
+    let mut clock = lock(&shared.clock);
+    clock._input.clear();
+    live.set_clock_in(false);
+    let Some(name) = name else { return Ok(()) };
+    let target = shared.clone();
+    let (connections, _) = niminal_live_cli::input::open_clock_in(name, move |message, arrived| {
+        if let Some(server) = lock(&target.session).as_mut() {
+            server.live_mut().midi_clock(message, arrived);
+        }
+    })?;
+    live.set_clock_in(true);
+    clock._input = connections;
+    Ok(())
 }
 
 fn describe(signal: &niminal_live::ControlSignal) -> Option<String> {

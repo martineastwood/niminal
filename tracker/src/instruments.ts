@@ -13,6 +13,8 @@ const sampleParams = 'begin: 0..1 = 0, rate: -4..4 = 1, stretch: 0.25..4 = 1, st
  * where the note ends (an OFF, CUT or the next note in the column), so a released pad or loop can be stopped.
  */
 const gateParams = (gate: number) => `gate: 0..1 = ${gate}, release: 0ms..2sec = 10ms`;
+const samplerParams = (gate: number, sliced = false) =>
+  ['freq: hz', ...(sliced ? ['sample: num = 0'] : []), ...sampleParams.split(', '), ...gateParams(gate).split(', ')].join(',\n  ');
 const gated = (play: string) => `${play} * (1 - gate + gate * env[1 | release 0])`;
 const gateNote = '/// gate: 0 plays the whole sample, 1 ends it when the note does (OFF, CUT or the next note), fading over release.';
 
@@ -21,7 +23,7 @@ export const longSample = 2;
 
 /** Plays one imported audio file, pitched from its root note. `file` is relative to the project folder; `seconds` is how long it plays, if known. */
 export const samplerSource = (code: string, file: string, seconds = 0) =>
-  `/// Plays ${file}. Change .root(...) to retune, or add .loop(forward) to sustain it.\n${gateNote}\n${code}_sample = sample("${file}").root(c4)\ninstr ${code}(freq: hz, ${sampleParams}, ${gateParams(seconds >= longSample ? 1 : 0)}) {\n  ${gated(`${code}_sample(freq: freq, begin: begin, rate: rate, stretch: stretch, stretch_mode: stretch_mode)`)}\n}\n`;
+  `/// Plays ${file}. Change .root(...) to retune, or add .loop(forward) to sustain it.\n${gateNote}\n${code}_sample = sample("${file}").root(c4)\ninstr ${code}(\n  ${samplerParams(seconds >= longSample ? 1 : 0)}\n) {\n  ${gated(`${code}_sample(freq: freq, begin: begin, rate: rate, stretch: stretch, stretch_mode: stretch_mode)`)}\n}\n`;
 
 /** The most pieces a sample can be cut into, or samples a kit can hold: one for each key from C-4 to B-7. */
 export const maxSlices = 48;
@@ -30,14 +32,14 @@ export const maxSlices = 48;
 export const slicedSource = (code: string, file: string, pieces: number | number[]) => {
   const count = typeof pieces === 'number' ? pieces : pieces.length;
   const cut = typeof pieces === 'number' ? String(pieces) : `[${pieces.map(share => Number(share.toFixed(5))).join(', ')}]`;
-  return `/// Plays ${file} in ${count} pieces: C-4 is the first, C#4 the next, and so on.\n${gateNote}\n${code}_sample = sample("${file}").root(c4)\n${code}_slices = ${code}_sample.slices(${cut})\ninstr ${code}(freq: hz, sample: num = 0, ${sampleParams}, ${gateParams(1)}) {\n  ${gated(`${code}_slices(sample: sample, begin: begin, rate: rate, stretch: stretch, stretch_mode: stretch_mode)`)}\n}\n`;
+  return `/// Plays ${file} in ${count} pieces: C-4 is the first, C#4 the next, and so on.\n${gateNote}\n${code}_sample = sample("${file}").root(c4)\n${code}_slices = ${code}_sample.slices(${cut})\ninstr ${code}(\n  ${samplerParams(1, true)}\n) {\n  ${gated(`${code}_slices(sample: sample, begin: begin, rate: rate, stretch: stretch, stretch_mode: stretch_mode)`)}\n}\n`;
 };
 
 /** Plays the samples of a kit folder, one key each from C-4: `members` are their names in the order the engine counts them. */
 export const kitSource = (code: string, folder: string, members: string[]) => {
   const keys = members.map((member, index) => `${noteAt(48 + index) ?? '?'} ${member}`);
   const lines = keys.reduce<string[]>((all, key) => { const last = all.at(-1); if (last !== undefined && last.length + key.length < 90) all[all.length - 1] = `${last} · ${key}`; else all.push(key); return all; }, []);
-  return `/// Plays the samples in ${folder}, one key each:\n${lines.map(line => `/// ${line}`).join('\n')}\n${gateNote}\n${code}_kit = kit("${folder}")\ninstr ${code}(freq: hz, sample: num = 0, ${sampleParams}, ${gateParams(0)}) {\n  ${gated(`${code}_kit(sample: sample, begin: begin, rate: rate, stretch: stretch, stretch_mode: stretch_mode)`)}\n}\n`;
+  return `/// Plays the samples in ${folder}, one key each:\n${lines.map(line => `/// ${line}`).join('\n')}\n${gateNote}\n${code}_kit = kit("${folder}")\ninstr ${code}(\n  ${samplerParams(0, true)}\n) {\n  ${gated(`${code}_kit(sample: sample, begin: begin, rate: rate, stretch: stretch, stretch_mode: stretch_mode)`)}\n}\n`;
 };
 
 /** A new instrument called `base` (made unique), whose code is written for the name it ends up with. */

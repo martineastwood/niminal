@@ -9,7 +9,7 @@ const TONE: &str = include_str!("../../src/presets/tone.nml");
 /// Gives every pattern parameter lanes for each return the song has now.
 fn sync_lanes(song: &mut Song) {
     for pattern in &mut song.patterns {
-        pattern.return_fx = vec![vec![FxLane::empty(pattern.rows)]; song.returns.len()];
+        pattern.return_fx = vec![vec![FxLane::empty()]; song.returns.len()];
     }
 }
 
@@ -49,9 +49,10 @@ fn test_song(note: Option<&str>) -> Song {
                     }]
                 })
                 .collect(),
-            fx: (0..4).map(|_| vec![FxLane::empty(32)]).collect(),
+            fx: (0..4).map(|_| vec![FxLane::empty()]).collect(),
             return_fx: vec![],
-            master_fx: vec![FxLane::empty(32)],
+            master_fx: vec![FxLane::empty()],
+            commands: vec![],
         }],
         loop_range: None,
         matrix: vec![],
@@ -60,6 +61,27 @@ fn test_song(note: Option<&str>) -> Song {
         returns: vec![],
         instrument_values: Default::default(),
     }
+}
+
+#[test]
+fn idle_engine_loss_is_published_so_the_window_can_reconnect() {
+    let engine = Arc::new(Mutex::new(EngineServer::new(
+        Session::new(48000.0, Layout::Mono).without_limiter(),
+    )));
+    let server = Server::start(engine, ServerConfig { port: 0, ..ServerConfig::default() }).unwrap();
+    let audio = Audio::new();
+    let (reply, response) = mpsc::channel();
+    audio.sender.send((Command::Connect { port: server.port(), token: None }, reply)).unwrap();
+    assert!(response.recv_timeout(Duration::from_secs(5)).unwrap().unwrap().connected);
+    server.stop();
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while audio.status().connected && std::time::Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(25));
+    }
+    let status = audio.status();
+    audio.quit();
+    assert!(!status.connected);
+    assert!(status.error.is_some());
 }
 
 #[test]
@@ -105,7 +127,7 @@ fn real_engine_plays_last_good_source_and_stop_cancels_the_loop() {
             note: "C-4".into(),
             track: 0,
             ms: 200,
-            start: None, retrigger: None,
+            commands: vec![],
         })
         .unwrap();
     let audio = engine.lock().unwrap().session_mut().process(24000);
@@ -150,7 +172,7 @@ fn real_engine_plays_last_good_source_and_stop_cancels_the_loop() {
             note: "D#4".into(),
             track: 0,
             ms: 200,
-            start: None, retrigger: None,
+            commands: vec![],
         })
         .unwrap();
     assert!(
@@ -210,7 +232,7 @@ fn track_effects_gain_and_mute_change_rendered_audio_and_reject_bad_fx_edits() {
                 note: "C-4".into(),
                 track: 0,
             ms: 200,
-                start: None, retrigger: None,
+                commands: vec![],
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -357,7 +379,7 @@ fn each_channel_and_the_master_have_a_scope() {
             note: "C-4".into(),
             track: 0,
             ms: 200,
-            start: None, retrigger: None,
+            commands: vec![],
         })
         .unwrap();
     // The engine renders in blocks; scopes reach the client as it renders and the client asks.
@@ -438,7 +460,7 @@ fn the_master_has_its_own_level_and_effects_and_solo_silences_other_tracks() {
                 note: "C-4".into(),
                 track,
             ms: 200,
-                start: None, retrigger: None,
+                commands: vec![],
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -536,7 +558,7 @@ fn tracks_send_to_returns_that_have_their_own_effects_level_and_mute() {
                 note: "C-4".into(),
                 track,
             ms: 200,
-                start: None, retrigger: None,
+                commands: vec![],
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -615,7 +637,7 @@ fn strips_come_and_go_with_the_tracks_and_returns_a_song_has() {
     worker.command(Command::Apply { id: "tone".into(), source: "instr flat(freq: hz) { 0.1 }".into(), kind: Kind::Instr, dir: None }).unwrap();
     worker.command(Command::Apply { id: "half".into(), source: "fx half { out = in * 0.5 }".into(), kind: Kind::Fx, dir: None }).unwrap();
     let level = |worker: &mut Worker, track: usize| -> Result<f32, String> {
-        worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track, ms: 200, start: None, retrigger: None })?;
+        worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track, ms: 200, commands: vec![] })?;
         let audio = engine.lock().unwrap().session_mut().process(16000);
         Ok(audio[0][2048..4096].iter().map(|s| s.abs()).sum::<f32>() / 2048.0)
     };
@@ -702,7 +724,7 @@ fn outputs_route_tracks_into_returns_and_sends_tap_the_chain_where_they_sit() {
                 note: "C-4".into(),
                 track,
             ms: 200,
-                start: None, retrigger: None,
+                commands: vec![],
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -999,7 +1021,7 @@ fn imported_samples_play_from_the_project_folder() {
             note: "C-4".into(),
             track: 0,
             ms: 200,
-            start: None, retrigger: None,
+            commands: vec![],
         })
         .unwrap();
     let audio = engine.lock().unwrap().session_mut().process(8000);
@@ -1058,7 +1080,7 @@ fn device_chain_runs_in_order_and_can_be_edited_while_playing() {
                 note: "C-4".into(),
                 track: 0,
             ms: 200,
-                start: None, retrigger: None,
+                commands: vec![],
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(16000);
@@ -1149,7 +1171,7 @@ fn song_playback_completes_and_leaves_the_final_release_audible() {
     song.patterns[0]
         .notes
         .resize(16, vec![NoteColumn::blank(32)]);
-    song.patterns[0].fx.resize(16, vec![FxLane::empty(32)]);
+    song.patterns[0].fx.resize(16, vec![FxLane::empty()]);
     song.patterns[0].notes[15][0].notes[0] = Some("C-4".into());
     song.patterns[0].notes[15][0].inst = vec![Some("tone".into()); 32];
     song.patterns[0].rows = 1;
@@ -1231,7 +1253,7 @@ fn macro_knob_drives_linked_parameters_and_follows_updates() {
         links: vec![MacroLink { device: "d0".into(), parameter: "amount".into(), min: 0.0, max: 1.0 }],
     }];
     let peak_of = |worker: &mut Worker| {
-        worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track: 0, ms: 200, start: None, retrigger: None }).unwrap();
+        worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track: 0, ms: 200, commands: vec![] }).unwrap();
         let audio = engine.lock().unwrap().session_mut().process(8000);
         audio[0][2000..6000].iter().fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
     };
@@ -1310,7 +1332,7 @@ fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
             note: "C-4".into(),
             track: 0,
             ms: 200,
-            start: None, retrigger: None,
+            commands: vec![],
         })
         .unwrap();
     let audio = engine.lock().unwrap().session_mut().process(8000);
@@ -1327,8 +1349,7 @@ fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
         device: "d0".into(),
         parameter: "amount".into(),
     });
-    song.patterns[0].fx[0][0].values[0] = Some("0".into());
-    song.patterns[0].fx[0][0].values[1] = Some("1".into());
+    song.patterns[0].fx[0][0].held(&[(0, 0.0), (1, 1.0)]);
     worker
         .command(Command::Play {
             song: song.clone(),
@@ -1356,7 +1377,7 @@ fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
             .any(|sample| sample.abs() > 0.2)
     );
     worker.command(Command::Stop).unwrap();
-    song.patterns[0].fx[0][0].values.fill(None);
+    song.patterns[0].fx[0][0].envelope = None;
     song.tracks[0].fx[0].modulations.insert(
         "amount".into(),
         Lfo {
@@ -1456,7 +1477,7 @@ fn library_instruments_expose_controls_and_sound_on_mono_and_stereo_engines() {
             let id = format!("library_instrument_{index}");
             worker.command(Command::Apply { id: id.clone(), source: (*source).into(), kind: Kind::Instr, dir: None }).unwrap();
             assert!(!worker.sounds[&id].parameters.is_empty(), "{id} exposes its controls");
-            worker.command(Command::Audition { instrument: id, note: "C-3".into(), track: 0, ms: 200, start: None, retrigger: None }).unwrap();
+            worker.command(Command::Audition { instrument: id, note: "C-3".into(), track: 0, ms: 200, commands: vec![] }).unwrap();
             let audio = engine.lock().unwrap().session_mut().process(24000);
             assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
             assert!(audio.iter().flatten().any(|sample| sample.abs() > 0.001), "silent instrument {index}");
@@ -1488,7 +1509,7 @@ fn library_drum_presets_carry_their_voice_and_sound_on_mono_and_stereo_engines()
             );
             worker.command(Command::Apply { id: id.clone(), source, kind: Kind::Instr, dir: None }).unwrap();
             assert!(!worker.sounds[&id].parameters.is_empty(), "{name} exposes its controls");
-            worker.command(Command::Audition { instrument: id, note: "C-3".into(), track: 0, ms: 200, start: None, retrigger: None }).unwrap();
+            worker.command(Command::Audition { instrument: id, note: "C-3".into(), track: 0, ms: 200, commands: vec![] }).unwrap();
             let audio = engine.lock().unwrap().session_mut().process(24000);
             assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
             assert!(audio.iter().flatten().any(|sample| sample.abs() > 0.001), "silent drum {name}");
@@ -1517,7 +1538,7 @@ fn overdriven_loudness(drive: f64) -> f32 {
         ..Device::default()
     }];
     worker.command(Command::Update { song }).unwrap();
-    worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track: 0, ms: 200, start: None, retrigger: None }).unwrap();
+    worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track: 0, ms: 200, commands: vec![] }).unwrap();
     let audio = engine.lock().unwrap().session_mut().process(24000);
     worker.command(Command::Disconnect).unwrap();
     let samples: Vec<f32> = audio.iter().flatten().copied().collect();
@@ -1550,7 +1571,7 @@ fn left_over_right(compressor_link: Option<f64>) -> f32 {
         }];
     }
     worker.command(Command::Update { song }).unwrap();
-    worker.command(Command::Audition { instrument: "tilted".into(), note: "C-4".into(), track: 0, ms: 200, start: None, retrigger: None }).unwrap();
+    worker.command(Command::Audition { instrument: "tilted".into(), note: "C-4".into(), track: 0, ms: 200, commands: vec![] }).unwrap();
     let audio = engine.lock().unwrap().session_mut().process(24000);
     worker.command(Command::Disconnect).unwrap();
     let rms = |c: usize| (audio[c][4000..].iter().map(|s| s * s).sum::<f32>() / (audio[c].len() - 4000) as f32).sqrt();
@@ -1628,7 +1649,7 @@ fn library_effects_expose_controls_and_render_on_mono_and_stereo_engines() {
                     note: "C-4".into(),
                     track: 0,
             ms: 200,
-                    start: None, retrigger: None,
+                    commands: vec![],
                 })
                 .unwrap();
             let audio = engine.lock().unwrap().session_mut().process(24000);
@@ -1696,7 +1717,6 @@ fn graphical_envelopes_render_native_linear_ramps_at_fractional_rows() {
         device: "d0".into(),
         parameter: "amount".into(),
     });
-    lane.values[0] = Some("1".into()); // Envelope takes priority over row values.
     lane.envelope = Some(Envelope {
         enabled: true,
         mode: "linear".into(),
@@ -1757,7 +1777,7 @@ fn parameter_lanes_on_the_master_and_a_return_change_the_sound() {
         let mut song = test_song(Some("C-4"));
         song.returns = vec![Track { name: "Verb".into(), ..Track::default() }];
         sync_lanes(&mut song);
-        song.patterns[0].return_fx = vec![vec![FxLane::empty(32)]];
+        song.patterns[0].return_fx = vec![vec![FxLane::empty()]];
         song.tracks[0].fx = vec![Device { id: "s1".into(), definition: "pass".into(), target: Some(0), ..Device::default() }];
         shape(&mut song);
         worker.command(Command::Play { song, mode: Mode::Song, pattern_id: "p0".into(), start_position: 0 }).unwrap();
@@ -1769,10 +1789,10 @@ fn parameter_lanes_on_the_master_and_a_return_change_the_sound() {
     // the track's own signal plus the same through the send and the return
     assert!(plain > 0.05, "something sounds: {plain}");
     // a return's volume lane silences what its send adds
-    let quiet_return = level(&|song| song.patterns[0].return_fx[0][0].values[0] = Some("-60".into()));
+    let quiet_return = level(&|song| song.patterns[0].return_fx[0][0].held(&[(0, -60.0)]));
     assert!((quiet_return / plain - 0.5).abs() < 0.01, "the send added half of it, and is now silent: {quiet_return} against {plain}");
     // the master's volume lane scales everything: 6 dB down is about half
-    let quiet_master = level(&|song| song.patterns[0].master_fx[0].values[0] = Some("-6".into()));
+    let quiet_master = level(&|song| song.patterns[0].master_fx[0].held(&[(0, -6.0)]));
     assert!((quiet_master / plain - 0.501).abs() < 0.01, "{quiet_master} against {plain}");
     // an envelope on the master moves it as the rows pass
     let swept = level(&|song| {
@@ -1857,20 +1877,13 @@ fn one_column(rows: usize, cells: &[(usize, &str)], commands: &[(usize, &str)]) 
     let mut song = test_song(None);
     let column = &mut song.patterns[0].notes[0][0];
     column.inst = vec![Some("tone".into()); 32];
-    column.start = vec![None; 32];
-    column.pitch = vec![None; 32];
-    column.rtg = vec![None; 32];
+    column.fx = vec![vec![None; 32]];
     for (row, note) in cells {
         column.notes[*row] = Some((*note).into());
     }
-    // the cells are written as O50, V, R4, G8, U12 or D3 and filed in the sub-column each belongs to
+    // the commands are written as S80, B00, R41, G10, U10 or D10, one to a row
     for (row, text) in commands {
-        match text.as_bytes()[0] {
-            b'O' => column.start[*row] = Some(text[1..].into()),
-            b'V' => column.start[*row] = Some("<".into()),
-            b'R' => column.rtg[*row] = Some(text[1..].into()),
-            _ => column.pitch[*row] = Some((*text).into()),
-        }
+        column.fx[0][*row] = Some((*text).into());
     }
     song.patterns[0].rows = rows;
     song
@@ -1896,7 +1909,7 @@ fn a_glide_bends_the_sounding_pitch_to_the_new_note() {
     let (engine, server, mut worker) = engine_worker();
     worker.command(Command::Apply { id: "tone".into(), source: "instr pure(freq: hz) { osc(sine, freq) * 0.2 }".into(), kind: Kind::Instr, dir: None }).unwrap();
     // C-4 from row 0, gliding to C-5 over a row from row 4, held to the end
-    play_song(&mut worker, one_column(10, &[(0, "C-4"), (4, "C-5")], &[(4, "G8")]));
+    play_song(&mut worker, one_column(10, &[(0, "C-4"), (4, "C-5")], &[(4, "G10")]));
     let audio = engine.lock().unwrap().session_mut().process(10 * 5760 + 9000);
     let start = audio[0].iter().position(|s| s.abs() > 0.001).unwrap_or(0);
     let crossings = |from: usize, to: usize| audio[0][start + from..start + to].windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f64;
@@ -1936,25 +1949,25 @@ fn offset_reverse_and_slices_choose_what_part_of_a_sample_plays() {
     apply(&mut worker, format!("smp = sample(\"{file}\").root(c4)\ninstr ramp(freq: hz, begin: 0..1 = 0, rate: -4..4 = 1) {{ smp(freq: freq, begin: begin, rate: rate) }}")).unwrap();
     assert!(worker.status.instrument_parameters["tone"].iter().any(|p| p.name == "begin"));
     assert!(worker.status.instrument_slices.is_empty());
-    play_song(&mut worker, one_column(12, &[(0, "C-4"), (4, "C-4"), (8, "C-4")], &[(4, "O50"), (8, "V")]));
+    play_song(&mut worker, one_column(12, &[(0, "C-4"), (4, "C-4"), (8, "C-4")], &[(4, "S80"), (8, "B00")]));
     let audio = [run(&engine, &mut worker, 12 * 5760 + 7200)];
     // playback starts 0.15 s after the clock it was asked at
     let from = 7200;
     let first = |row: usize| audio[0][from + row * 5760 + 50..from + row * 5760 + 90].iter().sum::<f32>() / 40.0;
     let (plain, offset, reversed) = (first(0), first(4), first(8));
     assert!(plain < 0.1, "the sample starts quietly: {plain}");
-    assert!((offset - 0.45).abs() < 0.1, "O50 starts half way up the ramp: {offset}");
-    assert!(reversed > 0.8, "V starts at the loud end: {reversed}");
+    assert!((offset - 0.45).abs() < 0.1, "S80 starts half way up the ramp: {offset}");
+    assert!(reversed > 0.8, "B00 starts at the loud end: {reversed}");
     worker.command(Command::Stop).unwrap();
     // entering a command in the grid plays the note with it
     let heard = |worker: &mut Worker, command: &str| {
-        worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track: 0, ms: 200, start: Some(command.into()), retrigger: None }).unwrap();
+        worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track: 0, ms: 200, commands: vec![command.into()] }).unwrap();
         let audio = engine.lock().unwrap().session_mut().process(4800);
         let start = audio[0].iter().position(|s| s.abs() > 0.01).unwrap_or(0);
         audio[0][start + 20..start + 60].iter().sum::<f32>() / 40.0
     };
-    assert!((heard(&mut worker, "50") - 0.45).abs() < 0.1);
-    assert!(heard(&mut worker, "<") > 0.8);
+    assert!((heard(&mut worker, "S80") - 0.45).abs() < 0.1);
+    assert!(heard(&mut worker, "B00") > 0.8);
 
     // a sliced sample plays the piece for each key; the ramp's fourth quarter is its loudest
     apply(&mut worker, format!("smp = sample(\"{file}\").root(c4)\nchops = smp.slices(4)\ninstr chop(freq: hz, sample: num = 0, begin: 0..1 = 0, rate: -4..4 = 1) {{ chops(sample: sample, begin: begin, rate: rate) }}")).unwrap();
@@ -2030,10 +2043,10 @@ fn an_export_is_as_long_as_the_patterns_own_tempo_makes_it() {
 #[test]
 fn tracker_glides_and_slides_are_even_in_semitones() {
     for (notes, commands, row, from, to) in [
-        (vec![(0, "A-4"), (4, "A-5")], vec![(4, "G8")], 4, 440.0_f32, 880.0_f32),
-        (vec![(0, "A-5"), (4, "A-4")], vec![(4, "G8")], 4, 880.0, 440.0),
-        (vec![(0, "A-4")], vec![(2, "U12")], 2, 440.0, 880.0),
-        (vec![(0, "A-5")], vec![(2, "D12")], 2, 880.0, 440.0),
+        (vec![(0, "A-4"), (4, "A-5")], vec![(4, "G10")], 4, 440.0_f32, 880.0_f32),
+        (vec![(0, "A-5"), (4, "A-4")], vec![(4, "G10")], 4, 880.0, 440.0),
+        (vec![(0, "A-4")], vec![(2, "U10")], 2, 440.0, 880.0),
+        (vec![(0, "A-5")], vec![(2, "D10")], 2, 880.0, 440.0),
     ] {
         let (engine, server, mut worker) = engine_worker();
         worker.command(Command::Apply { id: "tone".into(), source: "instr pitch_probe(freq: hz) { freq.num / 2000 }".into(), kind: Kind::Instr, dir: None }).unwrap();
@@ -2086,7 +2099,7 @@ fn a_lane_on_an_instrument_parameter_changes_the_note_that_is_sounding() {
     let mut song = one_column(8, &[(0, "C-4")], &[]);
     let lane = &mut song.patterns[0].fx[0][0];
     lane.target = Some(crate::commands::FxTarget::Instrument { instrument: "tone".into(), parameter: "level".into() });
-    lane.values[3] = Some("0.5".into());
+    lane.held(&[(3, 0.5)]);
     play_song(&mut worker, song);
     let audio = run(&engine, &mut worker, 8 * 5760 + 7200);
     let level = |from: usize, to: usize| audio[7200 + from..7200 + to].iter().sum::<f32>() / (to - from) as f32;

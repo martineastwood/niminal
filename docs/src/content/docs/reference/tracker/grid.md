@@ -1,6 +1,6 @@
 ---
 title: The grid
-description: Entering notes, note columns, start, pitch and retrigger cells, and sliced samples in the tracker.
+description: Entering notes, note columns, commands, and sliced samples in the tracker.
 ---
 
 The grid is where you write notes: one row per step in time, one column per track. Rows are grouped by the meter into bars; **Page Up / Page Down** move by a bar, **Home / End** go to the first and last row.
@@ -11,7 +11,7 @@ Enter notes on the keyboard as a piano: the **Z** row (**Z S X D C V G B H N J M
 
 **Step** sets how many rows to advance after note entry (0–256): 4 at four rows per beat enters notes on consecutive beats, 16 on consecutive bars, and 0 stays on the current row. Arrows still move by one row. Octave is adjustable. Entered notes play while stopped and connected.
 
-**Space** plays and stops when the grid is focused; **F6** switches between grid and code. Code editing keeps its normal shortcuts, and Space in code does not affect playback.
+**Space** plays and stops when the grid is focused; **F6** switches between the grid and the instrument's code. Code editing keeps its normal shortcuts, and Space in code does not affect playback.
 
 ## Record mode
 
@@ -27,63 +27,42 @@ There is no fixed note length, so leave a gap with OFF for staccato. A looped pa
 
 ## Note columns and sub-columns
 
-The **⋯** button in a track header adds up to eight note columns (for chords; shared by every pattern) and shows or hides the **Vol**, **Pan**, **Dly**, **Start**, **Chance**, **Pitch**, **Rtg**, **Len** and **Fx** sub-columns beside each note (the menu calls them **Volume**, **Panning**, **Delay**, **Start**, **Chance**, **Pitch**, **Retrigger**, **Length** and **Effect**).
-
-The **Ins** column is always there: it holds the number of the instrument that plays the note. They take plain numbers, edited like a parameter lane (click a cell or just type a digit, then Enter to save and move down):
+The **⋯** button in a track header adds up to eight note columns (for chords; shared by every pattern), up to four **command columns**, and shows or hides the **Vel**, **Pan** and **Dly** sub-columns beside each note (the menu calls them **Velocity**, **Panning** and **Delay**). The **Ins** column is always there. Cells take plain numbers, edited like any other cell (click one or just type a digit, then Enter to save and move down):
 
 | Column | What it holds |
 | --- | --- |
 | **Ins** | An instrument's number (shown before its name in the browser's **Project** folder), which plays that note and the notes below it in the column until another is set. |
-| **Vol** | 0–100. |
+| **Vel** | Velocity: how hard the note plays, 0–100. The track's own volume is an automation lane. |
 | **Pan** | −50 (left) to +50 (right), or `C` for centre. |
 | **Dly** | Starts the note that many percent of a row late, 0–99. |
-| **Start** | Where a new note's sample starts and which way it plays: `50`, `<` or `50<`. See [Start, Pitch and Rtg](#start-pitch-and-rtg). |
-| **Chance** | The percent chance, 0–100, that the note plays. Blank always plays. See [Chance](#chance). |
-| **Pitch** | A glide or slide: `G8`, `U12` or `D3`. |
-| **Rtg** | How many times the note plays in its row, 2–32, optionally with a change in level per hit, such as `4:-25`. |
-| **Len** | How long a new note sounds before it is released, 1–99 percent of a row, for staccato notes. Blank holds the note until the next note or **OFF**. |
-| **Fx** | A change to the note held in the column during this row. `V-20` makes it 20% of full level quieter, `V+10` 10% louder (1–99); the level glides over the row, starting from the note's **Vol**. Pan slides are not there yet. |
+| **Fx** | A [command](#commands), for the note or for the track. |
 
 Hidden sub-columns still play.
 
-## Start, Pitch and Rtg
+## Commands
 
-These sub-columns — the **Start**, **Chance**, **Pitch** and **Retrigger** checkboxes in **⋯** — sit to the right of **Dly** beside every note column, so each of a track's note columns has its own. Returns and the master hold no notes, so they have none. Hidden sub-columns still play, and hiding one never deletes what it holds.
+A command is a letter and two hex digits, as in Renoise's effect commands: type `S80`, `g10` or `R03` (letters are made capitals). The same column also takes the [track commands](/reference/tracker/automation/#track-commands) `Lxx`, `Pxx` and the four-digit `xyzz`, so a cell holds up to four characters. Each note column can have up to four command columns (each track starts with one), set under **Command columns** in **⋯**; commands in the same row combine, and a later column's wins if two of the same kind meet. Each acts on the note in its own row, or on the note held above it in the same column, until an **OFF** or **CUT** ends that hold. Whatever a command needs, the instrument has to have the parameter it sets: a start offset needs `begin`, backwards needs `rate`.
 
-**Start** configures a new note:
+A tick is a twelfth of a row, as in Renoise. As in Renoise, `00` on `G`, `U`, `D`, `I` and `O` repeats the last value of that command above it in the column (`U10` then `U00` slides twice), and does nothing if there is none.
 
-| Cell | What it does |
+| Command | What it does |
 | --- | --- |
-| `0`–`99` | Starts the sample that percent of the way in (the instrument's `begin`). |
-| `<` | Plays it backwards (`rate` of −1). |
-| `50<` | Both. |
+| `Sxx` | Starts a new note's sample `xx`/256 of the way in: `S80` is half way (the instrument's `begin`). |
+| `B00`, `B01` | Plays the new note's sample backwards (`rate` of −1) or forwards. |
+| `Gxx` | Glides: instead of starting a new note, the note held in the column slides to this row's pitch at `xx` sixteenths of a semitone per tick (`G10` crosses an octave in a row; `GFF` jumps at once). The sound carries on unbroken, pitch moving evenly in semitones. |
+| `Uxx`, `Dxx` | Slides the held note up or down by `xx` sixteenths of a semitone per tick for the row (`U10` is an octave). Repeat down the column for a longer slide. |
+| `Rxy` | Retriggers: the note plays again every `y` ticks (1–6, so 12 to 2 hits in the row), each hit's level changed by `x`: `0` and `8` keep it, `1`–`5` lower it by 3, 6, 12, 25 and 50%, `6` and `7` by 33 and 50%, `9`–`D` raise it by 3, 6, 12, 25 and 50%, `E` and `F` by 50% and 100%. Unlike Renoise every change builds on the last hit. The last hit is held as the note would be. |
+| `C0y` | Cuts the note `y` ticks (1–11) into the row, for staccato notes. Blank holds the note until the next note or **OFF**. Renoise's `Cxy` can also drop the level to `x` instead of 0; only `C0y` is supported. |
+| `Yxx` | Plays the note with probability `xx`/255 (`Y01` to `YFF`). Each time the pattern plays, every note with a probability rolls afresh, so loop passes and restarts differ. A note that does not play leaves the note before it sounding, as if the cell were empty, and drops its commands with it. An export draws once for the whole song, and the mix and every stem share the same draws. |
+| `Ixx`, `Oxx` | Fades the held note's level in or out by `xx` volume units (`00`–`80`, out of 128) during the row, starting from the note's **Vel**. |
 
-**Rtg** is a number from 2 to 32: the note plays that many times within its row, like a stutter. The last hit is held as the note would be. After a `:` it takes how much each hit's level changes from the one before, from −100 to 100 percent: `4:-25` plays four hits, each 75% as loud as the last, and `4:-100` silences every hit after the first. A positive change builds up instead: in `4:50` each hit is 50% louder than the one before and the last plays at the note's own level, so no hit is louder than the note.
+A glide keeps one voice and a retrigger restarts it, so a row cannot have both, even in two command columns: entering one where the other is refused with a message, and a project that has both is rejected. A slide and a retrigger can share a row.
 
-**Pitch** takes a letter and a whole number, **G**, **U** or **D**:
+Hover a command to read what it does in words (`S80 starts the sample 50% of the way in`); the status line says the same as you type one and when you save it, and says why if it cannot be played.
 
-| Cell | What it does | Accepted |
-| --- | --- | --- |
-| **G** | Glides: instead of starting a new note, the note held in the column slides to this row's pitch over that many eighths of a row (**G8** is one row, **G16** two, **G4** half). The sound carries on unbroken, pitch moving evenly in semitones (equal frequency ratios over equal time), so it is a portamento on any instrument. With nothing held, or after another instrument's note, it is an ordinary note. | `G0`–`G99` |
-| **U**, **D** | Slides the note held in the column up or down that many semitones during this row, at a constant musical rate. Repeat down the column for a longer slide. | `U1`–`U99`, `D1`–`D99` |
+Type into them like any other cell: click it or just start typing, **Enter** to save and move down by **Step**, **Escape** to cancel, and clearing the cell removes the command. Entering an `S`, `B` or `R` command plays the note it acts on at once, through the track's effects, so you can try a start point or a stutter without playing the pattern. Glides and slides are heard when the pattern plays.
 
-A glide keeps one voice and a retrigger restarts it, so a row cannot have both: entering one where the other is refused with a message, and a project that has both is rejected. A slide and a retrigger can share a row.
-
-Type into them like any other cell: click it or just start typing, **Enter** to save and move down by **Step**, **Escape** to cancel, and clearing the cell removes the setting.
-
-**Enter** on a cell you have not started typing in, or a double click, opens its **editor** instead: a small panel with named fields and units (Offset and Backwards for Start; Movement and Amount for Pitch; Hits and Level change for Rtg; Chance), a preview of the cell's text and what it means in words, and **Apply**, **Clear** and **Cancel**. **Enter** applies and **Escape** cancels. An entry that is out of range stays in the editor with a note saying what the field takes, and nothing changes until it is valid. Applying is one undo step. If a glide and a retrigger would share the row, the editor says so and offers **Replace the retrigger** (or the glide), which does both changes as one undo step. Hovering over a filled cell shows the same meaning in words. Lower case is tidied to upper case, so `g8` becomes `G8`; an entry that is not valid is refused, with a hint saying what the cell takes, and the cell keeps what it had.
-
-Each acts on the note in its own row, or on the note held above it in the same column. An **OFF** or a **CUT** ends that hold, so a slide below one has nothing to move. **Start** needs a note in its own row to start something. Whatever a setting needs, the instrument has to have the parameter it sets: one it cannot use is ignored, and nothing else about the row changes. Samplers made by **♪** import or the scissors have `begin` and `rate`, so **Start** works on them.
-
-Entering a **Start** or **Rtg** value plays the note it acts on at once, through the track's effects, so you can try a start point or a stutter without playing the pattern. Glides and slides are heard when the pattern plays.
-
-### Chance
-
-**Chance** is a whole percent from 0 to 100; blank is certain (100). Each time the pattern plays, every note with a chance rolls afresh, so loop passes and restarts differ. A note that does not play leaves the note before it sounding, as if the cell were empty, and drops its Start, Pitch and Rtg with it. A whole retrigger plays or not as one. An empty, **OFF** or **CUT** row ignores its Chance.
-
-A row with only a Pitch or Rtg and no new note is never rolled. An export draws once for the whole song, and the mix and every stem share the same draws.
-
-Cells are stored as the text you typed, so they copy, paste and save as `G8`; they move with their note when a block is inserted, deleted or pasted, and undo covers them.
+Cells are stored as the text you typed, so they copy, paste and save as `G10`; they move with their note when a block is inserted, deleted or pasted, and undo covers them.
 
 ## Sliced samples
 
@@ -91,9 +70,9 @@ The **✂** button above the instrument list makes a new instrument from the cur
 
 Each key plays a piece, counting up from **C-4** (C#4 the second, and so on), at its recorded pitch; keys outside the pieces are silent. Write a pattern of keys to rearrange a break, and add **Rtg** and **Start** to the pieces.
 
-### The Sample tab
+### The Sample view
 
-The **Sample** tab of the bottom dock (View → Sample) draws the waveform of the current sampler. For a sliced instrument it marks each cut with the key that plays the piece after it. **Click** a piece to hear it. **Drag** a marker to move a cut (the code is rewritten when you let go, and applied), **double-click** the waveform to add a cut, **double-click** a marker (or select it and press Delete) to remove it. The first cut stays at the start and a sample keeps at least two pieces. **Find hits** moves the cuts to where the hits begin, and **Cut equally** starts again with that many equal pieces. A sampler that is not cut shows its waveform too; click to hear it. A kit has no single sample to show.
+The **Sample** view (the bar above the grid, or View → Sample) draws the waveform of the current sampler. For a sliced instrument it marks each cut with the key that plays the piece after it. **Click** a piece to hear it. **Drag** a marker to move a cut (the code is rewritten when you let go, and applied), **double-click** the waveform to add a cut, **double-click** a marker (or select it and press Delete) to remove it. The first cut stays at the start and a sample keeps at least two pieces. **Find hits** moves the cuts to where the hits begin, and **Cut equally** starts again with that many equal pieces. A sampler that is not cut shows its waveform too; click to hear it. A kit has no single sample to show.
 
 **Stretch ×** changes duration while preserving the selected pitch: `2` lasts twice as long, `0.5` lasts half as long, and `1` uses ordinary playback. Choose **Granular** for fixed grain positions and a lower CPU cost, or **WSOLA** to align neighbouring waveforms for smoother joins. **Transient WSOLA** protects detected forward attacks and stretches the bodies between them. Changing either control rewrites and applies the instrument code; the choice is saved with the instrument. The range is 0.25 to 4, and sliced instruments stretch each piece. A kit exposes `stretch` and `stretch_mode` through its instrument parameters and code.
 

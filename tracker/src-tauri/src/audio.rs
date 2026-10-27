@@ -7,7 +7,7 @@ use niminal_ws::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::pattern::{Mode, Playback, Song, Start, Track, fit_to_tempo, hit_args, note_args, start_args, Retrigger};
+use crate::pattern::{Mode, Playback, Song, Track, commands_of, fit_to_tempo, hit_args, note_args, retrigger_of, start_args, start_of};
 use crate::{
     mixer,
     sound::{Kind, Sound},
@@ -79,12 +79,9 @@ pub enum Command {
         /// How long the note is held, in milliseconds.
         #[serde(default = "audition_ms")]
         ms: u32,
-        /// A start (offset or reverse) to hear it with.
+        /// Note commands (`S20`, `R41`) to hear it with.
         #[serde(default)]
-        start: Option<String>,
-        /// A retrigger to hear it with.
-        #[serde(default)]
-        retrigger: Option<String>,
+        commands: Vec<String>,
     },
     Stop,
     /// The tracker is closing: stop the sound and the engine it started.
@@ -159,6 +156,9 @@ impl Audio {
                             *published.lock().unwrap_or_else(|e| e.into_inner()) =
                                 worker.scopes.clone();
                         }
+                        // A failed idle health check clears the connection too; publish it so
+                        // the window can reconnect even when no pattern is playing.
+                        *shared.lock().unwrap_or_else(|e| e.into_inner()) = worker.status.clone();
                     } else if worker.client.is_none() {
                         published.lock().unwrap_or_else(|e| e.into_inner()).clear();
                     }
@@ -633,8 +633,7 @@ impl Worker {
                 note,
                 track,
                 ms,
-                start,
-                retrigger,
+                commands,
             } => {
                 if track >= 16 {
                     return Err("Invalid audition track".into());
@@ -649,11 +648,12 @@ impl Worker {
                 let Some(mut args) = note_args(&note, slices)? else {
                     return Ok(());
                 };
-                let start = start.as_deref().and_then(Start::parse).unwrap_or_default();
+                let commands = commands_of(commands.iter().map(String::as_str));
+                let start = start_of(&commands);
                 fit_to_tempo(&mut args, self.status.instrument_parameters.get(&instrument).map_or(&[], Vec::as_slice), self.mixer_timing.0);
                 start_args(&mut args, start, self.status.instrument_parameters.get(&instrument).map_or(&[], Vec::as_slice));
                 // a retrigger shares the time between its hits
-                let retrigger = retrigger.as_deref().and_then(Retrigger::parse);
+                let retrigger = retrigger_of(&commands);
                 let hits = retrigger.map_or(1, |r| r.hits);
                 let start = if hits > 1 { self.clock()? + (self.status.sample_rate * 0.02) as u64 } else { 0 };
                 let events = (0..hits)
@@ -698,10 +698,6 @@ impl Worker {
                 let target = lane.target.as_ref().ok_or("Choose an envelope parameter")?;
                 crate::commands::edit(target, &point.value.to_string(), slot, strip, parameters)?;
             }
-        }
-        for value in lane.values.iter().flatten() {
-            let target = lane.target.as_ref().ok_or("Choose a lane parameter")?;
-            crate::commands::edit(target, value, slot, strip, parameters)?;
         }
         Ok(())
     }

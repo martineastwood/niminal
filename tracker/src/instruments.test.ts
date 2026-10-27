@@ -8,6 +8,7 @@ it('adds synths and samplers with code named after them, so copies never collide
   expect([synth.name, second.name, kick.name]).toEqual(['Synth', 'Synth 2', 'kick']);
   expect(synth.source).toContain('instr synth(freq: hz)'); expect(second.source).toContain('instr synth_2(freq: hz)');
   expect(kick.source).toBe(samplerSource('kick', 'samples/kick.wav'));
+  expect(kick.source).toContain('instr kick(\n  freq: hz,\n  begin: 0..1 = 0,\n  rate: -4..4 = 1,\n  stretch: 0.25..4 = 1,\n  stretch_mode: 0..2 = 0,\n  from_bpm: 0..400 = 0,\n  gate: 0..1 = 0,\n  release: 0ms..2sec = 10ms\n)');
   expect(kick.source).toContain('sample("samples/kick.wav").root(c4)'); expect(kick.source).toContain('kick_sample');
 });
 
@@ -55,7 +56,7 @@ it('makes a sliced copy of a sampler, and nothing from an instrument with no sam
   const slices = sliceInstrument(project, kick, 16)!;
   expect(slices.name).toBe('kick slices'); expect(slices.id).not.toBe(kick.id);
   expect(slices.source).toContain('sample("samples/kick.wav")'); expect(slices.source).toContain('kick_slices_slices = kick_slices_sample.slices(16)');
-  expect(slices.source).toContain('instr kick_slices(freq: hz, sample: num = 0, begin: 0..1 = 0, rate: -4..4 = 1, stretch: 0.25..4 = 1, stretch_mode: 0..2 = 0, from_bpm: 0..400 = 0, gate: 0..1 = 1, release: 0ms..2sec = 10ms)');
+  expect(slices.source).toContain('instr kick_slices(\n  freq: hz,\n  sample: num = 0,\n  begin: 0..1 = 0,\n  rate: -4..4 = 1,\n  stretch: 0.25..4 = 1,\n  stretch_mode: 0..2 = 0,\n  from_bpm: 0..400 = 0,\n  gate: 0..1 = 1,\n  release: 0ms..2sec = 10ms\n)');
   expect(slices.source).toContain('kick_slices_slices(sample: sample, begin: begin, rate: rate, stretch: stretch, stretch_mode: stretch_mode) * (1 - gate + gate * env[1 | release 0])');
   expect(sliceInstrument(project, project.definitions[0], 8)).toBeNull();
   // at chosen places, and only within what the keyboard has keys for
@@ -83,7 +84,7 @@ it('makes a kit instrument that lists which key plays which sample', () => {
   const project = newProject(), kit = addKit(project, 'samples/drums', ['hat', 'kick', 'snare'])!;
   expect(kit.name).toBe('drums');
   expect(kit.source).toContain('/// C-4 hat · C#4 kick · D-4 snare'); expect(kit.source).toContain('drums_kit = kit("samples/drums")');
-  expect(kit.source).toContain('instr drums(freq: hz, sample: num = 0, begin: 0..1 = 0, rate: -4..4 = 1, stretch: 0.25..4 = 1, stretch_mode: 0..2 = 0, from_bpm: 0..400 = 0, gate: 0..1 = 0');
+  expect(kit.source).toContain('instr drums(\n  freq: hz,\n  sample: num = 0,\n  begin: 0..1 = 0,\n  rate: -4..4 = 1,\n  stretch: 0.25..4 = 1,\n  stretch_mode: 0..2 = 0,\n  from_bpm: 0..400 = 0,\n  gate: 0..1 = 0');
   expect(kit.source).toContain('drums_kit(sample: sample, begin: begin, rate: rate, stretch: stretch, stretch_mode: stretch_mode)');
   expect(addKit(project, 'samples/none', [])).toBeNull(); expect(addKit(project, 'samples/many', Array.from({ length: 49 }, (_, i) => `s${i}`))).toBeNull();
   const copy = duplicateInstrument(project, kit);

@@ -1,6 +1,6 @@
 import { patternSeconds, patternRow } from './project';
 import { expect, it } from 'vitest';
-import { emptyProject, keyboardNote, transposeNote, setTrackSource, trackSource, newProject, emptyFxLane, blankColumn, makePattern, removeTrack, restoreTrack, readProject, resizePattern, patternSwing, startValue, chanceValue, pitchValue, retriggerValue, lenValue, fxValue, duplicateTrack } from './project';
+import { emptyProject, keyboardNote, transposeNote, setTrackSource, trackSource, newProject, emptyFxLane, blankColumn, makePattern, removeTrack, restoreTrack, readProject, resizePattern, patternSwing, commandValue, commandProblem, glideRetriggers, trackCommandValue, duplicateTrack } from './project';
 
 it('round trips source and notes and rejects unsupported project data', () => {
   const project = newProject();
@@ -37,11 +37,11 @@ it('accepts more tracks only when every pattern has matching note columns', () =
   const project = newProject();
   project.tracks.push({ ...project.tracks[0], name: 'Extra' });
   expect(() => readProject(JSON.stringify(project))).toThrow();
-  project.patterns[0].notes.push([blankColumn(32)]); project.patterns[0].fx.push([emptyFxLane(32)]);
+  project.patterns[0].notes.push([blankColumn(32)]); project.patterns[0].fx.push([emptyFxLane()]);
   expect(readProject(JSON.stringify(project)).tracks).toHaveLength(5);
   while (project.tracks.length < 17) {
     project.tracks.push({ ...project.tracks[0] });
-    project.patterns[0].notes.push([blankColumn(32)]); project.patterns[0].fx.push([emptyFxLane(32)]);
+    project.patterns[0].notes.push([blankColumn(32)]); project.patterns[0].fx.push([emptyFxLane()]);
   }
   expect(() => readProject(JSON.stringify(project))).toThrow();
 });
@@ -69,13 +69,13 @@ it('round trips named lanes, processors and LFO settings and rejects malformed v
   project.definitions.push({ id: 'soften', name: 'Filter', kind: 'fx', source: 'fx soften() { out = in }' });
   project.tracks[0].fx = [{ id: 'd1', definition: 'soften', bypass: false, values: { cutoff: 700 }, modulations: { cutoff: { enabled: true, shape: 'sine', period: 16, min: 0.1, max: 0.8 } } }];
   project.patterns[0].fx[0][0].target = { kind: 'effect', device: 'd1', parameter: 'cutoff' };
-  project.patterns[0].fx[0][0].values[4] = '2400';
+  project.patterns[0].fx[0][0].envelope = { enabled: true, mode: 'hold', points: [{ row: 4, value: 2400 }] };
   expect(readProject(JSON.stringify(project))).toEqual(project);
-  const copy = makePattern(project, project.patterns[0]); copy.fx[0][0].values[4] = '800';
-  expect(project.patterns[0].fx[0][0].values[4]).toBe('2400');
-  resizePattern(copy, 2); resizePattern(copy, 64); expect(copy.fx[0][0].values[4]).toBe('800');
-  project.patterns[0].fx[0][0].values[4] = '0Q10'; expect(() => readProject(JSON.stringify(project))).toThrow();
-  project.patterns[0].fx[0][0].values[4] = null;
+  const copy = makePattern(project, project.patterns[0]); copy.fx[0][0].envelope!.points[0].value = 800;
+  expect(project.patterns[0].fx[0][0].envelope!.points[0].value).toBe(2400);
+  resizePattern(copy, 2); resizePattern(copy, 64); expect(copy.fx[0][0].envelope!.points[0].value).toBe(800);
+  project.patterns[0].fx[0][0].target = null; expect(() => readProject(JSON.stringify(project))).toThrow(); // an envelope needs a parameter
+  project.patterns[0].fx[0][0].target = { kind: 'effect', device: 'd1', parameter: 'cutoff' };
   project.tracks[0].fx[0].modulations.cutoff.period = 0; expect(() => readProject(JSON.stringify(project))).toThrow();
 });
 
@@ -131,7 +131,7 @@ it('keeps a master strip and solo flags, and rejects a master with an instrument
 it('keeps returns, outputs and send devices, and rejects bad routing or too many returns', () => {
   const project = newProject();
   const verb = { name: 'Verb', fx: [], pan: 0, muted: false, volume_db: 0 };
-  const addReturn = (track: typeof verb) => { project.returns.push(track); for (const p of project.patterns) p.return_fx.push([emptyFxLane(p.rows)]); };
+  const addReturn = (track: typeof verb) => { project.returns.push(track); for (const p of project.patterns) { p.return_fx.push([emptyFxLane()]); p.commands.splice(project.tracks.length + project.returns.length - 1, 0, [Array(p.rows).fill(null)]); } };
   addReturn(verb); project.tracks[0].output = { kind: 'return', index: 0 };
   expect(readProject(JSON.stringify(project))).toEqual(project);
   project.definitions.push({ id: 'fx_a', name: 'A', kind: 'fx', source: 'fx fx_a { out = in }' }); const fx = { id: 'd1', definition: 'fx_a', bypass: false, values: {}, modulations: {} };
@@ -149,7 +149,7 @@ it('keeps returns, outputs and send devices, and rejects bad routing or too many
   project.returns.pop(); for (const p of project.patterns) p.return_fx.pop();
   bad(p => { p.tracks[0].fx = [{ ...fx, target: 8 }]; });
   bad(p => { p.master.fx = [{ ...fx, target: 0 }]; });
-  project.returns = Array(9).fill(verb); for (const p of project.patterns) p.return_fx = Array.from({ length: 9 }, () => [emptyFxLane(p.rows)]);
+  project.returns = Array(9).fill(verb); for (const p of project.patterns) p.return_fx = Array.from({ length: 9 }, () => [emptyFxLane()]);
   expect(() => readProject(JSON.stringify(project))).toThrow();
   const { returns: _, ...old } = newProject();
   expect(readProject(JSON.stringify(old)).returns).toEqual([]);
@@ -182,24 +182,23 @@ it("takes a deleted track's matrix cells with it and puts them back, shifting th
 
 it('keeps parameter lanes for each return and the master, and rejects lanes that do not match the strips', () => {
   const project = newProject(), verb = { name: 'Verb', fx: [], pan: 0, muted: false, volume_db: 0 };
-  project.returns.push(verb); for (const p of project.patterns) p.return_fx.push([emptyFxLane(p.rows)]);
-  project.patterns[0].master_fx[0].values[2] = '-6'; project.patterns[0].return_fx[0][0].target = { kind: 'pan' };
+  project.returns.push(verb); for (const p of project.patterns) { p.return_fx.push([emptyFxLane()]); p.commands.splice(project.tracks.length + project.returns.length - 1, 0, [Array(p.rows).fill(null)]); }
+  project.patterns[0].master_fx[0].envelope = { enabled: true, mode: 'hold', points: [{ row: 2, value: -6 }] }; project.patterns[0].return_fx[0][0].target = { kind: 'pan' };
   expect(readProject(JSON.stringify(project))).toEqual(project);
   const bad = (change: (p: typeof project) => void) => { const copy = structuredClone(project); change(copy); expect(() => readProject(JSON.stringify(copy))).toThrow(); };
   bad(p => { p.patterns[0].return_fx.pop(); }); // a lane list for every return
-  bad(p => { p.patterns[0].master_fx = []; }); bad(p => { p.patterns[0].master_fx = Array.from({ length: 5 }, () => emptyFxLane(32)); });
+  bad(p => { p.patterns[0].master_fx = []; }); bad(p => { p.patterns[0].master_fx = Array.from({ length: 5 }, () => emptyFxLane()); });
   bad(p => { p.patterns[0].master_fx[0].target = { kind: 'instrument', instrument: 'tone', parameter: 'cutoff' }; }); // no notes, no instruments
-  bad(p => { p.patterns[0].return_fx[0][0].values[0] = 'loud'; });
+  bad(p => { p.patterns[0].return_fx[0][0].envelope = { enabled: true, mode: 'hold', points: [{ row: 1, value: 0 }, { row: 1, value: 1 }] }; }); // points run in order
 });
 
 it('gives a new pattern lanes for the returns and the master, and copies them into a variation', () => {
   const project = newProject(); project.returns.push({ name: 'Verb', fx: [], pan: 0, muted: false, volume_db: 0 });
-  for (const p of project.patterns) p.return_fx.push([emptyFxLane(p.rows)]);
+  for (const p of project.patterns) p.return_fx.push([emptyFxLane()]);
   const blank = makePattern(project); expect(blank.return_fx).toHaveLength(1); expect(blank.master_fx).toHaveLength(1);
-  project.patterns[0].master_fx[0].values[1] = '-3';
+  project.patterns[0].master_fx[0].envelope = { enabled: true, mode: 'hold', points: [{ row: 1, value: -3 }] };
   const copy = makePattern(project, project.patterns[0]);
-  expect(copy.master_fx[0].values[1]).toBe('-3'); copy.master_fx[0].values[1] = '0'; expect(project.patterns[0].master_fx[0].values[1]).toBe('-3');
-  resizePattern(copy, 40); expect(copy.master_fx[0].values).toHaveLength(40); expect(copy.return_fx[0][0].values).toHaveLength(40);
+  expect(copy.master_fx[0].envelope!.points[0].value).toBe(-3); copy.master_fx[0].envelope!.points[0].value = 0; expect(project.patterns[0].master_fx[0].envelope!.points[0].value).toBe(-3);
 });
 
 it('starts a new project with a pattern that has nothing in it, and an instrument ready to play', () => {
@@ -210,27 +209,49 @@ it('starts a new project with a pattern that has nothing in it, and an instrumen
   expect(newProject().patterns[0].notes[0][0].notes[0]).toBe('C-4'); // the phrase the tests use is still there
 });
 
-it('keeps start, pitch and retrigger cells in the project and rejects older files', () => {
-  expect(startValue('50')).toBe('50'); expect(startValue(' < ')).toBe('<'); expect(startValue('5<')).toBe('5<');
-  for (const bad of ['', '100', '<5', '5x', 'v']) expect(startValue(bad), bad).toBeNull();
-  expect(pitchValue('g8')).toBe('G8'); expect(pitchValue('D12')).toBe('D12'); expect(pitchValue('u3')).toBe('U3');
-  for (const bad of ['', 'G', 'U0', 'G100', 'X3', '8', 'R4']) expect(pitchValue(bad), bad).toBeNull();
-  expect(retriggerValue('4')).toBe('4'); expect(retriggerValue('32')).toBe('32'); expect(retriggerValue('4:-25')).toBe('4:-25'); expect(retriggerValue('2:100')).toBe('2:100');
-  for (const bad of ['', '1', '33', 'R4', '-2', '4:', '4:101', '4:-101', '4:+5', ':5', '4:--1']) expect(retriggerValue(bad), bad).toBeNull();
-  expect(chanceValue('0')).toBe('0'); expect(chanceValue(' 100 ')).toBe('100'); expect(chanceValue('050')).toBe('50');
-  for (const bad of ['', '101', '-1', '5%', '5.5']) expect(chanceValue(bad), bad).toBeNull();
+it('reads commands as a letter and two hex digits, and keeps command columns in the project', () => {
+  expect(commandValue(' s80 ')).toBe('S80'); expect(commandValue('RF4')).toBe('RF4'); expect(commandValue('C06')).toBe('C06'); expect(commandValue('G10')).toBe('G10'); expect(commandValue('u00')).toBe('U00'); // 00 repeats the last value above it
+  for (const bad of ['', 'S', 'S8', 'S800', 'SG0', '80S', 'Q10', 'B02', 'Y00', 'O81', 'R00', 'R07', 'C10', 'C00', 'C0C']) expect(commandValue(bad), bad).toBeNull();
+  expect(commandProblem('Q10')).toContain('Commands are');
+  expect(glideRetriggers(['G10', 'R03'])).toBe(true); expect(glideRetriggers(['U10', 'R03'])).toBe(false); expect(glideRetriggers([null, undefined])).toBe(false);
   const project = newProject(), column = project.patterns[0].notes[0][0];
-  column.chance[1] = '50'; column.pitch[3] = 'G8'; column.start[2] = '50<'; column.rtg[4] = '4';
+  column.fx = [Array(32).fill(null), Array(32).fill(null)];
+  column.fx[0][3] = 'G10'; column.fx[0][2] = 'S80'; column.fx[1][4] = 'R03';
   const read = readProject(JSON.stringify(project)).patterns[0].notes[0][0];
-  expect([read.pitch[3], read.start[2], read.rtg[4], read.chance[1]]).toEqual(['G8', '50<', '4', '50']);
-  column.chance[1] = '101'; expect(() => readProject(JSON.stringify(project))).toThrow(); column.chance[1] = null;
-  column.pitch[3] = 'G'; expect(() => readProject(JSON.stringify(project))).toThrow();
-  column.pitch[3] = 'G8'; column.rtg[3] = '4'; expect(() => readProject(JSON.stringify(project))).toThrow(); // a glide and a retrigger compete
-  column.pitch[3] = 'U12'; readProject(JSON.stringify(project));
-  expect(() => readProject(JSON.stringify({ ...newProject(), version: 11 }))).toThrow(/version 12/);
+  expect([read.fx[0][3], read.fx[0][2], read.fx[1][4]]).toEqual(['G10', 'S80', 'R03']);
+  column.fx[0][2] = 'Z99'; expect(() => readProject(JSON.stringify(project))).toThrow(); column.fx[0][2] = null;
+  column.fx[1][3] = 'R03'; expect(() => readProject(JSON.stringify(project))).toThrow(); // a glide and a retrigger compete, even in two columns
+  column.fx[1][3] = null;
+  column.fx.push(Array(32).fill(null), Array(32).fill(null), Array(32).fill(null)); expect(() => readProject(JSON.stringify(project))).toThrow(); // at most four
+  expect(() => readProject(JSON.stringify({ ...newProject(), version: 12 }))).toThrow(/version 13/);
   const longer = newProject();
+  longer.patterns[0].notes[0][0].fx = [Array(32).fill(null)];
   resizePattern(longer.patterns[0], 64);
-  for (const cells of [longer.patterns[0].notes[0][0].start, longer.patterns[0].notes[0][0].chance, longer.patterns[0].notes[0][0].pitch, longer.patterns[0].notes[0][0].rtg]) expect(cells).toHaveLength(64);
+  expect(longer.patterns[0].notes[0][0].fx[0]).toHaveLength(64);
+});
+
+it('keeps commands in the fx columns of a track and the command columns of each return and the master, and rejects ones that cannot play', () => {
+  expect(trackCommandValue(' l80 ')).toBe('L80'); expect(trackCommandValue('PFF')).toBe('PFF'); expect(trackCommandValue('13ff')).toBe('13FF');
+  expect(trackCommandValue('01ff')).toBe('01FF'); expect(trackCommandValue('08FF')).toBe('08FF'); // place 0 is a macro, 1 to 8
+  for (const bad of ['', 'L8', 'L800', 'Q80', 'S80', '0000', '0900', '1000', '12G0', '12F', '12FFF']) expect(trackCommandValue(bad), bad).toBeNull();
+  expect(commandValue('13ff')).toBe('13FF'); expect(commandValue('s80')).toBe('S80'); expect(commandValue('l80')).toBe('L80'); // a track's fx column takes both kinds
+  const project = newProject(), verb = { name: 'Verb', fx: [], pan: 0, muted: false, volume_db: 0 };
+  project.returns.push(verb); for (const p of project.patterns) { p.return_fx.push([emptyFxLane()]); p.commands.splice(project.returns.length - 1, 0, [Array(p.rows).fill(null)]); }
+  expect(project.patterns[0].commands).toHaveLength(2); // a return and the master
+  expect(project.patterns[0].notes[0][0].fx).toHaveLength(1); // a track starts with a command column
+  project.patterns[0].notes[0][0].fx[0][3] = '12FF'; project.patterns[0].commands[0][0][3] = 'L80'; project.patterns[0].commands[1][0][0] = 'P00';
+  expect(readProject(JSON.stringify(project))).toEqual(project);
+  const bad = (change: (p: typeof project) => void) => { const copy = structuredClone(project); change(copy); expect(() => readProject(JSON.stringify(copy))).toThrow(); };
+  bad(p => { p.patterns[0].commands.pop(); }); // a list for every strip
+  bad(p => { p.patterns[0].commands[0][0][3] = 'S80'; }); // a strip has no notes to start
+  bad(p => { p.patterns[0].commands[0] = Array.from({ length: 5 }, () => Array(32).fill(null)); }); // at most four columns
+  bad(p => { p.patterns[0].commands[0][0] = Array(31).fill(null); });
+  bad(p => { p.patterns[0].commands[1] = []; }); // a return or the master keeps a column
+  // a new pattern and a copy of a track carry them along
+  const copy = makePattern(project, project.patterns[0]); expect(copy.commands[0][0][3]).toBe('L80'); expect(copy.notes[0][0].fx[0][3]).toBe('12FF');
+  const at = duplicateTrack(project, 0)!; expect(project.patterns[0].notes[at][0].fx[0][3]).toBe('12FF');
+  const removed = removeTrack(project, at)!; restoreTrack(project, removed); expect(project.patterns[0].notes[at][0].fx[0][3]).toBe('12FF');
+  const longer = newProject(); resizePattern(longer.patterns[0], 64); expect(longer.patterns[0].commands[0][0]).toHaveLength(64); expect(longer.patterns[0].notes[0][0].fx[0]).toHaveLength(64);
 });
 
 it('duplicates a track with its effects, notes, lanes and matrix cells, right after it', () => {
@@ -238,7 +259,7 @@ it('duplicates a track with its effects, notes, lanes and matrix cells, right af
   project.tracks[1].fx.push({ id: 'd1', definition: 'x', bypass: false, values: { amount: 2 }, modulations: {} });
   project.tracks[1].solo = true;
   project.patterns[0].notes[1][0].notes[3] = 'E-3';
-  project.patterns[0].fx[1][0].values[4] = '-6';
+  project.patterns[0].fx[1][0].envelope = { enabled: true, mode: 'hold', points: [{ row: 4, value: -6 }] };
   setTrackSource(project, 0, 1, { kind: 'mute' });
   setTrackSource(project, 0, 2, { kind: 'pattern', id: project.patterns[0].id });
   expect(duplicateTrack(project, 1)).toBe(2);
@@ -247,7 +268,7 @@ it('duplicates a track with its effects, notes, lanes and matrix cells, right af
   expect(copy.fx).toEqual(project.tracks[1].fx); expect(copy.fx).not.toBe(project.tracks[1].fx); expect(copy.solo).toBe(false);
   const [pattern] = project.patterns;
   expect(pattern.notes[2][0].notes[3]).toBe('E-3'); expect(pattern.notes[2][0]).not.toBe(pattern.notes[1][0]);
-  expect(pattern.fx[2][0].values[4]).toBe('-6'); expect(pattern.notes).toHaveLength(5); expect(pattern.fx).toHaveLength(5);
+  expect(pattern.fx[2][0].envelope!.points[0].value).toBe(-6); expect(pattern.notes).toHaveLength(5); expect(pattern.fx).toHaveLength(5);
   // the later track keeps its cell, and the copy plays the same as the original
   expect(trackSource(project, 0, 1)).toEqual({ kind: 'mute' }); expect(trackSource(project, 0, 2)).toEqual({ kind: 'mute' });
   expect(trackSource(project, 0, 3)).toEqual({ kind: 'pattern', id: pattern.id });
@@ -291,18 +312,4 @@ it('swings pairs of rows without changing how long a pair lasts, and reads swing
   expect(readProject(JSON.stringify(project)).patterns[0].swing).toBe(0);
   project.swing = 76; expect(() => readProject(JSON.stringify(project))).toThrow();
   project.swing = 50; project.patterns[0].swing = -1; expect(() => readProject(JSON.stringify(project))).toThrow();
-});
-
-it('reads a length cell as 1 to 99 percent of a row, and fills one in for an older project', () => {
-  expect(lenValue(' 50 ')).toBe('50'); expect(lenValue('05')).toBe('5');
-  for (const bad of ['', '0', '100', '-1', '5%', '5.5']) expect(lenValue(bad), bad).toBeNull();
-  const project = newProject();
-  const old = JSON.parse(JSON.stringify(project));
-  for (const track of old.patterns[0].notes) for (const column of track) delete column.len;
-  expect(readProject(JSON.stringify(old)).patterns[0].notes[0][0].len).toEqual(Array(project.patterns[0].rows).fill(null));
-});
-
-it('reads an effect cell as a signed volume change of 1 to 99 percent', () => {
-  expect(fxValue(' v-20 ')).toBe('V-20'); expect(fxValue('V+5')).toBe('V+5');
-  for (const bad of ['', 'V', 'V20', 'V+0', 'V+100', 'P+5', 'V+1.5']) expect(fxValue(bad), bad).toBeNull();
 });

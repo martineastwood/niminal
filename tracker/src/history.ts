@@ -30,7 +30,7 @@ export function parseNotes(text: string): (string | null)[][] | null {
   const lines = text.replace(/\r/g, '').trim().split('\n');
   if (lines.length > 256) return null;
   const rows = lines.map(line => line.split('\t').map(value => value.trim()));
-  if (rows.some(row => row.length > 80 || row.some(value => !['', '---', '···', '··'].includes(value) && !/^(?:[A-G][#-][0-8]|OFF|CUT|C|[ORGUDV]\d{0,2})$/i.test(value) && !/^[-+]?\d*\.?\d+(?:e[-+]?\d+)?\s*(?:khz|hz|ms|sec|s|db|%|st|deg)?$/i.test(value)))) return null;
+  if (rows.some(row => row.length > 80 || row.some(value => !['', '---', '···', '··'].includes(value) && !/^(?:[A-G][#-][0-8]|OFF|CUT|C|[A-Z][0-9A-F]{2}|[0-9A-F]{4})$/i.test(value) && !/^[-+]?\d*\.?\d+(?:e[-+]?\d+)?\s*(?:khz|hz|ms|sec|s|db|%|st|deg)?$/i.test(value)))) return null;
   return rows.map(row => row.map(value => ['', '---', '···', '··'].includes(value) ? null : value.toUpperCase()));
 }
 

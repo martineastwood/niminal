@@ -99,6 +99,19 @@ niminal-live live examples/midi_osc.nml --midi --osc-port 9000
 
 `midi.learn` waits for the next control change and binds to it. A clip with `keys: midi.keys(...)` plays from a MIDI keyboard. Details: [Performance](/reference/language/performance/).
 
+## Syncing to other gear with MIDI clock
+
+Niminal can follow the clock of another device or program, and send its own.
+
+```sh
+niminal-live live song.nml --clock-in "IAC Driver" --clock-out "IAC Driver"
+```
+
+- `--clock-in NAME` follows the clock of the MIDI input whose name contains `NAME`. The tempo is taken from the spacing of its ticks, and kept in step with them as they drift. When the other side presses start, bar 1 starts at its first tick (continue picks up the bar where it stopped). Stop leaves the clips playing and holds the tempo. Clips and changes already waiting for a bar line keep the sample they were queued for, so start the other side before you queue anything for the first bar.
+- `--clock-out NAME` sends 24 ticks to the beat to the output whose name contains `NAME` (or makes an output of that name, where the system allows). A start goes out on a bar line, ticks follow the tempo through every change, and a `reset` stops the clock and starts it again on the next bar line.
+
+The stage has the same two choices in its **sync** menus. Following a clock changes the tempo like a `tempo` command would, so it shows in the session log and a set replays.
+
 ## Sending MIDI and OSC out
 
 A `midi_out` is an instrument that plays external gear. Its notes go to a MIDI output port instead of making sound here: a note's `freq` is the key that is pressed (a note name works) and its `gain` the velocity (0db the loudest, -30db the softest), and the note ends when its step does.

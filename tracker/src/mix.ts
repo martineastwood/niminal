@@ -5,10 +5,8 @@ import { trackColour, masterColour } from './grid';
 import { drawScope, meterLevel } from './scope';
 
 export interface MixActions {
-  /** Select a track in the pattern editor. */
-  selectTrack(track: number): void;
-  /** Open a strip's effect chain; the master is -1 and returns are below that. */
-  openFx(track: number): void;
+  /** Open a strip's effect chain, at one of its devices if given; the master is -1 and returns are below that. */
+  openFx(track: number, device?: string): void;
   /** A level, pan, output, mute or solo changed. */
   edited(): void;
   addReturn(): void;
@@ -58,7 +56,15 @@ export class MixPanel {
       const element = document.createElement('div'); element.className = `mix-strip ${master ? 'master' : ''} ${ret ? 'return' : ''}`; element.dataset.track = String(index);
       element.style.setProperty('--track-colour', master ? masterColour : ret ? '#5fa8a0' : trackColour(track, index)); element.classList.toggle('selected', index === this.active);
       const name = document.createElement('button'); name.className = 'mix-name'; name.textContent = master ? 'Master' : track.name; name.title = track.name;
-      name.onclick = () => (index < 0 ? this.actions.openFx(index) : this.actions.selectTrack(index));
+      // a click on a strip, off its controls, shows that strip's effect chain
+      name.onclick = () => this.actions.openFx(index);
+      const chain = document.createElement('div'); chain.className = 'mix-chain'; chain.setAttribute('aria-label', `${track.name} effects`);
+      for (const device of track.fx) {
+        const slot = document.createElement('button'), label = project.definitions.find(d => d.id === device.definition)?.name ?? device.definition;
+        slot.className = 'mix-device'; slot.textContent = label; slot.title = `${label}${device.bypass ? ' (bypassed)' : ''} on ${track.name}`; slot.classList.toggle('bypassed', device.bypass);
+        slot.onclick = () => this.actions.openFx(index, device.id); chain.append(slot);
+      }
+      element.onclick = event => { if (!(event.target as HTMLElement).closest('button, input, .fader') ) this.actions.openFx(index); };
       const canvas = document.createElement('canvas'); canvas.className = 'mix-scope'; canvas.setAttribute('aria-label', `${track.name} scope`);
       const pan = document.createElement('input'); pan.type = 'range'; pan.min = '-1'; pan.max = '1'; pan.step = '0.01'; pan.value = String(track.pan); pan.className = 'mix-pan'; pan.setAttribute('aria-label', `${track.name} pan`);
       pan.oninput = () => { track.pan = Number(pan.value); this.actions.edited(); }; pan.ondblclick = () => { pan.value = '0'; pan.oninput!(new Event('input')); };
@@ -77,7 +83,7 @@ export class MixPanel {
       const fx = document.createElement('button'); fx.textContent = track.fx.length ? `FX ${track.fx.length}` : 'FX'; fx.title = `${track.name} effects`; fx.setAttribute('aria-label', `${track.name} effect chain`);
       fx.onclick = () => this.actions.openFx(index); buttons.append(fx);
       if (ret) { const remove = document.createElement('button'); remove.textContent = '×'; remove.title = `Remove ${track.name}`; remove.setAttribute('aria-label', `Remove ${track.name}`); remove.onclick = () => this.actions.removeReturn(returnIndex(index)); buttons.append(remove); }
-      element.append(name, canvas, pan, faders, readout, buttons);
+      element.append(name, chain, canvas, pan, faders, readout, buttons);
       if (!master) element.append(this.output(track, project, ret ? returnIndex(index) + 1 : 0));
       else { const out = document.createElement('span'); out.className = 'mix-output-label'; out.textContent = 'Main out'; element.append(out); }
       this.parent.append(element); this.strips.push({ track: index, element, canvas, meter: fill });

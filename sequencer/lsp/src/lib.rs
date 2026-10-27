@@ -868,6 +868,35 @@ mod tests {
     }
 
     #[test]
+    fn a_scene_is_coloured_apart_from_the_clips_in_it() {
+        let text = "instr tone(freq: hz) { osc(saw, freq) }\nclip lead { instrument: tone }\nscene verse { lead }\n";
+        let mut server = Server::new();
+        open(&mut server, text);
+        let reply = request(
+            &mut server,
+            1,
+            "textDocument/semanticTokens/full",
+            json!({ "textDocument": { "uri": URI } }),
+        );
+        let data: Vec<u64> = reply["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .collect();
+        let (mut line, mut column, mut found) = (0, 0, Vec::new());
+        for t in data.chunks(5) {
+            line += t[0];
+            column = if t[0] == 0 { column + t[1] } else { t[1] };
+            let word = &text.lines().nth(line as usize).unwrap()
+                [column as usize..(column + t[2]) as usize];
+            found.push((word, features::TOKEN_TYPES[t[3] as usize]));
+        }
+        assert!(found.contains(&("verse", "enum")), "{found:?}");
+        assert!(found.iter().filter(|f| f.0 == "lead").all(|f| f.1 == "namespace"));
+    }
+
+    #[test]
     fn semantic_tokens_tell_names_apart_by_what_they_are() {
         let mut server = Server::new();
         open(&mut server, SONG);
@@ -918,6 +947,31 @@ mod tests {
             Some("function"),
             "used as the node's instrument"
         );
+        // a transform passed by name is a function too
+        let every = "clip c { notes: [c4 e4].every(2, reverse) }\n";
+        let mut other = Server::new();
+        open(&mut other, every);
+        let reply = request(
+            &mut other,
+            1,
+            "textDocument/semanticTokens/full",
+            json!({ "textDocument": { "uri": URI } }),
+        );
+        let data: Vec<u64> = reply["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .collect();
+        let (mut column, mut words) = (0, Vec::new());
+        for t in data.chunks(5) {
+            column = if t[0] == 0 { column + t[1] } else { t[1] };
+            words.push((
+                &every[column as usize..(column + t[2]) as usize],
+                features::TOKEN_TYPES[t[3] as usize],
+            ));
+        }
+        assert!(words.contains(&("reverse", "function")), "{words:?}");
         // words of the language itself are left to the grammar
         assert_eq!(kind("instr", 0), None);
         assert_eq!(kind("node", 0), None);

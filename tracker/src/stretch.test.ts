@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { readFit, sourceTempo, withFit, withStretch, estimateBeats } from './stretch';
 import { samplerSource } from './instruments';
 
-const older = samplerSource('hit', 'samples/hit.wav').replace(/, stretch: 0\.25\.\.4 = 1, stretch_mode: 0\.\.2 = 0, from_bpm: 0\.\.400 = 0/, '').replace(', stretch: stretch, stretch_mode: stretch_mode', '');
+const older = samplerSource('hit', 'samples/hit.wav').replace(/,\s+stretch: 0\.25\.\.4 = 1,\s+stretch_mode: 0\.\.2 = 0,\s+from_bpm: 0\.\.400 = 0/, '').replace(', stretch: stretch, stretch_mode: stretch_mode', '');
 
 it('gives a sampler written before stretching the parameters it needs, once', () => {
   expect(older).not.toContain('stretch');

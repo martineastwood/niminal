@@ -27,16 +27,18 @@ Click **▶ Pattern** to hear the current pattern. Entering a note in the grid p
 
 The **pattern grid** is the main workspace. A single toolbar holds transport, tempo (BPM, LPB), octave, entry step, pattern and track controls; engine connection and status live in the footer.
 
-The bottom dock has **Code**, **Automation**, **Mixer**, **Matrix** and **Sample** tabs. It starts open on **Code**, showing the current instrument. **Instrument** / **FX** at the top of the pane switch it between the instrument's code and the selected track's effect chain, with presets and generated controls beside the code. **×** closes the dock, **⤢** expands it over the grid, and dragging its top edge resizes it. **F6** switches between the grid and the editor.
+The bar above the grid switches the main area between **Pattern**, **Instrument**, **Sample** and **Mixer**. The Instrument view holds the current instrument's controls and code, which every track shares; Sample draws its waveform; Mixer shows a strip for every track. **Pattern** returns to the grid.
+
+The bottom dock belongs to the selected track and stays open under every view. It is named after the track and has **FX** and **Automation** tabs. Selecting another track (in the grid, or on a mixer strip) shows that track's effect chain, with presets and generated controls beside the code of the selected effect, or its automation if that tab is open. **×** closes the dock, **⤢** expands it over the main area, and dragging its top edge resizes it. **F6** switches between the grid and the instrument's code.
 
 The right-hand side holds the project's instruments and the sound browser. **Cmd/Ctrl+B** shows or hides the browser.
 
 The **menu bar** has File (New, Open, Save, Import Samples, Import Samples as a Kit, Export WAV, Export WAV and Track Stems), Edit (Undo, Redo, Cut, Copy, Paste), Song, Sound and View. Items do what the matching button or key does.
 
-- [The grid](/reference/tracker/grid/) — notes, columns, start, pitch and retrigger cells, sliced samples
-- [Patterns, the sequence and timing](/reference/tracker/sequence/) — song order, loops, sections, the matrix, tempo
+- [The grid](/reference/tracker/grid/) — notes, columns, commands, sliced samples
+- [Patterns, the sequence and timing](/reference/tracker/sequence/) — song order, loops, sections, the track cells, tempo
 - [Instruments and effects](/reference/tracker/instruments/) — the project's sounds, the browser, applying code, effect chains
-- [Parameter lanes, LFOs and envelopes](/reference/tracker/automation/) — automation inside a pattern
+- [Track commands, automation and envelopes](/reference/tracker/automation/) — automation inside a pattern
 - [Mixer, returns and sends](/reference/tracker/mixer/) — levels, groups, parallel effects
 - [Selecting and editing](/reference/tracker/editing/) — block operations, shortcuts, undo, MIDI
 

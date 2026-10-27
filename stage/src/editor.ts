@@ -18,6 +18,7 @@ import { languageTransport } from './transport';
 import { stage } from './live';
 import { highlightExtensions } from './highlight';
 import { scrubbing } from './scrub';
+import { semanticHighlighting } from './semantic';
 
 export const lsp = new LSPClient({
   extensions: [
@@ -101,6 +102,7 @@ export function niminalEditor(source: string, uri: string, apply: (scope: Scope)
       theme,
       colours,
       highlightExtensions,
+      semanticHighlighting,
       // Tab takes the suggestion when the list is open, and indents otherwise
       keymap.of([{ key: 'Tab', run: acceptCompletion }, indentWithTab]),
       lsp.plugin(uri, 'niminal'),

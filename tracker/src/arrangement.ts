@@ -1,3 +1,4 @@
+import { closeMatrixMenu, matrixCell } from './matrix';
 import { makePattern, tidyMatrix, type Pattern, type Project, type Section } from './project';
 
 export class Arrangement {
@@ -118,7 +119,10 @@ export class Arrangement {
 
   render() {
     const project = this.project();
+    closeMatrixMenu();
     this.parent.replaceChildren();
+    // the sidebar makes room for a cell for each track
+    this.parent.parentElement?.style.setProperty('--sequence-cells', `${project.tracks.length * 17}px`);
     let hidden = false;
     for (const [index, id] of project.sequence.entries()) {
       const section = project.sections?.find(s => s.start === index);
@@ -139,7 +143,9 @@ export class Arrangement {
       const name = document.createElement('button'); name.className = 'sequence-name'; name.textContent = pattern.name; name.title = pattern.name; name.onclick = () => this.select(index);
       select.title = `Pattern ${number}: ${pattern.name}`;
       select.onchange = () => { project.sequence[index] = select.value; this.select(index); this.edited(); };
-      row.append(button, select, name); this.parent.append(row);
+      const cells = document.createElement('div'); cells.className = 'sequence-cells';
+      for (let track = 0; track < project.tracks.length; track++) cells.append(matrixCell(project, index, track, () => { this.render(); this.selected(false); this.edited(); }));
+      row.append(button, select, name, cells); this.parent.append(row);
     }
   }
 

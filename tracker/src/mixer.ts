@@ -29,7 +29,7 @@ export function renderInstrument(parent: HTMLElement, definition: Definition, pa
       }, hide);
       row.querySelector('input')!.setAttribute('aria-label', `${definition.name} ${parameter.name}`);
       const record = row.querySelector<HTMLButtonElement>('button')!;
-      record.disabled = activeTrack < 0; if (activeTrack < 0) record.title = 'Only a track has parameter lanes';
+      record.disabled = activeTrack < 0; if (activeTrack < 0) record.title = 'Only a track has automation lanes';
       const lfo = lfos[parameter.name];
       const toggle = button('∿', modulatable(parameter) ? `Toggle ${parameter.name} LFO` : `${parameter.name} is a gain in decibels, which an LFO can't move`, () => {
         const source = setLfo(definition.source, parameter, lfo ? null : { shape: 'sine', rate: 2, depth: 0.5 });

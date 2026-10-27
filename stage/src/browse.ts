@@ -4,6 +4,16 @@ export type BrowseFile = { path: string; bytes: number };
 
 const slashes = (path: string) => path.replace(/\\/g, '/');
 
+/** The folder above a path, or null at a filesystem root. */
+export function parentFolder(path: string): string | null {
+  const dir = slashes(path).replace(/\/+$/, '');
+  if (!dir || /^[a-z]:$/i.test(dir)) return null;
+  const slash = dir.lastIndexOf('/');
+  if (slash < 0) return null;
+  const parent = dir.slice(0, slash);
+  return /^[a-z]:$/i.test(parent) ? `${parent}/` : parent || '/';
+}
+
 /** `file` as a path from folder `from`, the way a piece names its samples; the full path when there is no folder. */
 export function relativePath(from: string | null, file: string) {
   const target = slashes(file);
@@ -120,9 +130,11 @@ export class FileBrowse {
     this.element.id = 'files';
     this.element.hidden = true;
     this.element.innerHTML = `
+      <div class="files-divider" role="separator" aria-orientation="vertical" aria-label="Resize file browser" tabindex="0" title="Drag to resize · double-click to reset"></div>
       <div class="files-head">
         <strong>browse</strong>
         <span class="files-where"></span>
+        <button class="files-up" title="Parent folder (← at top level)" disabled>↑ Up</button>
         <button class="files-folder" title="Choose another folder">Folder…</button>
         <button class="files-close" title="Close (Esc)">×</button>
       </div>
@@ -133,7 +145,7 @@ export class FileBrowse {
         <button id="save" title="Save the file">Save</button>
       </div>
       <input class="files-filter" placeholder="filter · ↑↓ · ↩ opens or inserts" spellcheck="false" />
-      <div class="files-list" role="tree"></div>
+      <div class="files-list" role="tree" tabindex="0" aria-label="Files"></div>
       <canvas class="files-wave" width="440" height="56"></canvas>
       <div class="files-detail"></div>`;
     const find = <T extends HTMLElement>(selector: string) => this.element.querySelector<T>(selector)!;
@@ -143,17 +155,71 @@ export class FileBrowse {
     this.wave = find<HTMLCanvasElement>('.files-wave');
     this.detail = find('.files-detail');
     find('.files-close').addEventListener('click', () => this.close());
+    find('.files-up').addEventListener('click', () => void this.up());
     find('.files-folder').addEventListener('click', () => void this.choose());
+    const divider = find('.files-divider');
+    const widthKey = 'niminal-stage:browser-width';
+    const savedWidth = Number(localStorage.getItem(widthKey));
+    if (savedWidth > 0) this.element.style.setProperty('--browser-width', `${savedWidth}px`);
+    const resize = (width: number) => {
+      const available = this.element.parentElement?.clientWidth ?? 0;
+      const clamped = Math.round(Math.min(Math.max(width, 220), Math.max(220, available - 240)));
+      this.element.style.setProperty('--browser-width', `${clamped}px`);
+      localStorage.setItem(widthKey, String(clamped));
+    };
+    let startX = 0;
+    let startWidth = 0;
+    divider.addEventListener('pointerdown', event => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      startX = event.clientX;
+      startWidth = this.element.getBoundingClientRect().width;
+      divider.setPointerCapture(event.pointerId);
+      divider.classList.add('dragging');
+      document.body.classList.add('resizing');
+    });
+    divider.addEventListener('pointermove', event => {
+      if (divider.hasPointerCapture(event.pointerId)) resize(startWidth + event.clientX - startX);
+    });
+    const endResize = () => {
+      divider.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+    };
+    divider.addEventListener('pointerup', event => {
+      if (divider.hasPointerCapture(event.pointerId)) divider.releasePointerCapture(event.pointerId);
+      endResize();
+    });
+    divider.addEventListener('lostpointercapture', endResize);
+    divider.addEventListener('pointercancel', endResize);
+    divider.addEventListener('dblclick', () => {
+      this.element.style.removeProperty('--browser-width');
+      localStorage.removeItem(widthKey);
+    });
+    divider.addEventListener('keydown', event => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      event.preventDefault();
+      resize(this.element.getBoundingClientRect().width + (event.key === 'ArrowRight' ? 1 : -1) * (event.shiftKey ? 80 : 20));
+    });
     this.filter.addEventListener('input', () => this.refilter());
-    this.filter.addEventListener('keydown', event => {
+    const navigate = (event: KeyboardEvent) => {
       const row = this.rows[this.selected];
       const folder = row && !row.file;
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
         this.select(this.selected + (event.key === 'ArrowDown' ? 1 : -1));
-      } else if ((event.key === 'ArrowRight' && folder && !this.opened.has(row.path)) || (event.key === 'ArrowLeft' && folder && this.opened.has(row.path))) {
+      } else if (event.key === 'ArrowRight' && folder) {
         event.preventDefault();
-        this.toggleDir(row.path);
+        if (!this.opened.has(row.path)) this.toggleDir(row.path);
+        else if (this.rows[this.selected + 1]?.depth > row.depth) this.select(this.selected + 1);
+      } else if (event.key === 'ArrowLeft' && !this.words().length) {
+        event.preventDefault();
+        if (folder && this.opened.has(row.path)) this.toggleDir(row.path);
+        else if (!row || row.depth === 0) void this.up();
+        else {
+          for (let i = this.selected - 1; i >= 0; i--) {
+            if (this.rows[i].depth < row.depth) { this.select(i); break; }
+          }
+        }
       } else if (event.key === 'Enter') {
         event.preventDefault();
         this.activate();
@@ -161,7 +227,9 @@ export class FileBrowse {
         event.preventDefault();
         this.close();
       }
-    });
+    };
+    this.filter.addEventListener('keydown', navigate);
+    this.list.addEventListener('keydown', navigate);
   }
 
   get open() {
@@ -201,9 +269,26 @@ export class FileBrowse {
     this.filter.focus();
   }
 
+  private async up() {
+    const root = this.root();
+    const parent = parentFolder(root);
+    if (!parent) return;
+    this.stop();
+    this.folder = parent;
+    localStorage.setItem('niminal-stage:samples', parent);
+    this.opened.clear();
+    this.filter.value = '';
+    await this.load(parent);
+    const previous = root.slice(root.lastIndexOf('/') + 1) + '/';
+    const index = this.rows.findIndex(row => row.path === previous);
+    if (index >= 0) this.select(index);
+    this.list.focus();
+  }
+
   private async load(dir: string) {
     this.where.textContent = dir;
     this.where.title = dir;
+    this.element.querySelector<HTMLButtonElement>('.files-up')!.disabled = parentFolder(dir) === null;
     try {
       this.files = await listing(dir);
     } catch (error) {
@@ -242,6 +327,7 @@ export class FileBrowse {
         el.textContent = row.file ? name : `${this.opened.has(row.path) ? '▾' : '▸'} ${name}`;
         el.title = row.file?.path ?? row.path;
         el.addEventListener('click', () => {
+          this.list.focus();
           this.select(index);
           if (!row.file) this.toggleDir(row.path);
         });
@@ -256,7 +342,6 @@ export class FileBrowse {
     this.rows = rowsFor(this.files, this.root(), this.opened, []).slice(0, ROWS);
     this.render();
     this.mark(Math.max(0, this.rows.findIndex(row => row.path === dir)));
-    this.filter.focus();
   }
 
   private mark(index: number) {

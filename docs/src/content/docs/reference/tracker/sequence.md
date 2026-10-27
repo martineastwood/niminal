@@ -1,6 +1,6 @@
 ---
 title: Patterns, the sequence and timing
-description: Song order, patterns, loops, sections, the matrix, tracks and tempo in the tracker.
+description: Song order, patterns, loops, sections, per-track cells, tracks and tempo in the tracker.
 ---
 
 The left-hand sequence controls song order. Each step occupies one compact row; the **◂ / ▸** button hides or shows pattern names. Hover over the small action buttons for their labels.
@@ -28,15 +28,15 @@ Song playback runs from where it starts up to the end of the loop, repeats the l
 
 A section header sits above its steps: **▾ / ▸** collapses or expands the steps (the count shows how many are hidden, and a collapsed section lights up while one of its steps plays), the name is editable, and **⟲** loops exactly that section (press it again to clear). Sections only organise the list and don't change playback. Steps added after a section's first step join it, steps removed move later sections up, and a section left with no steps disappears. Sections are saved with the project.
 
-## The matrix
+## Track cells
 
-**Matrix** (in the toolbar, or the dock's Matrix tab) is the pattern matrix: a row for each sequence step and a column for each track, so each step can differ per track without copying a whole pattern.
+Each sequence step has a small cell for every track at the end of its row (the sequence bar widens to fit them), so each step can differ per track without copying a whole pattern. This is the pattern matrix.
 
-A cell normally shows the step's own pattern number. **Click** a cell for a menu to mute that track in that step (**✕**) or have it play another pattern's notes and lanes (**→03**), or choose *Own pattern* to undo; **Shift-click** mutes or unmutes at once. A step label selects the step, and sections appear as separators.
+A cell is blank when the track plays the step's own pattern. **Click** a cell for a menu to mute that track in that step (**✕**) or have it play another pattern's notes and lanes (shown as that pattern's number, like **03**), or choose *Own pattern* to undo; **Shift-click** mutes or unmutes at once.
 
 A redirected track plays the other pattern's rows from its first row, and falls silent after them if that pattern is shorter than the step. A muted track ends a note still sounding from the step before. The pattern editor marks a track that is muted or redirected in the selected step (the header is dimmed or underlined) because editing its cells there isn't heard.
 
-A step's matrix cells move with it when steps are inserted, moved or removed, and with a track when it is deleted and restored. Matrix changes can be made while the song plays. Pattern-only playback (**▶ Pattern**) ignores the matrix.
+A step's cells move with it when steps are inserted, moved or removed, and with a track when it is deleted and restored. Cell changes can be made while the song plays. Pattern-only playback (**▶ Pattern**) ignores them.
 
 ## Playing
 
@@ -76,4 +76,4 @@ Live timing edits affect rows beyond the scheduler's existing lookahead; queued 
 
 Effects, volume and mute are song-wide track settings, and instruments belong to the project, not to tracks. Patterns contain notes and parameter values.
 
-Stop playback before changing sequence structure, pattern lengths, or track count. Notes, instrument assignments, parameter values, envelopes, matrix cells, loop ranges and section organisation can be edited while playing. Mixer controls, effect chains, returns and sends are live too: add, reorder, bypass or remove devices, change outputs or send destinations, and add or remove returns without stopping. Apply instrument or effect code while playing to hear the compiled changes.
+Stop playback before changing sequence structure, pattern lengths, or track count. Notes, instrument assignments, parameter values, envelopes, track cells, loop ranges and section organisation can be edited while playing. Mixer controls, effect chains, returns and sends are live too: add, reorder, bypass or remove devices, change outputs or send destinations, and add or remove returns without stopping. Apply instrument or effect code while playing to hear the compiled changes.

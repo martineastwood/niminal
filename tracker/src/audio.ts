@@ -16,7 +16,7 @@ type Command =
   | { op: 'scopes'; strips: boolean }
   | { op: 'midi_on'; key: number; instrument: string; note: string; track: number; velocity: number }
   | { op: 'midi_off'; key: number | null }
-  | { op: 'audition'; instrument: string; note: string; track: number; ms?: number; start?: string; retrigger?: string };
+  | { op: 'audition'; instrument: string; note: string; track: number; ms?: number; commands?: string[] };
 
 export let audioStatus: AudioStatus = {
   connected: false, playing: false, row: null, row_phase: null, row_at_ms: 0, pattern_id: null, sequence_position: null, sample_rate: 0,

@@ -12,7 +12,7 @@ import { mod } from './shortcuts';
 import { sceneCommand, sceneStates } from './scenes';
 import { HealthWatch } from './health';
 import { learnedRange } from './learn';
-import { SampleBrowser } from './samples';
+import { FileBrowse } from './browse';
 import { Bar, loudest } from './meters';
 import { Action, EvalOutcome, Problem, Queued, Scene, Snapshot, beatsUntil, queuedStates, stage } from './live';
 import { StoredTabs, loadTabs, moveItem, tabTitle, tabsKey } from './tabs';
@@ -24,32 +24,28 @@ app.innerHTML = `
     <div class="brand">
       <span class="mark">◈</span>
       <div class="brand-text">
-        <h1>niminal <em>stage</em></h1>
         <span id="connection" class="connection offline"><i></i><span>offline</span></span>
       </div>
     </div>
     <div class="transport" id="transport">
       <div class="position"><span class="eyebrow">bar</span><strong id="bar">1</strong><span class="beat" id="beat">1.1</span><span class="beats" id="beats"></span></div>
-      <div class="readout"><span class="eyebrow">tempo</span><span id="bpm">—</span><small>bpm</small></div>
-      <div class="readout"><span class="eyebrow">meter</span><span id="meter">4/4</span></div>
+      <div class="readout"><span class="eyebrow">tempo</span><span id="bpm">—</span><small>bpm</small><small>·</small><span id="meter">4/4</span></div>
       <div class="readout"><span class="eyebrow">out</span><span id="master" class="master" title="Output level in dB, peak held; click to clear the clip light"></span></div>
-      <div class="readout"><span class="eyebrow">engine</span><span id="health" class="health ok">ok</span></div>
-      <div class="readout"><span class="eyebrow">midi</span><button id="midi" class="midi" title="Look for MIDI inputs again">—</button></div>
+      <div class="readout" id="health-readout" hidden><span class="eyebrow">engine</span><span id="health" class="health ok">ok</span></div>
+      <div class="readout" id="midi-readout" hidden><span class="eyebrow">midi</span><button id="midi" class="midi" title="Look for MIDI inputs again">—</button></div>
+      <div class="readout" id="sync-readout"><span class="eyebrow">sync</span>
+        <select id="clock-in" class="sync" title="Follow the MIDI clock of an input: its tempo, and bar 1 where it starts"><option value="">follow: off</option></select>
+        <select id="clock-out" class="sync" title="Send MIDI clock, with start and stop, to an output"><option value="">send: off</option></select>
+      </div>
       <div class="readout"><span class="eyebrow">voices</span><span id="voices">0</span></div>
-      <div class="readout"><span class="eyebrow">waiting</span><span id="waiting">0</span></div>
+      <div class="readout" id="waiting-readout" hidden><span class="eyebrow">waiting</span><span id="waiting">0</span></div>
     </div>
     <div class="top-actions">
-      <span class="setup">
+      <span class="setup" id="setup">
         <label class="port">port <input id="port" inputmode="numeric" value="7401" /></label>
         <input id="token" type="password" placeholder="token" aria-label="engine token" />
         <button id="reconnect" title="Connect to the engine">Connect</button>
       </span>
-      <span class="zoom" title="Text size: Cmd/Ctrl + and −, 0 to reset, or pinch the trackpad">
-        <button id="zoom-out" aria-label="Smaller text">A−</button>
-        <button id="zoom-reset" aria-label="Reset text size">100%</button>
-        <button id="zoom-in" aria-label="Larger text">A+</button>
-      </span>
-      <button id="rail-toggle" title="Show or hide the sidebar (Cmd/Ctrl+B)">Sidebar</button>
       <button id="perform" title="Performance mode: just the code and what is playing (Cmd/Ctrl+Shift+P)">Perform</button>
       <button id="hush" title="Stop every clip, letting what sounds ring out">Hush</button>
       <button id="panic" class="danger" title="Stop everything now">Panic</button>
@@ -65,12 +61,7 @@ app.innerHTML = `
         <span id="landing" class="landing" aria-live="polite"></span>
         <div class="editor-actions">
           <span class="file-actions">
-            <button id="new" title="A new empty tab (Cmd/Ctrl+T)">New</button>
-            <button id="open" title="Open a .nml file in a tab">Open</button>
-            <button id="open-project" title="Open a folder: main.nml and what it uses, or every .nml file, as tabs">Project</button>
-            <button id="save" title="Save the file">Save</button>
-            <button id="samples-toggle" title="Find a sample, hear it, and write it into the code (Cmd/Ctrl+Shift+L)">Samples</button>
-            <button id="demo" title="Load the stage's opening piece">Demo</button>
+            <button id="browse-toggle" title="Browse the folder: open pieces, hear samples and write them into the code (Cmd/Ctrl+Shift+L)">Browse</button>
           </span>
           <label class="quantize" title="When an evaluation lands">land <input id="quantize" placeholder="next 4bars" /></label>
           <button id="evaluate-all" title="Evaluate every tab, left to right" hidden>All</button>
@@ -80,7 +71,9 @@ app.innerHTML = `
       </div>
       <div id="tabs" class="tabs" role="tablist"></div>
       <div id="banner" role="alert" hidden></div>
-      <div id="editor"></div>
+      <div id="workbench">
+        <div id="editor"></div>
+      </div>
       <div id="problems" aria-live="polite"></div>
       <div id="editor-status"></div>
     </section>
@@ -171,7 +164,8 @@ function setConnection(ok: boolean) {
   connected = ok;
   connection.classList.toggle('offline', !ok);
   connection.classList.toggle('online', ok);
-  connection.querySelector('span')!.textContent = ok ? 'engine connected' : 'offline';
+  connection.querySelector('span')!.textContent = ok ? 'engine' : 'offline';
+  $('setup').hidden = ok;
 }
 
 function makeTab(source: string, path: string | null, title: string, saved = source): Tab {
@@ -511,6 +505,7 @@ let lastMidi: string | null = null;
 function updateMidi(snapshot: Snapshot) {
   const chip = $('midi');
   const { inputs, last } = snapshot.midi;
+  $('midi-readout').hidden = inputs.length === 0;
   chip.textContent = inputs.length ? (last ?? `${inputs.length} in`) : 'none';
   chip.title = inputs.length
     ? `${inputs.join(', ')}${last ? ` · last: ${last}` : ''}. Click to look for inputs again.`
@@ -546,6 +541,7 @@ function updateHealth(snapshot: Snapshot) {
   chip.classList.toggle('ok', ok);
   chip.classList.toggle('trouble', !ok);
   chip.textContent = ok ? 'ok' : 'dropouts';
+  $('health-readout').hidden = ok;
   chip.title = ok
     ? known
       ? 'The engine is keeping up'
@@ -638,6 +634,7 @@ function updateTransport(snapshot: Snapshot) {
     bpm.textContent = '—';
     voices.textContent = '0';
     waiting.textContent = '0';
+    $('waiting-readout').hidden = true;
     return;
   }
   bar.textContent = String(t.bar);
@@ -652,6 +649,7 @@ function updateTransport(snapshot: Snapshot) {
   meter.textContent = snapshot.meter.join('/');
   voices.textContent = String(t.voices);
   waiting.textContent = String(snapshot.pending.length);
+  $('waiting-readout').hidden = snapshot.pending.length === 0;
 }
 
 /** A refused evaluation is shown big at the top of the code, where it cannot be missed from across a room. */
@@ -777,6 +775,21 @@ async function openFile() {
   }
 }
 
+/** Open one file from the file browse panel in a tab, or switch to it if it is already open. */
+async function openPath(path: string) {
+  try {
+    const open = tabs.find(tab => tab.path === path);
+    if (open) show(open);
+    else {
+      const opened = await stage.openPath(path);
+      addTab(opened.source, opened.path, 'untitled');
+    }
+    status(`opened ${path}; evaluate it when you are ready`);
+  } catch (error) {
+    status(String(error));
+  }
+}
+
 /** Open a folder's files as tabs: `main.nml` and what it uses, or every file in the folder without one. */
 async function openProject() {
   try {
@@ -823,11 +836,6 @@ async function saveFile(tab = current) {
 /** Save every tab that has a file and has changed. */
 async function saveAll() {
   for (const tab of tabs) if (tab.path && isDirty(tab)) await saveFile(tab);
-}
-
-function loadDemo() {
-  addTab(demoSource, null, 'demo');
-  status('the opening piece is loaded; evaluate it when you are ready');
 }
 
 /** Send every tab in turn, left to right, so a tab of instruments goes before the clips that play them. */
@@ -959,7 +967,6 @@ let zoom = 1;
 function setZoom(value: number) {
   zoom = Math.min(Math.max(value, ZOOMS[0]), ZOOMS[ZOOMS.length - 1]);
   document.documentElement.style.setProperty('--z', String(zoom));
-  $('zoom-reset').textContent = `${Math.round(zoom * 100)}%`;
   localStorage.setItem(zoomKey, String(zoom));
   view?.requestMeasure();
 }
@@ -968,9 +975,6 @@ function stepZoom(direction: 1 | -1) {
   if (next !== undefined) setZoom(next);
 }
 setZoom(Number(localStorage.getItem(zoomKey)) || 1);
-$('zoom-in').addEventListener('click', () => stepZoom(1));
-$('zoom-out').addEventListener('click', () => stepZoom(-1));
-$('zoom-reset').addEventListener('click', () => setZoom(1));
 // pinching on a trackpad arrives as a wheel with the control key held
 let pinch = 0;
 window.addEventListener(
@@ -1000,7 +1004,7 @@ for (const name of (localStorage.getItem(modeKey) ?? '').split(',')) {
   if (name === 'perform' || name === 'no-rail') document.body.classList.add(name);
 }
 $('perform').addEventListener('click', () => setMode('perform', !document.body.classList.contains('perform')));
-$('rail-toggle').addEventListener('click', () => setMode('no-rail', !document.body.classList.contains('no-rail')));
+const toggleRail = () => setMode('no-rail', !document.body.classList.contains('no-rail'));
 
 // The divider between the code and the sidebar: drag it, or use the arrow keys, to give either more room.
 const railKey = 'niminal-stage-rail';
@@ -1053,18 +1057,11 @@ const laneView = new LaneView($('lanes'), (action, target, change) => {
   else void act({ action, target, change });
 });
 
-$('evaluate').addEventListener('click', () => void evaluate());
-$('evaluate-file').addEventListener('click', () => void evaluate('file'));
-$('new').addEventListener('click', () => addTab('', null, 'untitled'));
-$('evaluate-all').addEventListener('click', () => void evaluateAll());
-$('open').addEventListener('click', () => void openFile());
-$('open-project').addEventListener('click', () => void openProject());
-$('save').addEventListener('click', () => void saveFile());
-$('demo').addEventListener('click', loadDemo);
-/** The sample browser: finds WAVs, plays them, and writes the one chosen where the cursor is. */
-const samples = new SampleBrowser({
+/** The file browse panel: opens pieces, plays samples, and writes the one chosen where the cursor is. */
+const files = new FileBrowse({
   fileDir,
   status,
+  openPiece: path => void openPath(path),
   insert: make => {
     if (!view) return;
     const { from, to } = view.state.selection.main;
@@ -1075,8 +1072,16 @@ const samples = new SampleBrowser({
     view.focus();
   },
 });
-$('backstage').append(samples.element);
-$('samples-toggle').addEventListener('click', () => samples.toggle());
+$('workbench').prepend(files.element);
+$('browse-toggle').addEventListener('click', () => files.toggle());
+
+$('evaluate').addEventListener('click', () => void evaluate());
+$('evaluate-file').addEventListener('click', () => void evaluate('file'));
+$('new').addEventListener('click', () => addTab('', null, 'untitled'));
+$('evaluate-all').addEventListener('click', () => void evaluateAll());
+$('open').addEventListener('click', () => void openFile());
+$('open-project').addEventListener('click', () => void openProject());
+$('save').addEventListener('click', () => void saveFile());
 $('rec').addEventListener('click', toggleRecording);
 $('midi').addEventListener('click', () => {
   stage.openMidi('').then(
@@ -1084,6 +1089,46 @@ $('midi').addEventListener('click', () => {
     error => status(String(error)),
   );
 });
+/** The MIDI clock choices: the ports there are, listed when a menu opens, and the one chosen kept. */
+const NEW_CLOCK_PORT = 'niminal clock';
+function clockMenu(id: 'clock-in' | 'clock-out', set: (name: string | null) => Promise<void>) {
+  const select = $(id) as HTMLSelectElement;
+  const off = select.options[0].textContent ?? '';
+  const refill = async () => {
+    const ports = await stage.midiPorts().catch(() => ({ inputs: [], outputs: [] }));
+    const names = id === 'clock-in' ? ports.inputs : ports.outputs;
+    const chosen = select.value;
+    const options = [{ value: '', label: off }];
+    if (id === 'clock-out' && !names.includes(NEW_CLOCK_PORT)) {
+      options.push({ value: NEW_CLOCK_PORT, label: `${NEW_CLOCK_PORT} (new port)` });
+    }
+    options.push(...names.map(name => ({ value: name, label: name })));
+    if (chosen && !options.some(o => o.value === chosen)) options.push({ value: chosen, label: chosen });
+    select.replaceChildren(
+      ...options.map(({ value, label }) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        return option;
+      }),
+    );
+    select.value = chosen;
+  };
+  select.addEventListener('mousedown', () => void refill());
+  select.addEventListener('change', async () => {
+    try {
+      await set(select.value || null);
+      select.classList.toggle('active', select.value !== '');
+      status(select.value ? `${id === 'clock-in' ? 'following' : 'sending clock to'} ${select.value}` : 'clock off');
+    } catch (error) {
+      select.value = '';
+      select.classList.remove('active');
+      status(String(error));
+    }
+  });
+}
+clockMenu('clock-in', name => stage.clockIn(name));
+clockMenu('clock-out', name => stage.clockOut(name));
 $('hush').addEventListener('click', () => void act({ action: 'hush' }));
 $('panic').addEventListener('click', () => void act({ action: 'panic' }));
 $('reconnect').addEventListener('click', async () => {
@@ -1118,7 +1163,7 @@ window.addEventListener('keydown', event => {
     $('perform').click();
   } else if (event.key.toLowerCase() === 'l' && event.shiftKey) {
     event.preventDefault();
-    samples.toggle();
+    files.toggle();
   } else if (event.key.toLowerCase() === 't' && !event.shiftKey) {
     event.preventDefault();
     $('new').click();
@@ -1130,7 +1175,7 @@ window.addEventListener('keydown', event => {
     step(1);
   } else if (event.key.toLowerCase() === 'b' && !event.shiftKey) {
     event.preventDefault();
-    $('rail-toggle').click();
+    toggleRail();
   } else if (/^[1-9]$/.test(event.key) && !event.shiftKey) {
     // the nth scene, as clicking it would
     const scene = sceneList[Number(event.key) - 1];
@@ -1163,7 +1208,8 @@ const menuActions: Record<string, () => void> = {
   'close-tab': () => closeTab(current),
   undo: () => view && undo(view),
   redo: () => view && redo(view),
-  sidebar: () => $('rail-toggle').click(),
+  browse: () => files.toggle(),
+  sidebar: () => toggleRail(),
   perform: () => $('perform').click(),
   'zoom-in': () => stepZoom(1),
   'zoom-out': () => stepZoom(-1),

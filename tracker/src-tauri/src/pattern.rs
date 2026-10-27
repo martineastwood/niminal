@@ -207,22 +207,79 @@ impl Envelope {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FxLane {
     pub target: Option<crate::commands::FxTarget>,
-    pub values: Vec<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub envelope: Option<Envelope>,
 }
 impl FxLane {
     #[cfg(test)]
-    pub fn empty(rows: usize) -> Self {
+    pub fn empty() -> Self {
         Self {
             target: Some(crate::commands::FxTarget::Volume),
-            values: vec![None; rows],
             envelope: None,
+        }
+    }
+    /// A lane that sets each of `values` at its row and holds it until the next.
+    #[cfg(test)]
+    pub fn held(&mut self, values: &[(usize, f64)]) {
+        self.envelope = Some(Envelope {
+            enabled: true,
+            mode: "hold".into(),
+            points: values.iter().map(|&(row, value)| EnvelopePoint { row: row as f64, value }).collect(),
+        });
+    }
+}
+
+/// A command on a track, a return or the master, as in Renoise's track commands. The cell is written `Lxx`, `Pxx`
+/// or four hex digits `xyzz`, with place `0` for a macro:
+///
+/// | | |
+/// |-|-|
+/// | `Lxx` | the strip's volume: `00` is silent, `FF` is +3 dB |
+/// | `Pxx` | the strip's pan: `00` is left, `80` centre, `FF` right |
+/// | `xyzz` | the effect in place `x` of the strip's chain (from 1) gets its parameter `y` (from 1) set to `zz`, from its least at `00` to its most at `FF` |
+/// | `0yzz` | the strip's macro `y` (from 1) is set to `zz`, from 0% at `00` to 100% at `FF` |
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TrackCommand {
+    Volume(u8),
+    Pan(u8),
+    Device { device: u8, parameter: u8, value: u8 },
+    Macro { index: u8, value: u8 },
+}
+
+impl TrackCommand {
+    pub fn parse(text: &str) -> Option<Self> {
+        let hex = |digits: &str| digits.bytes().all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b)).then(|| u8::from_str_radix(digits, 16).ok()).flatten();
+        match text.as_bytes() {
+            [b'L', ..] if text.len() == 3 => hex(&text[1..]).map(Self::Volume),
+            [b'P', ..] if text.len() == 3 => hex(&text[1..]).map(Self::Pan),
+            _ if text.len() == 4 && text.is_ascii() => {
+                let (device, parameter) = (hex(&text[..1])?, hex(&text[1..2])?);
+                let value = hex(&text[2..])?;
+                if device == 0 { return (1..=MAX_MACROS as u8).contains(&parameter).then_some(Self::Macro { index: parameter, value }); }
+                (parameter > 0).then_some(Self::Device { device, parameter, value })
+            }
+            _ => None,
+        }
+    }
+
+    /// What the strip is told to do: the target and the value in the units its lane would hold.
+    pub fn target(self, strip: &Track, parameters: &crate::commands::EffectParameters) -> Option<(crate::commands::FxTarget, f64)> {
+        use crate::commands::FxTarget;
+        match self {
+            Self::Volume(value) => Some((FxTarget::Volume, if value == 0 { -60.0 } else { (20.0 * (f64::from(value) / 255.0).log10() + 3.0).clamp(-60.0, 6.0) })),
+            Self::Pan(value) => Some((FxTarget::Pan, ((f64::from(value) - 128.0) / 127.0).clamp(-1.0, 1.0))),
+            Self::Macro { index, value } => Some((FxTarget::Macro { index: usize::from(index) - 1 }, f64::from(value) / 255.0)),
+            Self::Device { device, parameter, value } => {
+                let device = strip.fx.get(usize::from(device) - 1)?;
+                let info = parameters.get(&device.definition)?.get(usize::from(parameter) - 1)?;
+                Some((FxTarget::Effect { device: device.id.clone(), parameter: info.name.clone() }, info.min + f64::from(value) / 255.0 * (info.max - info.min)))
+            }
         }
     }
 }
 
 pub const MAX_NOTE_COLUMNS: usize = 8;
+pub const MAX_TRACK_COMMAND_COLUMNS: usize = 4;
 
 /// One note column of a track. Every sub-column holds a cell per row; the optional ones
 /// may be left empty, which reads as blank everywhere.
@@ -242,27 +299,69 @@ pub struct NoteColumn {
     /// How late the note starts, in 256ths of a row.
     #[serde(default)]
     pub delay: Vec<Option<String>>,
-    /// Where the sample starts and which way it plays, for a new note: see [`Start`].
+    /// Command columns: a letter and two hex digits in each cell, such as `S20` or `R41`: see [`Command`].
+    /// Each is a column of cells for every row; a note column has none until it is given some.
     #[serde(default)]
-    pub start: Vec<Option<String>>,
-    /// A glide, slide or other pitch movement for the note, or for the note sounding in this column: see [`Pitch`].
-    #[serde(default)]
-    pub pitch: Vec<Option<String>>,
-    /// How many times the note plays in its row, and how its level changes: see [`Retrigger`].
-    #[serde(default)]
-    pub rtg: Vec<Option<String>>,
-    /// The percent chance, 0 to 100, that a note plays; blank is certain.
-    #[serde(default)]
-    pub chance: Vec<Option<String>>,
-    /// How long a new note sounds before it is released, as a percent of a row, 1 to 99; blank holds it as usual.
-    #[serde(default)]
-    pub len: Vec<Option<String>>,
-    /// A change to the note sounding in this column during this row: see [`parse_fx`].
-    #[serde(default)]
-    pub fx: Vec<Option<String>>,
+    pub fx: Vec<Vec<Option<String>>>,
 }
 
-/// Where a new note's sample starts and which way it plays: `50` half way in, `<` backwards, `50<` both.
+pub const MAX_FX_COLUMNS: usize = 4;
+/// Ticks in a row, as in Renoise: the commands that count ticks and per-tick speeds use it.
+const TICKS: f64 = 12.0;
+
+/// A command cell: a letter and two hex digits, `S20`. These follow Renoise's effect commands where
+/// the engine has the same thing:
+///
+/// | | |
+/// |-|-|
+/// | `Sxx` | start the sample `xx`/256 of the way in |
+/// | `B00`, `B01` | play the sample backwards, forwards |
+/// | `Gxx` | glide the held note to this one at `xx` sixteenths of a semitone per tick (`FF` at once); `G00` repeats the last `G` above it |
+/// | `Uxx`, `Dxx` | slide the held note up or down by `xx` sixteenths of a semitone per tick during the row; `00` repeats the last one |
+/// | `Rxy` | retrigger every `y` ticks (1 to 6), each hit changed in level by `x`'s factor |
+/// | `C0y` | cut the note `y` ticks (1 to 11) into the row |
+/// | `Yxx` | play the note with probability `xx`/255 |
+/// | `Ixx`, `Oxx` | fade the held note's level in or out by `xx` volume units (0 to 128) during the row; `00` repeats the last one |
+///
+/// A cell may instead hold a [`TrackCommand`] (`Lxx`, `Pxx` or `xyzz`), which acts on the whole track and which the note accessors skip.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Command {
+    pub letter: char,
+    pub value: u8,
+}
+
+impl Command {
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut chars = text.chars();
+        let letter = chars.next().filter(char::is_ascii_uppercase)?;
+        let digits = chars.as_str();
+        if digits.len() != 2 || !digits.bytes().all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b)) {
+            return None;
+        }
+        Some(Self { letter, value: u8::from_str_radix(digits, 16).ok()? })
+    }
+    fn x(self) -> u8 {
+        self.value >> 4
+    }
+    fn y(self) -> u8 {
+        self.value & 15
+    }
+    /// Why the engine cannot play this command, if it cannot.
+    pub fn problem(self) -> Option<&'static str> {
+        match self.letter {
+            'S' => None,
+            'B' => (self.value > 1).then_some("B is B00 (backwards) or B01 (forwards)"),
+            'G' | 'U' | 'D' => None,
+            'Y' => (self.value == 0).then_some("Y runs from 01 to FF"),
+            'I' | 'O' => (self.value > 0x80).then_some("I and O run from 00 to 80"),
+            'R' => (self.y() == 0 || self.y() > 6).then_some("R is Rxy with y from 1 to 6 ticks"),
+            'C' => (self.x() != 0 || self.y() == 0 || self.y() > 11).then_some("C is C0y with y from 1 to 11 ticks"),
+            _ => Some("Commands are S, B, G, U, D, R, C, Y, I and O for a note, and L, P or four hex digits for the track"),
+        }
+    }
+}
+
+/// Where a new note's sample starts and which way it plays.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Start {
     /// The share of the sample to skip, from 0 up to 0.99.
@@ -270,97 +369,43 @@ pub struct Start {
     pub reverse: bool,
 }
 
-impl Start {
-    pub fn parse(text: &str) -> Option<Self> {
-        let (digits, reverse) = match text.strip_suffix('<') {
-            Some(digits) => (digits, true),
-            None => (text, false),
-        };
-        if digits.is_empty() {
-            return reverse.then_some(Self { offset: None, reverse });
-        }
-        if digits.len() > 2 || !digits.bytes().all(|b| b.is_ascii_digit()) {
-            return None;
-        }
-        Some(Self { offset: Some(digits.parse::<f64>().ok()? / 100.0), reverse })
-    }
-}
-
-/// What a cell of the pitch sub-column asks for, written as a letter and a whole number.
+/// What a pitch command asks for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pitch {
-    /// `G8`: glide the note that is held in this column to this one, over this many rows (given in eighths).
+    /// `Gxx`: glide the note that is held in this column to this one, at this speed in sixteenths of a semitone per tick.
     Glide(f64),
-    /// `U12`, `D3`: slide the held note up or down by this many semitones during this row.
+    /// `Uxx`, `Dxx`: slide the held note up or down by this many semitones during this row.
     Slide(f64),
 }
 
 impl Pitch {
-    pub fn parse(text: &str) -> Option<Self> {
-        let mut chars = text.chars();
-        let letter = chars.next()?;
-        let digits = chars.as_str();
-        if digits.len() > 2 || !digits.bytes().all(|b| b.is_ascii_digit()) {
-            return None;
-        }
-        let n: u32 = digits.parse().unwrap_or(0);
-        match letter {
-            'G' if !digits.is_empty() => Some(Self::Glide(f64::from(n) / 8.0)),
-            'U' if n > 0 => Some(Self::Slide(f64::from(n))),
-            'D' if n > 0 => Some(Self::Slide(-f64::from(n))),
-            _ => None,
-        }
+    /// How many rows a glide of `speed` takes to cover `semitones`; a speed of 255 is at once.
+    pub fn glide_rows(speed: f64, semitones: f64) -> f64 {
+        if speed >= 255.0 { 0.0 } else { semitones.abs() * 16.0 / (speed * TICKS) }
     }
 }
 
-/// An effect cell: `V-20` or `V+10` move the level of the note held in the column, by that many percent of full level
-/// (1 to 99) during this row. The result is the change in the level cells' units, 0 to 128.
-pub fn parse_fx(text: &str) -> Option<f64> {
-    let digits = text.strip_prefix('V')?;
-    let sign = match digits.as_bytes().first()? {
-        b'+' => 1.0,
-        b'-' => -1.0,
-        _ => return None,
-    };
-    let digits = &digits[1..];
-    if digits.len() > 2 || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    digits.parse::<u32>().ok().filter(|n| (1..=99).contains(n)).map(|n| sign * f64::from(n) * 1.28)
-}
-
-/// A retrigger cell: `4` plays the note four times in its row, `4:-25` with each hit 25% quieter than the one before.
+/// A retrigger: `R41` plays the note again every tick, each hit changed in level.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Retrigger {
-    /// How many times the note plays, from 2 to 32.
+    /// How many times the note plays, from 2 to 12.
     pub hits: u32,
     /// How each hit's level differs from the one before, from -1 to 1.
     pub change: f64,
 }
 
 impl Retrigger {
-    pub fn parse(text: &str) -> Option<Self> {
-        let (hits, change) = match text.split_once(':') {
-            Some((hits, change)) => (hits, Some(change)),
-            None => (text, None),
+    fn from(command: Command) -> Self {
+        let change = match command.x() {
+            1..=5 => -[0.03, 0.06, 0.12, 0.25, 0.5][usize::from(command.x()) - 1],
+            6 => -0.33,
+            7 => -0.5,
+            9..=13 => [0.03, 0.06, 0.12, 0.25, 0.5][usize::from(command.x()) - 9],
+            14 => 0.5,
+            15 => 1.0,
+            _ => 0.0,
         };
-        let digits = |text: &str, len: usize| !text.is_empty() && text.len() <= len && text.bytes().all(|b| b.is_ascii_digit());
-        if !digits(hits, 2) {
-            return None;
-        }
-        let change = match change {
-            None => 0,
-            Some(change) => {
-                let (negative, magnitude) = change.strip_prefix('-').map_or((false, change), |m| (true, m));
-                if !digits(magnitude, 3) {
-                    return None;
-                }
-                let n: i32 = magnitude.parse().ok().filter(|n| *n <= 100)?;
-                if negative { -n } else { n }
-            }
-        };
-        let hits: u32 = hits.parse().ok().filter(|n| (2..=32).contains(n))?;
-        Some(Self { hits, change: f64::from(change) / 100.0 })
+        Self { hits: (TICKS / f64::from(command.y())) as u32, change }
     }
     /// How loud hit `hit` (counting from 0) is against the note's own level. Each hit is the one before
     /// times `1 + change`; when that grows, the last hit is the note's level and the earlier ones are quieter.
@@ -371,17 +416,27 @@ impl Retrigger {
     }
 }
 
-/// The length cell for a note: 1 to 99 percent of a row.
-pub fn parse_len(text: &str) -> Option<u32> {
-    text.parse().ok().filter(|n| (1..=99).contains(n))
+/// Where the sample starts, from the commands of a row.
+pub fn start_of(commands: &[Command]) -> Start {
+    let mut start = Start::default();
+    for command in commands {
+        match command.letter {
+            'S' => start.offset = Some((f64::from(command.value) / 256.0).min(0.99)),
+            'B' => start.reverse = command.value == 0,
+            _ => {}
+        }
+    }
+    start
 }
 
-/// The chance cell for a note, 0 to 100 percent.
-pub fn parse_chance(text: &str) -> Option<u32> {
-    if text.is_empty() || text.len() > 3 || !text.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    text.parse().ok().filter(|n| *n <= 100)
+/// The retrigger, from the commands of a row.
+pub fn retrigger_of(commands: &[Command]) -> Option<Retrigger> {
+    commands.iter().rev().find(|c| c.letter == 'R').map(|c| Retrigger::from(*c))
+}
+
+/// Parses the commands of a row, ignoring any that are not valid.
+pub fn commands_of<'a>(cells: impl IntoIterator<Item = &'a str>) -> Vec<Command> {
+    cells.into_iter().filter_map(Command::parse).filter(|c| c.problem().is_none()).collect()
 }
 
 #[cfg(test)]
@@ -403,12 +458,8 @@ impl NoteColumn {
             || !sized(self.vol.len(), true)
             || !sized(self.pan.len(), true)
             || !sized(self.delay.len(), true)
-            || !sized(self.start.len(), true)
-            || !sized(self.pitch.len(), true)
-            || !sized(self.rtg.len(), true)
-            || !sized(self.chance.len(), true)
-            || !sized(self.len.len(), true)
-            || !sized(self.fx.len(), true)
+            || self.fx.len() > MAX_FX_COLUMNS
+            || self.fx.iter().any(|cells| !sized(cells.len(), false))
         {
             return Err("Every note sub-column needs a cell for each row".into());
         }
@@ -426,25 +477,21 @@ impl NoteColumn {
         if !within(&self.vol, 128) || !within(&self.pan, 128) || !within(&self.delay, 255) {
             return Err("Volume and pan run 0–128 and delay 0–255".into());
         }
-        if self.start.iter().flatten().any(|c| Start::parse(c).is_none()) {
-            return Err("Start is a percentage from 0 to 99, a <, or both, such as 50<".into());
+        for command in self.fx.iter().flatten().flatten() {
+            if TrackCommand::parse(command).is_some() {
+                continue;
+            }
+            let Some(parsed) = Command::parse(command) else {
+                return Err(format!("{command} is not a command: a letter and two hex digits such as S20, or four hex digits for an effect"));
+            };
+            if let Some(problem) = parsed.problem() {
+                return Err(problem.into());
+            }
         }
-        if self.pitch.iter().flatten().any(|c| Pitch::parse(c).is_none()) {
-            return Err("A pitch command is G, U or D and a number, such as G8".into());
-        }
-        if self.rtg.iter().flatten().any(|c| Retrigger::parse(c).is_none()) {
-            return Err("A retrigger is 2 to 32 hits, then optionally : and a change in level from -100 to 100, such as 4:-25".into());
-        }
-        if self.chance.iter().flatten().any(|c| parse_chance(c).is_none()) {
-            return Err("Chance runs from 0 to 100".into());
-        }
-        if self.len.iter().flatten().any(|c| parse_len(c).is_none()) {
-            return Err("Length runs from 1 to 99 percent of a row".into());
-        }
-        if self.fx.iter().flatten().any(|c| parse_fx(c).is_none()) {
-            return Err("An effect command is V, a + or -, and a number from 1 to 99, such as V-20".into());
-        }
-        if (0..rows).any(|row| matches!(self.pitch(row), Some(Pitch::Glide(_))) && self.retrigger(row).is_some()) {
+        if (0..rows).any(|row| {
+            let commands = self.commands(row);
+            commands.iter().any(|c| c.letter == 'G') && retrigger_of(&commands).is_some()
+        }) {
             return Err("A glide cannot share a row with a retrigger".into());
         }
         Ok(())
@@ -465,26 +512,47 @@ impl NoteColumn {
     pub fn panning(&self, row: usize) -> Option<u32> {
         Self::text(&self.pan, row).and_then(|v| v.parse().ok())
     }
+    /// The commands in a row, from every command column.
+    pub fn commands(&self, row: usize) -> Vec<Command> {
+        let resolved = self.fx.iter().filter_map(|cells| {
+            let command = Command::parse(Self::text(cells, row)?)?;
+            if command.value != 0 || !"GUDIO".contains(command.letter) {
+                return Some(command);
+            }
+            // 00 repeats the last value of the same command above it in the column; with none, it does nothing
+            cells[..row].iter().rev().flatten().filter_map(|text| Command::parse(text)).find(|c| c.letter == command.letter && c.value != 0)
+        });
+        resolved.filter(|c| c.problem().is_none()).collect()
+    }
     pub fn start(&self, row: usize) -> Start {
-        Self::text(&self.start, row).and_then(Start::parse).unwrap_or_default()
+        start_of(&self.commands(row))
     }
     pub fn pitch(&self, row: usize) -> Option<Pitch> {
-        Self::text(&self.pitch, row).and_then(Pitch::parse)
+        self.commands(row).iter().rev().find_map(|c| match c.letter {
+            'G' => Some(Pitch::Glide(f64::from(c.value))),
+            'U' => Some(Pitch::Slide(f64::from(c.value) * TICKS / 16.0)),
+            'D' => Some(Pitch::Slide(-f64::from(c.value) * TICKS / 16.0)),
+            _ => None,
+        })
     }
     pub fn retrigger(&self, row: usize) -> Option<Retrigger> {
-        Self::text(&self.rtg, row).and_then(Retrigger::parse)
+        retrigger_of(&self.commands(row))
     }
     /// The chance, as a percent, that the note in this row plays.
     pub fn chance(&self, row: usize) -> u32 {
-        Self::text(&self.chance, row).and_then(parse_chance).unwrap_or(100)
+        self.commands(row).iter().rev().find(|c| c.letter == 'Y').map_or(100, |c| (f64::from(c.value) * 100.0 / 255.0).round() as u32)
     }
     /// How far the level of the note held in this column moves during this row, in the volume cells' units.
-    pub fn fx(&self, row: usize) -> Option<f64> {
-        Self::text(&self.fx, row).and_then(parse_fx)
+    pub fn fade(&self, row: usize) -> Option<f64> {
+        self.commands(row).iter().rev().find_map(|c| match c.letter {
+            'I' => Some(f64::from(c.value)),
+            'O' => Some(-f64::from(c.value)),
+            _ => None,
+        })
     }
-    /// The most of a row the note in this row may sound for, if its length is set.
+    /// The most of a row the note in this row may sound for, if it is cut.
     pub fn length(&self, row: usize) -> Option<f64> {
-        Self::text(&self.len, row).and_then(parse_len).map(|n| f64::from(n) / 100.0)
+        self.commands(row).iter().rev().find(|c| c.letter == 'C').map(|c| f64::from(c.y()) / TICKS)
     }
     /// The delay as a fraction of a row, from 0 up to just under 1.
     pub fn delayed(&self, row: usize) -> f64 {
@@ -556,6 +624,10 @@ pub struct Pattern {
     /// Parameter lanes of each return, in order. Returns and the master have no notes.
     pub return_fx: Vec<Vec<FxLane>>,
     pub master_fx: Vec<FxLane>,
+    /// Track commands of the returns, then the master, which have no note columns: each has up to four
+    /// columns of cells (a track's are in the fx columns of its note columns): see [`TrackCommand`].
+    #[serde(default)]
+    pub commands: Vec<Vec<Vec<Option<String>>>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -650,14 +722,23 @@ impl Song {
             for column in pattern.notes.iter().flatten() {
                 column.validate(pattern.rows)?;
             }
+            if !pattern.commands.is_empty() {
+                let columns = self.returns.len() + 1;
+                if pattern.commands.len() != columns
+                    || pattern.commands.iter().any(|strip| strip.len() > MAX_TRACK_COMMAND_COLUMNS || strip.iter().any(|cells| cells.len() < pattern.rows || cells.len() > 256))
+                {
+                    return Err("Patterns need up to four track command columns, with a cell for each row, for every return and the master".into());
+                }
+                if pattern.commands.iter().flatten().flatten().flatten().any(|text| TrackCommand::parse(text).is_none()) {
+                    return Err("A track command is Lxx, Pxx or four hex digits for a device parameter, such as 12FF".into());
+                }
+            }
             if pattern.fx.len() != self.tracks.len() || pattern.return_fx.len() != self.returns.len() {
                 return Err("Patterns need parameter lanes for every track and return, and the master".into());
             }
             let groups = || pattern.fx.iter().chain(&pattern.return_fx).chain([&pattern.master_fx]);
             if groups().any(|lanes| {
-                lanes.is_empty()
-                    || lanes.len() > 4
-                    || lanes.iter().any(|lane| lane.values.len() < pattern.rows || lane.values.len() > 256)
+                lanes.is_empty() || lanes.len() > 4
             }) {
                 return Err("Patterns need 1–4 parameter lanes per track, return and the master".into());
             }
@@ -668,19 +749,8 @@ impl Song {
                 if lane.envelope.as_ref().is_some_and(|e| !e.valid()) {
                     return Err("Invalid automation envelope".into());
                 }
-                if lane.target.is_none()
-                    && (lane.values.iter().any(Option::is_some)
-                        || lane.envelope.as_ref().is_some_and(|e| !e.points.is_empty()))
-                {
+                if lane.target.is_none() && lane.envelope.as_ref().is_some_and(|e| !e.points.is_empty()) {
                     return Err("Choose a parameter for every populated lane".into());
-                }
-                if lane
-                    .values
-                    .iter()
-                    .flatten()
-                    .any(|v| !v.parse::<f64>().is_ok_and(|n| n.is_finite()))
-                {
-                    return Err("Parameter lanes need finite numeric values".into());
                 }
             }
         }
@@ -1184,7 +1254,7 @@ impl Playback {
                     continue;
                 }
                 let glide = match (command, held, midi(note)) {
-                    (Some(Pitch::Glide(rows)), Some((instrument, _)), Some(to)) if next.instrument(row) == Some(instrument) => Some((rows, to)),
+                    (Some(Pitch::Glide(speed)), Some((instrument, _)), Some(to)) if next.instrument(row) == Some(instrument) => Some((Pitch::glide_rows(speed, to - current.unwrap_or(to)), to)),
                     _ => None,
                 };
                 let Some((rows, to)) = glide else {
@@ -1195,7 +1265,7 @@ impl Playback {
                 current = Some(to);
                 continue;
             }
-            if let Some(change) = next.fx(row) {
+            if let Some(change) = next.fade(row) {
                 volume = (volume + change).clamp(0.0, 128.0);
                 hold.changes.push(Change { index: index + ahead, delay: if ahead == 0 { delay } else { 0.0 }, volume });
             }
@@ -1252,17 +1322,12 @@ impl Playback {
                     }
                 }
             }
-        } else if let Some(value) = lane.values.get(row).and_then(|v| v.as_deref()).and_then(|v| v.parse::<f64>().ok()) {
-            for note in listeners() {
-                set(note.id, at, value, None);
-            }
         }
     }
 
-    /// The engine edits for one parameter lane at one row of a pattern: a value or the steps of an
-    /// envelope across the row, for the strip named `slot` (a track's number, `r<n>` or `m`).
-    /// `when` is the pattern's length and current row; `out` takes the edits made at
-    /// the start of the row and the timed events for the rest.
+    /// The engine events for one automation lane at one row of a pattern: the steps of its envelope
+    /// across the row, for the strip named `slot` (a track's number, `r<n>` or `m`).
+    /// `when` is the pattern's length and current row.
     fn lane_events(
         &self,
         slot: &str,
@@ -1270,10 +1335,9 @@ impl Playback {
         lane: &FxLane,
         when: (usize, usize),
         sample_rate: f64,
-        out: (&mut Vec<Value>, &mut Vec<Value>),
+        events: &mut Vec<Value>,
     ) -> Result<(), String> {
         let (rows, row) = when;
-        let (edits, events) = out;
         if lane
             .target
             .as_ref()
@@ -1351,14 +1415,24 @@ impl Playback {
             }
             return Ok(());
         }
-        let (Some(target), Some(Some(value))) = (&lane.target, lane.values.get(row))
-        else {
-            return Ok(());
-        };
-        let edit =
-            crate::commands::edit(target, value, slot, strip, &self.parameters)?;
-        edits.extend(target.unmap(slot, strip));
-        edits.push(edit);
+        Ok(())
+    }
+
+    /// The edits the track commands in `columns` make at `row`.
+    fn command_edits<'a>(&self, columns: impl IntoIterator<Item = &'a Vec<Option<String>>>, slot: &str, strip: &Track, row: usize, edits: &mut Vec<Value>) -> Result<(), String> {
+        for cells in columns {
+            let Some(command) = cells.get(row).and_then(|c| c.as_deref()).and_then(TrackCommand::parse) else {
+                continue;
+            };
+            let Some((target, value)) = command.target(strip, &self.parameters) else {
+                continue;
+            };
+            if !target.available(strip, &self.parameters) {
+                continue;
+            }
+            edits.extend(target.unmap(slot, strip));
+            edits.push(crate::commands::edit(&target, &value.to_string(), slot, strip, &self.parameters)?);
+        }
         Ok(())
     }
 
@@ -1410,11 +1484,7 @@ impl Playback {
                                 position.row as f64,
                                 info.is_some_and(|p| p.unit.as_deref() == Some("db")),
                             ),
-                            _ => lane
-                                .values
-                                .get(position.row)
-                                .and_then(|v| v.as_deref())
-                                .and_then(|v| v.parse().ok()),
+                            _ => None,
                         };
                         if let Some(value) = value {
                             state[index].insert((instrument.clone(), parameter.clone()), value);
@@ -1430,9 +1500,10 @@ impl Playback {
                         lane,
                         (pattern.rows, position.row),
                         sample_rate,
-                        (&mut edits, &mut events),
+                        &mut events,
                     )?;
                 }
+                self.command_edits(pattern.notes[index].iter().flat_map(|column| &column.fx), &index.to_string(), track, position.row, &mut edits)?;
                 if !edits.is_empty() {
                     events.push(
                         json!({"op":"routing", "at":at, "tag":"tracker-pattern", "edits":edits}),
@@ -1545,10 +1616,11 @@ impl Playback {
                 .map(|(r, (strip, lanes))| (format!("r{r}"), strip, lanes))
                 .chain([(crate::mixer::MASTER.to_string(), &self.song.master, &pattern.master_fx)]);
             let mut edits = Vec::new();
-            for (slot, strip, lanes) in strips {
+            for (at_strip, (slot, strip, lanes)) in strips.enumerate() {
                 for lane in lanes {
-                    self.lane_events(&slot, strip, lane, (pattern.rows, position.row), sample_rate, (&mut edits, &mut events))?;
+                    self.lane_events(&slot, strip, lane, (pattern.rows, position.row), sample_rate, &mut events)?;
                 }
+                self.command_edits(pattern.commands.get(at_strip).into_iter().flatten(), &slot, strip, position.row, &mut edits)?;
             }
             if !edits.is_empty() {
                 events.push(json!({"op":"routing", "at":at, "tag":"tracker-pattern", "edits":edits}));
@@ -1596,9 +1668,10 @@ mod tests {
                             }]
                         })
                         .collect(),
-                    fx: (0..4).map(|_| vec![FxLane::empty(rows)]).collect(),
+                    fx: (0..4).map(|_| vec![FxLane::empty()]).collect(),
                     return_fx: vec![],
-                    master_fx: vec![FxLane::empty(rows)],
+                    master_fx: vec![FxLane::empty()],
+                    commands: vec![],
                 })
                 .collect(),
             sequence: vec!["a".into(), "b".into(), "a".into()],
@@ -1814,9 +1887,10 @@ mod tests {
             name: "a".into(),
             rows,
             notes: vec![columns],
-            fx: vec![vec![FxLane::empty(rows)]],
+            fx: vec![vec![FxLane::empty()]],
             return_fx: vec![],
-            master_fx: vec![FxLane::empty(rows)],
+            master_fx: vec![FxLane::empty()],
+            commands: vec![],
         }];
         song.sequence = vec!["a".into()];
         let mut play = Playback::new(0, song, mode, "a".into(), 0).unwrap();
@@ -1925,18 +1999,10 @@ mod tests {
     }
     fn with_commands(rows: usize, cells: &[(usize, &str)], commands: &[(usize, &str)]) -> NoteColumn {
         let mut column = column(rows, cells);
-        // the cells are written as O50, V, R4, G8, U12 or D3 and filed in the sub-column each belongs to
-        column.start = vec![None; rows];
-        column.pitch = vec![None; rows];
-        column.rtg = vec![None; rows];
+        // the commands are written as S80, B00, R03, G10, U10 or D10, one to a row
+        column.fx = vec![vec![None; rows]];
         for (row, text) in commands {
-            let (cells, cell) = match text.as_bytes()[0] {
-                b'O' => (&mut column.start, text[1..].to_string()),
-                b'V' => (&mut column.start, "<".to_string()),
-                b'R' => (&mut column.rtg, text[1..].to_string()),
-                _ => (&mut column.pitch, (*text).to_string()),
-            };
-            cells[*row] = Some(cell);
+            column.fx[0][*row] = Some((*text).into());
         }
         column
     }
@@ -1968,40 +2034,57 @@ mod tests {
     }
 
     #[test]
-    fn start_pitch_and_retrigger_cells_have_their_own_forms() {
-        assert_eq!(Start::parse("50"), Some(Start { offset: Some(0.5), reverse: false }));
-        assert_eq!(Start::parse("<"), Some(Start { offset: None, reverse: true }));
-        assert_eq!(Start::parse("5<"), Some(Start { offset: Some(0.05), reverse: true }));
-        assert_eq!(Pitch::parse("G8"), Some(Pitch::Glide(1.0)));
-        assert_eq!(Pitch::parse("U12"), Some(Pitch::Slide(12.0)));
-        assert_eq!(Pitch::parse("D3"), Some(Pitch::Slide(-3.0)));
-        assert_eq!(Retrigger::parse("4"), Some(Retrigger { hits: 4, change: 0.0 }));
-        assert_eq!(Retrigger::parse("4:-25"), Some(Retrigger { hits: 4, change: -0.25 }));
-        assert_eq!(Retrigger::parse("2:100"), Some(Retrigger { hits: 2, change: 1.0 }));
-        for bad in ["", "100", "5x", "<<", "<5", "-1"] {
-            assert_eq!(Start::parse(bad), None, "{bad}");
+    fn commands_are_a_letter_and_two_hex_digits() {
+        assert_eq!(Command::parse("S80"), Some(Command { letter: 'S', value: 0x80 }));
+        assert_eq!(Command::parse("RF4"), Some(Command { letter: 'R', value: 0xF4 }));
+        for bad in ["", "S", "S8", "S800", "s80", "SG0", "80S", "S-1"] {
+            assert_eq!(Command::parse(bad), None, "{bad}");
         }
-        for bad in ["", "G", "U0", "G100", "X5", "5", "R4", "g8"] {
-            assert_eq!(Pitch::parse(bad), None, "{bad}");
-        }
-        for bad in ["", "1", "33", "x", "004", "R4", "4:", "4:101", "4:--1", "4:+5", ":5", "4:-"] {
-            assert_eq!(Retrigger::parse(bad), None, "{bad}");
+        let column = |text: &str| with_commands(2, &[(0, "C-4")], &[(0, text)]);
+        assert_eq!(column("S80").start(0), Start { offset: Some(0.5), reverse: false });
+        assert_eq!(column("B00").start(0), Start { offset: None, reverse: true });
+        assert_eq!(column("B01").start(0), Start::default());
+        assert_eq!(column("G10").pitch(0), Some(Pitch::Glide(16.0)));
+        assert_eq!(column("U10").pitch(0), Some(Pitch::Slide(12.0)));
+        assert_eq!(column("D04").pitch(0), Some(Pitch::Slide(-3.0)));
+        assert_eq!(column("R03").retrigger(0), Some(Retrigger { hits: 4, change: 0.0 }));
+        assert_eq!(column("R76").retrigger(0), Some(Retrigger { hits: 2, change: -0.5 }));
+        assert_eq!(column("RF4").retrigger(0), Some(Retrigger { hits: 3, change: 1.0 }));
+        assert_eq!(column("C06").length(0), Some(0.5));
+        assert_eq!(column("YFF").chance(0), 100);
+        assert_eq!(column("Y80").chance(0), 50);
+        assert_eq!(column("O40").fade(0), Some(-64.0));
+        assert_eq!(column("I20").fade(0), Some(32.0));
+        // 00 repeats the last value of its command above it in the column, and does nothing with none
+        let mut repeating = with_commands(8, &[(0, "A-4")], &[(1, "U10"), (2, "D04"), (3, "U00"), (4, "D00"), (5, "I20"), (6, "I00")]);
+        assert_eq!((repeating.pitch(3), repeating.pitch(4)), (Some(Pitch::Slide(12.0)), Some(Pitch::Slide(-3.0))));
+        assert_eq!(repeating.fade(6), Some(32.0));
+        repeating.fx[0][0] = Some("G00".into());
+        assert_eq!(repeating.pitch(0), None);
+        // a glide speed covers the distance at that many sixteenths of a semitone a tick; FF is at once
+        assert_eq!(Pitch::glide_rows(16.0, 12.0), 1.0);
+        assert_eq!(Pitch::glide_rows(8.0, -12.0), 2.0);
+        assert_eq!(Pitch::glide_rows(255.0, 12.0), 0.0);
+        for bad in ["Q10", "B02", "Y00", "O81", "R00", "R07", "C10", "C00", "C0C"] {
+            assert!(Command::parse(bad).is_some_and(|c| c.problem().is_some()), "{bad}");
         }
         let mut song = song();
-        song.patterns[0].notes[0][0].pitch = vec![Some("Q1".into()), None];
+        song.patterns[0].notes[0][0].fx = vec![vec![Some("Q10".into()), None]];
         assert!(song.validate().is_err());
-        song.patterns[0].notes[0][0].pitch = vec![Some("G8".into()), None];
+        song.patterns[0].notes[0][0].fx = vec![vec![Some("G10".into()), None]];
         song.validate().unwrap();
-        song.patterns[0].notes[0][0].rtg = vec![Some("4".into()), None];
+        song.patterns[0].notes[0][0].fx = vec![vec![Some("G10".into()), None], vec![Some("R03".into()), None]];
         assert!(song.validate().unwrap_err().contains("glide"), "a glide and a retrigger compete for the row");
-        song.patterns[0].notes[0][0].pitch = vec![Some("U12".into()), None];
+        song.patterns[0].notes[0][0].fx = vec![vec![Some("U10".into()), None], vec![Some("R03".into()), None]];
         song.validate().unwrap();
+        song.patterns[0].notes[0][0].fx = vec![vec![None, None]; MAX_FX_COLUMNS + 1];
+        assert!(song.validate().is_err());
     }
 
     #[test]
     fn a_retrigger_plays_the_note_again_within_its_row() {
         // an eighth of a second a row: four hits are 31.25 ms apart, 1500 samples
-        let events = played(4, vec![with_commands(4, &[(1, "C-4")], &[(1, "R4")])], Mode::Song);
+        let events = played(4, vec![with_commands(4, &[(1, "C-4")], &[(1, "R03")])], Mode::Song);
         let at: Vec<_> = events.iter().filter(|e| e["op"] == "note").map(|e| e["at"].as_u64().unwrap()).collect();
         assert_eq!(at, [6000, 7500, 9000, 10500]);
         let held: Vec<_> = events.iter().map(duration).collect();
@@ -2016,21 +2099,19 @@ mod tests {
             played(2, vec![with_commands(2, &[(0, "C-4")], &[(0, text)])], Mode::Song).iter().map(db).collect()
         };
         let halving = 20.0 * 0.5_f64.log10();
-        let fading = gains("R4:-50");
+        let fading = gains("R73");
         assert_eq!(fading.len(), 4);
         for (hit, gain) in fading.iter().enumerate() {
             assert!((gain - hit as f64 * halving).abs() < 0.01, "{fading:?}");
         }
-        let swelling = gains("R3:100");
+        let swelling = gains("RF4");
         assert!((swelling[0] + 2.0 * -halving).abs() < 0.01 && (swelling[1] + -halving).abs() < 0.01 && swelling[2] == 0.0, "the last hit is the note's own level: {swelling:?}");
-        assert!(gains("R4").iter().all(|g| *g == 0.0));
-        let silenced = gains("R3:-100");
-        assert!(silenced[0] == 0.0 && silenced[1] < -100.0 && silenced[2] < -100.0, "{silenced:?}");
+        assert!(gains("R03").iter().all(|g| *g == 0.0));
     }
 
     #[test]
     fn a_retrigger_dynamics_start_from_the_notes_volume() {
-        let mut column = with_commands(2, &[(0, "C-4")], &[(0, "R2:-50")]);
+        let mut column = with_commands(2, &[(0, "C-4")], &[(0, "R76")]);
         column.vol = vec![Some("64".into()), None];
         let events = played(2, vec![column], Mode::Song);
         let gain = |i: usize| events[i]["args"]["gain"].as_str().unwrap().trim_end_matches("db").parse::<f64>().unwrap();
@@ -2041,7 +2122,7 @@ mod tests {
     fn a_volume_slide_moves_the_held_notes_level_during_its_row() {
         let mut column = column(6, &[(0, "A-4")]);
         column.vol = vec![Some("128".into()), None, None, None, None, None];
-        column.fx = vec![None, None, Some("V-50".into()), None, Some("V+25".into()), None];
+        column.fx = vec![vec![None, None, Some("O40".into()), None, Some("I20".into()), None]];
         let events = played(6, vec![column], Mode::Song);
         let sets: Vec<_> = events.iter().filter(|e| e["op"] == "set").collect();
         assert_eq!(sets.len(), 2, "{sets:?}");
@@ -2049,27 +2130,24 @@ mod tests {
         assert_eq!(sets[0]["args"]["gain"].as_str(), Some(format!("{:.3}db", volume_db(64)).as_str()));
         assert_eq!(sets[1]["args"]["gain"].as_str(), Some(format!("{:.3}db", volume_db(96)).as_str()));
         assert_eq!(sets[0]["glide"], "0.125000sec");
-        for bad in ["V", "V50", "V+0", "V+100", "P+5", "V+1x"] {
-            assert!(parse_fx(bad).is_none(), "{bad}");
-        }
     }
 
     #[test]
     fn a_length_releases_the_note_part_way_through_its_row() {
         let mut shortened = column(4, &[(0, "C-4"), (2, "E-4")]);
-        shortened.len = vec![None, None, Some("50".into()), None];
+        shortened.fx = vec![vec![None, None, Some("C06".into()), None]];
         let held: Vec<_> = played(4, vec![shortened], Mode::Song).iter().filter(|e| e["op"] == "note").map(duration).collect();
         assert!((held[0] - 0.25).abs() < 1e-5 && (held[1] - 0.0625).abs() < 1e-5, "{held:?}");
         let mut bad = column(2, &[(0, "C-4")]);
-        bad.len = vec![Some("100".into()), None];
+        bad.fx = vec![vec![Some("C10".into()), None]];
         assert!(bad.validate(2).is_err());
     }
 
     fn chance_column(rows: usize, cells: &[(usize, &str)], chances: &[(usize, &str)]) -> NoteColumn {
         let mut column = column(rows, cells);
-        column.chance = vec![None; rows];
+        column.fx = vec![vec![None; rows]];
         for (row, text) in chances {
-            column.chance[*row] = Some((*text).into());
+            column.fx[0][*row] = Some((*text).into());
         }
         column
     }
@@ -2079,10 +2157,10 @@ mod tests {
         let notes = |chance: &str| -> Vec<Value> {
             played(4, vec![chance_column(4, &[(0, "C-4"), (2, "E-4")], &[(2, chance)])], Mode::Song).into_iter().filter(|e| e["op"] == "note").collect()
         };
-        let sure = notes("100");
+        let sure = notes("YFF");
         assert_eq!(sure.len(), 2);
         assert!((duration(&sure[0]) - 0.25).abs() < 1e-5, "E-4 ends C-4 at its row: {}", duration(&sure[0]));
-        let never = notes("0");
+        let never = notes("Y01");
         assert_eq!(never.len(), 1, "E-4 does not play");
         assert!((duration(&never[0]) - 0.5).abs() < 1e-5, "C-4 rings on to the end of the pattern: {}", duration(&never[0]));
     }
@@ -2091,7 +2169,7 @@ mod tests {
     fn chance_is_rolled_afresh_and_a_note_and_its_hold_agree() {
         // 64 notes at half chance: some play and some do not
         let cells: Vec<_> = (0..64).map(|row| (row, "C-4")).collect();
-        let chances: Vec<_> = (0..64).map(|row| (row, "50")).collect();
+        let chances: Vec<_> = (0..64).map(|row| (row, "Y80")).collect();
         let events = played(64, vec![chance_column(64, &cells, &chances)], Mode::Song);
         let notes: Vec<_> = events.iter().filter(|e| e["op"] == "note").collect();
         assert!((10..54).contains(&notes.len()), "{}", notes.len());
@@ -2158,7 +2236,7 @@ mod tests {
     #[test]
     fn offset_and_reverse_reach_only_instruments_that_have_the_parameter() {
         let cells = [(0, "C-4"), (2, "C-4")];
-        let commands = [(0, "O25"), (2, "V")];
+        let commands = [(0, "S40"), (2, "B00")];
         let notes = |parameters: &[&str]| {
             played_with(4, vec![with_commands(4, &cells, &commands)], Mode::Song, |play| {
                 play.instrument_parameters.insert("tone".into(), parameters.iter().map(|p| parameter(p)).collect());
@@ -2184,8 +2262,8 @@ mod tests {
 
     #[test]
     fn a_glide_carries_the_held_note_to_the_new_pitch_instead_of_starting_one() {
-        // C-4 at row 0, glide to E-4 over one row at row 2, an OFF at row 5
-        let column = with_commands(8, &[(0, "C-4"), (2, "E-4"), (5, "OFF")], &[(2, "G8")]);
+        // C-4 at row 0, glide to A-4 over one row (nine semitones at 12 sixteenths a tick is one row) at row 2, an OFF at row 5
+        let column = with_commands(8, &[(0, "C-4"), (2, "A-4"), (5, "OFF")], &[(2, "G0C")]);
         let events = played(8, vec![column], Mode::Song);
         let notes: Vec<_> = events.iter().filter(|e| e["op"] == "note").collect();
         assert_eq!(notes.len(), 1, "the glide starts no note of its own");
@@ -2193,21 +2271,21 @@ mod tests {
         let set = events.iter().find(|e| e["op"] == "set").expect("the glide");
         assert_eq!(set["id"], notes[0]["id"]);
         assert_eq!(set["at"], 2 * 6000);
-        assert_eq!(set["args"]["freq"], "329.628hz");
+        assert_eq!(set["args"]["freq"], "440.000hz");
         assert_eq!(set["glide"], "0.125000sec");
         // with nothing held, a glide note is just a note
-        let column = with_commands(4, &[(1, "E-4")], &[(1, "G8")]);
+        let column = with_commands(4, &[(1, "A-4")], &[(1, "G0C")]);
         assert_eq!(played(4, vec![column], Mode::Song).iter().filter(|e| e["op"] == "note").count(), 1);
         // and a glide to another instrument's note cannot carry the sound on
-        let mut column = with_commands(8, &[(0, "C-4"), (2, "E-4")], &[(2, "G8")]);
+        let mut column = with_commands(8, &[(0, "C-4"), (2, "A-4")], &[(2, "G0C")]);
         column.inst[2] = Some("alt".into());
         assert_eq!(played(8, vec![column], Mode::Song).iter().filter(|e| e["op"] == "note").count(), 2);
     }
 
     #[test]
     fn a_slide_bends_the_held_note_during_its_row() {
-        // U12 a row below the note takes it up an octave; D12 on the row after brings it back
-        let column = with_commands(8, &[(0, "A-4")], &[(2, "U12"), (3, "D12")]);
+        // U10 a row below the note takes it up an octave; D10 on the row after brings it back
+        let column = with_commands(8, &[(0, "A-4")], &[(2, "U10"), (3, "D10")]);
         let events = played(8, vec![column], Mode::Song);
         let sets: Vec<_> = events.iter().filter(|e| e["op"] == "set").collect();
         assert_eq!(sets.len(), 2);
@@ -2220,9 +2298,65 @@ mod tests {
         play.instrument_parameters.insert("tone".into(), vec![parameter("cutoff")]);
         let lane = &mut play.song.patterns[0].fx[0][0];
         lane.target = Some(crate::commands::FxTarget::Instrument { instrument: "tone".into(), parameter: "cutoff".into() });
-        for (row, value) in cutoff {
-            lane.values[*row] = Some((*value).into());
+        let values: Vec<_> = cutoff.iter().map(|(row, value)| (*row, value.parse().unwrap())).collect();
+        lane.held(&values);
+    }
+
+    #[test]
+    fn track_commands_set_the_volume_pan_and_effect_parameters_of_their_strip() {
+        use crate::commands::FxTarget;
+        assert_eq!(TrackCommand::parse("L80"), Some(TrackCommand::Volume(0x80)));
+        assert_eq!(TrackCommand::parse("PFF"), Some(TrackCommand::Pan(0xFF)));
+        assert_eq!(TrackCommand::parse("13FF"), Some(TrackCommand::Device { device: 1, parameter: 3, value: 0xFF }));
+        assert_eq!(TrackCommand::parse("02FF"), Some(TrackCommand::Macro { index: 2, value: 0xFF }));
+        for bad in ["", "L8", "L800", "Q80", "l80", "0000", "0900", "1000", "12G0", "12F", "12FFF"] {
+            assert_eq!(TrackCommand::parse(bad), None, "{bad}");
         }
+        let strip = Track { fx: vec![Device { id: "d0".into(), definition: "filter".into(), ..Device::default() }], ..Track::default() };
+        let parameters: crate::commands::EffectParameters = [("filter".into(), vec![crate::commands::Parameter { name: "cutoff".into(), min: 20.0, max: 20000.0, default: 2400.0, unit: Some("hz".into()) }])].into();
+        let aim = |text: &str| TrackCommand::parse(text).and_then(|c| c.target(&strip, &parameters));
+        assert_eq!(aim("L00"), Some((FxTarget::Volume, -60.0)));
+        let (target, db) = aim("LFF").unwrap();
+        assert_eq!((target, db), (FxTarget::Volume, 3.0));
+        assert!((aim("LB4").unwrap().1).abs() < 0.1, "about 0 dB at B4");
+        assert_eq!(aim("P00"), Some((FxTarget::Pan, -1.0)));
+        assert_eq!(aim("P80"), Some((FxTarget::Pan, 0.0)));
+        assert_eq!(aim("PFF"), Some((FxTarget::Pan, 1.0)));
+        assert_eq!(aim("1100"), Some((FxTarget::Effect { device: "d0".into(), parameter: "cutoff".into() }, 20.0)));
+        assert_eq!(aim("11FF").unwrap().1, 20000.0);
+        assert_eq!(aim("2100"), None, "no second effect");
+        assert_eq!(aim("1200"), None, "no second parameter");
+        let knobs = Track { macros: vec![Macro { name: "Open".into(), value: 0.0, links: vec![] }], ..strip.clone() };
+        let aim_macro = |text: &str| TrackCommand::parse(text).and_then(|c| c.target(&knobs, &parameters));
+        assert_eq!(aim_macro("0100"), Some((crate::commands::FxTarget::Macro { index: 0 }, 0.0)));
+        assert_eq!(aim_macro("01FF").unwrap().1, 1.0);
+        assert!(!aim_macro("0200").unwrap().0.available(&knobs, &parameters), "no second macro: the command is skipped");
+        // a track's commands, in the fx columns of its note columns, reach the engine as one routing edit at the start of their row
+        let mut with_commands = column(4, &[]);
+        with_commands.fx = vec![vec![None, Some("L00".into()), None, Some("P00".into())]];
+        let events = played_with(4, vec![with_commands], Mode::Song, |_| {});
+        let edits: Vec<_> = events.iter().filter(|e| e["op"] == "routing").collect();
+        assert_eq!(edits.len(), 2, "{edits:?}");
+        assert_eq!((edits[0]["at"].as_u64(), edits[0]["edits"][0]["args"]["level"].as_f64()), (Some(6000), Some(10.0_f64.powf(-3.0))));
+        assert_eq!((edits[1]["at"].as_u64(), edits[1]["edits"][0]["args"]["balance"].as_f64()), (Some(18000), Some(-1.0)));
+        // a track command does not disturb the note commands of the same cells
+        let mut mixed = with_commands_and_note();
+        assert_eq!(mixed.commands(0).len(), 1);
+        assert!(mixed.validate(4).is_ok());
+        mixed.fx[0][2] = Some("Q80".into());
+        assert!(mixed.validate(4).is_err());
+        // a song with a track command the engine cannot read, or the wrong number of strips, is refused
+        let mut bad = song();
+        bad.patterns[0].commands = vec![vec![vec![Some("Q80".into()), None]]; bad.returns.len() + 1];
+        assert!(bad.validate().is_err());
+        bad.patterns[0].commands = vec![vec![]; bad.returns.len() + 2];
+        assert!(bad.validate().is_err());
+    }
+
+    fn with_commands_and_note() -> NoteColumn {
+        let mut column = column(4, &[(0, "C-4")]);
+        column.fx = vec![vec![Some("S80".into()), Some("L80".into()), Some("12FF".into()), None]];
+        column
     }
 
     #[test]
@@ -2233,10 +2367,13 @@ mod tests {
         let sets: Vec<_> = events.iter().filter(|e| e["op"] == "set").collect();
         assert_eq!(notes.len(), 2);
         assert!(notes[0]["id"].is_u64() && notes[1]["id"].is_u64(), "notes that a lane can change are named");
-        assert_eq!(sets.len(), 2, "{sets:?}");
-        // the held note hears row 3 only: it has been released by row 5; the later note hears row 7 and had row 5's value from the start
-        assert_eq!((sets[0]["id"].clone(), sets[0]["at"].as_u64(), sets[0]["args"]["cutoff"].clone()), (notes[0]["id"].clone(), Some(3 * 6000), json!(0.5)));
-        assert_eq!((sets[1]["id"].clone(), sets[1]["at"].as_u64(), sets[1]["args"]["cutoff"].clone()), (notes[1]["id"].clone(), Some(7 * 6000), json!(0.75)));
+        // the held note hears row 3 only: it has been released by row 5; the later note hears row 7 on (the envelope holds, and says so each row) and had row 5's value from the start
+        let of = |note: &Value| sets.iter().filter(|e| e["id"] == note["id"]).collect::<Vec<_>>();
+        let (first, second) = (of(notes[0]), of(notes[1]));
+        assert_eq!(first.len(), 1, "{sets:?}");
+        assert_eq!((first[0]["at"].as_u64(), first[0]["args"]["cutoff"].clone()), (Some(3 * 6000), json!(0.5)));
+        assert_eq!(second[0]["at"].as_u64(), Some(7 * 6000));
+        assert!(second.iter().all(|e| e["args"]["cutoff"] == json!(0.75)), "{second:?}");
         assert_eq!(notes[1]["args"]["cutoff"], json!(0.25));
         assert!(notes[0]["args"].get("cutoff").is_none());
     }
@@ -2279,12 +2416,12 @@ mod tests {
         let mut song = song();
         song.bpm = 120.0;
         song.tracks.truncate(1);
-        let mut lane = FxLane::empty(4);
+        let mut lane = FxLane::empty();
         lane.target = Some(crate::commands::FxTarget::Instrument {
             instrument: "tone".into(),
             parameter: "cutoff".into(),
         });
-        lane.values[1] = Some("500".into());
+        lane.held(&[(1, 500.0)]);
         let mut notes = column(4, &[(0, "C-4"), (2, "D-4"), (3, "E-4")]);
         notes.inst = vec![Some("tone".into()), None, Some("alt".into()), Some("tone".into())];
         song.patterns = vec![Pattern {
@@ -2296,7 +2433,8 @@ mod tests {
             notes: vec![vec![notes]],
             fx: vec![vec![lane]],
             return_fx: vec![],
-            master_fx: vec![FxLane::empty(4)],
+            master_fx: vec![FxLane::empty()],
+            commands: vec![],
         }];
         song.sequence = vec!["a".into()];
         let mut play = Playback::new(0, song, Mode::Song, "a".into(), 0).unwrap();
@@ -2319,12 +2457,12 @@ mod tests {
         let mut song = song();
         song.bpm = 120.0;
         song.tracks.truncate(1);
-        let mut lane = FxLane::empty(4);
+        let mut lane = FxLane::empty();
         lane.target = Some(crate::commands::FxTarget::Instrument {
             instrument: "tone".into(),
             parameter: "cutoff".into(),
         });
-        lane.values[2] = Some("500".into());
+        lane.held(&[(2, 500.0)]);
         song.patterns = vec![Pattern {
             timing: None,
             swing: None,
@@ -2334,7 +2472,8 @@ mod tests {
             notes: vec![vec![column(4, &[(0, "C-4"), (2, "D-4"), (3, "E-4")])]],
             fx: vec![vec![lane]],
             return_fx: vec![],
-            master_fx: vec![FxLane::empty(4)],
+            master_fx: vec![FxLane::empty()],
+            commands: vec![],
         }];
         song.sequence = vec!["a".into()];
         song.instrument_values = BTreeMap::from([(

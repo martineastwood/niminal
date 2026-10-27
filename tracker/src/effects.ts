@@ -88,7 +88,7 @@ export function removeMacro(project: Project, track: number): boolean {
       const target = lanes[i].target;
       if (target?.kind !== 'macro' || target.index !== index) continue;
       removed = true;
-      if (lanes.length > 1) lanes.splice(i, 1); else lanes[i] = emptyFxLane(lanes[i].values.length);
+      if (lanes.length > 1) lanes.splice(i, 1); else lanes[i] = emptyFxLane();
     }
   }
   return removed;
@@ -101,22 +101,50 @@ export function linkParameter(project: Project, track: number, device: string, p
   if (index !== null) macros[index]?.links.push({ device, parameter, min: 0, max: 1 });
 }
 
-/** Removes a device from a chain. The effect stays in the library. Lanes that pointed at it are cleared, or kept as "missing" when they hold values. */
+/** The cells of a strip's effect commands (`xyzz`, which count the chain's effects from 1 by place), across every pattern. */
+function effectCommands(project: Project, track: number) {
+  const column = stripToColumn(project, track);
+  const columns = (pattern: Project['patterns'][number]) => column < project.tracks.length ? pattern.notes[column].flatMap(note => note.fx) : pattern.commands[column - project.tracks.length];
+  return project.patterns.flatMap(columns).flatMap(cells => cells.map((text, row) => ({ cells, row, text })).filter(cell => cell.text !== null && /^[1-9A-F][1-9A-F][0-9A-F]{2}$/.test(cell.text)));
+}
+/** How many effect commands of a strip are written for the effect `deviceId`. */
+export function commandsFor(project: Project, track: number, deviceId: string): number {
+  const place = stripOf(project, track).fx.findIndex(d => d.id === deviceId) + 1;
+  return place === 0 ? 0 : effectCommands(project, track).filter(cell => parseInt(cell.text![0], 16) === place).length;
+}
+/**
+ * Keeps the effect commands of a strip on the effects they were written for after its chain changed from the order `before` to `after`
+ * (device ids): each follows its effect to its new place, and those for a removed effect are cleared. Commands for a place that held no effect stay.
+ */
+function followChain(project: Project, track: number, before: string[], after: string[]) {
+  for (const cell of effectCommands(project, track)) {
+    const id = before[parseInt(cell.text![0], 16) - 1];
+    if (id === undefined) continue;
+    const place = after.indexOf(id) + 1;
+    cell.cells[cell.row] = place === 0 ? null : place.toString(16).toUpperCase() + cell.text!.slice(1);
+  }
+}
+
+/** Removes a device from a chain. The effect stays in the library. Effect commands for it are cleared and those for later effects count one place less. Lanes that pointed at it are cleared, or kept as "missing" when they hold an envelope. */
 export function removeDevice(project: Project, track: number, deviceId: string): Device | null {
   const chain = stripOf(project, track).fx, index = chain.findIndex(d => d.id === deviceId);
   if (index < 0) return null;
-  const [device] = chain.splice(index, 1);
+  const before = chain.map(d => d.id), [device] = chain.splice(index, 1);
+  followChain(project, track, before, chain.map(d => d.id));
   for (const knob of stripOf(project, track).macros ?? []) knob.links = knob.links.filter(link => link.device !== deviceId);
   const column = stripToColumn(project, track);
   for (const pattern of project.patterns) for (const lane of columnLanes(project, pattern, column)) {
-    if (lane.target?.kind === 'effect' && lane.target.device === deviceId && !lane.values.some(v => v !== null) && !lane.envelope?.points.length) lane.target = null;
+    if (lane.target?.kind === 'effect' && lane.target.device === deviceId && !lane.envelope?.points.length) lane.target = null;
   }
   return device;
 }
 
+/** Moves a device along the chain, taking its effect commands with it. */
 export function moveDevice(project: Project, track: number, deviceId: string, delta: number): boolean {
   const chain = stripOf(project, track).fx, from = chain.findIndex(d => d.id === deviceId), to = from + delta;
   if (from < 0 || to < 0 || to >= chain.length) return false;
+  const before = chain.map(d => d.id);
   [chain[from], chain[to]] = [chain[to], chain[from]];
+  followChain(project, track, before, chain.map(d => d.id));
   return true;
 }

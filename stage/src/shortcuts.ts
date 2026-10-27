@@ -10,7 +10,7 @@ export const shortcuts: [keys: string, what: string][] = [
   [`${mod}⌥↑ ↓`, 'nudge the number at the cursor; send it yourself'],
   [`${mod}.`, 'hush: stop every clip'],
   [`⇧${mod}.`, 'panic: silence everything now, tails included'],
-  [`⇧${mod}L`, 'find a sample, hear it, write it into the code'],
+  [`⇧${mod}L`, 'browse files: open pieces, hear samples, write them into the code'],
   [`${mod}B`, 'show or hide the sidebar'],
   [`⇧${mod}P`, 'performance mode'],
   [`${mod}+ ${mod}−`, 'text size (or pinch)'],

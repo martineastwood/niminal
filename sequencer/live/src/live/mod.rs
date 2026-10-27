@@ -28,6 +28,8 @@ use niminal_server::{
 use crate::keyboard::Keyboard;
 use crate::link::EngineLink;
 use crate::log::{Expression, LiveInput, LiveLogEntry};
+use crate::sync::{ClockIn, ClockOut, Follow};
+pub use crate::sync::{ClockMessage, Realtime};
 use crate::quantize::{Grid, QuantizeDefaults};
 
 mod eval;
@@ -287,6 +289,11 @@ pub struct Live {
     arming: bool,
     /// The `on` controllers and OSC addresses that are held down, so that they set off once.
     triggers_down: std::collections::BTreeSet<String>,
+    /// MIDI clock sent to others, and the clock of another followed.
+    clock_out: ClockOut,
+    clock_in: ClockIn,
+    /// Tempo changes made to follow a clock, which are not reported when they land.
+    followed: Vec<u64>,
 }
 
 /// A clip's `then:` that has been queued to land where the clip finishes.
@@ -310,6 +317,89 @@ impl Live {
     /// The tempo and meter the project has now.
     pub fn tempo(&self) -> Tempo {
         self.program.tempo
+    }
+
+    /// Send MIDI clock from the next bar line, or stop sending it.
+    pub fn set_clock_out(&mut self, on: bool) {
+        if on {
+            self.clock_out.enable(self.clock);
+        } else {
+            self.clock_out.disable(self.clock);
+        }
+    }
+
+    /// Follow the tempo of a MIDI clock that [`Live::midi_clock`] is given, or stop.
+    pub fn set_clock_in(&mut self, on: bool) {
+        self.clock_in.set(on);
+    }
+
+    pub fn follows_clock(&self) -> bool {
+        self.clock_in.is_on()
+    }
+
+    /// Whether the clock being followed has started and not stopped.
+    pub fn clock_running(&self) -> bool {
+        self.clock_in.is_running()
+    }
+
+    /// The clock messages to send since this was last called, in order, each for the sample at which
+    /// the output plays it.
+    pub fn take_clock_out(&mut self) -> Vec<ClockMessage> {
+        self.clock_out.take()
+    }
+
+    /// The Unix time in microseconds at which the output plays `sample`, once the engine has said.
+    pub fn wall_micros_of(&self, sample: u64) -> Option<u64> {
+        let info = self.engine.as_ref()?;
+        let wall = info.wall_micros? as f64;
+        let seconds = (sample as f64 - info.sample as f64) / f64::from(self.sample_rate);
+        Some((wall + (seconds + info.output_latency) * 1e6).max(0.0) as u64)
+    }
+
+    /// A message of the clock being followed arrived at Unix time `wall_micros`.
+    pub fn midi_clock(&mut self, message: Realtime, wall_micros: u64) {
+        let Some(info) = &self.engine else { return };
+        let Some(wall) = info.wall_micros else { return };
+        let seconds = (wall_micros as f64 - wall as f64) / 1e6 - info.output_latency;
+        let sample = info.sample as f64 + seconds * f64::from(self.sample_rate);
+        self.midi_clock_at(message, sample);
+    }
+
+    /// Like [`Live::midi_clock`], for a message that arrived as the output was at `sample`.
+    pub fn midi_clock_at(&mut self, message: Realtime, sample: f64) {
+        match self.clock_in.message(message, sample, &self.grid()) {
+            Some(Follow::Origin(origin)) => self.rebase_origin(origin),
+            Some(Follow::Tempo(bpm)) => self.follow_tempo(bpm),
+            None => {}
+        }
+    }
+
+    /// Bars count from `sample` now.
+    fn rebase_origin(&mut self, sample: f64) {
+        let at = sample / f64::from(self.sample_rate);
+        let i = self.history.partition_point(|h| h.at <= at);
+        self.history.insert(
+            i,
+            HistoryEntry {
+                at,
+                action: NamedAction::Origin,
+                arrangement: None,
+            },
+        );
+        self.send(self.clock_ops(self.clock));
+    }
+
+    /// Ask for a tempo, to land a little ahead of what has been sent, without saying so.
+    fn follow_tempo(&mut self, bpm: f64) {
+        let at = self.clock.max(self.fetched_until);
+        self.landing_at = Some(at);
+        let result = self.eval(&format!("tempo {bpm:.2}bpm"), Some("now"));
+        self.landing_at = None;
+        if let Ok(accepted) = result
+            && let Some(id) = accepted.id
+        {
+            self.followed.push(id);
+        }
     }
 
     /// A sequencer for an engine that outputs `layout` at `sample_rate`.
@@ -367,6 +457,9 @@ impl Live {
             armed: Vec::new(),
             arming: false,
             triggers_down: std::collections::BTreeSet::new(),
+            clock_out: ClockOut::default(),
+            clock_in: ClockIn::default(),
+            followed: Vec::new(),
         }
     }
 
@@ -557,6 +650,7 @@ impl Live {
             {
                 // what falls before the change is as the project was
                 self.fetch_until(self.pending[i].lands_at);
+                self.clock_out.emit(&self.grid(), self.pending[i].lands_at);
                 self.land(i);
                 self.sync_pending();
             }
@@ -566,6 +660,7 @@ impl Live {
             }
         }
         self.fetch_until(horizon);
+        self.clock_out.emit(&self.grid(), horizon);
         // a clip that plays once and has finished is no longer running, and forgets what was done to it
         let at = self.seconds(horizon);
         let (schedule, nodes) = (&self.schedule, &self.program.nodes);
@@ -946,6 +1041,10 @@ impl Live {
             }
         }
         let position = self.grid().position(at);
+        if let Some(i) = self.followed.iter().position(|&f| f == id) {
+            self.followed.remove(i);
+            return;
+        }
         self.landed.push(Landed {
             id,
             at,
@@ -1005,6 +1104,9 @@ impl Live {
             let Some(named) = name_action(program, &scheduled.action) else {
                 continue;
             };
+            if matches!(named, NamedAction::Reset) {
+                self.clock_out.restart(self.samples(when));
+            }
             self.history.push(HistoryEntry {
                 at: when,
                 action: named,
