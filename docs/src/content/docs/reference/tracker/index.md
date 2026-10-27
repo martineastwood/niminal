@@ -19,7 +19,7 @@ Elsewhere, build it from [`tracker/`](https://github.com/martineastwood/niminal/
 
 ## Connecting to the server
 
-The tracker starts the engine itself: when it opens it connects to `niminal server` on port 7401, and if nothing is listening it runs the `niminal` program it finds on the search path or in `~/.cargo/bin`, and stops it again when it closes. **Connect** in the footer reconnects. An engine you started yourself is used as it is and left running.
+The tracker does not start an engine; run `niminal server` yourself. When it opens, and every few seconds after, the tracker looks for one on port 7401 and connects as soon as it is listening, so the order you start them in doesn't matter. **Connect** in the footer reconnects. Closing the tracker leaves the engine running.
 
 Click **▶ Pattern** to hear the current pattern. Entering a note in the grid plays it on the current instrument, through the track's effects, even while stopped.
 

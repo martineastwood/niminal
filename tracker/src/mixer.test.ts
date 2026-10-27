@@ -104,7 +104,7 @@ it('shows an instrument\'s parameters as sliders that set its values, and record
   const project = newProject(), parent = document.createElement('div'), edited = vi.fn(), write = vi.fn(); document.body.append(parent);
   const tone = project.definitions[0];
   const parameters = { tone: [{ name: 'cutoff', min: 200, max: 8000, default: 2000, unit: 'hz' }] };
-  renderInstrument(parent, tone, {}, edited, write, 0, vi.fn()); expect(parent.textContent).toContain('Apply to expose parameters');
+  renderInstrument(parent, tone, {}, edited, write, 0, vi.fn()); expect(parent.textContent).toContain('Parameters appear once the engine has applied this');
   renderInstrument(parent, tone, parameters, edited, write, 0, vi.fn());
   const value = parent.querySelector<HTMLInputElement>('[aria-label="cutoff value"]')!;
   expect(value.value).toBe('2000'); value.value = '500'; value.dispatchEvent(new Event('change'));
@@ -154,9 +154,9 @@ it('reads its presets from the library that comes with niminal, each as a defini
   expect(Object.fromEntries(instrumentPresets.map(p => [p.id, p.folder]))).toMatchObject({ kick: 'drums/kicks', kick_808: 'drums/kicks', snare_tri: 'drums/snares', hat_open: 'drums/hats', rim: 'drums/percussion', bass: 'synths/bass', wobble_bass: 'synths/bass', zap: 'sounds/fx' });
   expect(effectPresets.every(p => p.folder.length > 0)).toBe(true); expect(effectPresets.find(p => p.id === 'echo')!.folder).toBe('time/delay');
   expect(parseLibrary('// folder: a/b\n\n/// One.\nfx one() {\n  out = in\n}\n\n/// Two.\nfx two() {\n  out = in\n}\n\n// folder: c\n\n/// Three.\nfx three() {\n  out = in\n}\n', 'fx').map(p => [p.id, p.folder])).toEqual([['one', 'a/b'], ['two', 'a/b'], ['three', 'c']]);
-  expect(effectPresets.map(p => p.id)).toContain('compressor'); expect(effectPresets.length).toBeGreaterThanOrEqual(14);
+  expect(effectPresets.map(p => p.id)).toContain('compressor'); expect(effectPresets.length).toBeGreaterThanOrEqual(15); expect(effectPresets.find(p => p.id === 'glitch')!.folder).toBe('time/glitch');
   for (const preset of [...instrumentPresets, ...effectPresets]) {
-    expect(preset.description.length).toBeGreaterThan(10); expect(preset.source).toMatch(new RegExp(`^(///.*\\n)+(instr|fx) ${preset.id}\\(`)); expect(preset.source.trimEnd().endsWith('}')).toBe(true);
+    expect(preset.description.length).toBeGreaterThan(10); expect(preset.source).toMatch(new RegExp(`^(use .*\\n)*(///.*\\n)+(instr|fx) ${preset.id}\\(`)); expect(preset.source.trimEnd().endsWith('}')).toBe(true);
   }
   expect(instrumentPresets.find(p => p.id === 'kick')!.name).toBe('Kick'); expect(effectPresets.find(p => p.id === 'band_cut')!.name).toBe('Band cut');
   expect(parseLibrary('// header\n\n/// One.\nfx one(a: 0..1 = 0) {\n  out = in\n}\n\n/// Two.\nfx two() {\n  out = in\n}\n', 'fx').map(p => p.id)).toEqual(['one', 'two']);

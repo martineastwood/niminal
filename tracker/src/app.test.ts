@@ -27,7 +27,10 @@ vi.mock('@tauri-apps/api/core', () => ({
       backend.status.connected = true;
     }
     if (command.op === 'disconnect') backend.status.connected = false;
-    if (command.op === 'apply') {
+    if (command.op === 'apply' && command.kind === 'fx') {
+      backend.status.effects[command.id] = 'fx';
+      backend.status.effect_parameters[command.id] = [{ name: 'mix', min: 0, max: 1, default: 0.5, unit: null }];
+    } else if (command.op === 'apply') {
       backend.status.instruments[command.id] = 'synth';
       backend.status.instrument_parameters[command.id] = [{ name: 'level', min: 0, max: 1, default: 0.5, unit: null }];
     }
@@ -58,7 +61,7 @@ it('shares startup with a new instrument, exposes its controls, and reconnects a
   expect(backend.commands.filter(c => c.op === 'connect')).toHaveLength(1);
   backend.connect!();
   await vi.waitFor(() => expect(document.getElementById('instr-controls')!.textContent).toContain('level'));
-  expect(document.getElementById('instr-controls')!.textContent).not.toContain('Apply to expose parameters');
+  expect(document.getElementById('instr-controls')!.textContent).not.toContain('Parameters appear once the engine has applied this');
   expect(backend.commands.some(c => c.op === 'audition')).toBe(true);
 
   backend.status.connected = false;
@@ -99,4 +102,29 @@ it('leaves the cursor in the grid after Escape and after clicks on buttons and m
   content.focus(); content.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
   await new Promise(resolve => setTimeout(resolve, 20));
   expect(active()).toBe(content); editor.remove();
+});
+
+it('applies an effect as soon as it is added to a track, so its controls appear without pressing Apply', async () => {
+  backend.commands.length = 0;
+  (document.querySelector('[aria-label="Add effect"]') as HTMLButtonElement).click();
+  const item = [...document.querySelectorAll<HTMLElement>('button, [role=option], li')].find(e => e.textContent?.trim().startsWith('Echo'))!;
+  item.click();
+  await vi.waitFor(() => expect(backend.commands.some(c => c.op === 'apply' && c.kind === 'fx')).toBe(true));
+  await vi.waitFor(() => expect(document.getElementById('mixer')!.textContent).toContain('mix'));
+  expect(document.getElementById('mixer')!.textContent).not.toContain('Parameters appear once the engine has applied this');
+  await vi.waitFor(() => expect(document.getElementById('fx-status')!.textContent).toBe('Applied'));
+  const apply = document.getElementById('fx-apply') as HTMLButtonElement;
+  expect(apply.disabled).toBe(false); expect(apply.classList.contains('dirty')).toBe(false); // clickable, and not highlighted once applied
+});
+
+it('applies an effect added while the engine was not connected as soon as it connects', async () => {
+  backend.status.connected = false; backend.status.effects = {}; backend.status.effect_parameters = {}; backend.commands.length = 0;
+  await vi.waitFor(() => expect(backend.commands.some(c => c.op === 'connect')).toBe(true), { timeout: 5000 });
+  (document.querySelector('[aria-label="Add effect"]') as HTMLButtonElement).click();
+  [...document.querySelectorAll<HTMLElement>('button, [role=option], li')].find(e => e.textContent?.trim().startsWith('Lowpass'))!.click();
+  expect(backend.commands.some(c => c.op === 'apply' && c.kind === 'fx')).toBe(false);
+  backend.connect!();
+  await vi.waitFor(() => expect(backend.commands.filter(c => c.op === 'apply' && c.kind === 'fx').length).toBeGreaterThan(0));
+  await vi.waitFor(() => expect(document.getElementById('fx-status')!.textContent).toBe('Applied'));
+  expect(document.getElementById('mixer')!.textContent).toContain('mix');
 });

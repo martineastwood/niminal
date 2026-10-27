@@ -53,8 +53,8 @@ export const niminal = StreamLanguage.define({
       state.naming = definers[word] ?? null;
       state.dot = false;
       state.def = defining ? 2 : fnDefiners.has(word) ? 1 : 0;
-      if (word === 'grid' && stream.match(/^\s*[{[]/, false)) {
-        state.grid = { close: stream.match(/^\s*\{/, false) ? '}' : ']', depth: 0 };
+      if ((word === 'grid' && stream.match(/^\s*[{[]/, false)) || (word === 'glitch' && stream.match(/^\s*(?:\([^)]*\))?\s*\{/, false))) {
+        state.grid = { close: stream.match(/^\s*(?:\([^)]*\))?\s*\{/, false) ? '}' : ']', depth: 0 };
         return 'keyword';
       }
       // what this file defines is coloured as defined wherever it is used again; a new object, as states are copied shallowly

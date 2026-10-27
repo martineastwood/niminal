@@ -405,7 +405,7 @@ impl Registry {
             ),
             OpSpec::new(
                 "bitcrush",
-                "Reduces sample rate and bit depth. `rate` is how often a new sample is taken (hz); `bits` is the bit depth.",
+                "Reduces sample rate and bit depth. `rate` is how often a new sample is taken (hz); `bits` is the bit depth (from 2; silence stays silent).",
                 vec![
                     req("x", SIGNAL),
                     opt("rate", Kind::Signal(Unit::Hz)),

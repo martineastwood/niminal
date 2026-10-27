@@ -564,6 +564,11 @@ impl Perform<'_> {
                 .map(PerfValue::Grid)
                 .map_err(|err| at_offset(err.message, e.span, err.offset)),
             ExprKind::Rows(raw) => self.rows(raw, e.span).map(PerfValue::Pattern),
+            ExprKind::Glitch { .. } => Err(Diagnostic::new(
+                "a glitch block is a clip lane named after an effect",
+                e.span,
+            )
+            .with_help("for example `break_glitch: glitch { stutter(length: 1/4beat): .... .... .... 234. }`")),
             ExprKind::Rest => Ok(PerfValue::Rest),
             // inside a change, `same` is the pattern being changed
             ExprKind::Name(name) if name == "same" && it.is_some() => {
@@ -1138,6 +1143,7 @@ impl Perform<'_> {
                     curves: Vec::new(),
                     signals: Vec::new(),
                     fx_params: Vec::new(),
+            mutations: Vec::new(),
                 };
                 self.on_clip(name, rest, clip, span, it)
                     .map(PerfValue::Clip)
@@ -1627,6 +1633,7 @@ impl Perform<'_> {
                 curves: clip.curves,
                 signals: Vec::new(),
                 fx_params: Vec::new(),
+            mutations: Vec::new(),
             });
         }
         // Pitch operations touch only the notes; time operations touch every lane.
@@ -1695,6 +1702,7 @@ impl Perform<'_> {
             curves: clip.curves,
             signals: Vec::new(),
             fx_params: Vec::new(),
+            mutations: Vec::new(),
         })
     }
 
@@ -2558,6 +2566,7 @@ impl Perform<'_> {
         let mut keys = None;
         let mut lanes: Vec<(String, Pattern<Step>)> = Vec::new();
         let mut curves: Vec<(String, EnvLane)> = Vec::new();
+        let mut mutations: Vec<(String, Mutation)> = Vec::new();
         let mut scored = Vec::new();
         let mut plays = None;
         let mut then = Vec::new();
@@ -2603,6 +2612,22 @@ impl Perform<'_> {
                     );
                 };
                 scored = parse_events(raw, value.span, self.cx)?;
+                continue;
+            }
+            if let ExprKind::Glitch { options, rows } = &value.kind {
+                let (glitch_lanes, mutation) = crate::glitch::lanes(&key.name, options, rows, value.span)?;
+                for (name, pattern) in glitch_lanes {
+                    if lanes.iter().any(|(n, _)| *n == name) {
+                        return Err(Diagnostic::new(
+                            format!("lane `{}` is given twice", name.replace("::", ".")),
+                            key.span,
+                        ));
+                    }
+                    if let Some(mutation) = mutation {
+                        mutations.push((name.clone(), mutation));
+                    }
+                    lanes.push((name, pattern));
+                }
                 continue;
             }
             if lanes.iter().any(|(n, _)| *n == key.name)
@@ -2666,6 +2691,7 @@ impl Perform<'_> {
             curves,
             signals: Vec::new(),
             fx_params: Vec::new(),
+            mutations,
         })
     }
 
@@ -2790,6 +2816,7 @@ impl Perform<'_> {
                 curves: Vec::new(),
                 signals: Vec::new(),
                 fx_params: Vec::new(),
+            mutations: Vec::new(),
             }),
             PerfValue::Num(v) => Ok(Clip {
                 name: hint.to_string(),
@@ -2803,6 +2830,7 @@ impl Perform<'_> {
                 curves: Vec::new(),
                 signals: Vec::new(),
                 fx_params: Vec::new(),
+            mutations: Vec::new(),
             }),
             PerfValue::Grid(_) => Err(Diagnostic::new("a grid has no pitches to play", span)
                 .with_help("give it notes with `.rhythm(grid[...])` on a pattern instead")),
@@ -4047,6 +4075,7 @@ fn section_to_clip(section: crate::Section, tempo: Tempo) -> Res<Clip> {
         curves: Vec::new(),
         signals: Vec::new(),
         fx_params: Vec::new(),
+            mutations: Vec::new(),
     })
 }
 

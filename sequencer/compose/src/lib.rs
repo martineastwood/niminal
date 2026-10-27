@@ -6,6 +6,7 @@ mod analysis;
 mod ast;
 mod compile;
 mod dsp;
+mod glitch;
 mod ide;
 mod lexer;
 mod literal;

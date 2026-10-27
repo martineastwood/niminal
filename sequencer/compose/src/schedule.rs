@@ -12,7 +12,7 @@ use niminal_pattern::{Rational, Span as CycleSpan};
 use niminal_score::{Event, Tempo, Time, Value};
 
 use crate::compile::Composition;
-use crate::performance::{Action, Clip, EnvLane, Scheduled, Step};
+use crate::performance::{Action, Clip, EnvLane, Mutation, Scheduled, Step};
 
 /// The pattern queries and events one clip may spend in a search: a base
 /// amount plus more for a longer stretch of time.
@@ -1023,9 +1023,14 @@ impl Schedule {
             if lane == "notes" || clip.signals.iter().any(|(l, _)| l == lane) {
                 continue;
             }
-            // The value in force at the moment the note starts.
+            // The value in force at the moment the note starts; a mutating lane reads a different stretch of its
+            // pattern for each start of the clip.
+            let read_at = match clip.mutations.iter().find(|(name, _)| name == lane) {
+                Some((_, mutation)) => whole.start + mutation_offset(*mutation, segment.origin, clip.length),
+                None => whole.start,
+            };
             let Some(hap) = pattern
-                .query(CycleSpan::new(whole.start, whole.start))
+                .query(CycleSpan::new(read_at, read_at))
                 .into_iter()
                 .next()
             else {
@@ -1072,6 +1077,17 @@ impl Schedule {
             args,
         })
     }
+}
+
+/// How far into its pattern a mutating lane reads: a whole number of passes of the clip, picked by a fixed seed or
+/// by when the clip began, so that a clip started again sounds different but a render is the same every time.
+fn mutation_offset(mutation: Mutation, origin: f64, length: Rational) -> Rational {
+    let seed = match mutation {
+        Mutation::Fresh => origin.to_bits(),
+        Mutation::Seed(seed) => seed,
+    };
+    let passes = (niminal_pattern::unit_random(seed, Rational::ZERO) * 997.0) as i64;
+    Rational::int(passes) * length
 }
 
 /// Play an envelope that starts at `origin` seconds: its first level at once, then a glide for each

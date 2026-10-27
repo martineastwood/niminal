@@ -1,7 +1,7 @@
 //! The stage's performance: a live sequencer embedded in the app, and the engine it plays through.
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -17,8 +17,6 @@ use serde::Serialize;
 /// The stage's one sequencer, shared by the worker that advances it and the window that asks about it.
 pub struct Shared {
     session: Mutex<Option<LiveServer>>,
-    /// The engine this app started, if it started one. Left alone when the user runs their own.
-    engine: Mutex<Option<Child>>,
     /// Changes whenever the project does, so the window can redraw only when it needs to.
     revision: AtomicU64,
     /// The engine's last health reading and when it was taken: asking is a full status request.
@@ -48,7 +46,6 @@ impl Shared {
     pub fn new() -> Shared {
         Shared {
             session: Mutex::new(None),
-            engine: Mutex::new(None),
             revision: AtomicU64::new(0),
             health: Mutex::new(None),
             midi: Mutex::new(Midi::default()),
@@ -58,14 +55,6 @@ impl Shared {
 
     pub fn bump(&self) {
         self.revision.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Let the engine this app started go when the window closes.
-    pub fn shutdown(&self) {
-        if let Some(mut child) = lock(&self.engine).take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
     }
 }
 
@@ -111,62 +100,12 @@ fn find_binary() -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-/// Runs `niminal server` on `port`, unless one is already listening. The caller owns the child.
-fn open_engine(port: u16) -> Result<Option<Child>, String> {
-    if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-        return Ok(None);
-    }
-    let binary = find_binary().ok_or(
-        "Could not find the niminal engine. Install it with `cargo install --path crates/niminal-cli`, or run `niminal server` yourself.",
-    )?;
-    let mut child = Command::new(binary)
-        .args(["server", "--port", &port.to_string()])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Could not start the niminal engine: {e}"))?;
-    // The server opens its port after it has set up audio; give it a few seconds.
-    let deadline = Instant::now() + Duration::from_secs(8);
-    while Instant::now() < deadline {
-        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return Ok(Some(child));
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-    Err(format!(
-        "the niminal engine did not open port {port}; is audio available?"
-    ))
-}
-
-/// Open a session, starting the engine if nothing is listening.
+/// Open a session with the engine on `port`. The engine is the user's to run (`niminal server`).
 pub fn connect(shared: &Shared, port: u16, token: Option<&str>) -> Result<(), String> {
     if lock(&shared.session).is_some() {
         return Ok(());
     }
-    let mut started = None;
-    let link = match WsLink::connect(port, token, "niminal-stage") {
-        Ok(connected) => connected,
-        Err(_) => {
-            started = open_engine(port)?;
-            let deadline = Instant::now() + Duration::from_secs(5);
-            loop {
-                match WsLink::connect(port, token, "niminal-stage") {
-                    Ok(connected) => break connected,
-                    Err(e) if Instant::now() >= deadline => {
-                        if let Some(mut child) = started.take() {
-                            let _ = child.kill();
-                            let _ = child.wait();
-                        }
-                        return Err(e);
-                    }
-                    Err(_) => std::thread::sleep(Duration::from_millis(100)),
-                }
-            }
-        }
-    };
+    let link = WsLink::connect(port, token, "niminal-stage")?;
     let hello = link.hello.clone();
     let EngineReply::Hello {
         sample_rate,
@@ -180,21 +119,14 @@ pub fn connect(shared: &Shared, port: u16, token: Option<&str>) -> Result<(), St
     let mut live = Live::new(Box::new(link), sample_rate, layout)
         .with_clock_sync(Duration::from_millis(100));
     live.set_metering(true);
-    if let Some(child) = started
-        && let Some(mut old) = lock(&shared.engine).replace(child)
-    {
-        let _ = old.kill();
-        let _ = old.wait();
-    }
     *lock(&shared.session) = Some(LiveServer::new(live));
     shared.bump();
     Ok(())
 }
 
-/// Close the session, and stop the engine if this app started it.
+/// Close the session. The engine keeps running.
 pub fn disconnect(shared: &Shared) {
     drop(lock(&shared.session).take());
-    shared.shutdown();
     shared.bump();
 }
 

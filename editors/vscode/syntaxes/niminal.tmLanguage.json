@@ -46,7 +46,7 @@
       ]
     },
     {
-      "begin": "\\b(grid)\\s*(\\{)",
+      "begin": "\\b(grid|glitch)\\s*(?:\\([^)]*\\))?\\s*(\\{)",
       "end": "\\}",
       "beginCaptures": {
         "1": {

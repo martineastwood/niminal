@@ -4,7 +4,7 @@ use crate::opcode::{Opcode, Port, ProcessCtx};
 
 /// Holds samples and quantizes amplitude. `rate` is how many times a second a
 /// new sample is taken (defaults to the audio rate, so no reduction); `bits`
-/// is the bit depth (defaults to 16).
+/// is the bit depth (defaults to 16; below 2 it is the same as 2). Silence stays silent.
 #[derive(Clone)]
 pub struct Bitcrush {
     held: f32,
@@ -69,10 +69,11 @@ impl Opcode for Bitcrush {
                 self.phase -= 1.0;
                 self.held = inputs[0][i];
             }
-            let levels = (2.0f32).powf(bits) - 1.0;
-            // quantize the held sample into the bit grid
-            let q = (self.held.clamp(-1.0, 1.0) * 0.5 + 0.5) * levels;
-            *o = (q.round() / levels) * 2.0 - 1.0;
+            // the steps between -1 and 1, evenly: zero is one of the levels, so silence stays silent, and
+            // so are -1 and 1. Below two bits there are three levels (-1, 0 and 1).
+            let steps = ((2.0f32).powf(bits) - 2.0).max(2.0);
+            let step = 2.0 / steps;
+            *o = ((self.held.clamp(-1.0, 1.0) / step).round() * step).clamp(-1.0, 1.0);
         }
     }
 }

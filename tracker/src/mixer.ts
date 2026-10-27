@@ -17,7 +17,7 @@ export function renderInstrument(parent: HTMLElement, definition: Definition, pa
   const lfos = readLfos(definition.source);
   const hidden = new Set(definition.hidden ?? []);
   const setHidden = () => { if (hidden.size) definition.hidden = [...hidden]; else delete definition.hidden; edited(); refresh(); };
-  if (!params) note('Apply to expose parameters');
+  if (!params) note('Parameters appear once the engine has applied this');
   else if (!params.length) note('No parameters');
   else {
     for (const parameter of params.filter(p => !hidden.has(p.name))) {
@@ -121,7 +121,7 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
     if (device.id === fx.selected) {
       const params = parameters[device.definition];
       const hint = (text: string) => { const p = document.createElement('p'); p.className = 'device-note'; p.textContent = text; card.append(p); };
-      if (!params) hint('Apply to expose parameters');
+      if (!params) hint('Parameters appear once the engine has applied this');
       else if (!params.length) hint('No parameters');
       else params.forEach(parameter => {
         const value = device.values[parameter.name] ?? parameter.default;

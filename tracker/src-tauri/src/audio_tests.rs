@@ -1596,7 +1596,7 @@ fn the_overdrive_drive_control_changes_the_sound() {
 #[test]
 fn library_effects_expose_controls_and_render_on_mono_and_stereo_engines() {
     let sources = library_definitions(include_str!("../../../crates/niminal-lang/std/fx.nml"));
-    assert!(sources.len() >= 14);
+    assert!(sources.len() >= 15);
     for layout in [Layout::Mono, Layout::Stereo] {
         let engine = Arc::new(Mutex::new(EngineServer::new(
             Session::new(48000.0, layout).without_limiter(),
@@ -1661,6 +1661,37 @@ fn library_effects_expose_controls_and_render_on_mono_and_stereo_engines() {
         }
         worker.command(Command::Disconnect).unwrap();
     }
+}
+
+/// The loudness of a tone through the library's glitch on a track, with `stutter_hold` set to `hold`.
+fn glitched_loudness(hold: f64) -> f32 {
+    let engine = Arc::new(Mutex::new(EngineServer::new(Session::new(48000.0, Layout::Stereo).without_limiter())));
+    let server = Server::start(engine.clone(), ServerConfig { port: 0, ..ServerConfig::default() }).unwrap();
+    let mut worker = Worker::default();
+    worker.command(Command::Connect { port: server.port(), token: None }).unwrap();
+    worker.command(Command::Apply { id: "tone".into(), source: TONE.into(), kind: Kind::Instr, dir: None }).unwrap();
+    let source = library_definitions(include_str!("../../../crates/niminal-lang/std/fx.nml")).into_iter().find(|s| s.contains("fx glitch(")).unwrap();
+    worker.command(Command::Apply { id: "glitch".into(), source: source.into(), kind: Kind::Fx, dir: None }).unwrap();
+    let mut song = test_song(None);
+    song.tracks[0].fx = vec![Device {
+        id: "s0".into(),
+        definition: "glitch".into(),
+        values: [("stutter_hold".to_string(), hold)].into(),
+        ..Device::default()
+    }];
+    worker.command(Command::Update { song }).unwrap();
+    worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track: 0, ms: 200, commands: vec![] }).unwrap();
+    let audio = engine.lock().unwrap().session_mut().process(24000);
+    worker.command(Command::Disconnect).unwrap();
+    (audio[0][4000..].iter().map(|s| s * s).sum::<f32>() / (audio[0].len() - 4000) as f32).sqrt()
+}
+
+#[test]
+fn the_glitch_stutter_hold_control_freezes_the_sound_on_a_track() {
+    let (open, held) = (glitched_loudness(0.0), glitched_loudness(1.0));
+    assert!(open > 0.01, "with no hold the tone passes: {open}");
+    // held from the start there is nothing yet to repeat, so the effect is silent
+    assert!(held < open * 0.1, "holding the first moment repeats silence: {held} against {open}");
 }
 
 #[test]
@@ -2228,4 +2259,15 @@ fn loop_edits_reach_held_pattern_and_midi_notes_without_retriggering() {
     }
     drop(worker); drop(server); drop(engine);
     std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn an_effect_can_be_applied_before_any_instrument() {
+    let sources = library_definitions(include_str!("../../../crates/niminal-lang/std/fx.nml"));
+    let (_engine, _server, mut worker) = engine_worker();
+    worker
+        .command(Command::Apply { id: "first".into(), source: sources[0].into(), kind: Kind::Fx, dir: None })
+        .unwrap();
+    assert!(worker.status.effects.contains_key("first"));
+    assert!(!worker.status.effect_parameters["first"].is_empty());
 }

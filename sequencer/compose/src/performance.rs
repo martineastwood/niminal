@@ -93,6 +93,18 @@ pub struct Clip {
     pub signals: Vec<(String, niminal_lang::Unit)>,
     /// Explicit fx parameter lanes, with their units and default smoothing.
     pub fx_params: Vec<(String, niminal_lang::Unit, f64)>,
+    /// Lanes that read a different stretch of their pattern each time the clip starts (`glitch(mutate)`), or a
+    /// fixed one (`glitch(seed: 7)`).
+    pub mutations: Vec<(String, Mutation)>,
+}
+
+/// Which stretch of its pattern a mutating lane reads.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Mutation {
+    /// A new one each time the clip starts.
+    Fresh,
+    /// The same one every time: `seed: 7`.
+    Seed(u64),
 }
 
 /// An `env[...]` in a lane: a run of glides between levels, from the start of the clip.

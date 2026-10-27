@@ -1,0 +1,86 @@
+// The functions behind the `glitch` effect: `use std/glitch`. Each plays the last stretch of the sound in its own
+// way while `hold` is above zero, and lets the sound through again when it is not. They create no effects of their
+// own, so a piece that uses them gets nothing else with them. The `glitch` effect in `std/fx` carries the same
+// functions for the tracker, so use one module or the other, not both.
+
+// Repeat the last `length` of the sound for as long as `hold` is above zero, then let the sound
+// through again. Each repeat is `fade` times the level of the one before, and `pitch` (in
+// semitones) changes the speed the piece is read at. `length`, `pitch` and `fade` can move while it
+// is held. `max` is the longest `length`, in samples.
+fn repeat_last(x, hold: 0..1, length: sec, pitch: -24..24 = 0, fade: 0..1 = 1, max: const int = 96000) {
+  state ring = zeros(max)
+  state pos = 0
+  state frozen = 0
+  state phase = 0
+  state level = 1
+  size = length.num * sample_rate.num
+  if hold > 0 and prev(hold) <= 0 {
+    frozen = pos
+    phase = 0
+    level = 1
+  }
+  seam = 0.001 * sample_rate.num
+  y = x
+  if hold > 0 {
+    edge = min(phase, size - phase).min(seam) / seam
+    y = ring.at(frozen - size + phase, interp: linear) * level * edge
+    phase = phase + exp(pitch * 0.05776227)
+    if phase >= size {
+      phase = phase - size
+      level = level * fade
+    }
+  } else {
+    ring[pos] = x
+    pos = (pos + 1).mod(max)
+  }
+  y
+}
+// Play the last `length` of the sound backwards, over and over, for as long as `hold` is above zero.
+fn rewind_last(x, hold: 0..1, length: sec, max: const int = 96000) {
+  state ring = zeros(max)
+  state pos = 0
+  state frozen = 0
+  state phase = 0
+  size = length.num * sample_rate.num
+  if hold > 0 and prev(hold) <= 0 {
+    frozen = pos
+    phase = 0
+  }
+  seam = 0.001 * sample_rate.num
+  y = x
+  if hold > 0 {
+    edge = min(phase, size - phase).min(seam) / seam
+    y = ring.at(frozen - phase, interp: linear) * edge
+    phase = phase + 1
+    if phase >= size {
+      phase = phase - size
+    }
+  } else {
+    ring[pos] = x
+    pos = (pos + 1).mod(max)
+  }
+  y
+}
+// Slow the sound down to a stop over `time` while `hold` is above zero, like a tape machine
+// switched off, and play it live again when `hold` ends.
+fn slow_down(x, hold: 0..1, time: sec, max: const int = 96000) {
+  state ring = zeros(max)
+  state pos = 0
+  state read = 0
+  state elapsed = 0
+  size = time.num * sample_rate.num
+  ring[pos] = x
+  pos = (pos + 1).mod(max)
+  if hold > 0 and prev(hold) <= 0 {
+    read = pos
+    elapsed = 0
+  }
+  y = x
+  if hold > 0 {
+    speed = if elapsed < size { 1 - elapsed / size } else { 0 }
+    y = ring.at(read, interp: linear) * min(1, speed * 8)
+    read = read + speed
+    elapsed = elapsed + 1
+  }
+  y
+}

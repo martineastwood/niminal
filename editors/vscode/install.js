@@ -27,6 +27,7 @@ for (const entry of [
   "package-lock.json",
   "extension.js",
   "blocks.js",
+  "project.js",
   "panel.js",
   "learn.js",
   "live.js",

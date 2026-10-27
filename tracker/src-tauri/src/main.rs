@@ -2,7 +2,6 @@
 
 mod audio;
 mod commands;
-mod engine;
 mod files;
 mod midi;
 mod mixer;

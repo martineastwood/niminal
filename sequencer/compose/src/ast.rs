@@ -471,6 +471,8 @@ pub enum ExprKind {
     Grid(String),
     /// `grid { kick: x... }`: the raw text between the braces, a row per sample.
     Rows(String),
+    /// `glitch(mutate) { stutter(length: 1/4beat): .... 234. }`: the text in the brackets, and the raw text between the braces, a row per glitch.
+    Glitch { options: String, rows: String },
     /// `events { 0beat c4 for 1/2beat }`: the raw text between the braces.
     Events(String),
     /// `~`: nothing, or stop.
@@ -566,6 +568,7 @@ impl Expr {
             | ExprKind::Pattern(_)
             | ExprKind::Grid(_)
             | ExprKind::Rows(_)
+            | ExprKind::Glitch { .. }
             | ExprKind::Events(_)
             | ExprKind::Rest
             | ExprKind::Str(_) => {}
@@ -638,6 +641,7 @@ impl Expr {
             | ExprKind::Pattern(_)
             | ExprKind::Grid(_)
             | ExprKind::Rows(_)
+            | ExprKind::Glitch { .. }
             | ExprKind::Events(_)
             | ExprKind::Rest
             | ExprKind::Str(_) => {}

@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
-use tauri::{Emitter, Manager, State};
+use tauri::{Emitter, State};
 
 use session::{EvalOutcome, Snapshot};
 
@@ -435,11 +435,7 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("the stage starts")
-        .run(move |app, event| {
-            if let tauri::RunEvent::Exit = event {
-                app.state::<AppState>().shared.shutdown();
-            }
-        });
+        .run(|_, _| {});
 }
 
 #[cfg(test)]

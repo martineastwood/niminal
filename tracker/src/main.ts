@@ -48,7 +48,7 @@ app.innerHTML = `
     </aside>
     <div class="col-resize" id="left-resize" tabindex="0" role="separator" aria-orientation="vertical" aria-label="Resize the sequence bar"></div>
     <section class="workspace">
-      <div class="dock-bar" id="view-bar"><button class="tab" data-view="pattern" title="The pattern editor">Pattern</button><button class="tab" data-view="instrument" title="The current instrument: its controls and code, shared by every track">Instrument</button><button class="tab" data-view="sample" title="The current instrument's sample">Sample</button><button class="tab" data-view="mix" title="Levels, pan, mute, solo and a scope for each channel">Mixer</button></div>
+      <div class="dock-bar" id="view-bar"><button class="tab" data-view="pattern" title="The pattern editor">Pattern</button><button class="tab" data-view="instrument" title="The current instrument: its controls and code, shared by every track">Instrument</button><button class="tab" data-view="sample" title="The current instrument's sample">Sample</button><button class="tab" data-view="mix" title="Levels, pan, mute, solo and a scope for each channel">Mixer</button><span class="spacer"></span><button id="toggle-dock" class="tab" aria-pressed="false" title="Show or hide the selected track's effects and automation">Track FX</button></div>
       <div id="grid-wrap"><div id="grid" tabindex="0" role="grid" aria-label="Pattern editor"></div></div>
       <section class="main-view" id="instrument-view" hidden><div class="code-bar">${codeTools('instr')}</div><div class="code-workspace"><div id="instr-controls" aria-label="Instrument controls"></div><div id="instr-code"></div></div></section>
       <section class="main-view" id="sample-panel" hidden><div id="sample"></div></section>
@@ -655,6 +655,7 @@ function renderApplyStatus() {
     const definition = shown[kind]; if (!definition) continue;
     const ready = (kind === 'fx' ? audioStatus.effects[definition.id] : audioStatus.instruments[definition.id]) !== undefined, applied = appliedSources.get(definition.id) === definition.source;
     element<HTMLButtonElement>(`${kind}-apply`).disabled = !audioStatus.connected;
+    element(`${kind}-apply`).title = audioStatus.connected ? 'Apply the code and play a note through it (Cmd/Ctrl+Enter in the editor)' : 'Connect the engine to apply';
     element(`${kind}-apply`).classList.toggle('dirty', audioStatus.connected && (!ready || !applied));
     setText(`${kind}-status`, !ready ? 'Not applied' : applied ? 'Applied' : 'Unapplied edits · playing last applied version');
   }
@@ -672,14 +673,21 @@ async function ensureConnected() {
   if (audioStatus.connected) return;
   connectionPending = 'connect';
   renderConnectButton();
-  setText('audio-status', 'Starting the engine…');
+  setText('audio-status', 'Connecting…');
   connectionAttempt = (async () => {
     transportRevision++; starting = false;
     appliedSources.clear();
     const port = Number(element<HTMLInputElement>('engine-port').value);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Enter an engine port between 1 and 65535');
-    await audioCommand({ op: 'connect', port, token: element<HTMLInputElement>('engine-token').value.trim() || null });
-    await applyDefinition(selected);
+    try { await audioCommand({ op: 'connect', port, token: element<HTMLInputElement>('engine-token').value.trim() || null }); }
+    catch (error) {
+      // the engine is the user's to start; this keeps looking for one
+      if (String(error).includes("can't reach the server")) throw new Error(`No engine on port ${port}: run \`niminal server\` and the tracker connects to it`);
+      throw error;
+    }
+    // everything on screen, then every instrument the song plays and every effect on its strips
+    for (const definition of new Set([selected, shown.instr, shown.fx])) if (definition) await applyDefinition(definition);
+    await ensureAssignments();
   })();
   try { await connectionAttempt; }
   finally {
@@ -859,6 +867,7 @@ function showPanel(panel: Panel, visible: boolean) {
   markTabs();
   element('fx-tools').hidden = element('code-panel').hidden || element('code').hidden;
   element('bottom-dock').hidden = panels.every(candidate => element(`${candidate}-panel`).hidden);
+  element('toggle-dock').setAttribute('aria-pressed', String(!element('bottom-dock').hidden));
   if (element('code-panel').hidden) {
     element('app').classList.remove('editor-expanded'); setText('expand', '⤢');
   }
@@ -892,6 +901,7 @@ for (const button of document.querySelectorAll<HTMLElement>('[data-view]')) {
   button.onclick = () => { showView(button.dataset.view as View); if (button.dataset.view === 'pattern') element('grid').focus(); };
 }
 element('open-mix').onclick = () => showView(mainView === 'mix' ? 'pattern' : 'mix');
+element('toggle-dock').onclick = () => { if (element('bottom-dock').hidden) { showPanel('code', true); showFx(); } else showPanel('code', false); };
 element('close-dock').onclick = () => { showPanel('code', false); element('grid').focus(); };
 element('dock-resize').onpointerdown = event => {
   const dock = element('bottom-dock'), startY = event.clientY, startHeight = dock.offsetHeight;
@@ -1152,7 +1162,7 @@ window.addEventListener('keydown', event => {
 }, true);
 if (isTauri()) {
   listen<string>('menu', event => menuActions[event.payload]?.()).catch(error => status(`The menu is not connected: ${error}`));
-  // Start the engine when none is running, as Stage does.
+  // Connect to an engine that is running; starting one is up to the user.
   void action(ensureConnected);
 }
 window.addEventListener('beforeunload', () => { clearInterval(audioTimer); clearInterval(scopeTimer); for (const each of Object.values(editors)) each.destroy(); });

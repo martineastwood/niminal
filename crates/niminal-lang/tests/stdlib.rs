@@ -111,7 +111,7 @@ fn one_pole_filters_split_a_signal() {
 
 #[test]
 fn every_library_module_compiles() {
-    for module in ["filters", "physical", "delays", "reverb", "spectral"] {
+    for module in ["filters", "physical", "delays", "reverb", "spectral", "glitch"] {
         let expanded = expand(
             &format!("use std/{module}\ninstr a() {{ osc(sine, 1hz) }}"),
             Path::new("."),
@@ -398,7 +398,7 @@ fn the_effect_library_compiles() {
         )
     });
     assert!(program.instruments.is_empty());
-    assert!(expanded.text.matches("\nfx ").count() >= 14);
+    assert!(expanded.text.matches("\nfx ").count() >= 15);
 }
 
 /// Every drum preset plays one note, bounded and audible.
@@ -600,5 +600,88 @@ fn the_drum_voice_is_bounded_at_any_setting() {
             out.iter().all(|v| v.is_finite()) && peak <= 1.0 + 1e-3,
             "case {case}: peak {peak}\n{call}"
         );
+    }
+}
+
+#[test]
+fn repeat_last_repeats_the_last_piece_while_held_and_passes_the_sound_after() {
+    // a ramp that rises every second, held from 0.5 s to 0.7 s, with a 47 ms piece
+    let out = render(
+        "use std/glitch\ninstr a() { osc(sine, 220hz).repeat_last(hold: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.7), length: 47ms) }",
+        1000,
+    );
+    assert!(finite(&out));
+    let piece = 2256; // 47 ms: not a whole number of cycles, so only a real repeat matches
+    let at = 24_000 + 100; // just after the hold begins
+    let (first, second) = (&out[at..at + 500], &out[at + piece..at + piece + 500]);
+    let differ = first.iter().zip(second).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    assert!(differ < 0.01, "the second repeat matches the first: {differ}");
+    assert!(rms(&out[40_000..46_000]) > 0.3, "the sound returns after the hold");
+}
+
+#[test]
+fn rewind_last_plays_the_last_piece_backwards_while_held() {
+    // a slow rising ramp, held from 0.5 s: read backwards, it falls
+    let out = render(
+        "use std/glitch\ninstr a() { phasor(0.5hz).rewind_last(hold: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.7), length: 50ms) }",
+        1000,
+    );
+    assert!(finite(&out));
+    let at = 24_000 + 200;
+    assert!(out[at + 400] < out[at + 100], "the ramp falls while rewinding: {} then {}", out[at + 100], out[at + 400]);
+    assert!(out[40_000] > out[30_000], "the live ramp is back after the hold");
+}
+
+#[test]
+fn slow_down_lowers_the_pitch_and_comes_to_a_stop() {
+    let out = render(
+        "use std/glitch\ninstr a() { osc(sine, 1khz).slow_down(hold: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.9), time: 100ms) }",
+        1000,
+    );
+    assert!(finite(&out));
+    let crossings = |range: std::ops::Range<usize>| out[range].windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count();
+    let (before, early, late) = (crossings(20_000..22_400), crossings(24_000..26_400), crossings(27_000..29_400));
+    assert!(before >= 45, "a 1 khz tone: {before}");
+    assert!(early < before && late < early, "the pitch falls: {before} {early} {late}");
+    assert!(rms(&out[30_000..32_000]) < 0.05, "it has stopped");
+    assert!(rms(&out[40_000..46_000]) > 0.3, "the sound returns after the hold");
+}
+
+#[test]
+fn bitcrush_keeps_silence_silent_and_full_scale_exact() {
+    // a quantizer with no zero level would leave a constant offset on silence
+    for bits in [2, 4, 8, 16] {
+        let out = render(
+            &format!("instr a() {{ (osc(sine, 100hz) * 0).bitcrush(rate: 12khz, bits: {bits}) }}"),
+            200,
+        );
+        assert!(out.iter().all(|v| *v == 0.0), "{bits} bits: silence stays at zero");
+    }
+    // two bits are three levels: -1, 0 and 1
+    let out = render("instr a() { osc(sine, 100hz).bitcrush(bits: 2) }", 200);
+    assert!(out.iter().all(|v| [-1.0, 0.0, 1.0].contains(v)), "two bits give three levels");
+    assert!(out.contains(&1.0) && out.contains(&-1.0), "full scale is reached");
+    // eight bits: 255 levels, evenly spaced and including both ends
+    let out = render("instr a() { osc(saw, 50hz).bitcrush(bits: 8) }", 2000);
+    let mut levels: Vec<i32> = out.iter().map(|v| (v * 127.0).round() as i32).collect();
+    levels.sort_unstable();
+    levels.dedup();
+    assert!(levels.len() > 200 && levels[0] == -127 && levels[levels.len() - 1] == 127, "{} levels", levels.len());
+    assert!(out.iter().all(|v| ((v * 127.0) - (v * 127.0).round()).abs() < 1e-3), "levels sit on the 1/127 grid");
+}
+
+/// The `glitch` effect in `std/fx` carries its own copy of the lane functions, because the tracker takes an effect
+/// and its helpers as one piece; `std/glitch` is the same functions for everyone else. They must not drift apart.
+#[test]
+fn the_glitch_module_and_the_glitch_effect_carry_the_same_functions() {
+    let function = |text: &str, name: &str| -> String {
+        let start = text.find(&format!("fn {name}(")).unwrap_or_else(|| panic!("no fn {name}"));
+        let end = text[start..].find("\n}\n").expect("the function ends") + start + 3;
+        text[start..end].to_string()
+    };
+    let module = include_str!("../std/glitch.nml");
+    let effects = include_str!("../std/fx.nml");
+    for name in ["repeat_last", "rewind_last", "slow_down"] {
+        assert_eq!(function(module, name), function(effects, name), "fn {name} differs between std/glitch and std/fx");
     }
 }

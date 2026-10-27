@@ -213,39 +213,12 @@ struct Worker {
     playback: Option<Playback>,
     mixer_timing: (f64, u32),
     dir: Option<String>,
-    /// The engine this tracker started, if it had to.
-    child: Option<std::process::Child>,
 }
 
-const UNREACHABLE: &str = "can't reach the server";
-
 impl Worker {
-    /// Connects to the engine, starting one first if nothing is listening on a port of this machine.
-    fn connect_or_launch(&mut self, port: u16, token: Option<&str>) -> Result<(Client, Value), String> {
-        let first = Client::connect_as(port, token, "niminal-tracker");
-        let Err(error) = &first else { return first };
-        if token.is_some() || !error.starts_with(UNREACHABLE) {
-            return first;
-        }
-        if self.child.as_mut().is_none_or(|child| !matches!(child.try_wait(), Ok(None))) {
-            self.child = Some(crate::engine::launch(port)?);
-        }
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        loop {
-            thread::sleep(Duration::from_millis(100));
-            match Client::connect_as(port, token, "niminal-tracker") {
-                Err(error) if error.starts_with(UNREACHABLE) => {
-                    if self.child.as_mut().is_some_and(|child| !matches!(child.try_wait(), Ok(None))) {
-                        self.child = None;
-                        return Err("The niminal engine stopped as it started. Run `niminal server` in a terminal to see why.".into());
-                    }
-                    if std::time::Instant::now() > deadline {
-                        return Err("The niminal engine did not start in time".into());
-                    }
-                }
-                other => return other,
-            }
-        }
+    /// Connects to the engine on `port`. The engine is the user's to run (`niminal server`).
+    fn connect(&mut self, port: u16, token: Option<&str>) -> Result<(Client, Value), String> {
+        Client::connect_as(port, token, "niminal-tracker")
     }
 
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
@@ -402,7 +375,7 @@ impl Worker {
                 self.mixer_returns.clear();
                 self.mixer_master = Track::default();
                 self.status = Status::default();
-                let (client, hello) = self.connect_or_launch(port, token.as_deref())?;
+                let (client, hello) = self.connect(port, token.as_deref())?;
                 self.status.sample_rate = hello["sample_rate"]
                     .as_f64()
                     .filter(|rate| *rate > 0.0)
@@ -514,9 +487,16 @@ impl Worker {
                 if dir.is_some() {
                     self.dir = dir;
                 }
-                let mut transaction =
-                    json!({"op":"transaction", "at":"now", "source":source, "edits":edits});
-                if let Some(dir) = &self.dir {
+                // Effects travel as edits; with no instrument what is left to define is only comments.
+                let defines = source.lines().any(|line| !line.trim().is_empty() && !line.trim_start().starts_with("//"));
+                let mut transaction = if !defines {
+                    json!({"op":"routing", "at":"now", "edits":edits})
+                } else {
+                    json!({"op":"transaction", "at":"now", "source":source, "edits":edits})
+                };
+                if let Some(dir) = &self.dir
+                    && defines
+                {
                     transaction["dir"] = json!(dir);
                 }
                 let mut events = vec![transaction];
@@ -668,10 +648,6 @@ impl Worker {
             Command::Quit => {
                 let result = self.stop();
                 self.client = None;
-                if let Some(mut child) = self.child.take() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
                 return result;
             }
             Command::Scopes { strips } => {

@@ -245,7 +245,7 @@ impl Walk<'_> {
             let (name, alias) = parse_use(rest, span)?;
             let path = self.find(name, dir).ok_or_else(|| {
                 Diagnostic::new(format!("no module `{name}`"), used_at).with_help(format!(
-                    "looked for {name}.nml next to the file, in lib/ and in the installed packages; the library that comes with niminal is `use std/filters`, `std/physical`, `std/delays`, `std/reverb`, `std/spectral`, `std/instruments`, `std/drums` and `std/fx`"
+                    "looked for {name}.nml next to the file, in lib/ and in the installed packages; the library that comes with niminal is `use std/filters`, `std/physical`, `std/delays`, `std/reverb`, `std/spectral`, `std/instruments`, `std/drums`, `std/fx` and `std/glitch`"
                 ))
             })?;
             if self.stack.contains(&path) {
@@ -305,7 +305,7 @@ impl Walk<'_> {
 pub const STD_DIR: &str = "<std>";
 
 /// The modules that come with niminal: `use std/filters`.
-const STD: [(&str, &str); 8] = [
+const STD: [(&str, &str); 9] = [
     ("std/filters", include_str!("../std/filters.nml")),
     ("std/physical", include_str!("../std/physical.nml")),
     ("std/delays", include_str!("../std/delays.nml")),
@@ -314,6 +314,7 @@ const STD: [(&str, &str); 8] = [
     ("std/instruments", include_str!("../std/instruments.nml")),
     ("std/drums", include_str!("../std/drums.nml")),
     ("std/fx", include_str!("../std/fx.nml")),
+    ("std/glitch", include_str!("../std/glitch.nml")),
 ];
 
 /// The source of a module that comes with niminal, if `name` is one.

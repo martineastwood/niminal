@@ -47,6 +47,9 @@ pub enum Tok {
     Grid(String),
     /// The raw text of `grid { ... }`: one row per sample.
     Rows(String),
+    /// `glitch(mutate) { stutter(length: 1/4beat): .... 234. }`: the text between the brackets (if any) and the
+    /// raw text between the braces, a row per glitch.
+    Glitch(String, String),
     /// The raw text of `events { ... }` inside a clip.
     Events(String),
     /// A quoted string such as a file path.
@@ -161,7 +164,8 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     Tok::Pattern(text)
                 }
             }
-            b'{' if matches!(tokens.last(), Some(Token { tok: Tok::Ident(n), .. }) if n == "grid" || n == "events") =>
+            b'{' if matches!(tokens.last(), Some(Token { tok: Tok::Ident(n), .. }) if n == "grid" || n == "events")
+                || glitch_header(&tokens, src).is_some() =>
             {
                 let Some(len) = matching_brace(src, i) else {
                     return Err(Diagnostic::new(
@@ -170,18 +174,25 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     ));
                 };
                 let text = src[i + 1..i + len].to_string();
+                let glitch = glitch_header(&tokens, src);
                 let kind = match tokens.last() {
+                    _ if glitch.is_some() => "glitch",
                     Some(Token {
                         tok: Tok::Ident(n), ..
                     }) if n == "events" => "events",
                     _ => "grid",
                 };
-                start = tokens.pop().map_or(start, |t| t.span.start);
+                // the keyword, and for a glitch block its brackets, are part of the token
+                let mut first = None;
+                for _ in 0..glitch.as_ref().map_or(1, |(count, _)| *count) {
+                    first = tokens.pop();
+                }
+                start = first.map_or(start, |t| t.span.start);
                 i += len + 1;
-                if kind == "events" {
-                    Tok::Events(text)
-                } else {
-                    Tok::Rows(text)
+                match kind {
+                    "events" => Tok::Events(text),
+                    "glitch" => Tok::Glitch(glitch.map(|(_, options)| options).unwrap_or_default(), text),
+                    _ => Tok::Rows(text),
                 }
             }
             b'"' => {
@@ -365,6 +376,22 @@ fn matching_bracket(bytes: &[u8], open: usize) -> Option<usize> {
         }
     }
     None
+}
+
+/// `key: glitch {` or `key: glitch(mutate) {`: the word `glitch` opens a block of rows only as a lane's value,
+/// so a part named `glitch` is untouched. How many tokens it takes up, and the text in its brackets.
+fn glitch_header(tokens: &[Token], src: &str) -> Option<(usize, String)> {
+    match tokens {
+        [.., Token { tok: Tok::Colon, .. }, Token { tok: Tok::Ident(n), .. }] if n == "glitch" => Some((1, String::new())),
+        [.., Token { tok: Tok::RParen, span: close }] => {
+            let open = tokens.iter().rposition(|t| t.tok == Tok::LParen)?;
+            let [.., Token { tok: Tok::Colon, .. }, Token { tok: Tok::Ident(n), .. }] = &tokens[..open] else {
+                return None;
+            };
+            (n == "glitch").then(|| (tokens.len() - open + 1, src[tokens[open].span.end..close.start].to_string()))
+        }
+        _ => None,
+    }
 }
 
 /// Index of the matching `}`, or `None`. `open` is the index of `{`. Returns the

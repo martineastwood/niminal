@@ -109,6 +109,7 @@ fn describe(tok: &Tok) -> String {
         Tok::Pattern(_) => "a pattern".into(),
         Tok::Rows(_) => "a grid".into(),
         Tok::Grid(_) => "a grid".into(),
+        Tok::Glitch(..) => "a glitch block".into(),
         Tok::Events(_) => "an events block".into(),
         Tok::Str(_) => "a string".into(),
         Tok::Newline => "the end of the line".into(),
@@ -2034,6 +2035,13 @@ impl Parser {
                 self.bump();
                 Ok(Expr {
                     kind: ExprKind::Rows(raw),
+                    span,
+                })
+            }
+            Tok::Glitch(options, rows) => {
+                self.bump();
+                Ok(Expr {
+                    kind: ExprKind::Glitch { options, rows },
                     span,
                 })
             }

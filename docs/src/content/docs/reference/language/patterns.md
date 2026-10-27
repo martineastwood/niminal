@@ -63,6 +63,59 @@ A row can also:
 
 Muting or stopping the host node does not silence rows routed to other nodes. Each drum node has its own mute and solo. Choke groups still apply only among notes that share a node and kit.
 
+## Glitch rows
+
+A lane named after an fx can be a `glitch` block: one row per glitch, a step each, drawn like a grid. The fx owns the glitches; the `glitch` fx in `std/fx` has four.
+
+```nml
+clip glitched {
+  instrument: break_voice
+  length: 2bars
+  notes: cuts
+  break_glitch: glitch {
+    stutter(length: 1/4beat): .... .... .... 248. .... .... .... 448.
+    rewind(length: 1/4beat):  .... .... x2.. .... .... .... .... .22.
+    slow:                     ...x xxx. .... .... .... .... .... ....
+    crush(bits: 8):           .... .... .... .... .... xxxx 2222 ....
+  }
+}
+```
+
+| Step | Meaning |
+| --- | --- |
+| `.` | Off |
+| `x` | On, with the row's first setting as written |
+| `2`..`9` | On, with the first setting divided by that number: `4` of `length: 1/4beat` is 1/16 of a beat, `3` is a triplet, `2` of `bits: 8` is 4 bits |
+
+- **Holds:** adjacent steps are one continuous hold. The fx is not restarted between them, so `248` is one stutter whose piece gets shorter each step. A `.` ends the hold.
+- **Rows play together:** all rows need the same number of steps, and they spread over the clip's `length` like any other lane.
+- **Lanes underneath:** the row `stutter` writes the lane `break_glitch.stutter_hold` (1 while on, 0 while off), and each setting in its brackets writes `break_glitch.stutter_<setting>`. The first setting is only set on steps that are on, so it keeps its last value while the row is off. Any fx whose parameters follow the `<name>_hold` and `<name>_<setting>` pattern can be driven this way, and an ordinary lane such as `break_glitch.stutter_pitch: [0 0 5 0]` can sit beside the block for anything the rows can't say.
+- **Settings:** values in the brackets are written like any lane value (`1/4beat`, `400ms`, `5`, `-7st`).
+
+A row can also be mini-notation in brackets, as in a drum grid: `x` or a digit is on, `~` is off, and the usual operators work.
+
+```nml
+break_glitch: glitch {
+  stutter(length: 1/4beat): [~ ~ ~ ~  ~ ~ ~ ~  <x 2> ~ x? 4?  8? ~ ~ ~]
+  crush(bits: 6):           [x(3,16)]
+}
+```
+
+Here `x?` happens half the time (chosen the same way every time), `<x 2>` takes a turn each cycle (a clip with a `length:` repeats its first turn on every loop, so leave `length:` out for a bar-by-bar change) and `x(3,16)` spreads three hits over sixteen steps. A step that is off, or dropped by `?`, turns the glitch off. A bracketed row is as long as a cycle however it is cut, so it needs no step count to match the other rows. Write each step as its own item (`[x 2 4]`, not `[x24]`).
+
+### Mutating
+
+The choices in a bracketed row (`?`, `<a b>`, `x(3,16)` and so on) come out the same way in every render, like all randomness here. Two options after `glitch` change which variation you hear:
+
+| Write | Meaning |
+| --- | --- |
+| `glitch(mutate) { ... }` | A new variation each time the clip starts: stop it and start it again, or start it at another moment in the piece. A render of the same piece is still the same every time |
+| `glitch(seed: 7) { ... }` | One fixed variation, the same on every start; another number is another variation |
+
+They move the glitch rows only, not the notes, and they keep the rows lined up with each other. Drawn rows (`x2..`) have nothing random in them, so they sound the same either way.
+
+See `examples/glitch.nml` for a complete piece.
+
 ## Rhythmic audio gates
 
 Inside an `instr` or `fx`, `grid[...]` produces a transport-synced level signal rather than note events. Multiply it by audio, or use `.gate(...)` to shape its opening and closing:
