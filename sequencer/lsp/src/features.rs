@@ -691,9 +691,56 @@ pub fn semantic_tokens(doc: &Document) -> Vec<u32> {
         .collect();
 
     let locals = local_kinds(&tokens);
-    let mut data = Vec::new();
-    let (mut last_line, mut last_char) = (0usize, 0usize);
+    // the names of the members of the kits and sliced samples the file defines: `s0` to `s15`, `kick`, `snare`
+    let members: Vec<&str> = doc
+        .symbols
+        .iter()
+        .filter(|s| matches!(s.kind, SymbolKind::Kit | SymbolKind::Sample))
+        .flat_map(|s| s.params.iter().map(|p| p.name.as_str()))
+        .collect();
+    // (start, end, type, modifiers) of each coloured word, in the order they come
+    let mut marks: Vec<(usize, usize, u32, u32)> = Vec::new();
     for (i, t) in tokens.iter().enumerate() {
+        // inside a list of notes or a drawn row the words are raw text: its members and the steps that hit
+        let raw = match &t.tok {
+            Tok::Pattern(raw) | Tok::Steps(raw) | Tok::Rows(raw) => Some(raw),
+            _ => None,
+        };
+        if let Some(raw) = raw {
+            let inside = doc.text.get(t.span.start..t.span.end).and_then(|text| text.find(raw.as_str()));
+            let base = t.span.start + inside.unwrap_or(0);
+            let steps = matches!(t.tok, Tok::Steps(_));
+            let rows = matches!(t.tok, Tok::Rows(_));
+            let mut word_start = None;
+            let mut in_row_label = rows;
+            for (at, c) in raw.char_indices().chain(std::iter::once((raw.len(), ' '))) {
+                let part_of_word = c.is_ascii_alphanumeric() || c == '_';
+                match (word_start, part_of_word) {
+                    (None, true) => word_start = Some(at),
+                    (Some(from), false) => {
+                        let word = &raw[from..at];
+                        // in a row, the name before the colon is a member; after it, steps
+                        let label = rows && in_row_label && c == ':';
+                        if (!steps && (!rows || label)) && members.contains(&word) {
+                            marks.push((base + from, base + at, ENUM_MEMBER, 0));
+                        }
+                        word_start = None;
+                    }
+                    _ => {}
+                }
+                if c == '\n' {
+                    in_row_label = rows;
+                }
+                if c == ':' {
+                    in_row_label = false;
+                }
+                // a step that hits
+                if (steps || (rows && !in_row_label)) && matches!(c, 'x' | 'X' | 'o') {
+                    marks.push((base + at, base + at + 1, ENUM_MEMBER, 0));
+                }
+            }
+            continue;
+        }
         let Tok::Ident(name) = &t.tok else { continue };
         let before = i.checked_sub(1).map(|i| &tokens[i].tok);
         let after = tokens.get(i + 1).map(|t| &t.tok);
@@ -741,16 +788,17 @@ pub fn semantic_tokens(doc: &Document) -> Vec<u32> {
             locals[i]
         };
         let Some(kind) = kind else { continue };
-
-        let line = line_starts.partition_point(|&s| s <= t.span.start) - 1;
-        let character: usize = doc.text[line_starts[line]..t.span.start]
+        marks.push((t.span.start, t.span.end, kind, modifiers));
+    }
+    let mut data = Vec::new();
+    let (mut last_line, mut last_char) = (0usize, 0usize);
+    for (start, end, kind, modifiers) in marks {
+        let line = line_starts.partition_point(|&s| s <= start) - 1;
+        let character: usize = doc.text[line_starts[line]..start]
             .chars()
             .map(char::len_utf16)
             .sum();
-        let length: usize = doc.text[t.span.start..t.span.end]
-            .chars()
-            .map(char::len_utf16)
-            .sum();
+        let length: usize = doc.text[start..end].chars().map(char::len_utf16).sum();
         let (delta_line, delta_char) = (
             line - last_line,
             if line == last_line {

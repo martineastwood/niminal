@@ -984,6 +984,34 @@ mod tests {
     }
 
     #[test]
+    fn members_of_a_kit_and_the_steps_that_hit_are_coloured_inside_lists_and_rows() {
+        let text = "brk = sample(\"b.wav\")\nchops = brk.slices(4)\ndrums = kit {\n  kick: sample(\"k.wav\")\n}\nclip a {\n  instrument: v\n  notes: [s0 s1 c4 ~ s3 kick]\n  g {\n    open: x.Xo xx..\n  }\n}\n";
+        let mut server = Server::new();
+        open(&mut server, text);
+        let reply = request(
+            &mut server,
+            1,
+            "textDocument/semanticTokens/full",
+            json!({ "textDocument": { "uri": URI } }),
+        );
+        let data: Vec<u32> = reply["data"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u32).collect();
+        let (mut line, mut column) = (0, 0);
+        let mut found: Vec<(u32, u32, String, &str)> = Vec::new();
+        for token in data.chunks(5) {
+            line += token[0];
+            column = if token[0] == 0 { column + token[1] } else { token[1] };
+            let word = &text.lines().nth(line as usize).unwrap()[column as usize..(column + token[2]) as usize];
+            found.push((line, column, word.to_string(), features::TOKEN_TYPES[token[3] as usize]));
+        }
+        // the slices in the list of notes are members, a note name and a rest are left to the grammar
+        let notes: Vec<&str> = found.iter().filter(|f| f.0 == 7 && f.3 == "enumMember").map(|f| f.2.as_str()).collect();
+        assert_eq!(notes, ["s0", "s1", "s3", "kick"], "{found:?}");
+        // in a drawn row every step that hits is marked, and the rests are not
+        let hits: Vec<(u32, &str)> = found.iter().filter(|f| f.0 == 9 && f.3 == "enumMember").map(|f| (f.1, f.2.as_str())).collect();
+        assert_eq!(hits.iter().map(|h| h.1).collect::<Vec<_>>(), ["x", "X", "o", "x", "x"], "{found:?}");
+    }
+
+    #[test]
     fn semantic_tokens_tell_names_apart_by_what_they_are() {
         let mut server = Server::new();
         open(&mut server, SONG);
