@@ -2318,12 +2318,24 @@ impl<'a> Lower<'a> {
             ExprKind::Call { name, args } => self.call(name, args, e.span),
             ExprKind::Lambda { params, body } => {
                 let def = funcs::lambda(params, body, e.span);
-                let captures = self
+                let mut captures: HashMap<String, Datum> = self
                     .scope
                     .iter()
                     .filter(|(n, _)| funcs::reads(&def, n))
                     .map(|(n, v)| (n.clone(), v.clone()))
                     .collect();
+                // an fx's parameters are controls, not locals, so they are captured by reading them here
+                let controls: Vec<String> = self
+                    .names
+                    .controls
+                    .iter()
+                    .filter(|c| !self.scope.contains_key(&c.name) && funcs::reads(&def, &c.name))
+                    .map(|c| c.name.clone())
+                    .collect();
+                for name in controls {
+                    let sig = self.name(&name, e.span)?;
+                    captures.insert(name, Datum::Sig(sig));
+                }
                 Ok(Datum::Function { def, captures })
             }
             _ => self.signal(e).map(Datum::Sig),

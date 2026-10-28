@@ -109,7 +109,7 @@ fn describe(tok: &Tok) -> String {
         Tok::Pattern(_) => "a pattern".into(),
         Tok::Rows(_) => "a grid".into(),
         Tok::Grid(_) => "a grid".into(),
-        Tok::Glitch(..) => "a glitch block".into(),
+        Tok::Steps(_) => "a row of steps".into(),
         Tok::Events(_) => "an events block".into(),
         Tok::Str(_) => "a string".into(),
         Tok::Newline => "the end of the line".into(),
@@ -1266,7 +1266,16 @@ impl Parser {
                     key.name = format!("{}::{}", key.name, param.name);
                     key.span = key.span.to(param.span);
                 }
-                if bare && matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::RBrace) {
+                if !bare && self.peek() == &Tok::LBrace {
+                    // `fx_name { open: x.x.  release: 300ms }`: lanes for one effect
+                    let (rows, end) = self.entries(false)?;
+                    let span = key.span.to(end);
+                    let value = Expr {
+                        kind: ExprKind::FxLanes(rows),
+                        span,
+                    };
+                    entries.push((key, value));
+                } else if bare && matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::RBrace) {
                     let value = Expr {
                         kind: ExprKind::Name(key.name.clone()),
                         span: key.span,
@@ -2038,10 +2047,10 @@ impl Parser {
                     span,
                 })
             }
-            Tok::Glitch(options, rows) => {
+            Tok::Steps(raw) => {
                 self.bump();
                 Ok(Expr {
-                    kind: ExprKind::Glitch { options, rows },
+                    kind: ExprKind::Steps(raw),
                     span,
                 })
             }

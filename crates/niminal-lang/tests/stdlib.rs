@@ -612,7 +612,7 @@ fn repeat_last_repeats_the_last_piece_while_held_and_passes_the_sound_after() {
     );
     assert!(finite(&out));
     let piece = 2256; // 47 ms: not a whole number of cycles, so only a real repeat matches
-    let at = 24_000 + 100; // just after the hold begins
+    let at = 24_000 + 300; // past the 3 ms blend that fades the repeat in
     let (first, second) = (&out[at..at + 500], &out[at + piece..at + piece + 500]);
     let differ = first.iter().zip(second).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
     assert!(differ < 0.01, "the second repeat matches the first: {differ}");
@@ -670,7 +670,80 @@ fn bitcrush_keeps_silence_silent_and_full_scale_exact() {
     assert!(out.iter().all(|v| ((v * 127.0) - (v * 127.0).round()).abs() < 1e-3), "levels sit on the 1/127 grid");
 }
 
-/// The `glitch` effect in `std/fx` carries its own copy of the lane functions, because the tracker takes an effect
+#[test]
+fn slow_down_starts_from_the_sound_as_it_is_now() {
+    // a ramp that rises for two seconds: held at 0.5 s, the tape starts from where the ramp is (0.25), not from
+    // the oldest sound in its buffer
+    let out = render(
+        "use std/glitch\ninstr a() { phasor(0.5hz).slow_down(hold: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.9), time: 200ms) }",
+        1000,
+    );
+    assert!(finite(&out));
+    let start = out[24_300];
+    assert!((start - 0.25).abs() < 0.01, "the tape starts at the current level: {start}");
+}
+
+#[test]
+fn shrink_makes_each_repeat_shorter() {
+    // a ramp, held from 0.5 s with a 50 ms piece that shrinks to half each repeat, down to a floor of 4 ms: every
+    // repeat starts silent (the seam), so the gaps between the silent samples are the lengths of the pieces after
+    // the first
+    let out = render(
+        "use std/glitch\ninstr a() { phasor(0.5hz).repeat_last(hold: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.9), length: 50ms, shrink: 0.5) }",
+        1000,
+    );
+    assert!(finite(&out));
+    let silent: Vec<usize> = (24_000..43_000).filter(|&i| out[i].abs() < 1e-9).collect();
+    let gaps: Vec<usize> = silent.windows(2).map(|w| w[1] - w[0]).filter(|g| *g > 100).collect();
+    assert_eq!(gaps[..4], [1200, 600, 300, 192], "{gaps:?}");
+}
+
+#[test]
+fn a_hold_starts_and_ends_without_a_click() {
+    // a 220 hz sine moves at most 0.03 a sample, so a jump of more than 0.1 anywhere is a click
+    for call in [
+        "repeat_last(hold: gate, length: 47ms)",
+        "rewind_last(hold: gate, length: 50ms)",
+        "slow_down(hold: gate, time: 100ms)",
+    ] {
+        let out = render(
+            &format!("use std/glitch\ninstr a() {{ gate = (phasor(1hz) > 0.5) * (phasor(1hz) < 0.7)\n osc(sine, 220hz).{call} }}"),
+            1000,
+        );
+        assert!(finite(&out));
+        let jump = out[20_000..40_000].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!(jump < 0.1, "{call}: a jump of {jump}");
+        assert!(rms(&out[40_000..46_000]) > 0.3, "{call}: the sound returns after the hold");
+    }
+}
+
+#[test]
+fn apply_runs_a_function_as_much_as_the_gate_says() {
+    let level = |when: &str| {
+        let out = render(
+            &format!("use std/glitch\ninstr a() {{ osc(sine, 220hz).apply(fn(s) {{ s * 0.5 }}, when: {when}) }}"),
+            400,
+        );
+        assert!(finite(&out));
+        rms(&out[out.len() / 2..]) / (0.5f32).sqrt()
+    };
+    assert!((level("0") - 1.0).abs() < 0.01, "off passes the sound");
+    assert!((level("1") - 0.5).abs() < 0.01, "on runs the function");
+    assert!((level("0.5") - 0.75).abs() < 0.01, "half way mixes the two");
+}
+
+#[test]
+fn apply_fades_between_dry_and_wet_without_a_click() {
+    let out = render(
+        "use std/glitch\ninstr a() { osc(sine, 220hz).apply(fn(s) { s * 0 }, when: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.7)) }",
+        1000,
+    );
+    let jump = out[20_000..40_000].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    assert!(jump < 0.1, "a jump of {jump}");
+    assert!(rms(&out[25_000..30_000]) < 0.01, "the function is in force while gated");
+}
+
+/// The `glitch` effect in `std/fx` carries its own copy of the glitch functions, because the tracker takes an effect
 /// and its helpers as one piece; `std/glitch` is the same functions for everyone else. They must not drift apart.
 #[test]
 fn the_glitch_module_and_the_glitch_effect_carry_the_same_functions() {
@@ -681,7 +754,7 @@ fn the_glitch_module_and_the_glitch_effect_carry_the_same_functions() {
     };
     let module = include_str!("../std/glitch.nml");
     let effects = include_str!("../std/fx.nml");
-    for name in ["repeat_last", "rewind_last", "slow_down"] {
+    for name in ["apply", "repeat_last", "rewind_last", "slow_down"] {
         assert_eq!(function(module, name), function(effects, name), "fn {name} differs between std/glitch and std/fx");
     }
 }

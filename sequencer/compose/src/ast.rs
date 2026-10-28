@@ -471,8 +471,10 @@ pub enum ExprKind {
     Grid(String),
     /// `grid { kick: x... }`: the raw text between the braces, a row per sample.
     Rows(String),
-    /// `glitch(mutate) { stutter(length: 1/4beat): .... 234. }`: the text in the brackets, and the raw text between the braces, a row per glitch.
-    Glitch { options: String, rows: String },
+    /// A row of steps, `x.x. xx..`: a lane that is 0 where it is `.` and a level where it is drawn.
+    Steps(String),
+    /// `fx_name { open: x.x.  release: 300ms }`: lanes for one effect, in a clip.
+    FxLanes(Vec<(Ident, Expr)>),
     /// `events { 0beat c4 for 1/2beat }`: the raw text between the braces.
     Events(String),
     /// `~`: nothing, or stop.
@@ -568,10 +570,11 @@ impl Expr {
             | ExprKind::Pattern(_)
             | ExprKind::Grid(_)
             | ExprKind::Rows(_)
-            | ExprKind::Glitch { .. }
+            | ExprKind::Steps(_)
             | ExprKind::Events(_)
             | ExprKind::Rest
             | ExprKind::Str(_) => {}
+            ExprKind::FxLanes(rows) => rows.iter_mut().for_each(|(_, e)| f(e)),
             ExprKind::Call { args, .. } => args.iter_mut().for_each(|a| f(&mut a.value)),
             ExprKind::Neg(inner) | ExprKind::Not(inner) => f(inner),
             ExprKind::Array(items) => items.iter_mut().for_each(&mut *f),
@@ -641,10 +644,11 @@ impl Expr {
             | ExprKind::Pattern(_)
             | ExprKind::Grid(_)
             | ExprKind::Rows(_)
-            | ExprKind::Glitch { .. }
+            | ExprKind::Steps(_)
             | ExprKind::Events(_)
             | ExprKind::Rest
             | ExprKind::Str(_) => {}
+            ExprKind::FxLanes(rows) => rows.iter().for_each(|(_, e)| f(e)),
             ExprKind::Call { args, .. } => args.iter().for_each(|a| f(&a.value)),
             ExprKind::Neg(inner) | ExprKind::Not(inner) => f(inner),
             ExprKind::Array(items) => items.iter().for_each(&mut *f),

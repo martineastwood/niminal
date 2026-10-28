@@ -1663,7 +1663,7 @@ fn library_effects_expose_controls_and_render_on_mono_and_stereo_engines() {
     }
 }
 
-/// The loudness of a tone through the library's glitch on a track, with `stutter_hold` set to `hold`.
+/// The loudness of a tone through the library's glitch on a track, with `stutter` set to `hold`.
 fn glitched_loudness(hold: f64) -> f32 {
     let engine = Arc::new(Mutex::new(EngineServer::new(Session::new(48000.0, Layout::Stereo).without_limiter())));
     let server = Server::start(engine.clone(), ServerConfig { port: 0, ..ServerConfig::default() }).unwrap();
@@ -1676,7 +1676,7 @@ fn glitched_loudness(hold: f64) -> f32 {
     song.tracks[0].fx = vec![Device {
         id: "s0".into(),
         definition: "glitch".into(),
-        values: [("stutter_hold".to_string(), hold)].into(),
+        values: [("stutter".to_string(), hold)].into(),
         ..Device::default()
     }];
     worker.command(Command::Update { song }).unwrap();
@@ -1687,7 +1687,7 @@ fn glitched_loudness(hold: f64) -> f32 {
 }
 
 #[test]
-fn the_glitch_stutter_hold_control_freezes_the_sound_on_a_track() {
+fn the_glitch_stutter_control_freezes_the_sound_on_a_track() {
     let (open, held) = (glitched_loudness(0.0), glitched_loudness(1.0));
     assert!(open > 0.01, "with no hold the tone passes: {open}");
     // held from the start there is nothing yet to repeat, so the effect is silent

@@ -29,7 +29,7 @@ export const constants = new Set('sine saw square pulse tri stereo quad true fal
 // information, documentation and validation come from the compiler through LSP.
 export const niminal = StreamLanguage.define({
   name: 'niminal',
-  startState: () => ({ string: false, grid: null as null | { close: string; depth: number }, naming: null as null | string, dot: false, def: 0, params: 0, declared: {} as Record<string, string> }),
+  startState: () => ({ string: false, steps: false, grid: null as null | { close: string; depth: number }, naming: null as null | string, dot: false, def: 0, params: 0, declared: {} as Record<string, string> }),
   token(stream, state) {
     if (state.string) {
       while (!stream.eol()) {
@@ -39,6 +39,8 @@ export const niminal = StreamLanguage.define({
       }
       return 'string';
     }
+    if (state.steps && stream.sol()) state.steps = false;
+    if (state.steps) return stepsToken(stream);
     if (stream.eatSpace()) return null;
     if (state.grid) return gridToken(stream, state);
     if (stream.match('//')) { stream.skipToEnd(); return 'comment'; }
@@ -53,9 +55,14 @@ export const niminal = StreamLanguage.define({
       state.naming = definers[word] ?? null;
       state.dot = false;
       state.def = defining ? 2 : fnDefiners.has(word) ? 1 : 0;
-      if ((word === 'grid' && stream.match(/^\s*[{[]/, false)) || (word === 'glitch' && stream.match(/^\s*(?:\([^)]*\))?\s*\{/, false))) {
-        state.grid = { close: stream.match(/^\s*(?:\([^)]*\))?\s*\{/, false) ? '}' : ']', depth: 0 };
+      if (word === 'grid' && stream.match(/^\s*[{[]/, false)) {
+        state.grid = { close: stream.match(/^\s*\{/, false) ? '}' : ']', depth: 0 };
         return 'keyword';
+      }
+      // `open: x.x. xx..` in a clip: a lane drawn as steps, to the end of the line
+      if (stream.match(/^\s*:\s*[.xXo<][\d.xXo <>[\]()*/!?@,~%| ]*(?:\/\/.*)?$/, false)) {
+        state.steps = true;
+        return 'propertyName';
       }
       // what this file defines is coloured as defined wherever it is used again; a new object, as states are copied shallowly
       if (named) {
@@ -93,6 +100,21 @@ export const niminal = StreamLanguage.define({
 });
 
 type Grid = { close: string; depth: number };
+
+/** After `open:` in a clip, to the end of the line: steps drawn with hits (`x X o`) and rests (`.`). */
+function stepsToken(stream: StringStream) {
+  if (stream.eatSpace()) return null;
+  if (stream.match('//')) {
+    stream.skipToEnd();
+    return 'comment';
+  }
+  if (stream.match(/[xXo]+/)) return 'string';
+  if (stream.match(/\.+/)) return 'comment';
+  if (stream.match(/\d+/)) return 'number';
+  if (stream.match(/[*/!?@%|~]/)) return 'operator';
+  stream.next();
+  return 'punctuation';
+}
 
 /** Inside `grid { ... }` or `grid[ ... ]`: row names, hits (`x X o`) and rests (`. ~`). */
 function gridToken(stream: StringStream, state: { grid: Grid | null }) {

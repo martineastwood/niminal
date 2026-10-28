@@ -14,7 +14,7 @@ None of these can be used as a name.
 | Control flow | `if`, `else`, `match`, `for`, `in`, `reset_on`, `after`, `spawn`, `oversample` |
 | Logic | `and`, `or`, `not`, `true`, `false` |
 | Rates | `const`, `init`, `control` |
-| Literal prefixes | `env[...]`, `grid[...]`, `grid { ... }`, `glitch { ... }` |
+| Literal prefixes | `env[...]`, `grid[...]`, `grid { ... }` |
 | Units | `num`, `int`, `sec`, `ms`, `samples`, `hz`, `khz`, `db`, `st`, `ct`, `deg`, `bpm`, `beat`, `beats`, `bar`, `bars`, `%` |
 | Implicit names | `out`, `in`, `it`, `note`, `clock` |
 | Constants | `pi`, `sample_rate` |

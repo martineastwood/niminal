@@ -2696,7 +2696,7 @@ fn a_clip_or_scene_can_say_which_key_launches_it() {
     );
 }
 
-const GLITCH_FX: &str = "\nbus src\ninstr pluck(freq: hz) {\n  out = osc(sine, freq)\n  src += out\n}\nfx g(stutter_hold: 0..1 = 0, stutter_length: 1ms..1sec = 125ms, crush_hold: 0..1 = 0, crush_bits: 1..16 = 5) {\n  out = src * (1 - stutter_hold) * (1 - crush_hold)\n}\n";
+const GATED_FX: &str = "\nbus src\ninstr pluck(freq: hz) {\n  out = osc(sine, freq)\n  src += out\n}\nfx g(open: 0..1 = 0, release: 1ms..500ms = 10ms) {\n  out = src * open\n}\n";
 
 fn lane_values(p: &Composition, clip: &str, lane: &str) -> Vec<(f64, Value)> {
     let lanes = p.clips[clip].lane_preview(0.0);
@@ -2708,135 +2708,167 @@ fn lane_values(p: &Composition, clip: &str, lane: &str) -> Vec<(f64, Value)> {
 }
 
 #[test]
-fn a_glitch_block_draws_an_effects_hold_and_setting_lanes() {
+fn an_fx_block_draws_its_rows_as_that_effects_lanes() {
     let p = ok(&format!(
-        "{GLITCH_FX}clip c {{\n  instrument: pluck\n  notes: [c4 c4 c4 c4]\n  g: glitch {{\n    stutter(length: 1/4beat): .248\n    crush(bits: 8): xx2.\n  }}\n}}\n"
+        "{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [c4 c4 c4 c4]\n  g {{\n    open: .xXo\n    release: [10ms 300ms]\n  }}\n}}\n"
     ));
-    let num = |x: f64| Value::Num(x);
-    let beats = |x: f64| Value::Beats(x);
+    let accent = 10f64.powf(3.0 / 20.0);
+    let ghost = 10f64.powf(-12.0 / 20.0);
+    let num = Value::Num;
     assert_eq!(
-        lane_values(&p, "c", "g::stutter_hold"),
-        [(0.0, num(0.0)), (0.25, num(1.0)), (0.5, num(1.0)), (0.75, num(1.0))]
+        lane_values(&p, "c", "g::open"),
+        [(0.0, num(0.0)), (0.25, num(1.0)), (0.5, num(accent)), (0.75, num(ghost))]
     );
-    // a digit divides the row's first setting, and an off step leaves it alone
+    // a row that is not drawn is an ordinary lane
     assert_eq!(
-        lane_values(&p, "c", "g::stutter_length"),
-        [(0.25, beats(1.0 / 8.0)), (0.5, beats(1.0 / 16.0)), (0.75, beats(1.0 / 32.0))]
-    );
-    assert_eq!(
-        lane_values(&p, "c", "g::crush_hold"),
-        [(0.0, num(1.0)), (0.25, num(1.0)), (0.5, num(1.0)), (0.75, num(0.0))]
-    );
-    assert_eq!(
-        lane_values(&p, "c", "g::crush_bits"),
-        [(0.0, num(8.0)), (0.25, num(8.0)), (0.5, num(4.0))]
+        lane_values(&p, "c", "g::release"),
+        [(0.0, Value::Seconds(0.01)), (0.5, Value::Seconds(0.3))]
     );
 }
 
 #[test]
-fn a_glitch_block_reports_what_is_wrong_with_a_row() {
-    let wrap = |rows: &str| format!("{GLITCH_FX}clip c {{\n  instrument: pluck\n  notes: [c4]\n  g: glitch {{\n    {rows}\n  }}\n}}\n");
-    assert!(first_error(&wrap("stutter(length: 1/4beat): .z..")).message.contains("isn't a glitch step"));
-    assert!(first_error(&wrap("stutter: .2..")).message.contains("needs one"));
-    assert!(first_error(&wrap("stutter(length: 1/4beat): ....\n    crush: ..")).message.contains("has 2 steps"));
-    assert!(first_error(&wrap("stutter(length: 1/4beat) ....")).message.contains("a glitch row is"));
-    assert!(first_error(&wrap("")).message.contains("at least one row"));
-}
-
-#[test]
-fn a_bracketed_glitch_row_is_mini_notation_with_rests_as_off() {
+fn steps_can_be_spaced_for_reading_and_stretch_over_the_clip() {
     let p = ok(&format!(
-        "{GLITCH_FX}clip c {{\n  instrument: pluck\n  notes: [c4 c4 c4 c4]\n  g: glitch {{\n    stutter(length: 1/4beat): [x ~ 2 ~]\n  }}\n}}\n"
+        "{GATED_FX}clip c {{\n  instrument: pluck\n  length: 2bars\n  notes: [c4 c4 c4 c4]\n  g {{\n    open: x. .x // a comment\n  }}\n}}\n"
     ));
-    let num = |x: f64| Value::Num(x);
-    // the same lanes the drawn row `x.2.` gives, with the rests filled in as explicit offs
-    let mut hold = lane_values(&p, "c", "g::stutter_hold");
-    hold.sort_by(|a, b| a.0.total_cmp(&b.0));
-    assert_eq!(hold, [(0.0, num(1.0)), (0.25, num(0.0)), (0.5, num(1.0)), (0.75, num(0.0))]);
+    let num = Value::Num;
     assert_eq!(
-        lane_values(&p, "c", "g::stutter_length"),
-        [(0.0, Value::Beats(0.25)), (0.5, Value::Beats(0.125))]
+        lane_values(&p, "c", "g::open"),
+        [(0.0, num(1.0)), (0.5, num(0.0)), (1.0, num(0.0)), (1.5, num(1.0))]
     );
 }
 
 #[test]
-fn a_dropped_glitch_step_is_off_not_left_on() {
-    let p = ok(&format!(
-        "{GLITCH_FX}clip c {{\n  instrument: pluck\n  notes: [c4 c4 c4 c4 c4 c4 c4 c4]\n  g: glitch {{\n    stutter(length: 1/4beat): [x? x? x? x? x? x? x? x?]\n  }}\n}}\n"
+fn a_qualified_lane_can_be_drawn_too() {
+    let block = ok(&format!(
+        "{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [c4 c4 c4 c4]\n  g {{\n    open: x.x.\n  }}\n}}\n"
     ));
-    let mut hold = lane_values(&p, "c", "g::stutter_hold");
-    hold.sort_by(|a, b| a.0.total_cmp(&b.0));
-    // every step has exactly one value, and with a half chance of each some are off and some on
-    assert_eq!(hold.len(), 8, "{hold:?}");
-    assert!(hold.iter().any(|(_, v)| *v == Value::Num(0.0)) && hold.iter().any(|(_, v)| *v == Value::Num(1.0)), "{hold:?}");
-    // and it is the same every time it is built
-    let again = ok(&format!(
-        "{GLITCH_FX}clip c {{\n  instrument: pluck\n  notes: [c4 c4 c4 c4 c4 c4 c4 c4]\n  g: glitch {{\n    stutter(length: 1/4beat): [x? x? x? x? x? x? x? x?]\n  }}\n}}\n"
+    let dotted = ok(&format!(
+        "{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [c4 c4 c4 c4]\n  g.open: x.x.\n}}\n"
     ));
-    let mut hold_again = lane_values(&again, "c", "g::stutter_hold");
-    hold_again.sort_by(|a, b| a.0.total_cmp(&b.0));
-    assert_eq!(hold, hold_again);
+    assert_eq!(lane_values(&block, "c", "g::open"), lane_values(&dotted, "c", "g::open"));
 }
 
 #[test]
-fn a_bracketed_glitch_row_reports_a_bad_step() {
-    let wrap = |rows: &str| format!("{GLITCH_FX}clip c {{\n  instrument: pluck\n  notes: [c4]\n  g: glitch {{\n    {rows}\n  }}\n}}\n");
-    for (row, message) in [
-        ("stutter(length: 1/4beat): [x z x]", "isn't a glitch step"),
-        ("stutter: [x 2]", "needs one"),
-        ("stutter(length: 1/4beat): [x x", "no matching"),
-    ] {
-        let found = compile(&wrap(row));
-        assert!(found.as_ref().err().is_some_and(|e| e[0].message.contains(message)), "{row}: {:?}", found.err().map(|e| e[0].message.clone()));
-    }
+fn an_fx_block_reports_what_is_wrong() {
+    let wrap = |body: &str| format!("{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [c4]\n  {body}\n}}\nc.start\n");
+    // a lane is given by the block and again beside it
+    let twice = first_error(&wrap("g {\n    open: x...\n  }\n  g.open: ..x."));
+    assert!(twice.message.contains("given twice"), "{}", twice.message);
+    // a lane the effect doesn't have
+    let unknown = first_error(&wrap("g {\n    shut: x...\n  }"));
+    assert!(unknown.message.contains("g.shut"), "{}", unknown.message);
+    // a row has to be steps or a value
+    assert!(compile(&wrap("g {\n    open: x.z.\n  }")).is_err());
 }
 
-/// The `stutter_hold` each note of a glitch clip starts with between `from` and `to` seconds.
-fn holds(p: &Composition, from: f64, to: f64) -> Vec<f64> {
-    p.schedule()
+#[test]
+fn a_block_of_lanes_is_only_for_a_clip() {
+    let found = compile(&format!("{GATED_FX}scene s {{\n  g {{\n    open: x...\n  }}\n}}\n"));
+    assert!(found.is_err());
+}
+
+fn open_lane(row: &str, steps: usize) -> Vec<f64> {
+    let notes = vec!["c4"; steps].join(" ");
+    let p = ok(&format!("{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [{notes}]\n  g {{\n    open: {row}\n  }}\n}}\n"));
+    let mut values = lane_values(&p, "c", "g::open");
+    values.sort_by(|a, b| a.0.total_cmp(&b.0));
+    values.iter().map(|(_, v)| if let Value::Num(n) = v { *n } else { f64::NAN }).collect()
+}
+
+#[test]
+fn a_row_of_steps_takes_mini_notation() {
+    // an alternation among the drawn steps: the first cycle takes `x`
+    assert_eq!(open_lane("...<x o .>", 4), [0.0, 0.0, 0.0, 1.0]);
+    // it can start with one
+    assert_eq!(open_lane("<. x>...", 4).first(), Some(&0.0));
+    // the same written in brackets
+    assert_eq!(open_lane("[. . . <x o .>]", 4), [0.0, 0.0, 0.0, 1.0]);
+    // `x*2` is two hits in its step, then two rests that are off, then the last step
+    let mut row = open_lane("x*2 .. x", 4);
+    row.dedup();
+    assert_eq!(row, [1.0, 0.0, 1.0]);
+    // a number in brackets is still an ordinary value pattern
+    assert_eq!(open_lane("[0 0 0 <1 2 0>]", 4), [0.0, 0.0, 0.0, 1.0]);
+}
+
+#[test]
+fn a_rest_or_a_dropped_step_in_a_row_is_off_not_left_on() {
+    // a euclidean row: the gaps between the hits are explicit zeros
+    let euclid = open_lane("x(2,8)", 8);
+    assert_eq!(euclid.iter().filter(|v| **v == 1.0).count(), 2, "{euclid:?}");
+    assert!(euclid.contains(&0.0), "{euclid:?}");
+    // a step dropped by `?` is off too, and is dropped the same way every time
+    let chance = open_lane("[x? x? x? x? x? x? x? x?]", 8);
+    assert!(chance.contains(&0.0) && chance.contains(&1.0), "{chance:?}");
+    assert_eq!(chance, open_lane("[x? x? x? x? x? x? x? x?]", 8));
+}
+
+#[test]
+fn a_bad_step_in_a_row_says_what_the_steps_are() {
+    let found = compile(&format!("{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [c4]\n  g {{\n    open: x . 9\n  }}\n}}\n"));
+    let message = found.err().map(|e| e[0].message.clone()).unwrap_or_default();
+    assert!(message.contains("isn't a step"), "{message}");
+}
+
+/// The changes the clips make to the fx `g`'s `name` lane between `from` and `to` seconds, as (when, level).
+fn fx_levels(p: &Composition, name: &str, from: f64, to: f64) -> Vec<(f64, f64)> {
+    let mut found: Vec<(f64, f64)> = p
+        .schedule()
         .events_lenient(0.0, 20.0, &[])
         .controls
         .iter()
-        .filter(|c| c.name == "g::stutter_hold" && c.at >= from && c.at < to)
-        .map(|c| c.target)
-        .collect()
-}
-
-fn dropout_clip(options: &str, commands: &str) -> Composition {
-    ok(&format!(
-        "{GLITCH_FX}clip c {{\n  instrument: pluck\n  notes: [c4 c4 c4 c4 c4 c4 c4 c4]\n  g: glitch{options} {{\n    stutter(length: 1/4beat): [x? x? x? x? x? x? x? x?]\n  }}\n}}\n{commands}"
-    ))
+        .filter(|c| c.name == name && c.at >= from && c.at <= to)
+        .map(|c| (c.at, c.target))
+        .collect();
+    found.sort_by(|a, b| a.0.total_cmp(&b.0));
+    found
 }
 
 #[test]
-fn a_mutating_glitch_block_picks_a_new_variation_each_time_the_clip_starts() {
-    let restarted = dropout_clip("(mutate)", "c.start\nat 2bars c.stop\nat 3bars c.start\n");
-    // a bar is two seconds: the first run's first bar, and the same bar of the run that starts at 6s
-    let first = holds(&restarted, 0.0, 2.0);
-    let second = holds(&restarted, 6.0, 8.0);
-    assert_eq!((first.len(), second.len()), (8, 8));
-    assert_ne!(first, second, "a clip started again chooses differently");
-    // but building it again gives the same thing, so a render is repeatable
-    let again = dropout_clip("(mutate)", "c.start\nat 2bars c.stop\nat 3bars c.start\n");
-    assert_eq!(first, holds(&again, 0.0, 2.0));
-    assert_eq!(second, holds(&again, 6.0, 8.0));
-}
-
-#[test]
-fn a_seeded_glitch_block_chooses_the_same_way_every_start() {
-    let seeded = dropout_clip("(seed: 3)", "c.start\nat 2bars c.stop\nat 3bars c.start\n");
-    assert_eq!(holds(&seeded, 0.0, 2.0), holds(&seeded, 6.0, 8.0));
-    let plain = dropout_clip("", "c.start\n");
-    assert_ne!(holds(&seeded, 0.0, 2.0), holds(&plain, 0.0, 2.0), "a seed picks another stretch than none");
-    let other = dropout_clip("(seed: 4)", "c.start\n");
-    assert_ne!(holds(&seeded, 0.0, 2.0), holds(&other, 0.0, 2.0));
-}
-
-#[test]
-fn glitch_options_are_checked() {
-    let found = compile(&format!(
-        "{GLITCH_FX}clip c {{\n  instrument: pluck\n  notes: [c4]\n  g: glitch(shuffle) {{\n    stutter(length: 1/4beat): x...\n  }}\n}}\n"
+fn stopping_a_clip_puts_the_fx_lanes_it_drove_back() {
+    let p = ok(&format!(
+        "{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [c4 c4 c4 c4]\n  g {{\n    open: xxxx\n    release: 300ms\n  }}\n}}\nc.start\nat 1bar c.stop\n"
     ));
-    let message = found.err().map(|e| e[0].message.clone()).unwrap_or_default();
-    assert!(message.contains("isn't an option"), "{message}");
+    // a bar is two seconds: at the stop the controls go back to where the effect starts
+    assert_eq!(fx_levels(&p, "g::open", 2.0, 2.0), [(2.0, 0.0)]);
+    let release = fx_levels(&p, "g::release", 2.0, 2.0);
+    assert!(release.len() == 1 && release[0].0 == 2.0 && (release[0].1 - 0.01).abs() < 1e-6, "{release:?}");
+    // and while it plays the lane has the clip's own levels
+    assert!(fx_levels(&p, "g::open", 0.0, 1.9).iter().all(|(_, v)| *v == 1.0));
+}
+
+#[test]
+fn hush_and_a_clip_that_finishes_put_the_fx_lanes_back_too() {
+    let hushed = ok(&format!(
+        "{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [c4 c4 c4 c4]\n  g {{\n    open: xxxx\n  }}\n}}\nc.start\nat 1bar hush\n"
+    ));
+    assert_eq!(fx_levels(&hushed, "g::open", 2.0, 2.0), [(2.0, 0.0)]);
+    let finished = ok(&format!(
+        "{GATED_FX}clip c {{\n  instrument: pluck\n  length: 1bar\n  times: 1\n  notes: [c4 c4 c4 c4]\n  g {{\n    open: xxxx\n  }}\n}}\nc.start\n"
+    ));
+    assert_eq!(fx_levels(&finished, "g::open", 2.0, 2.0), [(2.0, 0.0)]);
+}
+
+#[test]
+fn a_clip_that_carries_on_keeps_the_fx_lane_it_shares() {
+    let two = |stop: &str| {
+        ok(&format!(
+            "{GATED_FX}clip a {{\n  instrument: pluck\n  notes: [c4 c4 c4 c4]\n  g {{\n    open: xxxx\n  }}\n}}\nclip b {{\n  instrument: pluck\n  notes: [e4 e4 e4 e4]\n  g {{\n    open: xxxx\n  }}\n}}\na.start\nb.start\n{stop}"
+        ))
+    };
+    // `a` stops while `b` still drives `g.open`: nothing puts it back
+    let p = two("at 1bar a.stop\n");
+    assert!(fx_levels(&p, "g::open", 0.0, 20.0).iter().all(|(_, v)| *v == 1.0));
+    // when both are gone it does go back
+    let p = two("at 1bar a.stop\nat 2bars b.stop\n");
+    assert_eq!(fx_levels(&p, "g::open", 4.0, 4.0), [(4.0, 0.0)]);
+}
+
+#[test]
+fn changing_a_playing_clip_does_not_put_its_lanes_back() {
+    let p = ok(&format!(
+        "{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [c4 c4 c4 c4]\n  g {{\n    open: xxxx\n  }}\n}}\nc.start\nat 1bar c.set(notes: [d4 d4 d4 d4])\n"
+    ));
+    assert!(fx_levels(&p, "g::open", 0.0, 20.0).iter().all(|(_, v)| *v == 1.0));
 }

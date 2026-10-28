@@ -47,15 +47,25 @@ pub enum Tok {
     Grid(String),
     /// The raw text of `grid { ... }`: one row per sample.
     Rows(String),
-    /// `glitch(mutate) { stutter(length: 1/4beat): .... 234. }`: the text between the brackets (if any) and the
-    /// raw text between the braces, a row per glitch.
-    Glitch(String, String),
+    /// A row of steps for a lane, `.x.x xx..`: drawn with `.`, `x`, `X` and `o`, only where a clip gives an
+    /// effect's lanes (`fx_name { open: x.x. }`, or `fx_name.open: x.x.`).
+    Steps(String),
     /// The raw text of `events { ... }` inside a clip.
     Events(String),
     /// A quoted string such as a file path.
     Str(String),
     Newline,
     Eof,
+}
+
+/// What an open `{` holds.
+#[derive(Clone, Copy, PartialEq)]
+enum Scope {
+    /// A clip's body.
+    Clip,
+    /// An effect's lanes inside a clip, `fx_name { open: x.x. }`.
+    FxLanes,
+    Other,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,6 +82,8 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
     // Whether each open brace is a signal context (an instrument, function or
     // part body), where a bracket is a channel list or envelope.
     let mut braces: Vec<bool> = Vec::new();
+    // What each open brace holds, so a clip's body and an effect's block of lanes inside it can be told apart.
+    let mut scopes: Vec<Scope> = Vec::new();
     let mut statement_start = true;
     let mut statement_keyword: Option<String> = None;
     let mut i = 0;
@@ -96,6 +108,12 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     i += 1;
                 }
                 continue;
+            }
+            b'.' | b'x' | b'X' | b'o' | b'<' if takes_steps(&tokens, scopes.last()) && steps_end(src, i).is_some() => {
+                let end = steps_end(src, i).unwrap_or(i);
+                let text = src[i..end].to_string();
+                i = end;
+                Tok::Steps(text)
             }
             b'0'..=b'9' => {
                 let (tok, end) = lex_number(src, i);
@@ -164,8 +182,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     Tok::Pattern(text)
                 }
             }
-            b'{' if matches!(tokens.last(), Some(Token { tok: Tok::Ident(n), .. }) if n == "grid" || n == "events")
-                || glitch_header(&tokens, src).is_some() =>
+            b'{' if matches!(tokens.last(), Some(Token { tok: Tok::Ident(n), .. }) if n == "grid" || n == "events") =>
             {
                 let Some(len) = matching_brace(src, i) else {
                     return Err(Diagnostic::new(
@@ -174,26 +191,14 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     ));
                 };
                 let text = src[i + 1..i + len].to_string();
-                let glitch = glitch_header(&tokens, src);
-                let kind = match tokens.last() {
-                    _ if glitch.is_some() => "glitch",
-                    Some(Token {
-                        tok: Tok::Ident(n), ..
-                    }) if n == "events" => "events",
-                    _ => "grid",
-                };
-                // the keyword, and for a glitch block its brackets, are part of the token
-                let mut first = None;
-                for _ in 0..glitch.as_ref().map_or(1, |(count, _)| *count) {
-                    first = tokens.pop();
-                }
-                start = first.map_or(start, |t| t.span.start);
+                let events = matches!(
+                    tokens.last(),
+                    Some(Token { tok: Tok::Ident(n), .. }) if n == "events"
+                );
+                // the keyword is part of the token
+                start = tokens.pop().map_or(start, |t| t.span.start);
                 i += len + 1;
-                match kind {
-                    "events" => Tok::Events(text),
-                    "glitch" => Tok::Glitch(glitch.map(|(_, options)| options).unwrap_or_default(), text),
-                    _ => Tok::Rows(text),
-                }
+                if events { Tok::Events(text) } else { Tok::Rows(text) }
             }
             b'"' => {
                 let Some(len) = src[i + 1..]
@@ -241,6 +246,17 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                                 )
                             );
                             braces.push(inherited || signal);
+                            let after = tokens.len().checked_sub(2).map(|n| &tokens[n].tok);
+                            scopes.push(if statement_keyword.as_deref() == Some("clip") {
+                                Scope::Clip
+                            } else if scopes.last() == Some(&Scope::Clip)
+                                && matches!(tokens.last(), Some(Token { tok: Tok::Ident(_), .. }))
+                                && matches!(after, None | Some(Tok::Newline | Tok::LBrace | Tok::Comma))
+                            {
+                                Scope::FxLanes
+                            } else {
+                                Scope::Other
+                            });
                         }
                         match c {
                             b'(' => Tok::LParen,
@@ -252,6 +268,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                         brackets.pop();
                         if c == b'}' {
                             braces.pop();
+                            scopes.pop();
                         }
                         match c {
                             b')' => Tok::RParen,
@@ -378,20 +395,35 @@ fn matching_bracket(bytes: &[u8], open: usize) -> Option<usize> {
     None
 }
 
-/// `key: glitch {` or `key: glitch(mutate) {`: the word `glitch` opens a block of rows only as a lane's value,
-/// so a part named `glitch` is untouched. How many tokens it takes up, and the text in its brackets.
-fn glitch_header(tokens: &[Token], src: &str) -> Option<(usize, String)> {
-    match tokens {
-        [.., Token { tok: Tok::Colon, .. }, Token { tok: Tok::Ident(n), .. }] if n == "glitch" => Some((1, String::new())),
-        [.., Token { tok: Tok::RParen, span: close }] => {
-            let open = tokens.iter().rposition(|t| t.tok == Tok::LParen)?;
-            let [.., Token { tok: Tok::Colon, .. }, Token { tok: Tok::Ident(n), .. }] = &tokens[..open] else {
-                return None;
-            };
-            (n == "glitch").then(|| (tokens.len() - open + 1, src[tokens[open].span.end..close.start].to_string()))
+/// Whether a row of steps can start here: after the colon of an effect's lane in a clip, either inside the
+/// effect's block or written `fx_name.param:`.
+fn takes_steps(tokens: &[Token], scope: Option<&Scope>) -> bool {
+    let [.., before, Token { tok: Tok::Colon, .. }] = tokens else {
+        return false;
+    };
+    match scope {
+        Some(Scope::FxLanes) => true,
+        Some(Scope::Clip) => {
+            matches!(before.tok, Tok::Ident(_))
+                && matches!(
+                    tokens.len().checked_sub(4).map(|n| (&tokens[n].tok, &tokens[n + 1].tok)),
+                    Some((Tok::Ident(_), Tok::Dot))
+                )
         }
-        _ => None,
+        _ => false,
     }
+}
+
+/// Where a row of steps that starts at `from` ends: the end of the line, or its `//` comment, if all it holds
+/// is `.`, `x`, `X`, `o` and spaces, with the mini-notation around them (`...<x X .>`, `x?`, `x(3,8)`).
+fn steps_end(src: &str, from: usize) -> Option<usize> {
+    let line = src[from..].split('\n').next().unwrap_or("");
+    let line = line.split("//").next().unwrap_or("").trim_end();
+    (!line.is_empty()
+        && line.chars().all(|c| {
+            c.is_ascii_digit() || matches!(c, '.' | 'x' | 'X' | 'o' | ' ' | '\t' | '<' | '>' | '[' | ']' | '(' | ')' | '*' | '/' | '!' | '?' | '@' | ',' | '~' | '%' | '|')
+        }))
+    .then_some(from + line.len())
 }
 
 /// Index of the matching `}`, or `None`. `open` is the index of `{`. Returns the

@@ -51,6 +51,20 @@ describe('the niminal language colours', () => {
     expect('extra'.match(hits)).toBeNull();
   });
 
+  it('colours a lane drawn as steps, to the end of its line', () => {
+    const found = tokens('clip c {\n  gate {\n    open: x.x. xX.o // a note\n    release: 300ms\n  }\n}\nx = 1');
+    expect(found).toContainEqual(['propertyName', 'open']);
+    expect(found.filter(([name]) => name === 'string').map(([, text]) => text)).toEqual(['x', 'x', 'xX', 'o']);
+    expect(found).toContainEqual(['comment', '// a note']);
+    // mini-notation among the steps is coloured as steps too
+    const mini = tokens('clip c {\n  gate {\n    open: ...<x X .> x?\n  }\n}');
+    expect(mini.filter(([name]) => name === 'string').map(([, text]) => text)).toEqual(['x', 'X', 'x']);
+    expect(mini).toContainEqual(['operator', '?']);
+    // the next line is ordinary code again
+    expect(found).toContainEqual(['number', '300ms']);
+    expect(found).toContainEqual(['variableName.definition', 'x']);
+  });
+
   it('stops colouring as a grid when the grid ends', () => {
     const found = tokens('grid { kick: x }\nx = 1');
     const xs = found.filter(([, text]) => text === 'x').map(([name]) => name);

@@ -564,11 +564,14 @@ impl Perform<'_> {
                 .map(PerfValue::Grid)
                 .map_err(|err| at_offset(err.message, e.span, err.offset)),
             ExprKind::Rows(raw) => self.rows(raw, e.span).map(PerfValue::Pattern),
-            ExprKind::Glitch { .. } => Err(Diagnostic::new(
-                "a glitch block is a clip lane named after an effect",
+            ExprKind::Steps(raw) => steps(raw)
+                .map(PerfValue::Pattern)
+                .map_err(|message| Diagnostic::new(message, e.span)),
+            ExprKind::FxLanes(_) => Err(Diagnostic::new(
+                "a block of lanes belongs in a clip, named after an effect",
                 e.span,
             )
-            .with_help("for example `break_glitch: glitch { stutter(length: 1/4beat): .... .... .... 234. }`")),
+            .with_help("for example `clip c { trance_gate { open: x.x. xx.x } }`")),
             ExprKind::Rest => Ok(PerfValue::Rest),
             // inside a change, `same` is the pattern being changed
             ExprKind::Name(name) if name == "same" && it.is_some() => {
@@ -1143,7 +1146,6 @@ impl Perform<'_> {
                     curves: Vec::new(),
                     signals: Vec::new(),
                     fx_params: Vec::new(),
-            mutations: Vec::new(),
                 };
                 self.on_clip(name, rest, clip, span, it)
                     .map(PerfValue::Clip)
@@ -1633,7 +1635,6 @@ impl Perform<'_> {
                 curves: clip.curves,
                 signals: Vec::new(),
                 fx_params: Vec::new(),
-            mutations: Vec::new(),
             });
         }
         // Pitch operations touch only the notes; time operations touch every lane.
@@ -1702,7 +1703,6 @@ impl Perform<'_> {
             curves: clip.curves,
             signals: Vec::new(),
             fx_params: Vec::new(),
-            mutations: Vec::new(),
         })
     }
 
@@ -2566,11 +2566,22 @@ impl Perform<'_> {
         let mut keys = None;
         let mut lanes: Vec<(String, Pattern<Step>)> = Vec::new();
         let mut curves: Vec<(String, EnvLane)> = Vec::new();
-        let mut mutations: Vec<(String, Mutation)> = Vec::new();
         let mut scored = Vec::new();
         let mut plays = None;
         let mut then = Vec::new();
+        // `fx_name { open: x.x. }` is the lanes `fx_name.open`, written together
+        let mut entries: Vec<(Ident, &Expr, bool)> = Vec::new();
         for (key, value) in &block.entries {
+            if let ExprKind::FxLanes(rows) = &value.kind {
+                for (row, row_value) in rows {
+                    let name = format!("{}::{}", key.name, row.name);
+                    entries.push((Ident { name, span: row.span }, row_value, true));
+                }
+            } else {
+                entries.push((key.clone(), value, false));
+            }
+        }
+        for (key, value, in_block) in entries {
             if key.name == "keys" {
                 if keys.is_some() {
                     return Err(Diagnostic::new("lane `keys` is given twice", key.span));
@@ -2614,22 +2625,6 @@ impl Perform<'_> {
                 scored = parse_events(raw, value.span, self.cx)?;
                 continue;
             }
-            if let ExprKind::Glitch { options, rows } = &value.kind {
-                let (glitch_lanes, mutation) = crate::glitch::lanes(&key.name, options, rows, value.span)?;
-                for (name, pattern) in glitch_lanes {
-                    if lanes.iter().any(|(n, _)| *n == name) {
-                        return Err(Diagnostic::new(
-                            format!("lane `{}` is given twice", name.replace("::", ".")),
-                            key.span,
-                        ));
-                    }
-                    if let Some(mutation) = mutation {
-                        mutations.push((name.clone(), mutation));
-                    }
-                    lanes.push((name, pattern));
-                }
-                continue;
-            }
             if lanes.iter().any(|(n, _)| *n == key.name)
                 || curves.iter().any(|(n, _)| *n == key.name)
             {
@@ -2637,6 +2632,14 @@ impl Perform<'_> {
                     format!("lane `{}` is given twice", key.name),
                     key.span,
                 ));
+            }
+            // in an effect's block a bracketed row of steps, `[x . <x X .>]`, is read as steps
+            if in_block
+                && let ExprKind::Pattern(raw) = &value.kind
+                && let Ok(pattern) = mini_steps(raw)
+            {
+                lanes.push((key.name.clone(), pattern));
+                continue;
             }
             let pattern = match self.eval(value, None)? {
                 PerfValue::Pattern(p) => p,
@@ -2691,7 +2694,6 @@ impl Perform<'_> {
             curves,
             signals: Vec::new(),
             fx_params: Vec::new(),
-            mutations,
         })
     }
 
@@ -2816,7 +2818,6 @@ impl Perform<'_> {
                 curves: Vec::new(),
                 signals: Vec::new(),
                 fx_params: Vec::new(),
-            mutations: Vec::new(),
             }),
             PerfValue::Num(v) => Ok(Clip {
                 name: hint.to_string(),
@@ -2830,7 +2831,6 @@ impl Perform<'_> {
                 curves: Vec::new(),
                 signals: Vec::new(),
                 fx_params: Vec::new(),
-            mutations: Vec::new(),
             }),
             PerfValue::Grid(_) => Err(Diagnostic::new("a grid has no pitches to play", span)
                 .with_help("give it notes with `.rhythm(grid[...])` on a pattern instead")),
@@ -3224,7 +3224,7 @@ impl Perform<'_> {
                 lane.contains("::")
                     .then(|| self.cx.names.controls.iter().find(|c| c.name == *lane))
                     .flatten()
-                    .map(|c| (lane.clone(), c.unit, c.smooth_seconds))
+                    .map(|c| (lane.clone(), c.unit, c.smooth_seconds, f64::from(c.initial)))
             })
             .collect();
         for (lane, curve) in &mut clip.curves {
@@ -3398,6 +3398,26 @@ impl Perform<'_> {
                 }
                 continue;
             }
+            if let Some((fx, param)) = lane.split_once("::") {
+                let params: Vec<&str> = self
+                    .cx
+                    .names
+                    .controls
+                    .iter()
+                    .filter_map(|c| c.name.strip_prefix(&format!("{fx}::")))
+                    .collect();
+                let mut d = Diagnostic::new(
+                    format!(
+                        "clip `{}` has a lane `{fx}.{param}`, but there is no effect parameter of that name",
+                        clip.name
+                    ),
+                    span,
+                );
+                if let Some(c) = closest(param, params) {
+                    d = d.with_help(format!("did you mean `{c}`?"));
+                }
+                return Err(d);
+            }
             let mut known: Vec<&str> = instrument.params.iter().map(|p| p.name.as_str()).collect();
             known.extend(UNIVERSAL_LANES);
             let mut d = Diagnostic::new(
@@ -3475,6 +3495,57 @@ fn time_of(e: &Expr, p: &Perform) -> Res<Time> {
 }
 
 /// Where in the source a problem inside a pattern's text is.
+/// What a step character is worth: `.` is 0 and `x` is 1, with `X` an accent (+3db) and `o` a ghost (-12db) as in a
+/// drum grid.
+fn step_level(c: char) -> f64 {
+    match c {
+        'x' => 1.0,
+        'X' => 10f64.powf(3.0 / 20.0),
+        'o' => 10f64.powf(-12.0 / 20.0),
+        _ => 0.0,
+    }
+}
+
+/// A row of steps as a lane. Drawn plain, each character is a step; the steps share one cycle, which the clip
+/// stretches over its length like any lane. With mini-notation in it (`...<x X .>`, `x?`, `x(3,8)`) the usual
+/// operators shape the steps, and a step that is off or dropped is an explicit 0, so the lane never keeps the last
+/// level.
+fn steps(raw: &str) -> Result<Pattern<Step>, String> {
+    if raw.chars().all(|c| matches!(c, '.' | 'x' | 'X' | 'o' | ' ' | '\t')) {
+        return Ok(Pattern::fastcat(
+            raw.chars()
+                .filter(|c| !c.is_whitespace())
+                .map(|c| Pattern::pure(Step::from(Value::Num(step_level(c)))))
+                .collect(),
+        ));
+    }
+    mini_steps(raw)
+}
+
+/// `raw` as mini-notation whose atoms are the step characters, `.` and `~` being rests.
+fn mini_steps(raw: &str) -> Result<Pattern<Step>, String> {
+    // each step character is a step of its own, as in a drawn row, so give it room
+    let chars: Vec<char> = raw.chars().collect();
+    let is_step = |c: char| matches!(c, '.' | 'x' | 'X' | 'o');
+    let mut spaced = String::new();
+    for (i, &c) in chars.iter().enumerate() {
+        spaced.push(if c == '.' { '~' } else { c });
+        let ends_a_step = is_step(c) || c.is_ascii_digit() || matches!(c, '>' | ']' | ')' | '?' | '!');
+        if ends_a_step && chars.get(i + 1).is_some_and(|&next| is_step(next) || matches!(next, '<' | '[')) {
+            spaced.push(' ');
+        }
+    }
+    let on = parse_with(&spaced, |atom, _| match atom {
+        "x" | "X" | "o" => Ok(step_level(atom.chars().next().unwrap_or('x'))),
+        other => Err(format!("`{other}` isn't a step: use `.` or `~` for off, and `x`, `X` or `o` for on")),
+    })
+    .map_err(|e| e.message)?;
+    // a rest or a dropped step makes no event, so the gaps are filled with an explicit off
+    let on = on.map(|level| Step::from(Value::Num(level)));
+    let off = on.invert(Step::from(Value::Num(0.0)));
+    Ok(Pattern::stack(vec![on, off]))
+}
+
 fn at_offset(message: String, token: Span, offset: usize) -> Diagnostic {
     // the token's text starts after its opening bracket
     let at = token.start + 1 + offset;
@@ -4075,7 +4146,6 @@ fn section_to_clip(section: crate::Section, tempo: Tempo) -> Res<Clip> {
         curves: Vec::new(),
         signals: Vec::new(),
         fx_params: Vec::new(),
-            mutations: Vec::new(),
     })
 }
 

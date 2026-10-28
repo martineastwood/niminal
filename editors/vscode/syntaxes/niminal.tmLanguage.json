@@ -46,7 +46,7 @@
       ]
     },
     {
-      "begin": "\\b(grid|glitch)\\s*(?:\\([^)]*\\))?\\s*(\\{)",
+      "begin": "\\b(grid)\\s*(\\{)",
       "end": "\\}",
       "beginCaptures": {
         "1": {
@@ -112,6 +112,34 @@
           ]
         }
       ]
+    },
+    {
+      "match": "^\\s*([A-Za-z_][A-Za-z0-9_.]*)\\s*:\\s*([.xXo<][0-9.xXo <>\\[\\]()*/!?@,~%|]*?)\\s*(?=//|$)",
+      "captures": {
+        "1": {
+          "name": "entity.name.tag.niminal"
+        },
+        "2": {
+          "patterns": [
+            {
+              "name": "string.other.hit.niminal",
+              "match": "[xXo]+"
+            },
+            {
+              "name": "comment.rest.niminal",
+              "match": "\\."
+            },
+            {
+              "name": "keyword.operator.niminal",
+              "match": "[*/!?@%|~<>(),\\[\\]]"
+            },
+            {
+              "name": "constant.numeric.niminal",
+              "match": "\\d+"
+            }
+          ]
+        }
+      }
     },
     {
       "begin": "\\b(instr|mono|fn|def)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(\\()",

@@ -12,7 +12,7 @@ use niminal_pattern::{Rational, Span as CycleSpan};
 use niminal_score::{Event, Tempo, Time, Value};
 
 use crate::compile::Composition;
-use crate::performance::{Action, Clip, EnvLane, Mutation, Scheduled, Step};
+use crate::performance::{Action, Clip, EnvLane, Scheduled, Step};
 
 /// The pattern queries and events one clip may spend in a search: a base
 /// amount plus more for a longer stretch of time.
@@ -583,6 +583,7 @@ impl Schedule {
             let mut chunk = Vec::new();
             for segment in &self.segments {
                 self.segment_controls(segment, start, end, &mut chunk)?;
+                self.release_controls(segment, start, end, &mut chunk);
             }
             self.lane_controls(start, end, &mut chunk)?;
             all.extend(chunk);
@@ -628,6 +629,7 @@ impl Schedule {
             if let Err(e) = self.segment_controls(segment, from, to, &mut controls) {
                 problem.get_or_insert(e);
             }
+            self.release_controls(segment, from, to, &mut controls);
             let before = out.len();
             let (result, exhausted) = niminal_pattern::with_budget(work, || {
                 self.segment_events(segment, from, to, &mut out)
@@ -636,7 +638,7 @@ impl Schedule {
                 problem.get_or_insert(e);
             }
             for (at, event) in &mut out[before..] {
-                for (name, unit, glide) in &segment.clip.fx_params {
+                for (name, unit, glide, _) in &segment.clip.fx_params {
                     if let Some(value) = event.args.remove(name) {
                         match niminal_lang::engine_value(*unit, value, segment.tempo) {
                             Ok(target) => controls.push(ControlSet {
@@ -846,6 +848,43 @@ impl Schedule {
         }
     }
 
+    /// When `segment` ends, if it does: where it was stopped or replaced, or the end of its last pass.
+    fn ends_at(&self, segment: &Segment) -> Option<f64> {
+        let finish = segment
+            .clip
+            .plays
+            .filter(|_| !segment.clip.endless)
+            .map(|n| segment.clock.seconds_at(segment.clip.length.to_f64() * f64::from(n)));
+        match (segment.end, finish) {
+            (Some(end), Some(finish)) => Some(end.min(finish)),
+            (end, finish) => end.or(finish),
+        }
+    }
+
+    /// An effect keeps the last level a clip gave its parameters, so when `segment` ends in `from..to` seconds they
+    /// go back to where the effect starts, unless a clip that carries on drives the same parameter.
+    fn release_controls(&self, segment: &Segment, from: f64, to: f64, out: &mut Vec<ControlSet>) {
+        let Some(end) = self.ends_at(segment).filter(|end| *end >= from && *end < to) else {
+            return;
+        };
+        for (name, _, glide, initial) in &segment.clip.fx_params {
+            let carried_on = self.segments.iter().any(|other| {
+                !std::ptr::eq(other, segment)
+                    && other.start <= end + END_SLACK
+                    && self.ends_at(other).is_none_or(|e| e > end + END_SLACK)
+                    && other.clip.fx_params.iter().any(|(n, ..)| n == name)
+            });
+            if !carried_on {
+                out.push(ControlSet {
+                    at: end,
+                    name: name.clone(),
+                    target: *initial,
+                    glide: *glide,
+                });
+            }
+        }
+    }
+
     /// What `segment`'s envelope lanes do to their node's parameters in `from..to` seconds. A curved
     /// segment becomes a few straight glides that follow the same curve an `env` in an instrument does.
     fn segment_controls(
@@ -1023,14 +1062,9 @@ impl Schedule {
             if lane == "notes" || clip.signals.iter().any(|(l, _)| l == lane) {
                 continue;
             }
-            // The value in force at the moment the note starts; a mutating lane reads a different stretch of its
-            // pattern for each start of the clip.
-            let read_at = match clip.mutations.iter().find(|(name, _)| name == lane) {
-                Some((_, mutation)) => whole.start + mutation_offset(*mutation, segment.origin, clip.length),
-                None => whole.start,
-            };
+            // The value in force at the moment the note starts
             let Some(hap) = pattern
-                .query(CycleSpan::new(read_at, read_at))
+                .query(CycleSpan::new(whole.start, whole.start))
                 .into_iter()
                 .next()
             else {
@@ -1077,17 +1111,6 @@ impl Schedule {
             args,
         })
     }
-}
-
-/// How far into its pattern a mutating lane reads: a whole number of passes of the clip, picked by a fixed seed or
-/// by when the clip began, so that a clip started again sounds different but a render is the same every time.
-fn mutation_offset(mutation: Mutation, origin: f64, length: Rational) -> Rational {
-    let seed = match mutation {
-        Mutation::Fresh => origin.to_bits(),
-        Mutation::Seed(seed) => seed,
-    };
-    let passes = (niminal_pattern::unit_random(seed, Rational::ZERO) * 997.0) as i64;
-    Rational::int(passes) * length
 }
 
 /// Play an envelope that starts at `origin` seconds: its first level at once, then a glide for each

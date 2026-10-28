@@ -69,113 +69,138 @@ fx echo(
 
 // folder: time/glitch
 
-/// Four glitches at once on the same sound, each switched on by its own hold control (automate them,
-/// or set them from a command column): stutter repeats the last piece, rewind plays it backwards, slow
-/// winds the sound down like a stopping tape, and crush reduces its sample rate and bit depth. Lanes
-/// that are held together are heard together. `dry` keeps some of the original under a glitch.
+/// Glitches on the same sound, one after another: stutter repeats the last piece, rewind plays it backwards,
+/// slow winds the sound down like a stopping tape, and crush reduces its sample rate and bit depth. Each is
+/// switched on by its own control (automate them, or set them from a command column) and the sound passes
+/// through untouched while all are off. A `stutter_shrink` below 1 makes a held stutter roll faster.
 fx glitch(
-  stutter_hold: 0..1 = 0,
+  stutter: 0..1 = 0,
   stutter_length: 1ms..1sec = 125ms,
   stutter_pitch: -24..24 = 0,
-  rewind_hold: 0..1 = 0,
+  stutter_shrink: 0.5..1 = 1,
+  rewind: 0..1 = 0,
   rewind_length: 1ms..1sec = 250ms,
-  slow_hold: 0..1 = 0,
+  slow: 0..1 = 0,
   slow_time: 10ms..1sec = 400ms,
-  crush_hold: 0..1 = 0,
+  crush: 0..1 = 0,
   crush_bits: 2..16 = 5,
   crush_rate: 200hz..20000hz = 4000hz,
-  dry: 0..1 = 0,
   mix: 0..1 = 1
 ) {
-  stuttered = in.repeat_last(hold: stutter_hold, length: stutter_length, pitch: stutter_pitch)
-  rewound = in.rewind_last(hold: rewind_hold, length: rewind_length)
-  slowed = in.slow_down(hold: slow_hold, time: slow_time)
-  crushed = in.bitcrush(rate: crush_rate, bits: crush_bits)
-  lanes = (stutter_hold > 0) + (rewind_hold > 0) + (slow_hold > 0) + (crush_hold > 0)
-  heard = stuttered * (stutter_hold > 0) + rewound * (rewind_hold > 0) + slowed * (slow_hold > 0) + crushed * (crush_hold > 0)
-  glitched = heard / sqrt(lanes.max(1)) + in * (dry * (lanes > 0) + (lanes < 0.5))
+  glitched = in
+    .repeat_last(hold: stutter, length: stutter_length, pitch: stutter_pitch, shrink: stutter_shrink)
+    .rewind_last(hold: rewind, length: rewind_length)
+    .slow_down(hold: slow, time: slow_time)
+    .apply(fn(s) { s.bitcrush(rate: crush_rate, bits: crush_bits) }, when: crush)
   out = in * (1 - mix) + glitched * mix
 }
+// Run `make` on the sound, as much as `when` says: 0 is not at all, 1 is all of it, and a value between
+// mixes the two. `when` moves smoothly over `blend`. Any function of one sound will do:
+// `x.apply(fn(s) { s.bitcrush(bits: 5) }, when: gate)`.
+fn apply(x, make: fn, when: 0..1, blend: sec = 3ms) {
+  state mix = 0
+  step = 1 / (blend.num * sample_rate.num).max(1)
+  mix = mix + (when - mix).max(-step).min(step)
+  x + (make(x) - x) * mix
+}
 // Repeat the last `length` of the sound for as long as `hold` is above zero, then let the sound
-// through again. Each repeat is `fade` times the level of the one before, and `pitch` (in
-// semitones) changes the speed the piece is read at. `length`, `pitch` and `fade` can move while it
-// is held. `max` is the longest `length`, in samples.
-fn repeat_last(x, hold: 0..1, length: sec, pitch: -24..24 = 0, fade: 0..1 = 1, max: const int = 96000) {
+// through again. Each repeat is `fade` times the level of the one before and `shrink` times the
+// length, so a `shrink` below 1 rolls faster the longer it is held. `pitch` (in semitones) changes the
+// speed the piece is read at. `length`, `pitch` and `fade` can move while it is held. `max` is the
+// longest `length`, in samples.
+fn repeat_last(x, hold: 0..1, length: sec, pitch: -24..24 = 0, fade: 0..1 = 1, shrink: 0.5..1 = 1, blend: sec = 3ms, max: const int = 96000) {
   state ring = zeros(max)
   state pos = 0
   state frozen = 0
   state phase = 0
   state level = 1
-  size = length.num * sample_rate.num
-  if hold > 0 and prev(hold) <= 0 {
+  state scale = 1
+  state mix = 0
+  held = hold > 0
+  if held and prev(hold) <= 0 {
     frozen = pos
     phase = 0
     level = 1
+    scale = 1
   }
   seam = 0.001 * sample_rate.num
-  y = x
-  if hold > 0 {
+  size = (length.num * sample_rate.num * scale).max(4 * seam)
+  step = 1 / (blend.num * sample_rate.num).max(1)
+  mix = mix + (held - mix).max(-step).min(step)
+  wet = x
+  if held or mix > 0 {
     edge = min(phase, size - phase).min(seam) / seam
-    y = ring.at(frozen - size + phase, interp: linear) * level * edge
+    wet = ring.at(frozen - size + phase, interp: linear) * level * edge
     phase = phase + exp(pitch * 0.05776227)
     if phase >= size {
       phase = phase - size
       level = level * fade
+      scale = scale * shrink
     }
-  } else {
+  }
+  if not held {
     ring[pos] = x
     pos = (pos + 1).mod(max)
   }
-  y
+  x + (wet - x) * mix
 }
 // Play the last `length` of the sound backwards, over and over, for as long as `hold` is above zero.
-fn rewind_last(x, hold: 0..1, length: sec, max: const int = 96000) {
+fn rewind_last(x, hold: 0..1, length: sec, blend: sec = 3ms, max: const int = 96000) {
   state ring = zeros(max)
   state pos = 0
   state frozen = 0
   state phase = 0
-  size = length.num * sample_rate.num
-  if hold > 0 and prev(hold) <= 0 {
+  state mix = 0
+  held = hold > 0
+  if held and prev(hold) <= 0 {
     frozen = pos
     phase = 0
   }
   seam = 0.001 * sample_rate.num
-  y = x
-  if hold > 0 {
+  size = length.num * sample_rate.num
+  step = 1 / (blend.num * sample_rate.num).max(1)
+  mix = mix + (held - mix).max(-step).min(step)
+  wet = x
+  if held or mix > 0 {
     edge = min(phase, size - phase).min(seam) / seam
-    y = ring.at(frozen - phase, interp: linear) * edge
+    wet = ring.at(frozen - phase, interp: linear) * edge
     phase = phase + 1
     if phase >= size {
       phase = phase - size
     }
-  } else {
+  }
+  if not held {
     ring[pos] = x
     pos = (pos + 1).mod(max)
   }
-  y
+  x + (wet - x) * mix
 }
 // Slow the sound down to a stop over `time` while `hold` is above zero, like a tape machine
 // switched off, and play it live again when `hold` ends.
-fn slow_down(x, hold: 0..1, time: sec, max: const int = 96000) {
+fn slow_down(x, hold: 0..1, time: sec, blend: sec = 3ms, max: const int = 96000) {
   state ring = zeros(max)
   state pos = 0
   state read = 0
   state elapsed = 0
-  size = time.num * sample_rate.num
+  state mix = 0
+  held = hold > 0
   ring[pos] = x
   pos = (pos + 1).mod(max)
-  if hold > 0 and prev(hold) <= 0 {
-    read = pos
+  if held and prev(hold) <= 0 {
+    read = pos - 1
     elapsed = 0
   }
-  y = x
-  if hold > 0 {
+  size = time.num * sample_rate.num
+  step = 1 / (blend.num * sample_rate.num).max(1)
+  mix = mix + (held - mix).max(-step).min(step)
+  wet = x
+  if held or mix > 0 {
     speed = if elapsed < size { 1 - elapsed / size } else { 0 }
-    y = ring.at(read, interp: linear) * min(1, speed * 8)
+    wet = ring.at(read, interp: linear) * min(1, speed * 8)
     read = read + speed
     elapsed = elapsed + 1
   }
-  y
+  x + (wet - x) * mix
 }
 
 // folder: time/reverb
