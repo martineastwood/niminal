@@ -361,6 +361,24 @@ clip roll {
 
 The rows step through the clip a sixteenth at a time. A list of levels (`[0@14 3@1 7@1]`) steps a control, and `env[0 3/4bar 0 1/4bar 12]` glides it, so a pitch can climb smoothly through a roll. (Levels in an `env` can't be times, because a time reads as a duration there.) See `examples/gestures.nml`.
 
+**Recipes.** These use the `break_stutter` effect from `examples/gestures.nml`, whose controls are `hold`, `length`, `pitch`, `fade`, `shrink`, `gate`, `reverse`, `shape`, `damp`, `attack`, `bend` and `accent` (the `glitch` effect in `std/fx` has the same ones, each starting with `stutter_`). Every row is a lane, so a number holds the whole gesture and `[a@3 b@1]` changes part-way through; the `@` weights are shares, not step counts.
+
+| Move | Rows |
+|---|---|
+| Machine gun: short, plucked repeats | `hold: xxxx xxxx`, `length: 1/8beat`, `gate: 0.4`, `shape: 1`, `bend: 0.7` |
+| Roll: each repeat shorter, so it speeds up | `hold: .... .... .... xxxx`, `shrink: [1@12 0.7@4]` |
+| Riser: a roll whose pitch climbs an octave | a roll, with `pitch: env[0 3/4bar 0 1/4bar 12]` |
+| Rewind: each repeat played backwards, swelling in | `hold: .... xxxx`, `reverse: 1`, `shape: -0.8` |
+| Tape echo: each repeat darker than the last | `hold: xxxx`, `fade: 0.8`, `damp: 0.3` |
+| Beat in a roll: every second repeat softer | add `accent: 0.6` to any roll |
+| Slow swell: each repeat fades up | `attack: 0.8` |
+
+A variant is one line. A gesture made from another keeps its rows and replaces the ones you name:
+
+```nml
+clip roll_hard = roll.set(break_stutter.accent: 0.9, break_stutter.damp: 0.5)
+```
+
 **Hold until the key comes up:** a gesture runs for its set length. For a stutter that lasts as long as a pad is held, bind a control to the key: `ctl held = midi.note(39)` is above zero while the key is down and back to zero when it comes up (the velocity sets how far; `.range(...)` sets the span, 0 to 1 if left out). Read it where the effect takes its hold, for example `repeat_last(hold: hold + held, ...)`.
 
 **One knob, many controls:** a `ctl` can feed any number of places, each with a range of its own, so it works as a macro: `ctl open = midi.cc(21)`, then `open.range(200hz..4khz)` on a filter and `open.range(0..0.5)` on a resonance.

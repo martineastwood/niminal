@@ -2843,6 +2843,16 @@ fn a_clip_with_only_rows_for_an_effect_is_a_gesture_that_moves_it_once() {
 }
 
 #[test]
+fn a_gesture_can_be_made_from_another_with_a_changed_row() {
+    let p = ok(&format!(
+        "{GATED_FX}clip hit {{\n  length: 1bar\n  times: 1\n  g {{\n    open: xxxx\n  }}\n}}\nclip soft = hit.set(g.open: 0.5)\nsoft.start\n"
+    ));
+    let open = fx_levels(&p, "g::open", 0.0, 1.0);
+    assert!(open.iter().all(|(_, v)| *v == 0.5), "{open:?}");
+    assert!(!open.is_empty());
+}
+
+#[test]
 fn an_envelope_row_ramps_an_effects_control() {
     let p = ok(&format!(
         "{GATED_FX}clip hit {{\n  length: 1bar\n  times: 1\n  g {{\n    open: env[0 1bar 1]\n  }}\n}}\nhit.start\n"

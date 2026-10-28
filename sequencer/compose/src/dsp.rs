@@ -151,7 +151,7 @@ pub fn project(
                         c.name.name,
                         &source[instrument.span.start..instrument.span.end]
                     )));
-                } else if drives_effects(c) {
+                } else if is_gesture(c, items, 0) {
                     // a clip that only moves an effect's controls plays this, which makes no sound
                     if !std::mem::replace(&mut silent_defined, true) {
                         pieces.push(derived(
@@ -362,7 +362,7 @@ pub fn warnings(source: &str) -> Vec<Diagnostic> {
     items
         .iter()
         .filter_map(|(item, _)| match item {
-            Item::Clip(c) if instrument_of(c, &items, 0).is_none() && !drives_effects(c) => Some(
+            Item::Clip(c) if instrument_of(c, &items, 0).is_none() && !is_gesture(c, &items, 0) => Some(
                 Diagnostic::new(
                     format!(
                         "clip `{}` has no instrument, so it plays nothing",
@@ -381,6 +381,19 @@ pub fn warnings(source: &str) -> Vec<Diagnostic> {
 /// gesture: it plays no notes and only moves those controls.
 pub fn drives_effects(clip: &crate::ast::NamedBlock) -> bool {
     clip.entries.iter().any(|(_, v)| matches!(v.kind, ExprKind::FxLanes(_)))
+}
+
+/// Is the clip a gesture: rows for an effect of its own, or made from a clip that has them?
+fn is_gesture(clip: &crate::ast::NamedBlock, items: &[(Item, Span)], depth: usize) -> bool {
+    if drives_effects(clip) {
+        return true;
+    }
+    let Some(root) = clip.base.as_deref().and_then(|b| b.root_name()) else {
+        return false;
+    };
+    depth <= 16
+        && root != clip.name.name
+        && items.iter().any(|(item, _)| matches!(item, Item::Clip(base) if base.name.name == root && is_gesture(base, items, depth + 1)))
 }
 
 /// The instrument a clip plays: its own `instrument:`, or its base's when it is made from another clip
