@@ -599,7 +599,7 @@ impl Registry {
             ),
             OpSpec::new(
                 "repeat_last",
-                "Repeats the last `length` of the sound for as long as `hold` is above zero, then lets the sound through again. Each repeat is `fade` times the level of the one before and `shrink` times the length, so a `shrink` below 1 rolls faster the longer it is held. `pitch` (in semitones) changes the speed the piece is read at. The change fades in and out over `blend` (3ms). `max:` is the longest `length` (default 2 seconds, at most 30).",
+                "Repeats the last `length` of the sound for as long as `hold` is above zero, then lets the sound through again. Each repeat is `fade` times the level of the one before and `shrink` times the length, so a `shrink` below 1 rolls faster the longer it is held. `pitch` (in semitones) changes the speed the piece is read at. `length` is read once at the start of each repeat, so a length that moves (a ramp from 1/4 beat to 1/32) gives a run of clean repeats. `gate` (0 to 1) is how much of each repeat sounds, the rest being silence, and a `reverse` above zero plays each repeat backwards. `shape` gives each repeat a level curve: above zero it dies away (1 is a straight fade to nothing), below zero it swells in. `damp` (0 to 1) darkens each repeat more than the one before, like a tape echo. `attack` (0 to 1) is how much of the repeat it takes to rise to full level, `bend` (0 to 1) turns the straight `shape` curve into an exponential one for a pluck, and `accent` (0 to 1) makes every second repeat that much quieter. The change fades in and out over `blend` (3ms). `max:` is the longest `length` (default 2 seconds, at most 30).",
                 vec![
                     req("x", SIGNAL),
                     req("hold", SIGNAL),
@@ -608,6 +608,13 @@ impl Registry {
                     opt("fade", SIGNAL),
                     opt("shrink", SIGNAL),
                     opt("blend", Kind::Signal(Unit::Time)),
+                    opt("gate", SIGNAL),
+                    opt("reverse", SIGNAL),
+                    opt("shape", SIGNAL),
+                    opt("damp", SIGNAL),
+                    opt("attack", SIGNAL),
+                    opt("bend", SIGNAL),
+                    opt("accent", SIGNAL),
                     setting("max", Kind::Signal(Unit::Time)),
                 ],
                 Build::Builtin(|a| Ok(Box::new(RepeatLast::new(glitch_max(a)?)))),

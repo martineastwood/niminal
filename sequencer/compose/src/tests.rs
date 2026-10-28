@@ -2826,6 +2826,18 @@ fn fx_levels(p: &Composition, name: &str, from: f64, to: f64) -> Vec<(f64, f64)>
 }
 
 #[test]
+fn a_clip_with_only_rows_for_an_effect_is_a_gesture_that_moves_it_once() {
+    let p = ok(&format!(
+        "{GATED_FX}clip hit {{\n  length: 1bar\n  times: 1\n  g {{\n    open: .... .... xxxx ....\n  }}\n}}\nat 1bar hit.start\n"
+    ));
+    // it starts at the second bar (2 s), opens the effect for the third beat, and puts it back
+    let open = fx_levels(&p, "g::open", 0.0, 10.0);
+    assert!(open.contains(&(3.0, 1.0)), "{open:?}");
+    assert_eq!(open.last().map(|o| o.1), Some(0.0), "{open:?}");
+    assert!(open.iter().all(|(at, _)| *at >= 2.0), "nothing before it starts: {open:?}");
+}
+
+#[test]
 fn stopping_a_clip_puts_the_fx_lanes_it_drove_back() {
     let p = ok(&format!(
         "{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [c4 c4 c4 c4]\n  g {{\n    open: xxxx\n    release: 300ms\n  }}\n}}\nc.start\nat 1bar c.stop\n"

@@ -725,6 +725,70 @@ fn shrink_makes_each_repeat_shorter() {
 }
 
 #[test]
+fn a_moving_length_is_read_once_per_repeat() {
+    // a length that ramps while held still gives clean repeats: no jump bigger than a 220 hz sine can make
+    let out = render(
+        "instr a() { gate = (phasor(1hz) > 0.5) * (phasor(1hz) < 0.9)\n osc(sine, 220hz).repeat_last(hold: gate, length: 20ms + phasor(1hz) * 30ms) }",
+        1000,
+    );
+    assert!(finite(&out));
+    let jump = out[26_000..43_000].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    assert!(jump < 0.1, "a jump of {jump}");
+}
+
+#[test]
+fn gate_silences_the_end_of_each_repeat_and_reverse_plays_it_backwards() {
+    let held = "(phasor(1hz) > 0.5) * (phasor(1hz) < 0.9)";
+    let render_with = |args: &str| {
+        render(&format!("instr a() {{ phasor(0.5hz).repeat_last(hold: {held}, length: 50ms{args}) }}"), 1000)
+    };
+    let (open, half) = (render_with(""), render_with(", gate: 0.5"));
+    let silent = |out: &[f32]| out[24_300..24_300 + 2400].iter().filter(|v| v.abs() < 1e-9).count();
+    assert!(silent(&half) > silent(&open) + 800, "half of each repeat is silent: {} {}", silent(&half), silent(&open));
+    let back = render_with(", reverse: 1");
+    assert!(finite(&back));
+    assert!(back[24_400 + 400] < back[24_400 + 100], "a rising ramp falls when reversed");
+}
+
+#[test]
+fn shape_and_damp_change_each_repeat() {
+    let held = "(phasor(1hz) > 0.5) * (phasor(1hz) < 0.9)";
+    let render_with = |args: &str| {
+        render(&format!("instr a() {{ osc(saw, 440hz).repeat_last(hold: {held}, length: 50ms{args}) }}"), 1000)
+    };
+    let window = |out: &[f32], from: usize| rms(&out[from..from + 400]);
+    // the start of a 2400-sample repeat against its end
+    let (plain, fading, swelling) = (render_with(""), render_with(", shape: 1"), render_with(", shape: -1"));
+    let (head, tail) = (24_400, 24_000 + 2000);
+    assert!(window(&fading, tail) < window(&fading, head) * 0.5, "a fade-out dies away");
+    assert!(window(&swelling, head) < window(&swelling, tail) * 0.5, "a swell builds");
+    assert!(window(&plain, tail) > window(&plain, head) * 0.8, "no shape stays level");
+    // a damped saw loses its highs, so later repeats jump less from sample to sample
+    let damped = render_with(", shrink: 1, damp: 0.6");
+    let later = |out: &[f32]| out[24_000 + 2400 * 4..24_000 + 2400 * 4 + 1500].windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>();
+    assert!(finite(&damped) && later(&damped) < later(&plain) * 0.8, "later repeats are darker: {} {}", later(&damped), later(&plain));
+}
+
+#[test]
+fn attack_bend_and_accent_shape_the_repeats() {
+    let held = "(phasor(1hz) > 0.5) * (phasor(1hz) < 0.9)";
+    let render_with = |args: &str| {
+        render(&format!("instr a() {{ osc(saw, 440hz).repeat_last(hold: {held}, length: 50ms{args}) }}"), 1000)
+    };
+    let window = |out: &[f32], from: usize| rms(&out[from..from + 300]);
+    // a slow attack: the start of a repeat is quieter than its middle
+    let slow = render_with(", attack: 0.5");
+    assert!(window(&slow, 24_400) < window(&slow, 24_000 + 1000) * 0.6, "it rises");
+    // a bent fade-out is quieter by the middle than a straight one
+    let (straight, bent) = (render_with(", shape: 1"), render_with(", shape: 1, bend: 1"));
+    assert!(window(&bent, 24_000 + 1200) < window(&straight, 24_000 + 1200) * 0.5, "a pluck");
+    // accent: the second repeat is quieter than the first
+    let accented = render_with(", accent: 0.8");
+    assert!(finite(&accented));
+    assert!(window(&accented, 24_000 + 2400 + 600) < window(&accented, 24_000 + 600) * 0.4, "the second is softer");
+}
+
+#[test]
 fn a_hold_starts_and_ends_without_a_click() {
     // a 220 hz sine moves at most 0.03 a sample, so a jump of more than 0.1 anywhere is a click
     for call in [

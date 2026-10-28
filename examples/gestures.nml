@@ -1,0 +1,87 @@
+// Gestures. A gesture is a clip that only moves an effect's controls: give it rows for the effect and no
+// `instrument:` or notes, and it plays once, puts the controls back, and sounds like the effect doing its thing.
+// Here three of them stutter a break. On a controller, `launch:` puts each on a pad (notes 36 to 38), and
+// `quantize:` lands it on the next sixteenth, so a pad hit a little early is still in time. In a file, as below,
+// `at` starts them in turn so you can render it:
+// Render with:  niminal-live render examples/gestures.nml --out gestures.wav --bars 4
+config { channels: stereo }
+tempo 130bpm
+
+brk = sample("break.wav").beats(4)
+chops = brk.slices(16)
+
+bus break_audio: stereo
+
+instr break_voice(sample) {
+  break_audio += chops(sample: sample)
+}
+
+// A persistent fx reads the bus, so the stutter keeps hearing the break across notes. `repeat_last` freezes the
+// last `length` of the sound and repeats it for as long as `hold` is above zero, then lets the sound through
+// again. Each repeat is `fade` times the level of the one before and `shrink` times the length, `pitch` (in
+// semitones) changes the speed the piece is read at, `gate` is how much of each repeat sounds, and a `reverse`
+// above zero plays it backwards. `shape` fades each repeat out (above zero) or swells it in (below), and `damp`
+// darkens each repeat more than the last, like a tape echo. `attack` is how much of a repeat it takes to rise to full
+// level, `bend` turns the straight `shape` fade into an exponential one (a pluck), and `accent` makes every second
+// repeat quieter, so a roll has a beat in it.
+fx break_stutter(
+  hold: 0..1 = 0, length: 1ms..1sec = 1/4beat, pitch: -12..12 = 0, fade: 0..1 = 0.9,
+  shrink: 0.5..1 = 1, gate: 0.05..1 = 1, reverse: 0..1 = 0, shape: -1..1 = 0, damp: 0..0.95 = 0,
+  attack: 0..1 = 0, bend: 0..1 = 0, accent: 0..1 = 0
+) {
+  out = break_audio.repeat_last(hold: hold, length: length, pitch: pitch, fade: fade, shrink: shrink, gate: gate, reverse: reverse,
+    shape: shape, damp: damp, attack: attack, bend: bend, accent: accent)
+}
+
+
+clip chop {
+  instrument: break_voice
+  notes: [s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12 s13 s14 s15]
+}
+
+// pad 36: a machine gun, short plucked repeats
+clip gun {
+  length: 1/2bar
+  times: 1
+  quantize: 1/4beat
+  launch: midi.note(36)
+  break_stutter {
+    hold:   xxxx xxxx
+    length: 1/8beat
+    gate:   0.4
+    shape:  1
+    bend:   0.7
+  }
+}
+
+// pad 37: a roll that speeds up and climbs, then lets go
+clip roll {
+  length: 1bar
+  times: 1
+  quantize: 1/4beat
+  launch: midi.note(37)
+  break_stutter {
+    hold:   .... .... .... xxxx
+    shrink: [1@12 0.7@4]
+    pitch:  [0@14 3@1 7@1]
+    accent: [0@12 0.5@4]
+  }
+}
+
+// pad 38: a rewind
+clip rewind {
+  length: 1/2bar
+  times: 1
+  quantize: 1/4beat
+  launch: midi.note(38)
+  break_stutter {
+    hold:    .... xxxx
+    reverse: 1
+    shape:   -0.8
+  }
+}
+
+chop.start
+at 1bar gun.start
+at 2bars roll.start
+at 3bars rewind.start

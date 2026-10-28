@@ -7,6 +7,7 @@ drum_voice.nml: 2x381627
 drums.nml: 2x488426
 functions.nml: 2x293633
 fx.nml: 2x583652
+gestures.nml: 2x353001
 glitch.nml: 2x353001
 groove.nml: 2x570512
 instrument_scopes.nml: 1x100807
@@ -25,7 +26,7 @@ song.nml: 2x583731
 spectral.nml: 2x478367
 spectral_delay.nml: 2x824064
 stereo.nml: 2x280705
-stutter.nml: 2x353001
+stutter.nml: 2x351522
 synth_drums.nml: 2x356382
 tables.nml: 2x182400
 trance_gate.nml: 2x337043

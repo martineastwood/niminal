@@ -1,7 +1,11 @@
-// Stuttering a break. The one-bar loop in break.wav is played slice by slice through a stutter:
-// while `hold` is above zero the last piece of the sound repeats, and `length` sets how long
-// that piece is. The two lanes below move them with the notes, so the last beat of each bar
-// repeats a shrinking piece of the break, rolling faster each time, then lets go.
+// Stuttering a break. The one-bar loop in break.wav is played slice by slice through a stutter. While `hold`
+// is on, the last `length` of the sound repeats; four hits in two bars show what the other controls do to it.
+//   bar 1, beat 2    a machine gun: short repeats with a `gate` below 1, each one a bent-down pluck
+//   bar 1, beat 4    a roll: `shrink` makes each repeat shorter, so it speeds up, and `pitch` climbs
+//   bar 2, beat 2    a rewind: `reverse` plays each repeat backwards, each one swelling in with `shape`
+//   bar 2, beat 4    a riser: a fast roll whose pitch climbs an octave, with an `accent` on every other repeat,
+//                    landing on the next downbeat
+// The length of a repeat is read when it starts, so a `length` that moves gives clean repeats.
 // Render with:  niminal render examples/stutter.nml --out stutter.wav --bars 4
 config { channels: stereo }
 tempo 130bpm
@@ -17,18 +21,40 @@ instr break_voice(sample) {
 
 // A persistent fx reads the bus, so the stutter keeps hearing the break across notes. `repeat_last` freezes the
 // last `length` of the sound and repeats it for as long as `hold` is above zero, then lets the sound through
-// again; each repeat is `fade` times the level of the one before, and `pitch` (in semitones) changes the speed
-// the piece is read at.
-fx break_stutter(hold: 0..1 = 0, length: 1ms..1sec = 1/8beat, pitch: -12..12 = 0, fade: 0..1 = 0.85) {
-  out = break_audio.repeat_last(hold: hold, length: length, pitch: pitch, fade: fade)
+// again. Each repeat is `fade` times the level of the one before and `shrink` times the length, `pitch` (in
+// semitones) changes the speed the piece is read at, `gate` is how much of each repeat sounds, and a `reverse`
+// above zero plays it backwards. `shape` fades each repeat out (above zero) or swells it in (below), and `damp`
+// darkens each repeat more than the last, like a tape echo. `attack` is how much of a repeat it takes to rise to full
+// level, `bend` turns the straight `shape` fade into an exponential one (a pluck), and `accent` makes every second
+// repeat quieter, so a roll has a beat in it.
+fx break_stutter(
+  hold: 0..1 = 0, length: 1ms..1sec = 1/4beat, pitch: -12..12 = 0, fade: 0..1 = 0.9,
+  shrink: 0.5..1 = 1, gate: 0.05..1 = 1, reverse: 0..1 = 0, shape: -1..1 = 0, damp: 0..0.95 = 0,
+  attack: 0..1 = 0, bend: 0..1 = 0, accent: 0..1 = 0
+) {
+  out = break_audio.repeat_last(hold: hold, length: length, pitch: pitch, fade: fade, shrink: shrink, gate: gate, reverse: reverse,
+    shape: shape, damp: damp, attack: attack, bend: bend, accent: accent)
 }
 
 clip chop {
   instrument: break_voice
-  notes: [s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12 s13 s14 s15]
-  break_stutter.hold:   [0 0 0 0  0 0 0 0  0 0 0 0  1 1 1 0]
-  break_stutter.length: [1/8beat 1/8beat 1/8beat 1/8beat  1/8beat 1/8beat 1/8beat 1/8beat  1/8beat 1/8beat 1/8beat 1/8beat  1/8beat 1/16beat 1/32beat 1/8beat]
-  break_stutter.pitch:  [0 0 0 0  0 0 0 0  0 0 0 0  0 0 5 0]
+  length: 2bars
+  notes: [s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12 s13 s14 s15  s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s2 s3 s12 s13 s14 s15]
+
+  // A row of steps spreads over the clip and each step is a sixteenth; `value@n` holds a value for n steps.
+  break_stutter {
+    hold:    .... .xxx .... xxxx  .... .xxx .... xxxx
+    length:  [1/4beat@5 1/8beat@3 1/4beat@20 1/8beat@4]
+    gate:    [1@5 0.4@3 1@24]
+    shrink:  [1@12 0.7@4 1@12 0.8@4]
+    reverse: [0@21 1@3 0@8]
+    shape:   [0@5 1@3 0@13 -0.8@3 0@8]
+    bend:    [0@5 0.7@3 0@24]
+    attack:  [0@21 0.8@3 0@8]
+    accent:  [0@28 0.6@4]
+    damp:    [0@12 0.25@4 0@16]
+    pitch:   [0@14 3@1 7@1 0@13 5@1 9@1 12@1]
+  }
 }
 
 chop.start

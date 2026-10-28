@@ -344,6 +344,25 @@ on midi.cc(64) bass.reverse              // sustain pedal goes down
 on osc_in("/panic") hush                 // a message with a value above 0.5
 ```
 
+**Gestures:** a clip with rows for an effect and no `instrument:` or notes is a gesture. It plays no sound of its own and only moves the effect's controls, then puts them back when it ends, so a pad can fire a stutter, a roll or a rewind. Give it `times: 1`, a `length:`, a `quantize:` to land it on the beat, and `launch:` to put it on a pad:
+
+```nml
+clip roll {
+  length: 1bar
+  times: 1
+  quantize: 1/4beat
+  launch: midi.note(37)
+  break_stutter {
+    hold:   .... .... .... xxxx
+    shrink: [1@12 0.7@4]
+  }
+}
+```
+
+The rows step through the clip a sixteenth at a time. See `examples/gestures.nml`.
+
+**One knob, many controls:** a `ctl` can feed any number of places, each with a range of its own, so it works as a macro: `ctl open = midi.cc(21)`, then `open.range(200hz..4khz)` on a filter and `open.range(0..0.5)` on a resonance.
+
 **Launching a scene or clip from a pad:** the usual case has a shorter form. Say which key launches it where it is defined, and `launch:` is the same as an `on` line that starts it:
 
 ```nml

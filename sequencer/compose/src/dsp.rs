@@ -119,6 +119,7 @@ pub fn project(
     standalone: bool,
 ) -> Result<DspSource, Diagnostic> {
     let mut pieces = Vec::new();
+    let mut silent_defined = false;
     for (item, span) in items {
         let text = &source[span.start..span.end];
         let verbatim = |text: String| Piece {
@@ -150,6 +151,14 @@ pub fn project(
                         c.name.name,
                         &source[instrument.span.start..instrument.span.end]
                     )));
+                } else if drives_effects(c) {
+                    // a clip that only moves an effect's controls plays this, which makes no sound
+                    if !std::mem::replace(&mut silent_defined, true) {
+                        pieces.push(derived(
+                            "instr __gesture(freq: hz = 440hz) { out = osc(sine, freq) * 0 }".into(),
+                        ));
+                    }
+                    pieces.push(derived(format!("node {} {{ instrument = __gesture }}", c.name.name)));
                 }
             }
             Item::Control { name, value, .. } => pieces.push(derived(format!(
@@ -353,7 +362,7 @@ pub fn warnings(source: &str) -> Vec<Diagnostic> {
     items
         .iter()
         .filter_map(|(item, _)| match item {
-            Item::Clip(c) if instrument_of(c, &items, 0).is_none() => Some(
+            Item::Clip(c) if instrument_of(c, &items, 0).is_none() && !drives_effects(c) => Some(
                 Diagnostic::new(
                     format!(
                         "clip `{}` has no instrument, so it plays nothing",
@@ -366,6 +375,12 @@ pub fn warnings(source: &str) -> Vec<Diagnostic> {
             _ => None,
         })
         .collect()
+}
+
+/// Does the clip have rows for an effect, such as `stutter_fx { hold: ..x. }`? With no instrument it is a
+/// gesture: it plays no notes and only moves those controls.
+pub fn drives_effects(clip: &crate::ast::NamedBlock) -> bool {
+    clip.entries.iter().any(|(_, v)| matches!(v.kind, ExprKind::FxLanes(_)))
 }
 
 /// The instrument a clip plays: its own `instrument:`, or its base's when it is made from another clip

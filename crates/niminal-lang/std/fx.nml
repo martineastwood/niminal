@@ -105,12 +105,19 @@ fx echo(
 /// Glitches on the same sound, one after another: stutter repeats the last piece, rewind plays it backwards,
 /// slow winds the sound down like a stopping tape, and crush reduces its sample rate and bit depth. Each is
 /// switched on by its own control (automate them, or set them from a command column) and the sound passes
-/// through untouched while all are off. A `stutter_shrink` below 1 makes a held stutter roll faster.
+/// through untouched while all are off. A `stutter_shrink` below 1 makes a held stutter roll faster, a `stutter_gate` below 1 makes the repeats staccato, and a `stutter_reverse` above 0 plays them backwards, a `stutter_shape` gives each a fade-out (above 0) or swell (below 0), `stutter_damp` darkens each repeat more than the last, `stutter_attack` and `stutter_bend` shape the envelope of each repeat (a slow attack, or an exponential pluck), and `stutter_accent` makes every second repeat quieter.
 fx glitch(
   stutter: 0..1 = 0,
   stutter_length: 1ms..1sec = 125ms,
   stutter_pitch: -24..24 = 0,
   stutter_shrink: 0.5..1 = 1,
+  stutter_gate: 0.05..1 = 1,
+  stutter_reverse: 0..1 = 0,
+  stutter_shape: -1..1 = 0,
+  stutter_damp: 0..0.95 = 0,
+  stutter_attack: 0..1 = 0,
+  stutter_bend: 0..1 = 0,
+  stutter_accent: 0..1 = 0,
   rewind: 0..1 = 0,
   rewind_length: 1ms..1sec = 250ms,
   slow: 0..1 = 0,
@@ -121,7 +128,10 @@ fx glitch(
   mix: 0..1 = 1
 ) {
   glitched = in
-    .repeat_last(hold: stutter, length: stutter_length, pitch: stutter_pitch, shrink: stutter_shrink)
+    .repeat_last(hold: stutter, length: stutter_length, pitch: stutter_pitch, shrink: stutter_shrink,
+      gate: stutter_gate, reverse: stutter_reverse,
+      shape: stutter_shape, damp: stutter_damp,
+      attack: stutter_attack, bend: stutter_bend, accent: stutter_accent)
     .rewind_last(hold: rewind, length: rewind_length)
     .slow_down(hold: slow, time: slow_time)
     .apply(fn(s) { s.bitcrush(rate: crush_rate, bits: crush_bits) }, when: crush)

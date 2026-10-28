@@ -2674,6 +2674,17 @@ impl Perform<'_> {
                 block.span,
             ));
         }
+        // a clip with rows for an effect and no notes is a gesture: a silent note on every sixteenth gives
+        // the rows a step to land on
+        if keys.is_none()
+            && scored.is_empty()
+            && !lanes.iter().any(|(n, _)| n == "notes")
+            && lanes.iter().any(|(n, _)| n.contains("::"))
+        {
+            let steps = 16 * length.map_or(1, |l| l.to_f64().ceil().max(1.0) as usize);
+            let step = Pattern::pure(Step::from(niminal_score::Value::Note(60)));
+            lanes.push(("notes".into(), Pattern::fastcat(vec![step; steps])));
+        }
         // a lane spans the whole clip, whatever its length
         if let Some(length) = length {
             lanes = lanes

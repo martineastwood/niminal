@@ -86,7 +86,14 @@ fn edge(phase: f64, size: f64, seam: f64) -> f32 {
 }
 
 /// Repeats the last `length` of the sound while `hold` is above zero. Each repeat is `fade` times the level
-/// of the one before and `shrink` times the length; `pitch` (semitones) changes the speed it is read at.
+/// of the one before and `shrink` times the length; `pitch` (semitones) changes the speed it is read at. The
+/// `length` is read once at the start of each repeat, so a length that moves gives a run of clean repeats
+/// instead of a smeared one. `gate` is how much of each repeat sounds (the rest is silence) and a `reverse`
+/// above zero plays each repeat backwards. `shape` gives each repeat a level curve: above zero it dies away
+/// (1 is a straight fade to nothing), below zero it swells in. `damp` darkens each repeat more than the one
+/// before, like a tape echo. `attack` is how much of the repeat (0 to 1) it takes to rise to full level,
+/// `bend` turns the straight `shape` curve into an exponential one (a pluck), and `accent` makes every second
+/// repeat that much quieter, so a roll has a beat in it.
 #[derive(Clone)]
 pub struct RepeatLast {
     ring: Ring,
@@ -94,8 +101,11 @@ pub struct RepeatLast {
     sample_rate: f32,
     frozen: usize,
     phase: f64,
+    size: f64,
     level: f32,
     scale: f64,
+    repeats: i32,
+    lp: f32,
 }
 
 impl RepeatLast {
@@ -106,8 +116,11 @@ impl RepeatLast {
             sample_rate: 48_000.0,
             frozen: 0,
             phase: 0.0,
+            size: 0.0,
             level: 1.0,
             scale: 1.0,
+            repeats: 0,
+            lp: 0.0,
         }
     }
 }
@@ -126,6 +139,13 @@ impl Opcode for RepeatLast {
             Port::optional("fade", 1.0),
             Port::optional("shrink", 1.0),
             Port::optional("blend", 0.003),
+            Port::optional("gate", 1.0),
+            Port::optional("reverse", 0.0),
+            Port::optional("shape", 0.0),
+            Port::optional("damp", 0.0),
+            Port::optional("attack", 0.0),
+            Port::optional("bend", 0.0),
+            Port::optional("accent", 0.0),
         ];
         PORTS
     }
@@ -147,8 +167,11 @@ impl Opcode for RepeatLast {
         self.hold = Hold::default();
         self.frozen = 0;
         self.phase = 0.0;
+        self.size = 0.0;
         self.level = 1.0;
         self.scale = 1.0;
+        self.repeats = 0;
+        self.lp = 0.0;
     }
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {
@@ -159,6 +182,9 @@ impl Opcode for RepeatLast {
             self.hold = old.hold.clone();
             self.frozen = old.frozen;
             self.phase = old.phase;
+            self.size = old.size;
+            self.repeats = old.repeats;
+            self.lp = old.lp;
             self.level = old.level;
             self.scale = old.scale;
         }
@@ -170,23 +196,38 @@ impl Opcode for RepeatLast {
         for (i, o) in out.iter_mut().enumerate() {
             let x = inputs[0][i];
             let (held, rising, mix) = self.hold.step(inputs[1][i], inputs[6][i], self.sample_rate);
+            let length = f64::from(inputs[2][i]) * sr;
             if rising {
                 self.frozen = self.ring.pos;
                 self.phase = 0.0;
                 self.level = 1.0;
                 self.scale = 1.0;
+                self.repeats = 0;
+                self.size = length.max(4.0 * seam);
             }
-            let size = (f64::from(inputs[2][i]) * sr * self.scale).max(4.0 * seam);
+            let size = self.size;
             let mut wet = x;
             if held || mix > 0.0 {
-                wet = self.ring.at(self.frozen as f64 - size + self.phase)
-                    * self.level
-                    * edge(self.phase, size, seam);
+                let open = size * f64::from(inputs[7][i]).clamp(0.05, 1.0);
+                let at = if inputs[8][i] > 0.0 { self.frozen as f64 - self.phase } else { self.frozen as f64 - size + self.phase };
+                let window = if self.phase < open { edge(self.phase, open, seam) } else { 0.0 };
+                let t = (self.phase / open.max(1.0)).min(1.0) as f32;
+                let shape = inputs[9][i].clamp(-1.0, 1.0);
+                let curve = if shape >= 0.0 { 1.0 - shape * t } else { 1.0 + shape * (1.0 - t) };
+                let curve = curve.powf(1.0 + 4.0 * inputs[12][i].clamp(0.0, 1.0));
+                let attack = inputs[11][i].clamp(0.0, 1.0);
+                let rise = if attack > 0.0 { (t / attack).min(1.0) } else { 1.0 };
+                let accent = if self.repeats % 2 == 1 { 1.0 - inputs[13][i].clamp(0.0, 1.0) } else { 1.0 };
+                let a = (1.0 - inputs[10][i].clamp(0.0, 0.95)).powi(self.repeats).max(0.02);
+                self.lp += a * (self.ring.at(at) - self.lp);
+                wet = self.lp * self.level * window * curve * rise * accent;
                 self.phase += (f64::from(inputs[3][i]) * 0.057_762_265).exp();
                 if self.phase >= size {
                     self.phase -= size;
                     self.level *= inputs[4][i];
                     self.scale *= f64::from(inputs[5][i]);
+                    self.repeats += 1;
+                    self.size = (length * self.scale).max(4.0 * seam);
                 }
             }
             if !held {
