@@ -833,6 +833,37 @@ pub(crate) fn compile_instr(
     Ok(instrument)
 }
 
+/// What the compiler works out about a loaded sample: how much energy it has, and where its hits are.
+struct SampleAnalysis {
+    /// Held so the table stays alive, which keeps its address from being reused for different audio.
+    _table: Arc<Table>,
+    energy: f64,
+    transients: Arc<[usize]>,
+}
+
+/// The analysis of a sample, made once however many times the piece is compiled. Every evaluation compiles
+/// the whole piece again, and for a long loop these two passes over its audio were most of the time.
+fn sample_analysis(table: &Arc<Table>) -> Arc<SampleAnalysis> {
+    use std::sync::{Mutex, OnceLock};
+    /// Samples remembered before the oldest are forgotten.
+    const KEPT: usize = 64;
+    static SEEN: OnceLock<Mutex<HashMap<usize, Arc<SampleAnalysis>>>> = OnceLock::new();
+    let key = Arc::as_ptr(table) as usize;
+    let seen = SEEN.get_or_init(Default::default);
+    if let Some(found) = seen.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return found.clone();
+    }
+    let energy = table.data().iter().map(|x| f64::from(*x).powi(2)).sum::<f64>();
+    let transients = niminal_engine::ops::detect_transients(table.data(), table.sample_rate_or(48_000.0), usize::MAX).into();
+    let made = Arc::new(SampleAnalysis { _table: table.clone(), energy, transients });
+    let mut seen = seen.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.len() >= KEPT {
+        seen.clear();
+    }
+    seen.insert(key, made.clone());
+    made
+}
+
 /// One sample of a sampler instrument.
 pub(crate) struct Member {
     pub name: String,
@@ -970,14 +1001,7 @@ impl Lower<'_> {
                 member
                     .channels
                     .iter()
-                    .map(|channel| {
-                        let energy = channel
-                            .data()
-                            .iter()
-                            .map(|x| f64::from(*x).powi(2))
-                            .sum::<f64>();
-                        (energy, channel)
-                    })
+                    .map(|channel| (sample_analysis(channel).energy, channel))
                     .max_by(|a, b| a.0.total_cmp(&b.0))
                     .map(|(_, channel)| channel.clone())
             })
@@ -985,17 +1009,9 @@ impl Lower<'_> {
         let transients: Vec<Arc<[usize]>> = references
             .iter()
             .map(|reference| {
-                reference.as_ref().map_or_else(
-                    || Arc::from([]),
-                    |table| {
-                        niminal_engine::ops::detect_transients(
-                            table.data(),
-                            table.sample_rate_or(48_000.0),
-                            usize::MAX,
-                        )
-                        .into()
-                    },
-                )
+                reference
+                    .as_ref()
+                    .map_or_else(|| Arc::from([]), |table| sample_analysis(table).transients.clone())
             })
             .collect();
         let mut mix: Option<Sig> = None;

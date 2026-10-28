@@ -416,6 +416,22 @@ impl LiveServer {
                 self.live_of(client).panic();
                 Ok(json!({}))
             }
+            "control.set" => {
+                let name = params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`name` should be a control name"))?;
+                let value = params
+                    .get("value")
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`value` should be a number"))?;
+                let unit = params.get("unit").and_then(Value::as_str);
+                let smooth_ms = params.get("smooth_ms").and_then(Value::as_f64);
+                match self.live_of(client).set_control(name, value, unit, smooth_ms) {
+                    Ok(()) => Ok(json!({})),
+                    Err(problems) => Err(rejected(&problems)),
+                }
+            }
             "subscribe" | "unsubscribe" => self.subscribe(client, params, method == "subscribe"),
             "status" => Ok(status_json(self.live_of(client))),
             other => Err(RpcError::new(

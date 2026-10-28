@@ -153,6 +153,14 @@ fn sidebar_quantize(action: &str, quantize: Option<String>) -> Option<String> {
 }
 
 #[tauri::command]
+async fn set_control(state: State<'_, AppState>, name: String, value: f64) -> Result<(), String> {
+    let shared = state.shared.clone();
+    tauri::async_runtime::spawn_blocking(move || session::set_control(&shared, &name, value))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn cancel(state: State<'_, AppState>, id: Option<u64>) -> Result<usize, String> {
     let shared = state.shared.clone();
     tauri::async_runtime::spawn_blocking(move || session::cancel(&shared, id))
@@ -370,6 +378,7 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let view = SubmenuBuilder::new(app, "View")
         .item(&item("browse", "Browse (⇧⌘L)", None)?)
         .item(&item("sidebar", "Sidebar (⌘B)", None)?)
+        .item(&item("controls", "Controls (⌘J)", None)?)
         .item(&item("perform", "Performance Mode (⇧⌘P)", None)?)
         .separator()
         .item(&item("zoom-in", "Bigger Text (⌘+)", None)?)
@@ -420,6 +429,7 @@ fn main() {
             snapshot,
             eval,
             perform,
+            set_control,
             cancel,
             open_file,
             open_project,

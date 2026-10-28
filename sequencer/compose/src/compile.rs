@@ -6,6 +6,7 @@ use std::ops::Deref;
 use niminal_lang::{
     CompileOptions, ControlDef, Diagnostic, Instrument, NodeInfo, Program, resolve_target,
 };
+use niminal_lang::{Span, closest};
 use niminal_score::{Event, Tempo, Time, Tuning};
 
 use crate::ast::*;
@@ -43,24 +44,45 @@ impl ControlBinding {
     /// The control's value, in its unit's own suffix (so `ControlDef::convert` accepts it), for a
     /// normalised input `t` from 0 to 1.
     pub fn map_input(&self, control: &ControlDef, t: f64) -> f64 {
-        let t = t.clamp(0.0, 1.0);
-        let (lo, hi) = (f64::from(self.lo), f64::from(self.hi));
-        let geometric = matches!(
-            control.unit,
-            niminal_lang::Unit::Hz | niminal_lang::Unit::Db
-        ) && lo > 0.0
-            && hi > 0.0;
-        let engine = if geometric {
-            lo * (hi / lo).powf(t)
-        } else {
-            lo + (hi - lo) * t
-        };
-        if control.unit == niminal_lang::Unit::Db {
-            20.0 * engine.log10()
-        } else {
-            engine
-        }
+        interpolate(control, self.lo, self.hi, t)
     }
+}
+
+/// The value `t` (0 to 1) of the way from `lo` to `hi` (engine units), in the control's unit suffix: even by ear
+/// for hz and db, so sweeps sound the same all the way along.
+pub fn interpolate(control: &ControlDef, lo: f32, hi: f32, t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    let (lo, hi) = (f64::from(lo), f64::from(hi));
+    let geometric = matches!(
+        control.unit,
+        niminal_lang::Unit::Hz | niminal_lang::Unit::Db
+    ) && lo > 0.0
+        && hi > 0.0;
+    let engine = if geometric {
+        lo * (hi / lo).powf(t)
+    } else {
+        lo + (hi - lo) * t
+    };
+    if control.unit == niminal_lang::Unit::Db {
+        20.0 * engine.log10()
+    } else {
+        engine
+    }
+}
+
+/// One control a macro moves: it is at `lo` when the macro is at 0 and at `hi` when it is at 1 (engine units).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MacroTarget {
+    pub control: String,
+    pub lo: f32,
+    pub hi: f32,
+}
+
+/// A macro: a control from 0 to 1 that moves other controls along with it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MacroDef {
+    pub name: String,
+    pub targets: Vec<MacroTarget>,
 }
 
 /// Commands to run when something arrives from outside, as they are written.
@@ -81,6 +103,8 @@ pub struct Composition {
     pub quantize: QuantizeConfig,
     /// The controls that MIDI or OSC drive, by control name.
     pub inputs: Vec<(String, ControlBinding)>,
+    /// The macros: controls that move others.
+    pub macros: Vec<MacroDef>,
     /// Commands that run when a key, controller or OSC message arrives: `on midi.note(36) beat.start`.
     pub triggers: Vec<Trigger>,
     /// Notes written directly in the source.
@@ -114,6 +138,11 @@ impl Composition {
     pub fn input(&self, name: &str) -> Option<&ControlBinding> {
         self.inputs.iter().find(|(n, _)| n == name).map(|(_, b)| b)
     }
+
+    /// The macro called `name`, if it is one.
+    pub fn macro_of(&self, name: &str) -> Option<&MacroDef> {
+        self.macros.iter().find(|m| m.name == name)
+    }
 }
 
 /// What the names of a composition are, for telling a binding from a clash with a definition.
@@ -133,6 +162,7 @@ fn names_of<'a>(items: &[Item], controls: &'a [ControlDef]) -> Names<'a> {
     for item in items {
         let (ident, kind) = match item {
             Item::Control { name, .. } => (name, "control"),
+            Item::Macro(d) => (&d.name, "control"),
             Item::Instr(d) => (&d.name, "instrument"),
             Item::MidiOut(d) => (&d.name, "instrument"),
             Item::Fn(d) => (&d.name, "function"),
@@ -188,7 +218,7 @@ pub fn compile_with(
                 .position(|(key, _)| key.name == "launch")
         {
             let (_, value) = block.entries.remove(at);
-            match launch_source(&value) {
+            match launch_source(&value, "launch") {
                 Ok(source) => launches.push(Trigger {
                     source,
                     commands: vec![format!("{}.start", block.name.name)],
@@ -268,6 +298,14 @@ pub fn compile_with(
         }
     };
 
+    let macros = match compile_macros(&items, &program, tempo) {
+        Ok(macros) => macros,
+        Err(mut found) => {
+            errors.append(&mut found);
+            Vec::new()
+        }
+    };
+
     let triggers = match triggers(source, &items, launches) {
         Ok(triggers) => triggers,
         Err(d) => {
@@ -286,6 +324,7 @@ pub fn compile_with(
         tempo,
         quantize,
         inputs,
+        macros,
         triggers,
         notes,
         performance,
@@ -310,13 +349,13 @@ fn locate(dsp: &DspSource, mut d: Diagnostic) -> Diagnostic {
 }
 
 /// `midi.note(36)`, `midi.note(c1, 10)`, `midi.cc(64)` or `osc_in("/go")`, written as an expression.
-fn launch_source(e: &Expr) -> Res<InputSource> {
+fn launch_source(e: &Expr, word: &str) -> Res<InputSource> {
     let bad = || {
         Diagnostic::new(
-            "`launch` takes a key, a controller or an OSC address",
+            format!("`{word}` takes a key, a controller or an OSC address"),
             e.span,
         )
-        .with_help("for example `launch: midi.note(36)` or `launch: osc_in(\"/verse\")`")
+        .with_help(format!("for example `{word}: midi.cc(21)` or `{word}: osc_in(\"/verse\")`"))
     };
     let ExprKind::Call { name, args } = &e.kind else {
         return Err(bad());
@@ -424,6 +463,27 @@ fn control_inputs(
     options: &CompileOptions,
 ) -> Res<Vec<(String, ControlBinding)>> {
     let mut out = Vec::new();
+    // a macro's `input:` drives the macro's own control, over 0 to 1
+    let mut from_macros: Vec<(Ident, ControlInput)> = Vec::new();
+    for item in items {
+        if let Item::Macro(block) = item
+            && let Some((_, value)) = block.entries.iter().find(|(key, _)| key.name == "input")
+        {
+            from_macros.push((
+                block.name.clone(),
+                ControlInput {
+                    source: launch_source(value, "input")?,
+                    hi: Expr {
+                        kind: ExprKind::Num {
+                            value: 1.0,
+                            unit: None,
+                        },
+                        span: value.span,
+                    },
+                },
+            ));
+        }
+    }
     let driven: Vec<(&Ident, &ControlInput)> = items
         .iter()
         .filter_map(|item| match item {
@@ -434,48 +494,73 @@ fn control_inputs(
             } => Some((name, input)),
             _ => None,
         })
+        .chain(from_macros.iter().map(|(name, input)| (name, input)))
         .collect();
     if driven.is_empty() {
         return Ok(out);
     }
-    // the upper ends of the ranges are worked out by the compiler, among the definitions they may use
-    let mut text = String::new();
-    for (n, (_, input)) in driven.iter().enumerate() {
-        text.push_str(&format!(
-            "
+    // a plain number is its own upper end; anything else (`4khz`, a name, a sum) is worked out by the
+    // compiler, among the definitions it may use, which compiles the program again
+    let literal: Vec<Option<f32>> = driven
+        .iter()
+        .map(|(name, input)| {
+            let def = program.controls.iter().find(|c| c.name == name.name)?;
+            match (&input.hi.kind, def.unit) {
+                (ExprKind::Num { value, unit: None }, niminal_lang::Unit::Num) => Some(*value as f32),
+                _ => None,
+            }
+        })
+        .collect();
+    let found = if literal.iter().all(Option::is_some) {
+        None
+    } else {
+        let mut text = String::new();
+        for (n, (_, input)) in driven.iter().enumerate() {
+            text.push_str(&format!(
+                "
 ctl __input_hi_{n} = {}",
-            crate::dsp::control_value(source, &input.hi)
-        ));
-    }
-    let base = &program.source;
-    let found = niminal_lang::compile_with(&format!("{base}{text}"), options)
-        .map_err(|mut found| found.remove(0))
-        .map_err(|mut d| {
-            d.span = driven[0].1.hi.span;
-            d
-        })?;
+                crate::dsp::control_value(source, &input.hi)
+            ));
+        }
+        let base = &program.source;
+        Some(
+            niminal_lang::compile_with(&format!("{base}{text}"), options)
+                .map_err(|mut found| found.remove(0))
+                .map_err(|mut d| {
+                    d.span = driven[0].1.hi.span;
+                    d
+                })?,
+        )
+    };
     for (n, (name, input)) in driven.iter().enumerate() {
         let def = program
             .controls
             .iter()
             .find(|c| c.name == name.name)
             .expect("a control is compiled");
-        let hi = found
-            .controls
-            .iter()
-            .find(|c| c.name == format!("__input_hi_{n}"))
-            .expect("a control is compiled");
-        if hi.unit != def.unit {
+        let (hi_unit, hi_initial) = match (literal[n], &found) {
+            (Some(value), _) => (def.unit, value),
+            (None, Some(found)) => {
+                let hi = found
+                    .controls
+                    .iter()
+                    .find(|c| c.name == format!("__input_hi_{n}"))
+                    .expect("a control is compiled");
+                (hi.unit, hi.initial)
+            }
+            (None, None) => unreachable!("a range that is not a number is compiled"),
+        };
+        if hi_unit != def.unit {
             return Err(Diagnostic::new(
                 format!(
                     "the range's ends need the same unit: {} and {}",
                     def.unit.describe(),
-                    hi.unit.describe()
+                    hi_unit.describe()
                 ),
                 input.hi.span,
             ));
         }
-        if !hi.initial.is_finite() || hi.initial <= def.initial {
+        if !hi_initial.is_finite() || hi_initial <= def.initial {
             return Err(Diagnostic::new(
                 "the upper end of a range must be above the lower end",
                 input.hi.span,
@@ -486,11 +571,138 @@ ctl __input_hi_{n} = {}",
             ControlBinding {
                 source: input.source.clone(),
                 lo: def.initial,
-                hi: hi.initial,
+                hi: hi_initial,
             },
         ));
     }
     Ok(out)
+}
+
+/// A control name as the code writes it: `break_stutter.damp`, not the `break_stutter::damp` it is kept as.
+pub(crate) fn written(control: &str) -> String {
+    control.replace("::", ".")
+}
+
+/// `200hz`, `0.6` or `-12` in a range: the number and its unit.
+fn endpoint(e: &Expr) -> Option<(f64, Option<&str>)> {
+    match &e.kind {
+        ExprKind::Num { value, unit } => Some((*value, unit.as_deref())),
+        ExprKind::Neg(inner) => endpoint(inner).map(|(value, unit)| (-value, unit)),
+        _ => None,
+    }
+}
+
+/// The macros: what each moves, over what range. A macro's own entries are `input:` and `smooth:`; every other
+/// entry is a control to move and the range to move it over, written `cutoff: 200hz..4khz`, in a block for an
+/// effect (`break_stutter { damp: 0..0.6 }`) or with a dot (`break_stutter.damp: 0..0.6`).
+fn compile_macros(items: &[Item], program: &Program, tempo: Tempo) -> Result<Vec<MacroDef>, Vec<Diagnostic>> {
+    let mut errors = Vec::new();
+    let mut out: Vec<MacroDef> = Vec::new();
+    let macro_names: Vec<&str> = items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Macro(block) => Some(block.name.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    for item in items {
+        let Item::Macro(block) = item else { continue };
+        if out.iter().any(|m| m.name == block.name.name) {
+            errors.push(Diagnostic::new(
+                format!("macro `{}` is defined twice", block.name.name),
+                block.name.span,
+            ));
+            continue;
+        }
+        let mut wanted: Vec<(String, &Expr, Span)> = Vec::new();
+        for (key, value) in &block.entries {
+            match key.name.as_str() {
+                "input" | "smooth" => {}
+                _ => match &value.kind {
+                    ExprKind::FxLanes(rows) => {
+                        for (row, range) in rows {
+                            wanted.push((format!("{}::{}", key.name, row.name), range, row.span));
+                        }
+                    }
+                    _ => wanted.push((key.name.clone(), value, key.span)),
+                },
+            }
+        }
+        if wanted.is_empty() {
+            errors.push(
+                Diagnostic::new(
+                    format!("macro `{}` moves nothing", block.name.name),
+                    block.name.span,
+                )
+                .with_help("give it a control and a range, such as `cutoff: 200hz..4khz`"),
+            );
+            continue;
+        }
+        let mut targets: Vec<MacroTarget> = Vec::new();
+        for (control, range, span) in wanted {
+            let shown = written(&control);
+            if macro_names.contains(&&*control) {
+                errors.push(Diagnostic::new(
+                    format!("`{shown}` is a macro; a macro can't move another macro"),
+                    span,
+                ));
+                continue;
+            }
+            let Some(def) = program.controls.iter().find(|c| c.name == control) else {
+                let mut d = Diagnostic::new(format!("no control named `{shown}`"), span);
+                if let Some(near) = closest(
+                    &control,
+                    program
+                        .controls
+                        .iter()
+                        .map(|c| c.name.as_str())
+                        .filter(|n| !n.starts_with("__")),
+                ) {
+                    d = d.with_help(format!("did you mean `{}`?", written(near)));
+                }
+                errors.push(d);
+                continue;
+            };
+            if targets.iter().any(|t| t.control == control) {
+                errors.push(Diagnostic::new(
+                    format!("macro `{}` moves `{shown}` twice", block.name.name),
+                    span,
+                ));
+                continue;
+            }
+            let bounds = match &range.kind {
+                ExprKind::Range {
+                    lo,
+                    hi,
+                    inclusive: true,
+                } => endpoint(lo).zip(endpoint(hi)),
+                _ => None,
+            };
+            let Some(((lo, lo_unit), (hi, hi_unit))) = bounds else {
+                errors.push(
+                    Diagnostic::new(
+                        format!("`{shown}` needs the range the macro moves it over"),
+                        range.span,
+                    )
+                    .with_help("two numbers, such as `200hz..4khz` or `0..0.6`; the first is where it is when the macro is at 0"),
+                );
+                continue;
+            };
+            match (def.convert(lo, lo_unit, tempo), def.convert(hi, hi_unit, tempo)) {
+                (Ok(lo), Ok(hi)) => targets.push(MacroTarget { control, lo, hi }),
+                (Err(why), _) | (_, Err(why)) => errors.push(Diagnostic::new(why, range.span)),
+            }
+        }
+        out.push(MacroDef {
+            name: block.name.name.clone(),
+            targets,
+        });
+    }
+    if errors.is_empty() {
+        Ok(out)
+    } else {
+        Err(errors)
+    }
 }
 
 /// Expand top-level `for` / `if` blocks into repeated or chosen notes and commands.

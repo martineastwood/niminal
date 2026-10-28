@@ -106,6 +106,30 @@ fn a_control_bound_to_a_key_is_open_while_the_key_is_down() {
     assert_eq!(s.process(4)[0], vec![0.0; 4]);
 }
 
+const MACRO: &str = "ctl cutoff = 1khz\nctl drive = 0.3\nmacro bright {\n  input: midi.cc(21)\n  smooth: 0ms\n  cutoff: 200hz..4khz\n  drive: 1..0\n}\ninstr flat() { drive }\nflat() for 1beat";
+
+#[test]
+fn a_macro_moves_its_controls_when_it_is_moved() {
+    let mut s = session(MACRO);
+    let value = |s: &Offline, name: &str| s.control_values().into_iter().find(|c| c.0 == name).unwrap().2;
+    // a controller sends the macro to the top: the frequency is at the top of its range and the other control
+    // at the end of its range, which is lower
+    assert_eq!(
+        s.control_input(&ControlSignal::MidiCc { cc: 21, channel: 1, value: 127 }),
+        1
+    );
+    s.process(64);
+    assert!((value(&s, "bright") - 1.0).abs() < 1e-6);
+    assert!((value(&s, "cutoff") - 4000.0).abs() < 0.5, "{}", value(&s, "cutoff"));
+    assert!(value(&s, "drive").abs() < 1e-6);
+    // half way is half way by ear for the frequency, and half way for the plain number
+    s.control_input(&ControlSignal::MidiCc { cc: 21, channel: 1, value: 64 });
+    s.process(64);
+    let t = 64.0 / 127.0;
+    assert!((value(&s, "cutoff") - 200.0 * 20.0_f32.powf(t)).abs() < 1.0, "{}", value(&s, "cutoff"));
+    assert!((value(&s, "drive") - (1.0 - t)).abs() < 1e-4, "{}", value(&s, "drive"));
+}
+
 const LEARNING: &str = "ctl level = midi.learn.range(0..1).smooth(0ms)\nctl pan = midi.learn.range(0..1).smooth(0ms)\ninstr flat() { level + pan * 10 }\nflat() for 1beat";
 
 #[test]

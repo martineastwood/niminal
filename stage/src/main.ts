@@ -16,6 +16,7 @@ import { FileBrowse } from './browse';
 import { Bar, loudest } from './meters';
 import { Action, EvalOutcome, Problem, Queued, Scene, Snapshot, beatsUntil, queuedStates, stage } from './live';
 import { StoredTabs, loadTabs, moveItem, tabTitle, tabsKey } from './tabs';
+import { Dock, isGesture } from './controls';
 import './style.css';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -91,6 +92,16 @@ app.innerHTML = `
       <div id="take" class="take" hidden></div>
     </section>
   </main>
+
+  <section id="dock">
+    <div id="dock-handle" role="separator" aria-orientation="horizontal" aria-label="Resize the controls" tabindex="0" title="Drag to resize · double-click to reset"></div>
+    <div class="dock-head">
+      <span class="pane-title">controls</span>
+      <span id="dock-count" class="dock-count"></span>
+      <button id="dock-toggle" title="Show or hide the controls (${mod}J)">hide</button>
+    </div>
+    <div class="dock-body"></div>
+  </section>
 
   <footer>
     <span id="footer-status">starting…</span>
@@ -866,6 +877,7 @@ function offline(): Snapshot {
     master: [],
     levels: { nodes: {}, buses: {} },
     health: null,
+    controls: [],
     learned: [],
     midi: { inputs: [], last: null },
     error: null,
@@ -906,6 +918,7 @@ async function refresh() {
     ['meters', () => updateMaster(snapshot)],
     ['health', () => updateHealth(snapshot)],
     ['midi', () => updateMidi(snapshot)],
+    ['controls', () => updateDock(snapshot)],
     ['scenes', () => updateScenes(snapshot)],
     ['pending', () => updatePending(snapshot)],
     ['notices', () => updateNotices(snapshot)],
@@ -1051,6 +1064,85 @@ divider.addEventListener('keydown', event => {
   event.preventDefault();
 });
 
+// The controls dock under both panes: sliders for the controls, pads for gestures. Drag its top edge to resize it.
+const dockKey = 'niminal-stage-dock';
+const dockOpenKey = 'niminal-stage-dock-open';
+const dockEl = $('dock');
+const dock = new Dock(dockEl, {
+  set: (name, value) => void stage.setControl(name, value).catch(error => status(String(error))),
+  launch: clip => void act({ action: 'start', target: clip }),
+});
+
+function updateDock(snapshot: Snapshot) {
+  const controls = snapshot.controls ?? [];
+  const gestures = snapshot.clips.filter(isGesture);
+  $('dock-count').textContent = controls.length ? `${controls.length}` : '';
+  dock.update({ controls, gestures });
+}
+function setDockOpen(open: boolean) {
+  dockEl.classList.toggle('closed', !open);
+  $('dock-toggle').textContent = open ? 'hide' : 'show';
+  localStorage.setItem(dockOpenKey, open ? '1' : '0');
+  view?.requestMeasure();
+}
+const toggleDock = () => setDockOpen(dockEl.classList.contains('closed'));
+setDockOpen(localStorage.getItem(dockOpenKey) !== '0');
+$('dock-toggle').addEventListener('click', toggleDock);
+function setDockHeight(height: number | null, save = true) {
+  if (height === null) {
+    dockEl.style.removeProperty('--dock-h');
+    localStorage.removeItem(dockKey);
+    return;
+  }
+  const room = Math.max(60, Math.round(window.innerHeight * 0.55));
+  const clamped = Math.round(Math.min(Math.max(height, 40), room));
+  dockEl.style.setProperty('--dock-h', `${clamped}px`);
+  if (save) localStorage.setItem(dockKey, String(clamped));
+}
+const savedDock = Number(localStorage.getItem(dockKey));
+if (savedDock) setDockHeight(savedDock, false);
+const dockHandle = $('dock-handle');
+let dragY = 0;
+let dragFrame = 0;
+dockHandle.addEventListener('pointerdown', event => {
+  event.preventDefault();
+  dockHandle.setPointerCapture(event.pointerId);
+  dockHandle.classList.add('dragging');
+  document.body.classList.add('resizing-rows');
+  if (dockEl.classList.contains('closed')) setDockOpen(true);
+});
+dockHandle.addEventListener('pointermove', event => {
+  // the body is what grows: the distance from the pointer to the bottom of the window, less the footer and the head
+  if (!dockHandle.hasPointerCapture(event.pointerId)) return;
+  // once a frame: the layout is redone for each change of height
+  dragY = event.clientY;
+  if (dragFrame) return;
+  dragFrame = requestAnimationFrame(() => {
+    dragFrame = 0;
+    const below = document.querySelector('footer')!.getBoundingClientRect().height + dockEl.querySelector('.dock-head')!.getBoundingClientRect().height;
+    setDockHeight(window.innerHeight - dragY - below, false);
+  });
+});
+const endDockDrag = (event: PointerEvent) => {
+  if (dockHandle.hasPointerCapture(event.pointerId)) dockHandle.releasePointerCapture(event.pointerId);
+  dockHandle.classList.remove('dragging');
+  document.body.classList.remove('resizing-rows');
+  const height = dockEl.querySelector('.dock-body')!.getBoundingClientRect().height;
+  if (height) localStorage.setItem(dockKey, String(Math.round(height)));
+  view?.requestMeasure();
+};
+dockHandle.addEventListener('pointerup', endDockDrag);
+dockHandle.addEventListener('pointercancel', endDockDrag);
+dockHandle.addEventListener('dblclick', () => setDockHeight(null));
+dockHandle.addEventListener('keydown', event => {
+  const step = event.shiftKey ? 40 : 10;
+  const now = dockEl.querySelector('.dock-body')!.getBoundingClientRect().height;
+  if (event.key === 'ArrowUp') setDockHeight(now + step);
+  else if (event.key === 'ArrowDown') setDockHeight(now - step);
+  else return;
+  event.preventDefault();
+});
+
 const highlighter = new Highlighter(() => view ?? undefined);
 const laneView = new LaneView($('lanes'), (action, target, change) => {
   if (action === 'connect') $('reconnect').click();
@@ -1176,6 +1268,9 @@ window.addEventListener('keydown', event => {
   } else if (event.key.toLowerCase() === 'b' && !event.shiftKey) {
     event.preventDefault();
     toggleRail();
+  } else if (event.key.toLowerCase() === 'j' && !event.shiftKey) {
+    event.preventDefault();
+    toggleDock();
   } else if (/^[1-9]$/.test(event.key) && !event.shiftKey) {
     // the nth scene, as clicking it would
     const scene = sceneList[Number(event.key) - 1];
@@ -1210,6 +1305,7 @@ const menuActions: Record<string, () => void> = {
   redo: () => view && redo(view),
   browse: () => files.toggle(),
   sidebar: () => toggleRail(),
+  controls: () => toggleDock(),
   perform: () => $('perform').click(),
   'zoom-in': () => stepZoom(1),
   'zoom-out': () => stepZoom(-1),

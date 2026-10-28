@@ -161,6 +161,14 @@ pub fn project(
                     pieces.push(derived(format!("node {} {{ instrument = __gesture }}", c.name.name)));
                 }
             }
+            // a macro is a control from 0 to 1 here; the composition keeps what it moves
+            Item::Macro(block) => {
+                let value = match block.entries.iter().find(|(key, _)| key.name == "smooth") {
+                    Some((_, smooth)) => format!("(0).smooth({})", control_value(source, smooth)),
+                    None => "0".to_string(),
+                };
+                pieces.push(derived(format!("ctl {} = {value}", block.name.name)));
+            }
             Item::Control { name, value, .. } => pieces.push(derived(format!(
                 "ctl {} = {}",
                 name.name,

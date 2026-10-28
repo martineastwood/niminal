@@ -17,6 +17,10 @@ pub const TOKEN_TYPES: [&str; 7] = [
     "namespace",
     "enum",
 ];
+/// The token modifiers, in the order the legend lists them. A control or macro is `readonly`: the code reads it
+/// and never assigns it, which themes colour like a constant, so its name stands out from plain text.
+pub const TOKEN_MODIFIERS: [&str; 1] = ["readonly"];
+const READONLY: u32 = 1;
 const FUNCTION: u32 = 0;
 const CLASS: u32 = 1;
 const VARIABLE: u32 = 2;
@@ -693,9 +697,13 @@ pub fn semantic_tokens(doc: &Document) -> Vec<u32> {
         let Tok::Ident(name) = &t.tok else { continue };
         let before = i.checked_sub(1).map(|i| &tokens[i].tok);
         let after = tokens.get(i + 1).map(|t| &t.tok);
+        let mut modifiers = 0;
         let kind = if RESERVED_WORDS.contains(&name.as_str()) {
             locals[i]
         } else if let Some((symbol, ..)) = doc.find(name) {
+            if symbol.kind == SymbolKind::Control {
+                modifiers = READONLY;
+            }
             Some(match symbol.kind {
                 SymbolKind::Instrument | SymbolKind::Function => FUNCTION,
                 SymbolKind::Fx
@@ -708,6 +716,9 @@ pub fn semantic_tokens(doc: &Document) -> Vec<u32> {
                 // a scene is a list of clips, and reads differently from one in a column of them
                 SymbolKind::Scene => ENUM,
             })
+        } else if name == "midi" && after == Some(&Tok::Dot) && before != Some(&Tok::Dot) {
+            // `midi.cc(21)`, `midi.note(36)`: the inputs live under it
+            Some(NAMESPACE)
         } else if (after == Some(&Tok::LParen) || before == Some(&Tok::Dot))
             && builtins.contains(name)
         {
@@ -748,7 +759,7 @@ pub fn semantic_tokens(doc: &Document) -> Vec<u32> {
                 character
             },
         );
-        data.extend([delta_line as u32, delta_char as u32, length as u32, kind, 0]);
+        data.extend([delta_line as u32, delta_char as u32, length as u32, kind, modifiers]);
         (last_line, last_char) = (line, character);
     }
     data

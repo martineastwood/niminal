@@ -49,16 +49,32 @@ impl Live {
         unit: Option<&str>,
         smooth_ms: Option<f64>,
     ) -> Result<(), Vec<Problem>> {
-        let op = Op::Control {
+        let control = |name: &str, value: f64, unit: Option<String>, glide: Option<Time>| Op::Control {
             name: name.into(),
             at: At::Now,
             value,
-            unit: unit.map(str::to_owned),
-            glide: smooth_ms.map(|ms| Time::Seconds(ms / 1000.0)),
+            unit,
+            glide,
             tag: None,
         };
+        let mut events = vec![control(
+            name,
+            value,
+            unit.map(str::to_owned),
+            smooth_ms.map(|ms| Time::Seconds(ms / 1000.0)),
+        )];
+        // a macro moves what it is made to move, each along its own scale and by its own smoothing
+        if let Some(moves) = self.program.macro_of(name) {
+            for target in &moves.targets {
+                let Some(def) = self.program.controls.iter().find(|c| c.name == target.control) else {
+                    continue;
+                };
+                let at = niminal_compose::interpolate(def, target.lo, target.hi, value);
+                events.push(control(&target.control, at, def.unit.suffix().map(str::to_owned), None));
+            }
+        }
         self.link
-            .request(EngineRequest::EventsSend { events: vec![op] })
+            .request(EngineRequest::EventsSend { events })
             .map(|_| ())
             .map_err(|e| {
                 e.problems()

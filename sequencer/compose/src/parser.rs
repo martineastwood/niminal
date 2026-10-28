@@ -631,6 +631,17 @@ impl Parser {
             } else {
                 Item::Scene(block)
             })
+        } else if self.is_keyword("macro") && matches!(self.peek_at(1), Tok::Ident(_)) {
+            let start = self.bump().span;
+            let name = self.ident("a macro name")?;
+            let (entries, end) = self.entries(false)?;
+            Ok(Item::Macro(NamedBlock {
+                name,
+                base: None,
+                entries,
+                options: Vec::new(),
+                span: start.to(end),
+            }))
         } else if self.is_keyword("at") {
             self.bump();
             let at = self.at_pos()?;

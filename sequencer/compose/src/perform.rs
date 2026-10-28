@@ -2629,7 +2629,7 @@ impl Perform<'_> {
                 || curves.iter().any(|(n, _)| *n == key.name)
             {
                 return Err(Diagnostic::new(
-                    format!("lane `{}` is given twice", key.name),
+                    format!("lane `{}` is given twice", crate::compile::written(&key.name)),
                     key.span,
                 ));
             }
@@ -3237,8 +3237,10 @@ impl Perform<'_> {
             .collect();
         for (lane, curve) in &mut clip.curves {
             let who = format!(
-                "clip `{}` has an envelope lane `{lane}`, but node `{}`",
-                clip.name, id.name
+                "clip `{}` has an envelope lane `{}`, but node `{}`",
+                clip.name,
+                crate::compile::written(lane),
+                id.name
             );
             self.bind_env(curve, name, lane, &who, span)?;
         }
@@ -3306,7 +3308,7 @@ impl Perform<'_> {
         for level in levels {
             niminal_lang::engine_value(def.unit, *level, tempo).map_err(|e| {
                 Diagnostic::new(
-                    format!("envelope lane `{param}` moves {}: {e}", def.name),
+                    format!("envelope lane `{}` moves {}: {e}", crate::compile::written(param), def.name),
                     span,
                 )
             })?;
@@ -3399,7 +3401,7 @@ impl Perform<'_> {
                     && !clip.signals.iter().any(|(l, _)| l == lane)
                 {
                     return Err(Diagnostic::new(
-                        format!("lane `{lane}` sets a parameter of node `{}` as each note starts, but clip `{}` has no notes", info.name, clip.name),
+                        format!("lane `{}` sets a parameter of node `{}` as each note starts, but clip `{}` has no notes", crate::compile::written(lane), info.name, clip.name),
                         span,
                     )
                     .with_help("add a `notes` lane to step on, or change it as the control instead"));
@@ -3430,8 +3432,10 @@ impl Perform<'_> {
             known.extend(UNIVERSAL_LANES);
             let mut d = Diagnostic::new(
                 format!(
-                    "clip `{}` has a lane `{lane}`, but `{}` has no such parameter",
-                    clip.name, instrument.name
+                    "clip `{}` has a lane `{}`, but `{}` has no such parameter",
+                    clip.name,
+                    crate::compile::written(lane),
+                    instrument.name
                 ),
                 span,
             );

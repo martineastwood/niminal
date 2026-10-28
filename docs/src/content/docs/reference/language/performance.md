@@ -365,13 +365,15 @@ The rows step through the clip a sixteenth at a time. A list of levels (`[0@14 3
 
 | Move | Rows |
 |---|---|
-| Machine gun: short, plucked repeats | `hold: xxxx xxxx`, `length: 1/8beat`, `gate: 0.4`, `shape: 1`, `bend: 0.7` |
+| Machine gun: fire the hit itself | not a stutter: a note pattern on the chopper, `notes: [s0!16]` with `length: 1/2bar` (a stutter repeats what it just heard, often a short tick) |
 | Roll: each repeat shorter, so it speeds up | `hold: .... .... .... xxxx`, `shrink: [1@12 0.7@4]` |
 | Riser: a roll whose pitch climbs an octave | a roll, with `pitch: env[0 3/4bar 0 1/4bar 12]` |
 | Rewind: each repeat played backwards, swelling in | `hold: .... xxxx`, `reverse: 1`, `shape: -0.8` |
 | Tape echo: each repeat darker than the last | `hold: xxxx`, `fade: 0.8`, `damp: 0.3` |
 | Beat in a roll: every second repeat softer | add `accent: 0.6` to any roll |
 | Slow swell: each repeat fades up | `attack: 0.8` |
+
+A stutter repeats the last piece of sound before it starts, so it needs a hit just before it. If a gesture sometimes clicks and sometimes repeats, it is landing right after a quiet moment: give it a coarser `quantize:` (`1/2beat` or `1beat`) so it always lands where a hit has just played.
 
 A variant is one line. A gesture made from another keeps its rows and replaces the ones you name:
 
@@ -381,7 +383,22 @@ clip roll_hard = roll.set(break_stutter.accent: 0.9, break_stutter.damp: 0.5)
 
 **Hold until the key comes up:** a gesture runs for its set length. For a stutter that lasts as long as a pad is held, bind a control to the key: `ctl held = midi.note(39)` is above zero while the key is down and back to zero when it comes up (the velocity sets how far; `.range(...)` sets the span, 0 to 1 if left out). Read it where the effect takes its hold, for example `repeat_last(hold: hold + held, ...)`.
 
-**One knob, many controls:** a `ctl` can feed any number of places, each with a range of its own, so it works as a macro: `ctl open = midi.cc(21)`, then `open.range(200hz..4khz)` on a filter and `open.range(0..0.5)` on a resonance.
+**Macros: one knob, many controls.** A `macro` is a control from 0 to 1 that moves other controls along with it, each over a range of its own. It is written like a clip: `input:` says what drives it, and every other line is a control and the range to move it over.
+
+```nml
+macro tension {
+  input:  midi.cc(1)                 // or osc_in("/tension"); leave it out to move it from the stage's dock
+  smooth: 20ms                       // optional, as `.smooth` on a ctl
+  cutoff: 200hz..4khz                // a ctl
+  break_stutter {                    // the parameters of an effect, as in a clip
+    damp:  0..0.6
+    shape: 0..1
+  }
+  break_stutter.accent: 0..0.5       // or one parameter, with a dot
+}
+```
+
+With the macro at 0 every control is at the start of its range, and at 1 at the end. A range written backwards (`1..0`) runs the other way, and a frequency or a level in dB sweeps evenly by ear. The macro is a control like any other: the stage's dock shows it as a slider, a controller, OSC or the dock moves it, and the code can read it by name (`tension`). It can move `ctl`s and the parameters of effects, in any file of the project. A macro can't move another macro, and lists a control once. Two macros may share a control: the one moved last wins. Only a move from a controller, OSC or the dock moves the targets; a clip lane or an envelope that drives the macro's own control does not.
 
 **Launching a scene or clip from a pad:** the usual case has a shorter form. Say which key launches it where it is defined, and `launch:` is the same as an `on` line that starts it:
 

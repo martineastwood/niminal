@@ -254,6 +254,98 @@ fn a_rejected_eval_carries_located_problems() {
 }
 
 #[test]
+fn status_describes_the_controls_and_control_set_moves_one() {
+    let (mut d, c) = ready();
+    call(
+        &mut d,
+        c,
+        2,
+        "eval",
+        json!({
+            "source": "ctl cutoff = midi.cc(21).range(200hz..4khz)\nctl drive = 0.3\ninstr a() { osc(saw, 100hz).lpf(cutoff: cutoff) * drive }\na() for 1beat",
+            "quantize": "now",
+        }),
+    );
+    d.process(1000);
+    let find = |status: &Value, name: &str| {
+        status["result"]["controls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == name)
+            .unwrap_or_else(|| panic!("no control {name}: {status}"))
+            .clone()
+    };
+    let status = call(&mut d, c, 3, "status", json!({}));
+    let cutoff = find(&status, "cutoff");
+    assert_eq!(cutoff["source"], "midi.cc(21)");
+    assert_eq!(cutoff["kind"], "ctl");
+    assert_eq!(cutoff["log"], true);
+    assert_eq!(cutoff["range"], json!([200.0, 4000.0]));
+    let drive = find(&status, "drive");
+    assert_eq!((drive["source"].is_null(), drive["range"].is_null()), (true, true));
+    // the light request a window uses many times a second says the same, without the rest of the status
+    let light = d.live_mut().engine_controls();
+    let cutoff_light = light.iter().find(|c| c["name"] == "cutoff").expect("cutoff is listed");
+    assert_eq!(cutoff_light["source"], "midi.cc(21)");
+    assert_eq!(cutoff_light["range"], json!([200.0, 4000.0]));
+    assert_eq!(light.len(), status["result"]["controls"].as_array().unwrap().len());
+    // moving one sets it, and a name that isn't a control is refused
+    let reply = call(&mut d, c, 4, "control.set", json!({"name": "drive", "value": 0.8, "smooth_ms": 0}));
+    assert_eq!(reply["result"], json!({}), "{reply}");
+    d.process(1000);
+    let status = call(&mut d, c, 5, "status", json!({}));
+    assert!((find(&status, "drive")["value"].as_f64().unwrap() - 0.8).abs() < 1e-3);
+    let reply = call(&mut d, c, 6, "control.set", json!({"name": "nope", "value": 1.0}));
+    assert!(reply["error"].is_object(), "{reply}");
+    let reply = call(&mut d, c, 7, "control.set", json!({"name": "drive"}));
+    assert_eq!(reply["error"]["code"], -32602);
+}
+
+#[test]
+fn setting_a_macro_by_name_moves_its_controls() {
+    let (mut d, c) = ready();
+    call(
+        &mut d,
+        c,
+        2,
+        "eval",
+        json!({
+            "source": "ctl cutoff = 1khz\nctl drive = 0.3\nmacro bright {\n  smooth: 0ms\n  cutoff: 200hz..4khz\n  drive: 1..0\n}\ninstr a() { osc(saw, 100hz).lpf(cutoff: cutoff) * drive }\na() for 1beat",
+            "quantize": "now",
+        }),
+    );
+    d.process(1000);
+    let level = |d: &mut Server, id: u64, name: &str| {
+        let status = call(d, c, id, "status", json!({}));
+        status["result"]["controls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|control| control["name"] == name)
+            .unwrap_or_else(|| panic!("no control {name}: {status}"))["target"]
+            .as_f64()
+            .unwrap()
+    };
+    // the dock moves the macro like any control, and what it moves goes with it
+    let reply = call(&mut d, c, 3, "control.set", json!({"name": "bright", "value": 1.0}));
+    assert_eq!(reply["result"], json!({}), "{reply}");
+    d.process(1000);
+    assert!((level(&mut d, 4, "bright") - 1.0).abs() < 1e-6);
+    assert!((level(&mut d, 5, "cutoff") - 4000.0).abs() < 0.5);
+    assert!(level(&mut d, 6, "drive").abs() < 1e-6);
+    call(&mut d, c, 7, "control.set", json!({"name": "bright", "value": 0.0}));
+    d.process(1000);
+    assert!((level(&mut d, 8, "cutoff") - 200.0).abs() < 0.5);
+    assert!((level(&mut d, 9, "drive") - 1.0).abs() < 1e-6);
+    // the macro's own entry lists where it is driven from, as for any control
+    let status = call(&mut d, c, 10, "status", json!({}));
+    let own = status["result"]["controls"].as_array().unwrap().iter().find(|control| control["name"] == "bright").unwrap().clone();
+    assert!(own["source"].is_null());
+    assert_eq!(own["range"], json!(null));
+}
+
+#[test]
 fn cancel_hush_and_panic() {
     let (mut d, c) = ready();
     call(

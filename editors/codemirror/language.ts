@@ -5,7 +5,7 @@ import { tags } from '@lezer/highlight';
 // The VS Code grammar (editors/vscode/syntaxes) lists the same words; language.test.ts keeps them
 // from drifting apart.
 
-export const keywords = new Set('instr mono fn def const bus buffer ctl node fx config clip scene arrangement kit grid events midi_out over meter tempo state use unsolo hush panic reset reset_on after new at next now on if else match for in and or not init control as capture last spawn oversample env cycle out sample'.split(' '));
+export const keywords = new Set('instr mono fn def const bus buffer ctl macro node fx config clip scene arrangement kit grid events midi_out over meter tempo state use unsolo hush panic reset reset_on after new at next now on if else match for in and or not init control as capture last spawn oversample env cycle out sample'.split(' '));
 export const types = new Set('hz khz db sec ms samples beat beats bar bars deg st ct bpm int num'.split(' '));
 /** Words after a dot that act on a clip or scene: `beat.start`, `bass.reverse`. */
 export const commands = new Set('start stop play mute unmute solo unsolo undo clear set reverse drop'.split(' '));
@@ -46,7 +46,8 @@ export const niminal = StreamLanguage.define({
     if (stream.match('//')) { stream.skipToEnd(); return 'comment'; }
     if (stream.peek() === '"') { stream.next(); state.string = true; return 'string'; }
     if (stream.match(/\d+(?:\.\d+)?(?:khz|hz|db|bpm|sec|ms|samples|beats?|bars?|deg|st|ct|s|%)?(?![\w])/)) return 'number';
-    if (stream.match(/[a-g](?:#|b)?-?\d\b/)) return 'atom';
+    // a note name (`c4`) and a slice of a sample (`s0` to `s15`, from `slices(16)`) are values in a list of notes
+    if (stream.match(/(?:[a-g](?:#|b)?-?\d|s\d+)\b/)) return 'atom';
     if (stream.match(/[A-Za-z_][\w]*/)) {
       const word = stream.current();
       const named = state.naming;

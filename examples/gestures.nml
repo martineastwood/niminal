@@ -1,6 +1,6 @@
 // Gestures. A gesture is a clip that only moves an effect's controls: give it rows for the effect and no
 // `instrument:` or notes, and it plays once, puts the controls back, and sounds like the effect doing its thing.
-// Here three of them stutter a break. On a controller, `launch:` puts each on a pad (notes 36 to 38), and
+// Here two of them stutter a break and a third fires a hit like a machine gun. On a controller, `launch:` puts each on a pad (notes 36 to 38, and 40), and
 // `quantize:` lands it on the next sixteenth, so a pad hit a little early is still in time. In a file, as below,
 // `at` starts them in turn so you can render it. Pad 39 is different: it holds the stutter for as long as the key
 // is down, because `ctl held = midi.note(39)` is open while the key is.
@@ -37,23 +37,47 @@ fx break_stutter(
 }
 
 
+// A macro is one control that moves several: the controller on CC 1 sweeps the stutter's tape-echo `damp` and its
+// `shape` together (a range written backwards runs the other way). Nothing needs to be playing: it only sets the
+// controls, so the gestures below sound different as it moves. The dock shows it as a slider, too.
+macro tension {
+  input: midi.cc(1)
+  break_stutter {
+    damp:  0..0.6
+    shape: 0..0.8
+  }
+}
+
 clip chop {
   instrument: break_voice
   notes: [s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12 s13 s14 s15]
 }
 
-// pad 36: a machine gun, short plucked repeats
+// pad 36: a machine gun. This one plays the chopper instead of moving the effect: the stutter can only repeat
+// what was just heard, which in a break is often a short tick, so the gun fires the hit itself, sixteen times in
+// half a bar. Change `s0` to another slice for a different hit.
 clip gun {
+  instrument: break_voice
+  notes: [s0!16]
   length: 1/2bar
   times: 1
   quantize: 1/4beat
   launch: midi.note(36)
+}
+
+// pad 40: the same gun made with the stutter, which repeats the last `1/4beat` of the sound. It needs a hit just
+// before it, so it lands on the half beat (`quantize: 1/2beat`); fired right after a quiet slice it would click.
+clip echo_gun {
+  length: 1/2bar
+  times: 1
+  quantize: 1/2beat
+  launch: midi.note(40)
   break_stutter {
     hold:   xxxx xxxx
-    length: 1/8beat
-    gate:   0.4
+    length: 1/4beat
+    gate:   0.2
     shape:  1
-    bend:   0.7
+    bend:   0.5
   }
 }
 

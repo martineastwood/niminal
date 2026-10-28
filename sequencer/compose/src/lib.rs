@@ -25,7 +25,9 @@ pub use analysis::{
     CommandAction, PlayInfo, Ramp, Statement, StatementData, StatementKind, analyze, scene_clips,
 };
 pub use ast::{ControlInput, InputSource};
-pub use compile::{Composition, ControlBinding, QuantizeConfig, Trigger, compile, compile_with};
+pub use compile::{
+    Composition, ControlBinding, MacroDef, MacroTarget, QuantizeConfig, Trigger, compile, compile_with, interpolate,
+};
 pub use dsp::{LIVE_BPM, LIVE_METER, LIVE_ORIGIN, dsp_source, warnings};
 pub use ide::{RESERVED_WORDS, Symbol, SymbolKind, SymbolParam, pattern_ops, symbols};
 pub use lexer::{Tok, Token, lex};

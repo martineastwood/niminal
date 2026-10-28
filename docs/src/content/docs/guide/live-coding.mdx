@@ -148,6 +148,15 @@ fx knob { out = k.osc_out("/vj/knob", host: "192.168.1.20", port: 9000, rate: 10
 
 A message is sent when the value has changed and `rate` allows it; the first value goes at once. Sending happens whenever the server runs, and is not logged, so a replay does not send.
 
+## The controls dock in the stage
+
+The stage has a dock along the bottom (⌘J shows or hides it; drag its top edge to resize it). It draws what the piece offers to play with, with nothing to set up:
+
+- a **slider** for each `ctl` and each parameter of an effect, which follows the engine, so a knob on a controller moves it;
+- a **pad** for each gesture clip, and a **held pad** for each control bound to a key (`ctl held = midi.note(39)`).
+
+Effect parameters are grouped under the effect's name. Dragging a slider sets the control, and the little tag beside it says what drives it (`cc(21)`, `osc`).
+
 ## Audio input
 
 An fx can read the sound card's input with `input(1)`, or `input(1..2)` for two channels:

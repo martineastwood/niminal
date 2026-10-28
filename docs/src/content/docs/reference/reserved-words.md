@@ -9,7 +9,7 @@ None of these can be used as a name.
 
 | Kind | Names |
 | --- | --- |
-| Declarations | `instr`, `mono`, `fn`, `const`, `state`, `bus`, `buffer`, `sample`, `kit`, `ctl`, `node`, `fx`, `clip`, `scene`, `arrangement`, `config`, `use`, `as` |
+| Declarations | `instr`, `mono`, `fn`, `const`, `state`, `bus`, `buffer`, `sample`, `kit`, `ctl`, `macro`, `node`, `fx`, `clip`, `scene`, `arrangement`, `config`, `use`, `as` |
 | Performance and score | `start`, `stop`, `play`, `mute`, `unmute`, `solo`, `unsolo`, `undo`, `clear`, `set`, `hush`, `panic`, `reset`, `new`, `capture`, `last`, `tempo`, `meter`, `at`, `for`, `over`, `next`, `now`, `on`, `cycle` |
 | Control flow | `if`, `else`, `match`, `for`, `in`, `reset_on`, `after`, `spawn`, `oversample` |
 | Logic | `and`, `or`, `not`, `true`, `false` |

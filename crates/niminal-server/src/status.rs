@@ -6,6 +6,19 @@ use serde_json::{Value, json};
 
 use crate::session::Session;
 
+/// Every control with its current value and where it is heading, in the units it is written in. A request
+/// for just these is much cheaper than a whole status.
+pub fn controls_json(session: &Session) -> Vec<Value> {
+    session
+        .control_values()
+        .iter()
+        .map(|(name, value, target, unit)| {
+            let display = |value: f32| if *unit == Some("db") { 20.0 * f64::from(value.max(f32::MIN_POSITIVE)).log10() } else { f64::from(value) };
+            json!({ "name": name, "value": display(*value), "target": display(*target), "unit": unit })
+        })
+        .collect()
+}
+
 /// The engine's state: clock, definitions with their parameters, controls, realtime health and, for each
 /// client, its held notes and how many of its events are waiting.
 pub fn status_json(session: &Session) -> Value {
@@ -23,10 +36,7 @@ pub fn status_json(session: &Session) -> Value {
             "deadline_misses": m.deadline_misses, "max_render_micros": m.max_render_micros,
             "mixer_builds": m.mixer_builds, "planner_panics": m.planner_panics,
         })),
-        "controls": session.control_values().iter().map(|(name, value, target, unit)| {
-            let display = |value: f32| if *unit == Some("db") { 20.0 * f64::from(value.max(f32::MIN_POSITIVE)).log10() } else { f64::from(value) };
-            json!({ "name": name, "value": display(*value), "target": display(*target), "unit": unit })
-        }).collect::<Vec<_>>(),
+        "controls": controls_json(session),
         "processing_latency": session.program().processing_latency(),
         "instruments": instruments.iter().map(|i| json!({
             "name": i.name,

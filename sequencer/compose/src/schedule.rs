@@ -649,7 +649,7 @@ impl Schedule {
                             }),
                             Err(e) => {
                                 problem.get_or_insert_with(|| {
-                                    ScheduleError(format!("fx lane `{name}`: {e}"))
+                                    ScheduleError(format!("fx lane `{}`: {e}", crate::compile::written(name)))
                                 });
                             }
                         }
@@ -916,8 +916,9 @@ impl Schedule {
             };
             let fail = |why: String| {
                 ScheduleError(format!(
-                    "clip `{}` on node `{name}`, lane `{lane}`: {why}",
-                    clip.name
+                    "clip `{}` on node `{name}`, lane `{}`: {why}",
+                    clip.name,
+                    crate::compile::written(lane)
                 ))
             };
             let control = if lane.contains("::") {
@@ -970,8 +971,9 @@ impl Schedule {
         for (lane, curve) in &clip.curves {
             let fail = |why: String| {
                 ScheduleError(format!(
-                    "clip `{}` on node `{name}`, lane `{lane}`: {why}",
-                    clip.name
+                    "clip `{}` on node `{name}`, lane `{}`: {why}",
+                    clip.name,
+                    crate::compile::written(lane)
                 ))
             };
             let unit = curve
@@ -1181,8 +1183,9 @@ fn emit_envelope(
 
 fn lane_error(clip: &Clip, node: &str, lane: &str, why: &str) -> ScheduleError {
     ScheduleError(format!(
-        "clip `{}` on node `{node}`, lane `{lane}`: {why}",
-        clip.name
+        "clip `{}` on node `{node}`, lane `{}`: {why}",
+        clip.name,
+        crate::compile::written(lane)
     ))
 }
 

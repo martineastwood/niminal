@@ -66,7 +66,7 @@ impl Server {
                     "renameProvider": { "prepareProvider": true },
                     "signatureHelpProvider": { "triggerCharacters": ["(", ","] },
                     "semanticTokensProvider": {
-                        "legend": { "tokenTypes": features::TOKEN_TYPES, "tokenModifiers": [] },
+                        "legend": { "tokenTypes": features::TOKEN_TYPES, "tokenModifiers": features::TOKEN_MODIFIERS },
                         "full": true,
                     },
                 },
@@ -951,6 +951,36 @@ mod tests {
         }
         assert!(found.contains(&("verse", "enum")), "{found:?}");
         assert!(found.iter().filter(|f| f.0 == "lead").all(|f| f.1 == "namespace"));
+    }
+
+    #[test]
+    fn controls_and_macros_are_readonly_names_and_midi_is_a_namespace() {
+        let text = "ctl held = midi.note(39)\nmacro tension {\n  input: midi.cc(1)\n  held: 0..1\n}\n";
+        let mut server = Server::new();
+        open(&mut server, text);
+        let reply = request(
+            &mut server,
+            1,
+            "textDocument/semanticTokens/full",
+            json!({ "textDocument": { "uri": URI } }),
+        );
+        let data: Vec<u32> = reply["data"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u32).collect();
+        let (mut line, mut column) = (0, 0);
+        let mut found: Vec<(String, &str, u32)> = Vec::new();
+        for token in data.chunks(5) {
+            line += token[0];
+            column = if token[0] == 0 { column + token[1] } else { token[1] };
+            let word = &text.lines().nth(line as usize).unwrap()[column as usize..(column + token[2]) as usize];
+            found.push((word.to_string(), features::TOKEN_TYPES[token[3] as usize], token[4]));
+        }
+        let of = |word: &str, nth: usize| found.iter().filter(|f| f.0 == word).nth(nth).map(|f| (f.1, f.2));
+        // a control and a macro are variables flagged read-only
+        assert_eq!(of("held", 0), Some(("variable", 1)), "{found:?}");
+        assert_eq!(of("tension", 0), Some(("variable", 1)), "{found:?}");
+        // `midi` is a namespace both times, and the legend names the flag
+        assert_eq!(of("midi", 0), Some(("namespace", 0)));
+        assert_eq!(of("midi", 1), Some(("namespace", 0)));
+        assert_eq!(features::TOKEN_MODIFIERS[0], "readonly");
     }
 
     #[test]

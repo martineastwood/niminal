@@ -2852,6 +2852,72 @@ fn a_gesture_can_be_made_from_another_with_a_changed_row() {
     assert!(!open.is_empty());
 }
 
+const MACRO_SETUP: &str = "ctl cutoff = 1khz\nctl drive = 0.3\nbus src\ninstr pluck(freq: hz) {\n  out = osc(sine, freq)\n  src += out\n}\nfx g(open: 0..1 = 0, release: 1ms..500ms = 10ms) {\n  out = src * open\n}\n";
+
+#[test]
+fn a_macro_is_a_control_that_moves_others_over_ranges() {
+    let p = ok(&format!(
+        "{MACRO_SETUP}macro bright {{\n  input: midi.cc(21)\n  smooth: 20ms\n  cutoff: 200hz..4khz\n  drive: 1..0\n  g {{\n    open: 0..0.5\n  }}\n  g.release: 10ms..100ms\n}}"
+    ));
+    // it is a control of its own, from 0 to 1, that a controller drives
+    let own = p.controls.iter().find(|c| c.name == "bright").expect("the macro is a control");
+    assert_eq!(own.initial, 0.0);
+    assert!((own.smooth_seconds - 0.02).abs() < 1e-9, "{}", own.smooth_seconds);
+    let binding = p.input("bright").expect("it has an input");
+    assert_eq!(binding.source, InputSource::MidiCc { cc: 21, channel: None });
+    assert_eq!((binding.lo, binding.hi), (0.0, 1.0));
+    // and it moves four controls: a ctl, one backwards, and two parameters of an effect (block and dotted forms)
+    let m = p.macro_of("bright").expect("it is a macro");
+    let moves: Vec<(&str, f32, f32)> = m.targets.iter().map(|t| (t.control.as_str(), t.lo, t.hi)).collect();
+    assert_eq!(moves[0].0, "cutoff");
+    assert_eq!((moves[0].1, moves[0].2), (200.0, 4000.0));
+    assert_eq!(moves[1], ("drive", 1.0, 0.0));
+    assert_eq!((moves[2].0, moves[2].1, moves[2].2), ("g::open", 0.0, 0.5));
+    assert_eq!(moves[3].0, "g::release");
+    assert!((moves[3].1 - 0.01).abs() < 1e-6 && (moves[3].2 - 0.1).abs() < 1e-6, "{moves:?}");
+    // the sweep is even by ear for a frequency, and straight for a plain number
+    let cutoff = p.controls.iter().find(|c| c.name == "cutoff").unwrap();
+    assert!((crate::compile::interpolate(cutoff, 200.0, 4000.0, 0.5) - 894.4).abs() < 0.1);
+    let drive = p.controls.iter().find(|c| c.name == "drive").unwrap();
+    assert_eq!(crate::compile::interpolate(drive, 1.0, 0.0, 0.25), 0.75);
+}
+
+#[test]
+fn a_macro_without_an_input_is_still_a_control() {
+    let p = ok(&format!("{MACRO_SETUP}macro open {{\n  cutoff: 200hz..4khz\n}}"));
+    assert!(p.controls.iter().any(|c| c.name == "open"));
+    assert!(p.input("open").is_none());
+    assert_eq!(p.macro_of("open").unwrap().targets.len(), 1);
+}
+
+#[test]
+fn a_macro_says_what_is_wrong_in_the_words_the_code_uses() {
+    let setup = |body: &str| format!("{MACRO_SETUP}{body}");
+    let d = first_error(&setup("macro m {\n  cutof: 200hz..4khz\n}"));
+    assert_eq!(d.message, "no control named `cutof`");
+    assert_eq!(d.help.as_deref(), Some("did you mean `cutoff`?"));
+    // an effect's parameter is named with a dot, as it is written
+    let d = first_error(&setup("macro m {\n  g {\n    opne: 0..1\n  }\n}"));
+    assert_eq!(d.message, "no control named `g.opne`");
+    assert_eq!(d.help.as_deref(), Some("did you mean `g.open`?"));
+    assert_eq!(msg(&setup("macro m {\n  input: midi.cc(1)\n}")), "macro `m` moves nothing");
+    assert!(msg(&setup("macro m {\n  cutoff: 200hz\n}")).contains("needs the range"));
+    // a number with a unit of another kind is refused
+    assert!(msg(&setup("macro m {\n  cutoff: 1db..2db\n}")).contains("cutoff"));
+    assert_eq!(
+        msg(&setup("macro a {\n  cutoff: 200hz..4khz\n}\nmacro b {\n  a: 0..1\n}")),
+        "`a` is a macro; a macro can't move another macro"
+    );
+    assert_eq!(
+        msg(&setup("macro m {\n  cutoff: 200hz..4khz\n  cutoff: 300hz..2khz\n}")),
+        "macro `m` moves `cutoff` twice"
+    );
+    assert_eq!(
+        msg(&setup("macro m {\n  input: 5\n  cutoff: 200hz..4khz\n}")),
+        "`input` takes a key, a controller or an OSC address"
+    );
+}
+
 #[test]
 fn an_envelope_row_ramps_an_effects_control() {
     let p = ok(&format!(

@@ -42,6 +42,9 @@ pub enum Item {
     },
     Clip(NamedBlock),
     Scene(NamedBlock),
+    /// `macro open { input: midi.cc(21)  cutoff: 200hz..4khz  fx_name { param: 0..1 } }`: one control that moves
+    /// others. The entries are `input:` and `smooth:`, and then a range for each control it moves.
+    Macro(NamedBlock),
     /// `def name(params) { ... }`: a score function returning a clip, scene or pattern.
     Def(FnDef),
     Command(CommandStmt),

@@ -39,6 +39,7 @@ pub const RESERVED_WORDS: &[&str] = &[
     "match",
     "meter",
     "midi_out",
+    "macro",
     "mono",
     "new",
     "next",
@@ -181,6 +182,7 @@ pub fn symbols(source: &str) -> Result<Vec<Symbol>, Diagnostic> {
                 (&b.name, SymbolKind::Clip, format!("clip {}", b.name.name))
             }
             Item::Scene(b) => (&b.name, SymbolKind::Scene, format!("scene {}", b.name.name)),
+            Item::Macro(b) => (&b.name, SymbolKind::Control, format!("macro {}", b.name.name)),
             Item::Arrangement(d) => (
                 &d.name,
                 SymbolKind::Arrangement,

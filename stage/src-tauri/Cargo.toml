@@ -27,3 +27,8 @@ hound = "3"
 
 [profile.dev]
 debug = "line-tables-only"
+
+# The language, engine and sample code run on every evaluation, and unoptimised they are tens of times
+# slower: loading a 2 MB loop took 5 seconds. Only Stage's own small crate is left unoptimised.
+[profile.dev.package."*"]
+opt-level = 3

@@ -336,6 +336,7 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
                     },
                 )
             }
+            Item::Macro(b) => simple_def(text, offset, format!("macro:{}", b.name.name)),
             Item::On(d) => simple_def(text, offset, format!("on:{}", d.source.key())),
             Item::Fn(d) => simple_def(text, offset, format!("fn:{}", d.name.name)),
             Item::Def(d) => simple_def(text, offset, format!("def:{}", d.name.name)),

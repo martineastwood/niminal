@@ -939,23 +939,63 @@ impl Live {
     pub fn engine_status(&mut self) -> serde_json::Value {
         match self.link.request(EngineRequest::Status {}) {
             Ok(EngineReply::Status(mut v)) => {
-                let client = v["client_id"].as_u64().unwrap_or(0);
-                if let Some(controls) = v["controls"].as_array_mut() {
-                    controls.retain_mut(|control| {
-                        let Some(name) = control["name"]
-                            .as_str()
-                            .and_then(|n| self.control_name(n, client))
-                        else {
-                            return false;
-                        };
-                        control["name"] = serde_json::Value::String(name);
-                        true
-                    });
-                }
+                self.tidy_controls(&mut v);
                 v
             }
             _ => serde_json::json!({}),
         }
+    }
+
+    /// Just the controls, as `engine_status` lists them. Much cheaper than a whole status, so a window can
+    /// ask many times a second without holding the engine up.
+    pub fn engine_controls(&mut self) -> Vec<serde_json::Value> {
+        match self.link.request(EngineRequest::Controls {}) {
+            Ok(EngineReply::Status(mut v)) => {
+                self.tidy_controls(&mut v);
+                v["controls"].as_array().cloned().unwrap_or_default()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Keep this client's controls under the names the code gives them, with what a widget needs about each.
+    fn tidy_controls(&self, v: &mut serde_json::Value) {
+        let client = v["client_id"].as_u64().unwrap_or(0);
+        if let Some(controls) = v["controls"].as_array_mut() {
+            controls.retain_mut(|control| {
+                let Some(name) = control["name"]
+                    .as_str()
+                    .and_then(|n| self.control_name(n, client))
+                else {
+                    return false;
+                };
+                self.describe_control(control, &name);
+                control["name"] = serde_json::Value::String(name);
+                true
+            });
+        }
+    }
+
+    /// Add to a control's status what a widget needs: the `range` it moves over in the units `value` is
+    /// shown in (null when the code gives none), whether it moves on a `log` scale, what drives it
+    /// (`source`, such as `midi.cc(21)`) and whether it is a `ctl` or the parameter of an effect.
+    fn describe_control(&self, control: &mut serde_json::Value, name: &str) {
+        let def = self.program.controls.iter().find(|c| c.name == name);
+        let binding = self.program.input(name);
+        let db = control["unit"] == "db";
+        let shown = |v: f64| if db { 20.0 * v.max(f64::MIN_POSITIVE).log10() } else { v };
+        let range = binding
+            .map(|b| (f64::from(b.lo), f64::from(b.hi)))
+            .or_else(|| def.and_then(|d| d.range));
+        control["range"] = match range {
+            Some((lo, hi)) => serde_json::json!([shown(lo), shown(hi)]),
+            None => serde_json::Value::Null,
+        };
+        control["log"] = serde_json::json!(
+            control["unit"] == "hz" && range.is_some_and(|(lo, hi)| lo > 0.0 && hi > 0.0)
+        );
+        control["source"] = binding.map_or(serde_json::Value::Null, |b| b.source.key().into());
+        control["kind"] = if name.contains("::") { "fx" } else { "ctl" }.into();
     }
 
     pub(crate) fn control_name(&self, name: &str, client: u64) -> Option<String> {
