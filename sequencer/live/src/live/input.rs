@@ -140,12 +140,14 @@ impl Live {
     }
 
     fn drive_controls(&mut self, signal: &ControlSignal) -> usize {
+        // a key also moves a `ctl` bound to it, so it can be a gate that is open while the key is down
+        let mut keys = 0;
         match signal {
             ControlSignal::MidiNote {
                 note,
                 channel,
                 velocity,
-            } => return self.key_input(*channel, *note, *velocity),
+            } => keys = self.key_input(*channel, *note, *velocity),
             // a bend of 2 semitones each way, or 48 for a note of its own on an MPE keyboard
             ControlSignal::MidiBend { channel, value } => {
                 let range = if *channel != 1 && self.plays_mpe() {
@@ -221,6 +223,15 @@ impl Live {
                             value,
                         },
                     ) => (address == got && value.is_finite()).then_some(*value)?,
+                    (
+                        InputSource::MidiNote { note, channel },
+                        ControlSignal::MidiNote {
+                            note: got,
+                            channel: on,
+                            velocity,
+                        },
+                    ) => (note == got && channel.is_none_or(|c| c == *on))
+                        .then(|| f64::from(*velocity) / 127.0)?,
                     _ => return None,
                 };
                 Some((
@@ -230,7 +241,7 @@ impl Live {
                 ))
             })
             .collect();
-        targets
+        keys + targets
             .iter()
             .filter(|(name, value, unit)| self.set_control(name, *value, *unit, None).is_ok())
             .count()

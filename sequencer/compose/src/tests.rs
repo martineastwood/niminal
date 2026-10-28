@@ -71,14 +71,20 @@ fn controls_can_be_driven_from_midi_and_osc() {
 }
 
 #[test]
+fn a_control_input_with_no_range_spans_zero_to_one() {
+    for source in ["ctl a = midi.cc(21)", "ctl a = midi.note(36)", "ctl a = osc_in(\"/a\")"] {
+        let p = ok(&stage(source));
+        assert_eq!(p.inputs.len(), 1, "{source}");
+        let binding = &p.inputs[0].1;
+        assert_eq!((binding.lo, binding.hi), (0.0, 1.0), "{source}");
+    }
+}
+
+#[test]
 fn bad_control_inputs_are_explained() {
     assert_eq!(
         msg("ctl a = midi.cc(200)"),
         "expected a CC number from 0 to 127, found a number"
-    );
-    assert_eq!(
-        msg("ctl a = midi.note(1)"),
-        "a control follows a controller: use `midi.cc(number)`"
     );
     assert_eq!(
         msg("ctl a = midi.bend"),
@@ -2650,7 +2656,6 @@ fn on_runs_commands_when_something_arrives() {
     assert_eq!(p.triggers[2].source, InputSource::Osc("/go".into()));
     assert!(msg(&stage("on midi.note(36) 5")).contains("runs commands"));
     assert!(msg(&stage("on midi.learn lead.start")).contains("for a control"));
-    assert!(msg(&stage("ctl x = midi.note(36)")).contains("follows a controller"));
     assert!(msg(&stage("on midi.note(200) lead.start")).contains("note number"));
 }
 
@@ -2835,6 +2840,23 @@ fn a_clip_with_only_rows_for_an_effect_is_a_gesture_that_moves_it_once() {
     assert!(open.contains(&(3.0, 1.0)), "{open:?}");
     assert_eq!(open.last().map(|o| o.1), Some(0.0), "{open:?}");
     assert!(open.iter().all(|(at, _)| *at >= 2.0), "nothing before it starts: {open:?}");
+}
+
+#[test]
+fn an_envelope_row_ramps_an_effects_control() {
+    let p = ok(&format!(
+        "{GATED_FX}clip hit {{\n  length: 1bar\n  times: 1\n  g {{\n    open: env[0 1bar 1]\n  }}\n}}\nhit.start\n"
+    ));
+    // it starts at 0 and glides to 1 over the bar (2 s), rather than stepping
+    let sets: Vec<_> = p
+        .schedule()
+        .events_lenient(0.0, 1.9, &[])
+        .controls
+        .into_iter()
+        .filter(|c| c.name == "g::open" && c.at < 0.5)
+        .map(|c| (c.target, c.glide))
+        .collect();
+    assert!(sets.contains(&(1.0, 2.0)), "{sets:?}");
 }
 
 #[test]

@@ -58,7 +58,7 @@ impl DspSource {
     }
 }
 
-fn control_value(source: &str, expr: &Expr) -> String {
+pub(crate) fn control_value(source: &str, expr: &Expr) -> String {
     match &expr.kind {
         ExprKind::Num { value, unit } => format!("{value}{}", unit.as_deref().unwrap_or("")),
         ExprKind::Call { name, args } if name.name == "smooth" => format!(

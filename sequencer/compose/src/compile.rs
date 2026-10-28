@@ -444,7 +444,7 @@ fn control_inputs(
         text.push_str(&format!(
             "
 ctl __input_hi_{n} = {}",
-            &source[input.hi.span.start..input.hi.span.end]
+            crate::dsp::control_value(source, &input.hi)
         ));
     }
     let base = &program.source;

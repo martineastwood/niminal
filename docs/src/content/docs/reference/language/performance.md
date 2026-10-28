@@ -359,7 +359,9 @@ clip roll {
 }
 ```
 
-The rows step through the clip a sixteenth at a time. See `examples/gestures.nml`.
+The rows step through the clip a sixteenth at a time. A list of levels (`[0@14 3@1 7@1]`) steps a control, and `env[0 3/4bar 0 1/4bar 12]` glides it, so a pitch can climb smoothly through a roll. (Levels in an `env` can't be times, because a time reads as a duration there.) See `examples/gestures.nml`.
+
+**Hold until the key comes up:** a gesture runs for its set length. For a stutter that lasts as long as a pad is held, bind a control to the key: `ctl held = midi.note(39)` is above zero while the key is down and back to zero when it comes up (the velocity sets how far; `.range(...)` sets the span, 0 to 1 if left out). Read it where the effect takes its hold, for example `repeat_last(hold: hold + held, ...)`.
 
 **One knob, many controls:** a `ctl` can feed any number of places, each with a range of its own, so it works as a macro: `ctl open = midi.cc(21)`, then `open.range(200hz..4khz)` on a filter and `open.range(0..0.5)` on a resonance.
 

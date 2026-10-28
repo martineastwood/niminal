@@ -92,6 +92,20 @@ fn bound_controls_replay_from_the_log() {
     assert_eq!(original, replay[0]);
 }
 
+#[test]
+fn a_control_bound_to_a_key_is_open_while_the_key_is_down() {
+    let mut s = session("ctl held = midi.note(36).range(0..1).smooth(0ms)\ninstr flat() { held }\nflat() for 1beat");
+    let key = |note, velocity| ControlSignal::MidiNote { note, channel: 1, velocity };
+    assert_eq!(s.process(4)[0], vec![0.0; 4]);
+    // another key leaves it alone
+    s.control_input(&key(37, 127));
+    assert_eq!(s.process(4)[0], vec![0.0; 4]);
+    s.control_input(&key(36, 127));
+    assert_eq!(s.process(4)[0], vec![1.0; 4]);
+    s.control_input(&key(36, 0));
+    assert_eq!(s.process(4)[0], vec![0.0; 4]);
+}
+
 const LEARNING: &str = "ctl level = midi.learn.range(0..1).smooth(0ms)\nctl pan = midi.learn.range(0..1).smooth(0ms)\ninstr flat() { level + pan * 10 }\nflat() for 1beat";
 
 #[test]

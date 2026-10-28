@@ -306,18 +306,12 @@ impl Parser {
         }))
     }
 
-    /// The rest of `ctl name = midi.cc(21).range(200hz..4khz).smooth(10ms)` or
-    /// `ctl name = osc_in("/fx/width").range(0..1)`.
+    /// The rest of `ctl name = midi.cc(21).range(200hz..4khz).smooth(10ms)`,
+    /// `ctl name = osc_in("/fx/width").range(0..1)` or `ctl held = midi.note(36)`, which is open while the
+    /// key is down.
     fn input_control(&mut self, name: Ident) -> Res<Item> {
         let start = self.span();
         let source = self.input_source()?;
-        if matches!(source, InputSource::MidiNote { .. }) {
-            return Err(Diagnostic::new(
-                "a control follows a controller: use `midi.cc(number)`",
-                start.to(self.prev_span()),
-            )
-            .with_help("to run commands from a key, write `on midi.note(36) beat.start`"));
-        }
         let number = |value: f64, span| Expr {
             kind: ExprKind::Num { value, unit: None },
             span,
