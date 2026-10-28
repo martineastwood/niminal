@@ -217,6 +217,11 @@ impl Server {
         };
         let before = &doc.text[..offset];
         let docs = |s: &Symbol| doc.comment_of(s);
+        // `use std/drums.{` offers the presets on that shelf
+        let line = before.rsplit('\n').next().unwrap_or(before);
+        if let Some(items) = complete::preset_items(line) {
+            return json!({ "isIncomplete": false, "items": items });
+        }
         // `alias::` offers what that module defines
         if let Some(alias) = text::qualifier(before) {
             let names: Vec<Symbol> = doc
@@ -234,7 +239,19 @@ impl Server {
                 .filter(|i| i.alias.is_none())
                 .flat_map(|i| i.symbols.clone()),
         );
-        json!({ "isIncomplete": false, "items": complete::items(before, &symbols, &docs) })
+        let mut items = complete::items(before, &symbols, &docs);
+        // a name being typed, not a method or a qualified one: the presets that start with it
+        let prefix = before
+            .rsplit(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .next()
+            .unwrap_or_default();
+        let head = &before[..before.len() - prefix.len()];
+        if prefix.len() >= 2 && !head.ends_with('.') && !head.ends_with(':') {
+            items.extend(complete::preset_suggestions(prefix, &doc.text, &|name| {
+                doc.find(name).is_some()
+            }));
+        }
+        json!({ "isIncomplete": false, "items": items })
     }
 
     /// `· control` after each value in an instrument body that changes less than every sample (and
@@ -771,6 +788,46 @@ mod tests {
             labels.contains(&"tone") && labels.contains(&"lpf"),
             "{labels:?}"
         );
+    }
+
+    #[test]
+    fn use_of_a_shelf_offers_its_presets() {
+        let mut server = Server::new();
+        open(&mut server, "use std/drums.{kick_808, ");
+        let completion = request(&mut server, 1, "textDocument/completion", at(0, 25));
+        let items = completion["items"].as_array().unwrap();
+        let labels: Vec<_> = items.iter().map(|i| i["label"].as_str().unwrap()).collect();
+        assert!(labels.contains(&"snare_tri") && !labels.contains(&"kick_808"), "{labels:?}");
+        assert!(!labels.contains(&"echo"), "only this shelf");
+    }
+
+    #[test]
+    fn a_preset_name_typed_anywhere_offers_to_use_it_or_copy_it() {
+        let mut server = Server::new();
+        open(&mut server, "use std/drums.{kick_808}\nclip a { instrument: snare_t");
+        let completion = request(&mut server, 1, "textDocument/completion", at(1, 27));
+        let items = completion["items"].as_array().unwrap();
+        let by_name = items.iter().find(|i| i["label"] == "snare_tri").expect("by name");
+        // the file already takes from std/drums, so the name joins that list
+        let edit = &by_name["additionalTextEdits"][0];
+        assert_eq!(edit["newText"], ", snare_tri");
+        assert_eq!(edit["range"]["start"], json!({ "line": 0, "character": 23 }));
+        let copy = items.iter().find(|i| i["label"] == "snare_tri (copy source)").expect("copy");
+        assert!(copy["insertText"].as_str().unwrap().contains("instr snare_tri("));
+        assert!(copy["insertText"].as_str().unwrap().contains("fn drum("), "the copy stands alone");
+        // one the file has already is not offered again
+        open(&mut server, "use std/drums.{kick_808}\nclip a { instrument: kick_8");
+        let again = request(&mut server, 2, "textDocument/completion", at(1, 27));
+        assert!(!again["items"].as_array().unwrap().iter().any(|i| i.get("additionalTextEdits").is_some()));
+        // a file that takes from no shelf gets a new `use` line, and a copy brings the voice it needs
+        open(&mut server, "clip a { instrument: echo");
+        let completion = request(&mut server, 3, "textDocument/completion", at(0, 25));
+        let echo = completion["items"].as_array().unwrap().iter().find(|i| i["label"] == "echo").unwrap().clone();
+        assert_eq!(echo["additionalTextEdits"][0]["newText"], "use std/fx.{echo}\n");
+        open(&mut server, "clip a { instrument: snare_t");
+        let completion = request(&mut server, 4, "textDocument/completion", at(0, 28));
+        let copy = completion["items"].as_array().unwrap().iter().find(|i| i["label"] == "snare_tri (copy source)").unwrap().clone();
+        assert!(copy["insertText"].as_str().unwrap().contains("fn drum("), "the voice comes along");
     }
 
     const SONG: &str = "instr tone(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: 800) }\nclip lead { instrument: tone }\nlead.mute\nlead.start\n";

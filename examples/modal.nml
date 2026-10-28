@@ -31,19 +31,19 @@ fn strike(length: sec) {
 
 instr tom(freq: init hz = 110hz) {
   tail = 3sec
-  out = strike(2ms).drum(freq, decay: 0.9993).gain(20db)
+  out = strike(2ms).membrane(freq, decay: 200ms).gain(20db)
   space += out.gain(-14db)
 }
 
 instr marimba(freq: init hz) {
   tail = 3sec
-  out = strike(3ms).free_bar(freq, decay: 0.9995).gain(26db)
+  out = strike(3ms).free_bar(freq, decay: 300ms).gain(26db)
   space += out.gain(-10db)
 }
 
 instr bell_hit(freq: init hz) {
   tail = 5sec
-  out = strike(1ms).bell(freq, decay: 0.99985).gain(34db)
+  out = strike(1ms).bell(freq, decay: 1sec).gain(34db)
   space += out.gain(-8db)
 }
 

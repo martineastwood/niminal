@@ -108,7 +108,7 @@ impl Opcode for Comb {
             let older = self.buf[(self.write + len - whole - 1) % len];
             let delayed = newer + (older - newer) * frac;
 
-            let fb = inputs[2][i].clamp(-0.995, 0.995);
+            let fb = inputs[2][i].clamp(-0.9999, 0.9999);
             let ff = inputs[3][i].clamp(-1.0, 1.0);
             let damp = f64::from(inputs[4][i].clamp(0.0, 1.0));
 

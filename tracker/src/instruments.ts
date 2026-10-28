@@ -74,7 +74,7 @@ export function sliceInstrument(project: Project, source: Definition, pieces: nu
 /** The code of a preset under the name `code`; a drum preset carries its own copy of the voice it calls, named from it. */
 export function presetSource(preset: Preset, code: string) {
   const source = preset.source.replace(/^instr \w+/m, `instr ${code}`);
-  const voice = preset.voice?.replace(/^fn drum\b/m, `fn ${code}_voice`).replace(/^\/\/\/.*\n/gm, '');
+  const voice = preset.helpers?.replace(/^fn drum\b/m, `fn ${code}_voice`).replace(/^\/\/\/.*\n/gm, '');
   return voice ? `${source.replace(/\bdrum\(/, `${code}_voice(`)}\n${voice}` : source;
 }
 

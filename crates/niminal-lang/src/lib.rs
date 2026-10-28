@@ -22,6 +22,7 @@ mod modules;
 mod namespace;
 mod opcodes;
 mod parser;
+pub mod presets;
 mod prelude;
 mod program;
 mod project;

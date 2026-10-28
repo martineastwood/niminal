@@ -346,12 +346,8 @@ mod tests {
         let mut server = niminal_lsp::Server::new();
         let uri = "file:///niminal-tracker/tone.nml";
         // The tracker's own instrument and send, and every definition in the library that comes with niminal.
-        let definitions = |text: &'static str| -> Vec<&'static str> {
-            text.split("\n\n").filter(|block| block.lines().any(|l| l.starts_with("fx ") || l.starts_with("instr "))).collect()
-        };
         let mut sources = vec![include_str!("../../src/presets/tone.nml"), include_str!("../../src/presets/send.nml")];
-        sources.extend(definitions(include_str!("../../../crates/niminal-lang/std/instruments.nml")));
-        sources.extend(definitions(include_str!("../../../crates/niminal-lang/std/fx.nml")));
+        sources.extend(niminal_lang::presets::all().iter().filter(|p| p.shelf != "std/drums").map(|p| p.source.as_str()));
         assert!(sources.len() >= 24);
         for source in sources {
             let replies = server.handle(&json!({"method":"textDocument/didOpen", "params": {

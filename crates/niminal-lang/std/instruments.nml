@@ -1,4 +1,5 @@
-// Ready-made instruments: `use std/instruments`, then play them by name. Each is a short, finished
+// Ready-made instruments, a shelf to take from: `use std/instruments.{kick, bass}`, then play them by name.
+// Each is a short, finished
 // sound with a few controls. They are complete on their own, so the tracker copies one into a
 // project as it stands and you can edit it from there.
 

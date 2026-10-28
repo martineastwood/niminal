@@ -3,7 +3,7 @@
 // Each preset has the same controls (`decay`, `drive`, `mix`, `noise_freq`, `eq_gain`...), so any
 // lane can reshape any sound, and the open and closed hats choke each other. `my_snare` shows `drum` called directly, with the settings you pick.
 // Render with:  niminal-live render examples/drum_voice.nml --out drum_voice.wav --bars 4
-use std/drums
+use std/drums.{kick_808, kick_punch, snare_tri, clap, hat_closed, hat_open, cowbell, rim, tom, blip, zap, wobble_bass}
 
 config { channels: stereo }
 tempo 124bpm

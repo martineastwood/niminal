@@ -1,6 +1,7 @@
 //! Built-in opcodes.
 
 mod allpass;
+mod biquad;
 mod bitcrush;
 mod buffer;
 mod chorus;
@@ -20,11 +21,14 @@ mod fold;
 mod follow;
 mod formant;
 mod gate;
+mod glitch;
 mod impulse;
+mod ladder;
 mod lag;
 mod lanes;
 mod limiter;
 mod math;
+mod modal;
 mod noise;
 mod osc;
 mod pan;
@@ -39,6 +43,7 @@ mod spectral;
 mod tap;
 
 pub use allpass::Allpass;
+pub use biquad::{Biquad, BiquadMode};
 pub use bitcrush::Bitcrush;
 pub use buffer::{BufferRead, BufferReadBank, BufferRecord, BufferWrite};
 pub use chorus::Chorus;
@@ -61,7 +66,9 @@ pub use fold::{Clip, Fold};
 pub use follow::Follow;
 pub use formant::Formant;
 pub use gate::Gate;
+pub use glitch::{DEFAULT_MAX_SECONDS as GLITCH_MAX_SECONDS, RepeatLast, RewindLast, SlowDown};
 pub use impulse::Impulse;
+pub use ladder::Ladder;
 pub use lag::Lag;
 pub use limiter::Limiter;
 pub use math::{
@@ -69,6 +76,7 @@ pub use math::{
     NoteStart, NoteTime, Pow, ReadContext, Released, Rem, SampleRate, Select, Sub, TableRead,
     Waveshape,
 };
+pub use modal::Modal;
 pub use noise::{Noise, NoiseColor};
 pub use osc::{Osc, Wave, Wavetable};
 pub use pan::{PanChannel, pan_gains};

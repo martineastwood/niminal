@@ -79,6 +79,7 @@ export function applyView(prefs: ViewPrefs, focus = false) {
 /** Lets the pointer drag `handle` to size a side bar: `sign` is 1 when growing means moving right. */
 export function dragWidth(handle: HTMLElement, sign: 1 | -1, current: () => number, set: (width: number) => void, done: () => void) {
   handle.onpointerdown = event => {
+    event.preventDefault();
     const startX = event.clientX, startWidth = current();
     handle.setPointerCapture(event.pointerId);
     handle.onpointermove = move => set(clampWidth(startWidth + sign * (move.clientX - startX)));

@@ -172,15 +172,15 @@ fn library() {
     );
     bench(
         "std drum (8 modes)",
-        "use std/physical\ninstr a() { impulse(2hz).drum(150hz) }",
+        "use std/physical\ninstr a() { impulse(2hz).membrane(150hz) }",
     );
     bench(
-        "std multitap (3 taps)",
-        "use std/delays\ninstr a() { osc(saw, 110hz).multitap([100ms, 200ms, 300ms], [0.5, 0.3, 0.2]) }",
+        "std echoes (3 taps)",
+        "use std/delays\ninstr a() { osc(saw, 110hz).echoes(count: 3, spacing: 100ms, fade: 0.6) }",
     );
     bench(
         "std fdn reverb (8 lines)",
-        "use std/reverb\ninstr a() { osc(saw, 110hz).fdn() }",
+        "instr a() { osc(saw, 110hz).fdn_reverb() }",
     );
     bench(
         "std spectral blur (1024)",

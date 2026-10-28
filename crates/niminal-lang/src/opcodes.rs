@@ -8,10 +8,10 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 use niminal_engine::Opcode;
 pub use niminal_engine::ops::Wave;
 use niminal_engine::ops::{
-    Allpass, Bitcrush, Chorus, Clip, Comb, Compressor, Convolve, DcBlock, Delay, Distortion, Eq,
-    EqMode, Fdn, FilterMode, FinishWhen, Fn1, Fold, Follow, Formant, Func, Gain, Gate, Impulse,
-    IrSpectrum, Lag, Limiter, Noise, NoiseColor, Osc, Phaser, Phasor, PitchShift, Resonator,
-    Reverb, SampleHold, SpectralDelay, SpectralFreeze, Svf, Waveshape, Wavetable,
+    Allpass, Biquad, BiquadMode, Bitcrush, Chorus, Clip, Comb, Compressor, Convolve, DcBlock, Delay, Distortion, Eq,
+    EqMode, Fdn, FilterMode, FinishWhen, Fn1, Fold, Follow, Formant, Func, GLITCH_MAX_SECONDS, Gain, Gate, Impulse,
+    IrSpectrum, Ladder, Lag, Limiter, Modal, Noise, NoiseColor, Osc, Phaser, Phasor, PitchShift, Resonator,
+    RepeatLast, Reverb, RewindLast, SampleHold, SlowDown, SpectralDelay, SpectralFreeze, Svf, Waveshape, Wavetable,
 };
 
 use crate::unit::Unit;
@@ -188,6 +188,15 @@ fn fft_size(a: &BuildArgs) -> Result<usize, String> {
 /// The longest delay line a program may ask for.
 const MAX_DELAY_SECONDS: f64 = 30.0;
 
+/// The `max:` of a glitch opcode: how much sound it keeps, in seconds.
+fn glitch_max(a: &BuildArgs) -> Result<f32, String> {
+    let max = a.consts.get("max").copied().unwrap_or(f64::from(GLITCH_MAX_SECONDS));
+    if max > MAX_DELAY_SECONDS {
+        return Err(format!("`max` can be at most {MAX_DELAY_SECONDS} seconds"));
+    }
+    Ok(max.max(0.0) as f32)
+}
+
 pub enum Build {
     Builtin(BuildFn),
     /// `pan`: one output per speaker of the master layout.
@@ -239,6 +248,20 @@ fn filter_params() -> Vec<ParamSpec> {
 
 fn filter(name: &str, doc: &str, build: BuildFn) -> OpSpec {
     OpSpec::new(name, doc, filter_params(), Build::Builtin(build))
+}
+
+/// A `biquad_` filter: the signal, a cutoff and a `q`.
+fn biquad(name: &str, doc: &str, build: BuildFn) -> OpSpec {
+    OpSpec::new(
+        name,
+        doc,
+        vec![
+            req("x", SIGNAL),
+            req("cutoff", Kind::Signal(Unit::Hz)),
+            opt("q", SIGNAL),
+        ],
+        Build::Builtin(build),
+    )
 }
 
 fn math(name: &str, doc: &str, build: BuildFn) -> OpSpec {
@@ -316,11 +339,12 @@ impl Registry {
             ),
             OpSpec::new(
                 "delay",
-                "A delay line. `time` is how long to wait, `feedback` feeds the output back in. A changing `time` needs `max:` to size the line (at most 30 seconds).",
+                "A delay line. `time` is how long to wait, `feedback` feeds the output back in, and `damp` (a cutoff in hz, off by default) darkens each echo as it goes round, like a tape delay. For several echoes, add several delays: `x + x.delay(120ms) * 0.6 + x.delay(250ms) * 0.3`, each with its own time and processing. A changing `time` needs `max:` to size the line (at most 30 seconds).",
                 vec![
                     req("x", SIGNAL),
                     req("time", Kind::Signal(Unit::Time)),
                     opt("feedback", SIGNAL),
+                    opt("damp", Kind::Signal(Unit::Hz)),
                     setting("max", Kind::Signal(Unit::Time)),
                 ],
                 Build::Builtin(|a| {
@@ -343,7 +367,7 @@ impl Registry {
             ),
             OpSpec::new(
                 "fdn_reverb",
-                "A reverb from a feedback delay network of eight lines. `time` is how long the tail takes to fall by 60db, `damp` the cutoff of the low-pass in each line (highs die first, as in a room), and `size` stretches the lines (0.5 to 2). Wet only; the channels of a stereo signal are decorrelated. `std/reverb` wraps it as `fdn`.",
+                "A reverb from a feedback delay network of eight lines. `time` is how long the tail takes to fall by 60db, `damp` the cutoff of the low-pass in each line (highs die first, as in a room), and `size` stretches the lines (0.5 to 2). Wet only; the channels of a stereo signal are decorrelated.",
                 vec![
                     req("x", SIGNAL),
                     opt("time", Kind::Signal(Unit::Time)),
@@ -572,6 +596,108 @@ impl Registry {
                     opt("release", Kind::Signal(Unit::Time)),
                 ],
                 Build::Builtin(|_| Ok(Box::new(Limiter::default()))),
+            ),
+            OpSpec::new(
+                "repeat_last",
+                "Repeats the last `length` of the sound for as long as `hold` is above zero, then lets the sound through again. Each repeat is `fade` times the level of the one before and `shrink` times the length, so a `shrink` below 1 rolls faster the longer it is held. `pitch` (in semitones) changes the speed the piece is read at. The change fades in and out over `blend` (3ms). `max:` is the longest `length` (default 2 seconds, at most 30).",
+                vec![
+                    req("x", SIGNAL),
+                    req("hold", SIGNAL),
+                    req("length", Kind::Signal(Unit::Time)),
+                    opt("pitch", SIGNAL),
+                    opt("fade", SIGNAL),
+                    opt("shrink", SIGNAL),
+                    opt("blend", Kind::Signal(Unit::Time)),
+                    setting("max", Kind::Signal(Unit::Time)),
+                ],
+                Build::Builtin(|a| Ok(Box::new(RepeatLast::new(glitch_max(a)?)))),
+            ),
+            OpSpec::new(
+                "rewind_last",
+                "Plays the last `length` of the sound backwards, over and over, for as long as `hold` is above zero. `blend` is the fade in and out (3ms). `max:` is the longest `length` (default 2 seconds, at most 30).",
+                vec![
+                    req("x", SIGNAL),
+                    req("hold", SIGNAL),
+                    req("length", Kind::Signal(Unit::Time)),
+                    opt("blend", Kind::Signal(Unit::Time)),
+                    setting("max", Kind::Signal(Unit::Time)),
+                ],
+                Build::Builtin(|a| Ok(Box::new(RewindLast::new(glitch_max(a)?)))),
+            ),
+            OpSpec::new(
+                "slow_down",
+                "Slows the sound to a stop over `time` while `hold` is above zero, like a tape machine switched off, and plays it live again when `hold` ends. `blend` is the fade in and out (3ms). `max:` is how much sound is kept (default 2 seconds, at most 30).",
+                vec![
+                    req("x", SIGNAL),
+                    req("hold", SIGNAL),
+                    req("time", Kind::Signal(Unit::Time)),
+                    opt("blend", Kind::Signal(Unit::Time)),
+                    setting("max", Kind::Signal(Unit::Time)),
+                ],
+                Build::Builtin(|a| Ok(Box::new(SlowDown::new(glitch_max(a)?)))),
+            ),
+            OpSpec::new(
+                "ladder",
+                "A four-pole low-pass with a `tanh` in each stage, like a transistor ladder. `res` feeds the output back to the input: 0 is a plain low-pass, and near 1 it rings and then sings at the cutoff. `drive` scales the input, so loud sounds saturate the stages harder.",
+                vec![
+                    req("x", SIGNAL),
+                    req("cutoff", Kind::Signal(Unit::Hz)),
+                    opt("res", SIGNAL),
+                    opt("drive", SIGNAL),
+                ],
+                Build::Builtin(|_| Ok(Box::new(Ladder::default()))),
+            ),
+            OpSpec::new(
+                "biquad",
+                "One two-pole, two-zero filter section from its five coefficients (`a0` already divided out), for building filters of your own: `x.biquad(b0, b1, b2, a1, a2)`. For the usual shapes use `biquad_lp`, `biquad_hp`, `biquad_bp`, `biquad_notch` or `biquad_allpass`.",
+                vec![
+                    req("x", SIGNAL),
+                    req("b0", SIGNAL),
+                    req("b1", SIGNAL),
+                    req("b2", SIGNAL),
+                    req("a1", SIGNAL),
+                    req("a2", SIGNAL),
+                ],
+                Build::Builtin(|_| Ok(Box::new(Biquad::new(BiquadMode::Raw)))),
+            ),
+            biquad(
+                "biquad_lp",
+                "A two-pole low-pass. `q` is the height of the peak at the cutoff: 0.707 is flat.",
+                |_| Ok(Box::new(Biquad::new(BiquadMode::Low))),
+            ),
+            biquad(
+                "biquad_hp",
+                "A two-pole high-pass.",
+                |_| Ok(Box::new(Biquad::new(BiquadMode::High))),
+            ),
+            biquad(
+                "biquad_bp",
+                "A two-pole band-pass with a constant peak gain of 1; `q` sets how narrow it is.",
+                |_| Ok(Box::new(Biquad::new(BiquadMode::Band))),
+            ),
+            biquad(
+                "biquad_notch",
+                "A notch: everything but a narrow band around `cutoff`.",
+                |_| Ok(Box::new(Biquad::new(BiquadMode::Notch))),
+            ),
+            biquad(
+                "biquad_allpass",
+                "Passes every frequency at the same level and turns the phase around `cutoff`; `q` sets how sharply.",
+                |_| Ok(Box::new(Biquad::new(BiquadMode::All))),
+            ),
+            OpSpec::new(
+                "modal",
+                "Resonators in parallel, one for each of `ratios` times `freq`: modal synthesis of bars, bells and drums. `x.modal(freq, [1, 2.756, 5.404], decay: 500ms)`. `decay` is how long every mode takes to fall by 60db (300ms unless given). Each mode is about as loud as the input at its own frequency. Modes above half the sample rate are left out.",
+                vec![
+                    req("x", SIGNAL),
+                    req("freq", Kind::Signal(Unit::Hz)),
+                    req("ratios", Kind::Table),
+                    opt("decay", Kind::Signal(Unit::Time)),
+                ],
+                Build::Builtin(|a| {
+                    let ratios = a.table.clone().expect("modal has ratios");
+                    Ok(Box::new(Modal::new(ratios)))
+                }),
             ),
             OpSpec::new(
                 "gate",

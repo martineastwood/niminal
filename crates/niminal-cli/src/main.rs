@@ -119,6 +119,18 @@ struct ServerArgs {
     render_fork: niminal_server::Policy,
 }
 
+#[derive(Args)]
+struct PresetsArgs {
+    /// Print this preset's source instead of the list.
+    name: Option<String>,
+    /// Only instruments (`instr`) or effects (`fx`).
+    #[arg(long, value_parser = ["instr", "fx"])]
+    kind: Option<String>,
+    /// The whole catalog as JSON.
+    #[arg(long, conflicts_with_all = ["name", "kind"])]
+    json: bool,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Re-render a session to a WAV file from the log a server recorded.
@@ -127,8 +139,51 @@ enum Command {
     Server(ServerArgs),
     /// Print the built-in opcode reference as Markdown, for the docs site.
     Docs,
+    /// List the ready-made instruments and effects, or print one to paste into a file.
+    Presets(PresetsArgs),
     /// List the sound cards, with the ids `--out-device` and `--in-device` take.
     Devices,
+}
+
+/// `niminal presets`: what comes with niminal, and how to take it.
+fn run_presets(args: &PresetsArgs) -> Result<(), String> {
+    use niminal_lang::presets;
+    if args.json {
+        print!("{}", presets::json());
+        return Ok(());
+    }
+    if let Some(name) = &args.name {
+        let preset = presets::find(name)
+            .ok_or_else(|| format!("error: no preset `{name}`; `niminal presets` lists them"))?;
+        println!(
+            "// take it by name: use {}.{{{}}}\n",
+            preset.shelf, preset.id
+        );
+        if !preset.helpers.is_empty() {
+            println!("{}", preset.helpers);
+        }
+        print!("{}", preset.source);
+        return Ok(());
+    }
+    let mut folder = "";
+    let shown: Vec<_> = presets::all()
+        .iter()
+        .filter(|p| args.kind.as_deref().is_none_or(|k| p.kind.keyword() == k))
+        .collect();
+    for p in &shown {
+        if p.folder != folder {
+            folder = &p.folder;
+            println!("\n{folder}");
+        }
+        println!("  {:<16} {}", p.id, p.description);
+    }
+    if let Some(p) = shown.first() {
+        println!(
+            "\ntake one by name: use {}.{{{}}}  (niminal presets <name> prints its source)",
+            p.shelf, p.id
+        );
+    }
+    Ok(())
 }
 
 fn main() -> ExitCode {
@@ -155,6 +210,7 @@ fn main() -> ExitCode {
             print!("{}", opcode_reference());
             Ok(())
         }
+        Command::Presets(args) => run_presets(&args),
         Command::Devices => {
             print_devices();
             Ok(())

@@ -4,7 +4,6 @@
 // compiler makes up for wherever a signal is mixed with its own dry copy.
 // Render with:  niminal-live render examples/spectral.nml --out spectral.wav
 use std/spectral
-use std/reverb
 
 config { channels: stereo }
 tempo 90bpm
@@ -39,7 +38,7 @@ instr hiss(amount: 0..1 = 0.4) {
 instr hall(freq: hz) {
   level = env[1 | 2sec 0]
   src = osc(sine, freq) * env[1 30ms 0]
-  out = src.fdn(time: 3.5sec, damp: 4khz) * level
+  out = src.fdn_reverb(time: 3.5sec, damp: 4khz) * level
   space += out.gain(8db)
 }
 

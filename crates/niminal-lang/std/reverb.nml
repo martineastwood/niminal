@@ -1,9 +1,0 @@
-// A reverb written in niminal: `use std/reverb`.
-
-/// A feedback delay network of eight lines of mutually prime lengths, mixed by a Hadamard matrix.
-/// `time` is how long the tail takes to fall by 60db, `damp` the cutoff of the low-pass in each line
-/// (highs die first, as in a room), and `size` stretches all the lines. Mono in, mono out: pan two
-/// with different `size`s for a stereo field. It is wet only; mix it with the dry yourself.
-fn fdn(x, time: init sec = 2sec, damp: init hz = 5khz, size: init 0.5..2 = 1) {
-  x.fdn_reverb(time: time, damp: damp, size: size)
-}

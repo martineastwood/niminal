@@ -1,5 +1,7 @@
-// Delay lines. A string is plucked into a multitap delay from the standard library, and a delay line
-// written here reads many taps at once and filters its output with a 16-tap FIR in one line each.
+// Delay lines. A plucked string goes into echoes three ways: `echoes` makes a regular train in one line,
+// taps added by hand sit wherever you put them and can each move or be filtered, and `comb_cloud` below is
+// a delay line written from scratch with `taps` and `fir`. Start with the first two; the last is for when
+// you want control of every sample.
 // Render with:  niminal-live render examples/multitap.nml --out multitap.wav
 use std/physical
 use std/delays
@@ -12,9 +14,10 @@ fx space_return {
   out = space.reverb(room: 0.6, damp: 0.5)
 }
 
-/// A comb of eight taps at related times, each a little quieter, summed and then darkened by a
-/// moving average over the last sixteen samples. `taps` reads the delay line at all eight times in one
-/// step; `fir` is the sixteen multiplications and the sum, also in one.
+/// The advanced route: a comb of eight taps at related times, each a little quieter, summed and then
+/// darkened by a moving average over the last sixteen samples. The times are in samples (331 is about 7ms at
+/// 48khz). `taps` reads the delay line at all eight times in one step; `fir` is the sixteen
+/// multiplications and the sum, also in one.
 const spacings = [331, 662, 993, 1324, 1655, 1986, 2317, 2648]
 const falloff = [1, 0.8, 0.64, 0.51, 0.41, 0.33, 0.26, 0.21]
 const box = (0..<16).map(1 / 16)
@@ -24,18 +27,28 @@ fn comb_cloud(x, mix: 0..1 = 0.4) {
   state pos = 0
   state at = 0
   line[pos] = x
-  echoes = line.taps(spacings, pos).dot(falloff)
-  soft[at] = echoes
+  cloud = line.taps(spacings, pos).dot(falloff)
+  soft[at] = cloud
   darker = soft.fir(box, at)
   pos = (pos + 1).mod(4096)
   at = (at + 1).mod(32)
   x + darker * mix
 }
 
+/// A regular train of echoes: four, 180ms apart, each about half as loud as the one before.
 instr pluck(freq: init hz, decay: 0..1 = 0.997) {
   tail = 4sec
-  out = (noise() * env[1 3ms 0]).string(freq, decay: decay).gain(-6db)
-  out += out.multitap([180ms, 360ms, 540ms], [0.5, 0.3, 0.18])
+  plucked = (noise() * env[1 3ms 0]).string(freq, decay: decay).gain(-6db)
+  out = plucked.echoes(count: 4, spacing: 180ms, fade: 0.55)
+  space += out.gain(-12db)
+}
+
+/// Taps placed by hand. Each `delay` is its own tap, so one drifts in time and one is darkened.
+instr drift(freq: init hz, decay: 0..1 = 0.997) {
+  tail = 4sec
+  plucked = (noise() * env[1 3ms 0]).string(freq, decay: decay).gain(-6db)
+  wobble = osc(sine, 0.4hz) * 6ms
+  out = plucked + plucked.delay(250ms + wobble, max: 300ms) * 0.4 + plucked.delay(500ms).lpf(cutoff: 1.5khz) * 0.35
   space += out.gain(-12db)
 }
 
@@ -52,3 +65,5 @@ at 3beats pluck(freq: e4) for 1beat
 at 4beats clicks(freq: 800hz) for 1/8beat
 at 5beats clicks(freq: 1200hz) for 1/8beat
 at 6beats clicks(freq: 500hz) for 1/8beat
+at 7beats drift(freq: d4) for 1beat
+at 8beats drift(freq: a3, decay: 0.994) for 1beat

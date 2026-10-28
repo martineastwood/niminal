@@ -250,6 +250,98 @@ fn setting_names(before: &str) -> Vec<Value> {
         .collect()
 }
 
+/// The presets of a shelf, for inside `use std/drums.{`: the text of the line before the cursor says which.
+pub fn preset_items(line_before: &str) -> Option<Vec<Value>> {
+    let rest = line_before.strip_prefix("use ")?;
+    let (shelf, taken) = rest.split_once(".{")?;
+    if taken.contains('}') {
+        return None;
+    }
+    let already: Vec<&str> = taken.split(',').map(str::trim).collect();
+    Some(
+        niminal_lang::presets::of_shelf(shelf.trim())
+            .filter(|p| !already.contains(&p.id.as_str()))
+            .map(|p| {
+                let detail = format!("{} · {}", p.folder, p.params.join(", "));
+                item(&p.id, FUNCTION, &detail, &p.description)
+            })
+            .collect(),
+    )
+}
+
+/// Presets whose names start with `prefix`, for a name typed anywhere in a file. Choosing one adds it
+/// to the file's `use` lines (or starts one), and a second entry pastes its source to edit instead.
+/// `defined` says what the file already has by that name.
+pub fn preset_suggestions(
+    prefix: &str,
+    text: &str,
+    defined: &dyn Fn(&str) -> bool,
+) -> Vec<Value> {
+    use crate::text::position;
+    let mut out = Vec::new();
+    for p in niminal_lang::presets::all()
+        .iter()
+        .filter(|p| p.id.starts_with(prefix) && !defined(&p.id))
+    {
+        let detail = format!("{} · {}", p.shelf, p.folder);
+        // `use shelf.{...}` is extended when the file already takes from that shelf
+        let line_start = format!("use {}.{{", p.shelf);
+        let existing = text
+            .match_indices(&line_start)
+            .find_map(|(at, _)| text[at..].find('}').map(|close| at + close));
+        let edit = match existing {
+            Some(close) => json!({
+                "range": { "start": position(text, close), "end": position(text, close) },
+                "newText": format!(", {}", p.id),
+            }),
+            None => {
+                let after_uses = text
+                    .split_inclusive('\n')
+                    .scan(0, |at, line| {
+                        *at += line.len();
+                        Some((*at, line))
+                    })
+                    .filter(|(_, line)| line.starts_with("use "))
+                    .map(|(end, _)| end)
+                    .last()
+                    .unwrap_or(0);
+                json!({
+                    "range": { "start": position(text, after_uses), "end": position(text, after_uses) },
+                    "newText": format!("use {}.{{{}}}\n", p.shelf, p.id),
+                })
+            }
+        };
+        let mut by_name = item(&p.id, FUNCTION, &detail, &p.description);
+        by_name["additionalTextEdits"] = json!([edit]);
+        by_name["sortText"] = json!(format!("~{}", p.id));
+        out.push(by_name);
+        // the source, with the helper functions the file doesn't have yet
+        let helpers_wanted: Vec<&str> = p
+            .helpers
+            .lines()
+            .filter_map(|l| l.strip_prefix("fn "))
+            .filter_map(|l| l.split('(').next())
+            .filter(|name| !defined(name))
+            .collect();
+        let source = if helpers_wanted.is_empty() {
+            p.source.clone()
+        } else {
+            format!("{}\n{}", p.helpers, p.source)
+        };
+        let mut copy = item(
+            &format!("{} (copy source)", p.id),
+            FUNCTION,
+            "paste it into this file to change it",
+            &p.description,
+        );
+        copy["filterText"] = json!(p.id);
+        copy["insertText"] = json!(source);
+        copy["sortText"] = json!(format!("~{}~", p.id));
+        out.push(copy);
+    }
+    out
+}
+
 /// Just the given names, for after `alias::`.
 pub fn symbol_items(symbols: &[Symbol], user_docs: &dyn Fn(&Symbol) -> String) -> Vec<Value> {
     symbols

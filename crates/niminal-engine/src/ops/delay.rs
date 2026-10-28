@@ -7,6 +7,9 @@ const ALREADY_QUIET: usize = usize::MAX / 2;
 /// Feedback delay with linear interpolation. Output is the delayed signal
 /// only; add the dry signal yourself for a mix.
 ///
+/// `damp` (a cutoff in hz, off at 0) puts a one-pole low-pass in the feedback path, so each echo is darker
+/// than the one before, as on a tape or analog delay.
+///
 /// The buffer is sized once, from `max_seconds`, so no allocation happens
 /// while processing. `time` is clamped to between one sample and that maximum,
 /// and `feedback` to 0..0.995 so the loop always decays.
@@ -22,6 +25,8 @@ pub struct Delay {
     /// The delay in use, in samples: once that much quiet has gone in, the
     /// line holds nothing audible.
     in_flight: usize,
+    /// The low-pass in the feedback path.
+    lp: f32,
 }
 
 impl Delay {
@@ -34,6 +39,7 @@ impl Delay {
             sample_rate: 48_000.0,
             quiet_run: ALREADY_QUIET,
             in_flight: 0,
+            lp: 0.0,
         };
         d.prepare(48_000.0);
         d
@@ -46,6 +52,7 @@ impl Opcode for Delay {
         self.write = 0;
         self.quiet_run = ALREADY_QUIET;
         self.in_flight = 0;
+        self.lp = 0.0;
     }
     fn name(&self) -> &str {
         "delay"
@@ -56,6 +63,7 @@ impl Opcode for Delay {
             Port::required("x"),
             Port::required("time"),
             Port::optional("feedback", 0.0),
+            Port::optional("damp", 0.0),
         ];
         PORTS
     }
@@ -73,6 +81,7 @@ impl Opcode for Delay {
         self.write = 0;
         self.quiet_run = ALREADY_QUIET;
         self.in_flight = 0;
+        self.lp = 0.0;
     }
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {
@@ -84,6 +93,7 @@ impl Opcode for Delay {
             self.write = old.write;
             self.quiet_run = old.quiet_run;
             self.in_flight = old.in_flight;
+            self.lp = old.lp;
         }
     }
 
@@ -110,7 +120,15 @@ impl Opcode for Delay {
             let delayed = newer + (older - newer) * frac;
 
             let feedback = inputs[2][i].clamp(0.0, 0.995);
-            let written = flush32(inputs[0][i] + feedback * delayed);
+            let damp = inputs[3][i];
+            let heard = if damp > 0.0 {
+                let a = (-std::f32::consts::TAU * damp / self.sample_rate).exp();
+                self.lp = flush32(delayed * (1.0 - a) + self.lp * a);
+                self.lp
+            } else {
+                delayed
+            };
+            let written = flush32(inputs[0][i] + feedback * heard);
             self.buf[self.write] = written;
             self.quiet_run = if written.abs() < TAIL_LEVEL {
                 self.quiet_run.saturating_add(1)

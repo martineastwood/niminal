@@ -1,26 +1,19 @@
 // Delays beyond the one `delay` opcode: `use std/delays`.
 
-/// Echoes at several times from one delay line: `x.multitap([120ms, 250ms, 410ms], [0.6, 0.4, 0.3])`.
-/// The output is `x` plus the echoes, each scaled by its gain. `max` is the longest time, in samples.
-fn multitap(x, times: [sec], gains: [num], max: const int = 96000) {
-  state ring = zeros(max)
-  state pos = 0
-  ring[pos] = x
-  echoes = ring.taps(times.map(it.num * sample_rate.num), pos)
-  pos = (pos + 1).mod(max)
-  x + echoes.dot(gains)
+/// `x` followed by `count` echoes, `spacing` apart, each `fade` times the level of the one before:
+/// `x.echoes(count: 4, spacing: 120ms, fade: 0.6)`. For echoes at times of your own, add delays by hand,
+/// `x + x.delay(120ms) * 0.6 + x.delay(250ms) * 0.3`: each is its own delay line, so each can move, be filtered
+/// or be panned.
+fn echoes(x, count: const int = 4, spacing: const sec = 120ms, fade: 0..1 = 0.6) {
+  total = x
+  for i in 0..<count {
+    total = total + x.delay(spacing * (i + 1)) * pow(fade, i + 1)
+  }
+  total
 }
 
 /// A feedback delay whose echoes are darker each time round: `time` between repeats, `feedback` kept
-/// of each, and `damp` the cutoff of the low-pass in the loop. `max` is the longest time, in samples.
-fn tape(x, time: sec, feedback: 0..1 = 0.5, damp: hz = 4khz, max: const int = 96000) {
-  state ring = zeros(max)
-  state pos = 0
-  state lp = 0
-  a = exp(-2 * pi * damp / sample_rate)
-  echo = ring.at(pos - time.num * sample_rate.num, interp: linear)
-  lp = echo * (1 - a) + lp * a
-  ring[pos] = x + lp * feedback
-  pos = (pos + 1).mod(max)
-  x + echo
+/// of each, and `damp` the cutoff of the low-pass in the loop. `max` is the longest time, in seconds.
+fn tape(x, time: sec, feedback: 0..1 = 0.5, damp: hz = 4khz, max: const sec = 2sec) {
+  x + x.delay(time, feedback: feedback, damp: damp, max: max)
 }

@@ -904,6 +904,7 @@ element('open-mix').onclick = () => showView(mainView === 'mix' ? 'pattern' : 'm
 element('toggle-dock').onclick = () => { if (element('bottom-dock').hidden) { showPanel('code', true); showFx(); } else showPanel('code', false); };
 element('close-dock').onclick = () => { showPanel('code', false); element('grid').focus(); };
 element('dock-resize').onpointerdown = event => {
+  event.preventDefault();
   const dock = element('bottom-dock'), startY = event.clientY, startHeight = dock.offsetHeight;
   const target = event.currentTarget as HTMLElement; target.setPointerCapture(event.pointerId);
   target.onpointermove = move => { dock.style.height = `${Math.max(120, startHeight + startY - move.clientY)}px`; measure(); };

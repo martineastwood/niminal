@@ -111,7 +111,7 @@ fn one_pole_filters_split_a_signal() {
 
 #[test]
 fn every_library_module_compiles() {
-    for module in ["filters", "physical", "delays", "reverb", "spectral", "glitch"] {
+    for module in ["filters", "physical", "delays", "spectral"] {
         let expanded = expand(
             &format!("use std/{module}\ninstr a() {{ osc(sine, 1hz) }}"),
             Path::new("."),
@@ -144,6 +144,28 @@ fn at_hz(x: &[f32], hz: f32) -> f32 {
         / x.len() as f32
 }
 
+/// The delay is shortened to make up for the damping in the loop, so the string sounds at the pitch asked for.
+#[test]
+fn a_string_is_in_tune() {
+    for (freq, damp) in [(220, "0.5"), (440, "0.5"), (220, "0.2")] {
+        let out = render(
+            &format!("use std/physical\ninstr a() {{ (noise() * env[1 4ms 0]).string({freq}hz, decay: 0.998, damp: {damp}) }}"),
+            1200,
+        );
+        let heard = &out[4800..4800 + 24_000];
+        let (mut best, mut loudest) = (0.0, 0.0f32);
+        let mut hz = freq as f32 - 6.0;
+        while hz <= freq as f32 + 6.0 {
+            let level = at_hz(heard, hz);
+            if level > loudest {
+                (best, loudest) = (hz, level);
+            }
+            hz += 0.25;
+        }
+        assert!((best - freq as f32).abs() < 1.0, "{freq}hz with damp {damp} sounds at {best}");
+    }
+}
+
 #[test]
 fn a_string_rings_at_its_pitch() {
     let out = render(
@@ -167,7 +189,7 @@ fn a_string_rings_at_its_pitch() {
 #[test]
 fn a_drum_rings_at_its_modes_and_dies_away() {
     let out = render(
-        "use std/physical\ninstr a() { impulse(0.5hz).drum(150hz, decay: 0.9995) }",
+        "use std/physical\ninstr a() { impulse(0.5hz).membrane(150hz, decay: 300ms) }",
         1000,
     );
     assert!(finite(&out));
@@ -206,26 +228,29 @@ fn a_bar_and_a_bell_have_their_partials() {
     assert!(at_hz(&bell[2000..14_000], 100.0) > at_hz(&bell[2000..14_000], 150.0) * 5.0);
 }
 
+/// Echoes at times and gains of your own are delays added by hand, one line each; the `echoes` function does a
+/// regular train of them.
 #[test]
-fn a_multitap_gives_echoes_at_its_times_and_gains() {
+fn taps_are_delays_and_echoes_is_a_train_of_them() {
+    let peak = |out: &[f32], range: std::ops::Range<usize>| out[range].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    // the click at the start, and echoes 4800 and 12000 samples after it
     let out = render(
-        "use std/delays\ninstr a() { (impulse(0.5hz) * 0.5).multitap([100ms, 250ms], [0.5, 0.25]) }",
+        "instr a() { x = impulse(0.5hz) * 0.5\n x + x.delay(100ms) * 0.5 + x.delay(250ms) * 0.25 }",
         400,
     );
-    // the click at the start, and echoes 4800 and 12000 samples after it
-    let peak =
-        |range: std::ops::Range<usize>| out[range].iter().fold(0.0f32, |m, v| m.max(v.abs()));
-    assert!(
-        peak(4700..4900) > 0.2 && peak(4700..4900) < 0.3,
-        "{}",
-        peak(4700..4900)
+    assert!(peak(&out, 4700..4900) > 0.2 && peak(&out, 4700..4900) < 0.3, "{}", peak(&out, 4700..4900));
+    assert!(peak(&out, 11_900..12_100) > 0.1 && peak(&out, 11_900..12_100) < 0.15, "{}", peak(&out, 11_900..12_100));
+    assert!(peak(&out, 7000..9000) < 0.01, "silence between the echoes");
+    // three echoes 100 ms apart, each half the level of the one before
+    let out = render(
+        "use std/delays\ninstr a() { (impulse(0.5hz) * 0.5).echoes(count: 3, spacing: 100ms, fade: 0.5) }",
+        400,
     );
-    assert!(
-        peak(11_900..12_100) > 0.1 && peak(11_900..12_100) < 0.15,
-        "{}",
-        peak(11_900..12_100)
-    );
-    assert!(peak(7000..9000) < 0.01, "silence between the echoes");
+    for (at, level) in [(4800, 0.25), (9600, 0.125), (14_400, 0.0625)] {
+        let heard = peak(&out, at - 100..at + 100);
+        assert!((heard - level).abs() < level * 0.1, "echo at {at}: {heard}");
+    }
+    assert!(peak(&out, 17_000..25_000) < 0.01, "and no more");
 }
 
 #[test]
@@ -249,7 +274,7 @@ fn a_tape_delay_repeats_and_each_repeat_is_quieter_and_darker() {
 #[test]
 fn the_fdn_reverb_has_a_tail_that_falls_away() {
     let out = render(
-        "use std/reverb\ninstr a() { impulse(0.2hz).fdn(time: 1sec) }",
+        "instr a() { impulse(0.2hz).fdn_reverb(time: 1sec) }",
         1500,
     );
     assert!(finite(&out));
@@ -266,7 +291,7 @@ fn the_fdn_reverb_has_a_tail_that_falls_away() {
 fn a_shorter_reverb_time_dies_faster() {
     let tail = |time: &str| {
         let out = render(
-            &format!("use std/reverb\ninstr a() {{ impulse(0.2hz).fdn(time: {time}) }}"),
+            &format!("instr a() {{ impulse(0.2hz).fdn_reverb(time: {time}) }}"),
             1200,
         );
         rms(&out[40_000..46_000])
@@ -322,8 +347,8 @@ fn the_spectral_gate_removes_quiet_noise_and_keeps_a_loud_tone() {
 fn the_documented_examples_compile_and_sound() {
     let cases = [
         // standard library page
-        "use std/filters\nuse std/reverb\ninstr a() {\n  freq = 110hz\n  out = osc(saw, freq).ladder(cutoff: 900hz, res: 0.4)\n  out += out.fdn(time: 2.5sec) * 0.3\n}",
-        "use std/physical\ninstr a(freq: hz = 110hz) { (impulse(1hz) * 0.5).drum(freq) }",
+        "instr a() {\n  freq = 110hz\n  out = osc(saw, freq).ladder(cutoff: 900hz, res: 0.4)\n  out += out.fdn_reverb(time: 2.5sec) * 0.3\n}",
+        "use std/physical\ninstr a(freq: hz = 110hz) { (impulse(1hz) * 0.5).membrane(freq) }",
         // functions page
         "const modes = [1, 2.76, 5.4, 8.9, 13.3, 18.6, 24.8, 31.9]\nfn chime(x, freq: init hz) {\n  state s1 = zeros(8)\n  state s2 = zeros(8)\n  w = 2 * pi * freq / sample_rate * modes\n  y = x * 0.01 + 1.98 * cos(w) * s1 - 0.9801 * s2\n  s2 = s1\n  s1 = y\n  y.sum\n}\ninstr a() { impulse(2hz).chime(220hz) }",
         "const keep = (0..<513).map(it < 40)\nfn low(x) {\n  x.frames(1024, fn(w) {\n    s = fft(w)\n    ifft(s[0] * keep, s[1] * keep)\n  })\n}\ninstr a() { low(osc(saw, 220hz)) }",
@@ -341,7 +366,7 @@ fn the_documented_examples_compile_and_sound() {
 /// Every instrument in `std/instruments` plays a pitched note: finite, audible, and not wildly loud.
 #[test]
 fn the_instrument_library_compiles_and_every_instrument_sounds() {
-    let expanded = expand("use std/instruments\n", Path::new(".")).unwrap();
+    let expanded = expand(&take_all("std/instruments"), Path::new(".")).unwrap();
     let program = compile(&expanded.text).unwrap_or_else(|errors| {
         panic!(
             "{}",
@@ -387,7 +412,7 @@ fn the_instrument_library_compiles_and_every_instrument_sounds() {
 /// The effect library compiles, and every effect's parameters have a range and a default.
 #[test]
 fn the_effect_library_compiles() {
-    let expanded = expand("use std/fx\n", Path::new(".")).unwrap();
+    let expanded = expand(&take_all("std/fx"), Path::new(".")).unwrap();
     let program = compile(&expanded.text).unwrap_or_else(|errors| {
         panic!(
             "{}",
@@ -404,7 +429,7 @@ fn the_effect_library_compiles() {
 /// Every drum preset plays one note, bounded and audible.
 #[test]
 fn the_drum_library_compiles_and_every_preset_sounds() {
-    let expanded = expand("use std/drums\n", Path::new(".")).unwrap();
+    let expanded = expand(&take_all("std/drums"), Path::new(".")).unwrap();
     let program = compile(&expanded.text).unwrap_or_else(|errors| {
         panic!(
             "{}",
@@ -437,7 +462,8 @@ fn the_drum_library_compiles_and_every_preset_sounds() {
 #[test]
 fn no_drum_preset_is_named_like_a_choice_of_the_drum_voice() {
     let text = include_str!("../std/drums.nml");
-    let voice = &text[text.find("fn drum(").unwrap()..];
+    let helpers = &niminal_lang::presets::find("kick_808").unwrap().helpers;
+    let voice = &helpers[helpers.find("fn drum(").unwrap()..];
     let signature = &voice[..voice.find(") {").unwrap()];
     let choices: Vec<&str> = signature
         .lines()
@@ -462,7 +488,7 @@ fn no_drum_preset_is_named_like_a_choice_of_the_drum_voice() {
 
 /// Renders `instr a() { drum_call }` from `std/drums` through the engine and returns its samples.
 fn render_drum(call: &str, blocks: usize) -> Vec<f32> {
-    render(&format!("use std/drums\ninstr a() {{ {call} }}"), blocks)
+    render(&format!("use std/drums.{{kick_808}}\ninstr a() {{ {call} }}"), blocks)
 }
 
 #[test]
@@ -607,7 +633,7 @@ fn the_drum_voice_is_bounded_at_any_setting() {
 fn repeat_last_repeats_the_last_piece_while_held_and_passes_the_sound_after() {
     // a ramp that rises every second, held from 0.5 s to 0.7 s, with a 47 ms piece
     let out = render(
-        "use std/glitch\ninstr a() { osc(sine, 220hz).repeat_last(hold: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.7), length: 47ms) }",
+        "instr a() { osc(sine, 220hz).repeat_last(hold: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.7), length: 47ms) }",
         1000,
     );
     assert!(finite(&out));
@@ -623,7 +649,7 @@ fn repeat_last_repeats_the_last_piece_while_held_and_passes_the_sound_after() {
 fn rewind_last_plays_the_last_piece_backwards_while_held() {
     // a slow rising ramp, held from 0.5 s: read backwards, it falls
     let out = render(
-        "use std/glitch\ninstr a() { phasor(0.5hz).rewind_last(hold: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.7), length: 50ms) }",
+        "instr a() { phasor(0.5hz).rewind_last(hold: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.7), length: 50ms) }",
         1000,
     );
     assert!(finite(&out));
@@ -635,7 +661,7 @@ fn rewind_last_plays_the_last_piece_backwards_while_held() {
 #[test]
 fn slow_down_lowers_the_pitch_and_comes_to_a_stop() {
     let out = render(
-        "use std/glitch\ninstr a() { osc(sine, 1khz).slow_down(hold: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.9), time: 100ms) }",
+        "instr a() { osc(sine, 1khz).slow_down(hold: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.9), time: 100ms) }",
         1000,
     );
     assert!(finite(&out));
@@ -675,7 +701,7 @@ fn slow_down_starts_from_the_sound_as_it_is_now() {
     // a ramp that rises for two seconds: held at 0.5 s, the tape starts from where the ramp is (0.25), not from
     // the oldest sound in its buffer
     let out = render(
-        "use std/glitch\ninstr a() { phasor(0.5hz).slow_down(hold: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.9), time: 200ms) }",
+        "instr a() { phasor(0.5hz).slow_down(hold: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.9), time: 200ms) }",
         1000,
     );
     assert!(finite(&out));
@@ -689,7 +715,7 @@ fn shrink_makes_each_repeat_shorter() {
     // repeat starts silent (the seam), so the gaps between the silent samples are the lengths of the pieces after
     // the first
     let out = render(
-        "use std/glitch\ninstr a() { phasor(0.5hz).repeat_last(hold: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.9), length: 50ms, shrink: 0.5) }",
+        "instr a() { phasor(0.5hz).repeat_last(hold: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.9), length: 50ms, shrink: 0.5) }",
         1000,
     );
     assert!(finite(&out));
@@ -707,7 +733,7 @@ fn a_hold_starts_and_ends_without_a_click() {
         "slow_down(hold: gate, time: 100ms)",
     ] {
         let out = render(
-            &format!("use std/glitch\ninstr a() {{ gate = (phasor(1hz) > 0.5) * (phasor(1hz) < 0.7)\n osc(sine, 220hz).{call} }}"),
+            &format!("instr a() {{ gate = (phasor(1hz) > 0.5) * (phasor(1hz) < 0.7)\n osc(sine, 220hz).{call} }}"),
             1000,
         );
         assert!(finite(&out));
@@ -721,7 +747,7 @@ fn a_hold_starts_and_ends_without_a_click() {
 fn apply_runs_a_function_as_much_as_the_gate_says() {
     let level = |when: &str| {
         let out = render(
-            &format!("use std/glitch\ninstr a() {{ osc(sine, 220hz).apply(fn(s) {{ s * 0.5 }}, when: {when}) }}"),
+            &format!("instr a() {{ osc(sine, 220hz).apply(fn(s) {{ s * 0.5 }}, when: {when}) }}"),
             400,
         );
         assert!(finite(&out));
@@ -735,7 +761,7 @@ fn apply_runs_a_function_as_much_as_the_gate_says() {
 #[test]
 fn apply_fades_between_dry_and_wet_without_a_click() {
     let out = render(
-        "use std/glitch\ninstr a() { osc(sine, 220hz).apply(fn(s) { s * 0 }, when: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.7)) }",
+        "instr a() { osc(sine, 220hz).apply(fn(s) { s * 0 }, when: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.7)) }",
         1000,
     );
     let jump = out[20_000..40_000].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
@@ -743,18 +769,61 @@ fn apply_fades_between_dry_and_wet_without_a_click() {
     assert!(rms(&out[25_000..30_000]) < 0.01, "the function is in force while gated");
 }
 
-/// The `glitch` effect in `std/fx` carries its own copy of the glitch functions, because the tracker takes an effect
-/// and its helpers as one piece; `std/glitch` is the same functions for everyone else. They must not drift apart.
+/// `use std/fx` alone would add every effect to the piece, so it asks for names; naming some adds only those.
 #[test]
-fn the_glitch_module_and_the_glitch_effect_carry_the_same_functions() {
-    let function = |text: &str, name: &str| -> String {
-        let start = text.find(&format!("fn {name}(")).unwrap_or_else(|| panic!("no fn {name}"));
-        let end = text[start..].find("\n}\n").expect("the function ends") + start + 3;
-        text[start..end].to_string()
-    };
-    let module = include_str!("../std/glitch.nml");
-    let effects = include_str!("../std/fx.nml");
-    for name in ["apply", "repeat_last", "rewind_last", "slow_down"] {
-        assert_eq!(function(module, name), function(effects, name), "fn {name} differs between std/glitch and std/fx");
+fn std_fx_is_taken_by_name() {
+    let err = expand("use std/fx\n", Path::new(".")).err().unwrap();
+    assert!(err.message.contains("name the ones you want"), "{}", err.message);
+    let err = expand("use std/fx.{nope}\n", Path::new(".")).err().unwrap();
+    assert!(err.message.contains("no `nope`"), "{}", err.message);
+    let expanded = expand("use std/fx.{echo, soft_clip}\n", Path::new(".")).unwrap();
+    assert_eq!(expanded.text.matches("\nfx ").count(), 2);
+    assert!(compile(&expanded.text).is_ok());
+}
+
+/// A file and a module it uses can each take their own effects from `std/fx`; the piece gets all of them, once.
+#[test]
+fn separate_uses_of_std_fx_add_up() {
+    let dir = std::env::temp_dir().join(format!("niminal-use-fx-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("rig.nml"), "use std/fx.{echo}\n").unwrap();
+    let expanded = expand("use rig\nuse std/fx.{soft_clip, echo}\n", &dir).unwrap();
+    assert_eq!(expanded.text.matches("\nfx echo(").count(), 1);
+    assert_eq!(expanded.text.matches("\nfx soft_clip(").count(), 1);
+    assert_eq!(expanded.text.matches("\nfx lofi(").count(), 0);
+    assert!(compile(&expanded.text).is_ok());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// `use` for every preset on a shelf.
+fn take_all(shelf: &str) -> String {
+    let names: Vec<&str> = niminal_lang::presets::of_shelf(shelf).map(|p| p.id.as_str()).collect();
+    format!("use {shelf}.{{{}}}\n", names.join(", "))
+}
+
+/// The catalog the tracker, the editor and the command line read: every preset has a folder, a description, its
+/// parameters and a source that compiles on its own with the helpers it names; and the JSON file the tracker
+/// imports is this catalog as it stands (`BLESS=1` rewrites it).
+#[test]
+fn the_preset_catalog_is_complete_and_its_json_is_current() {
+    use niminal_lang::presets::{PresetKind, all, find, json};
+    let presets = all();
+    assert_eq!(presets.iter().filter(|p| p.kind == PresetKind::Instrument).count(), 29);
+    assert!(presets.iter().filter(|p| p.kind == PresetKind::Effect).count() >= 15);
+    for p in presets {
+        assert!(!p.folder.is_empty() && !p.description.is_empty(), "{} needs a folder and a description", p.id);
+        assert!(!p.params.is_empty(), "{} lists its parameters", p.id);
+        let alone = format!("{}\n{}", p.helpers, p.source);
+        compile(&alone).unwrap_or_else(|e| panic!("{} on its own: {}", p.id, e[0].message));
     }
+    assert_eq!(find("kick_808").unwrap().folder, "drums/kicks");
+    assert!(find("kick_808").unwrap().helpers.starts_with("/// A drum voice") || find("kick_808").unwrap().helpers.contains("fn drum("));
+    assert!(find("echo").unwrap().helpers.is_empty());
+    assert_eq!(find("echo").unwrap().name, "Echo");
+    assert_eq!(find("band_cut").unwrap().name, "Band cut");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("std/presets.json");
+    if std::env::var_os("BLESS").is_some() {
+        std::fs::write(&path, json()).unwrap();
+    }
+    assert_eq!(std::fs::read_to_string(&path).unwrap_or_default(), json(), "std/presets.json is out of date; run with BLESS=1");
 }

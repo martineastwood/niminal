@@ -1,39 +1,18 @@
-import type { Definition } from './project';
-import instruments from '../../crates/niminal-lang/std/instruments.nml?raw';
-import drums from '../../crates/niminal-lang/std/drums.nml?raw';
-import fx from '../../crates/niminal-lang/std/fx.nml?raw';
-
-/** One ready-made instrument or effect from the library that comes with niminal (`use std/instruments`, `use std/fx`). */
-export interface Preset {
-  id: string; name: string; description: string; source: string;
-  /** Where it sits in the browser, like `drums/kicks`; empty for the top level. */
-  folder: string;
-  /** The `drum` voice a preset of it is built on, copied into the project along with the preset. */
-  voice?: string;
-}
+import catalog from '../../crates/niminal-lang/std/presets.json';
 
 /**
- * The definitions in a library module. Each is written to stand alone, with a blank line between one
- * and the next; the comment above it is its description. A comment block `// folder: drums/kicks` puts
- * the definitions after it in that folder, until the next one.
+ * One ready-made instrument or effect from the catalog that comes with niminal (`niminal presets` lists the
+ * same one). The catalog is written by niminal-lang from its `std/` shelves; this file only reads it.
  */
-export function parseLibrary(text: string, kind: Definition['kind']): Preset[] {
-  const presets: Preset[] = [];
-  let folder = '';
-  for (const block of text.split(/\n\s*\n/)) {
-    const lines = block.trim().split('\n'), start = lines.findIndex(line => new RegExp(`^${kind} \\w+`).test(line));
-    if (start < 0) { folder = /^\/\/ folder: *(.*)$/m.exec(block)?.[1].trim() ?? folder; continue; }
-    const id = new RegExp(`^${kind} (\\w+)`).exec(lines[start])![1];
-    const description = lines.slice(0, start).filter(line => line.startsWith('///')).map(line => line.slice(3).trim()).join(' ');
-    presets.push({ id, name: id.charAt(0).toUpperCase() + id.slice(1).replaceAll('_', ' '), description, folder, source: `${lines.join('\n')}\n` });
-  }
-  return presets;
+export interface Preset {
+  id: string; name: string; description: string; source: string;
+  /** Where it sits in the browser, like `drums/kicks`. */
+  folder: string;
+  /** The functions it calls that its shelf defines (the `drum` voice of a drum preset), copied into the project along with it. */
+  helpers: string;
 }
 
-/** The drum presets are short calls to the `drum` function, which each project copy carries along. */
-const drumVoice = drums.split(/\n\s*\n/).find(block => /^fn drum\(/m.test(block))!.trim() + '\n';
-const drumLibrary = parseLibrary(drums, 'instr');
-for (const preset of drumLibrary) preset.voice = drumVoice;
+const presets = catalog as (Preset & { kind: 'instr' | 'fx' })[];
 
-export const instrumentPresets = [...parseLibrary(instruments, 'instr'), ...drumLibrary];
-export const effectPresets = parseLibrary(fx, 'fx');
+export const instrumentPresets = presets.filter(p => p.kind === 'instr');
+export const effectPresets = presets.filter(p => p.kind === 'fx');

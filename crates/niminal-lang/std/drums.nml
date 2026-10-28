@@ -1,61 +1,9 @@
-// Drum presets. `drum` is one function with the controls of a drum machine voice, and each
-// instrument after it is that voice with its settings chosen: `use std/drums`, then play them by name.
+// Drum presets. `drum` (it comes with the language, no `use` needed) is one function with the controls of a
+// drum machine voice, and each instrument here is that voice with its settings chosen: `use std/drums.{kick_808, snare_tri}`, then play them by name.
 // A note tunes a preset (c3 plays it as designed), and the note's velocity (its `gain`) shapes the
 // oscillator, noise and pitch modulation by as much as `osc_vel`, `noise_vel` and `mod_vel` say. The
 // hats share a choke group, so a closed hat ends an open one. In the tracker, adding a preset copies the
 // voice along with it, so the copy stands alone and every control can be edited.
-
-/// A drum voice with the controls of a drum machine: an oscillator with a pitch modulation, a noise
-/// source with its own filter and envelope, a mix between them, then distortion and an EQ band.
-/// The instruments below are presets of it. `mod_mode` is how the pitch moves (`drop` falls from
-/// `mod_amount` semitones above at `mod_rate`; `wobble` is a sine; `random` steps at random);
-/// `noise_shape` is how the noise swells and fades (`burst` chops it at `mod_rate`). `vel` is how hard the
-/// note is played (0..1); `osc_vel`, `noise_vel` and `mod_vel` say how much it matters to the oscillator,
-/// the noise and the pitch modulation.
-fn drum(
-  freq: hz = 100hz,
-  wave: (sine | tri | square | saw) = sine,
-  attack: 0.1ms..50ms = 0.5ms,
-  decay: 5ms..10sec = 300ms,
-  mod_mode: (drop | wobble | random) = drop,
-  mod_amount: -48..48 = 0,
-  mod_rate: 1hz..4khz = 100hz,
-  noise_filter: (low | band | high) = band,
-  noise_freq: 20hz..20khz = 4khz,
-  noise_q: 0..1 = 0.3,
-  noise_shape: (soft | linear | burst) = soft,
-  noise_attack: 0.1ms..200ms = 1ms,
-  noise_decay: 5ms..10sec = 150ms,
-  mix: 0..1 = 0,
-  drive: 0..1 = 0,
-  eq_freq: 20hz..20khz = 1khz,
-  eq_gain: -24db..24db = 0db,
-  amp: db = -6db,
-  vel: 0..1 = 1,
-  osc_vel: 0..1 = 0.5,
-  noise_vel: 0..1 = 0.5,
-  mod_vel: 0..1 = 0
-) {
-  swing = mod_amount * (1 - mod_vel * (1 - vel))
-  bend = if mod_mode == drop {
-    swing * perc(attack: 0.05ms, decay: 1sec / mod_rate.num)
-  } else if mod_mode == wobble {
-    osc(sine, mod_rate) * swing
-  } else {
-    noise().sample_hold(impulse(mod_rate)) * swing
-  }
-  cur_freq = freq * (bend * 0.0577623).exp
-  tone = if wave == sine { osc(sine, cur_freq) } else if wave == tri { osc(tri, cur_freq) } else if wave == square { osc(square, cur_freq) } else { osc(saw, cur_freq) }
-  body = tone * perc(attack: attack, decay: decay) * (1 - osc_vel * (1 - vel))
-  hiss = noise()
-  hiss = if noise_filter == low { hiss.lpf(cutoff: noise_freq, res: noise_q) } else if noise_filter == band { hiss.bpf(cutoff: noise_freq, res: noise_q) } else { hiss.hpf(cutoff: noise_freq, res: noise_q) }
-  shape = if noise_shape == linear { env[0 noise_attack 1 noise_decay 0] } else { perc(attack: noise_attack, decay: noise_decay) }
-  chop = if noise_shape == burst { osc(saw, mod_rate) * 0.5 + 0.5 } else { 1 }
-  grit = hiss * shape * chop * (1 - noise_q * 0.5) * (1 - noise_vel * (1 - vel))
-  voice = body * (1 - mix) + grit * mix
-  voice = (voice * (1 + drive * 10)).tanh * (1 / (1 + drive * 2))
-  voice.peak_eq(cutoff: eq_freq, gain: eq_gain, q: 1).tanh.gain(amp)
-}
 
 // folder: drums/kicks
 

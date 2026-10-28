@@ -182,7 +182,10 @@ pub fn expand_with_rules(
     let mut text = walk.visit(source, dir, None)?;
     let root_len = text.len();
     let mut modules = Vec::new();
-    for done in walk.done {
+    for mut done in walk.done {
+        if let Some(select) = &done.select {
+            done.source = keep_only(&done.source, &done.name, select, done.used_at)?;
+        }
         let body = rules.rename(&done.source, &done.name, done.alias.as_deref());
         text.push('\n');
         let start = text.len();
@@ -208,6 +211,7 @@ struct Done {
     path: PathBuf,
     name: String,
     alias: Option<String>,
+    select: Option<Vec<String>>,
     used_at: Span,
     source: String,
 }
@@ -242,10 +246,14 @@ impl Walk<'_> {
             };
             out.extend(line.chars().map(|c| if c == '\n' { c } else { ' ' }));
             let used_at = root_use.unwrap_or(span);
-            let (name, alias) = parse_use(rest, span)?;
+            let Use {
+                name,
+                alias,
+                select,
+            } = parse_use(rest, span)?;
             let path = self.find(name, dir).ok_or_else(|| {
                 Diagnostic::new(format!("no module `{name}`"), used_at).with_help(format!(
-                    "looked for {name}.nml next to the file, in lib/ and in the installed packages; the library that comes with niminal is `use std/filters`, `std/physical`, `std/delays`, `std/reverb`, `std/spectral`, `std/instruments`, `std/drums`, `std/fx` and `std/glitch`"
+                    "looked for {name}.nml next to the file, in lib/ and in the installed packages; the library that comes with niminal is `use std/filters`, `std/physical`, `std/delays`, `std/spectral`, `std/instruments`, `std/drums` and `std/fx`; the last three are shelves of presets, taken by name: `use std/fx.{{echo}}`"
                 ))
             })?;
             if self.stack.contains(&path) {
@@ -254,7 +262,29 @@ impl Walk<'_> {
                     used_at,
                 ));
             }
-            if let Some(earlier) = self.done.iter().find(|d| d.path == path) {
+            if select.is_none() && crate::presets::SHELVES.contains(&name) {
+                let two: Vec<&str> = crate::presets::of_shelf(name)
+                    .take(2)
+                    .map(|p| p.id.as_str())
+                    .collect();
+                return Err(Diagnostic::new(
+                    format!("`{name}` is a shelf of presets: name the ones you want"),
+                    used_at,
+                )
+                .with_help(format!(
+                    "write `use {name}.{{{}}}`; each one you name is added to your piece",
+                    two.join(", ")
+                )));
+            }
+            if let Some(earlier) = self.done.iter_mut().find(|d| d.path == path) {
+                // each `use` of a module adds to what is taken from it; one that takes it whole wins
+                earlier.select = match (earlier.select.take(), select) {
+                    (Some(mut a), Some(b)) => {
+                        a.extend(b.into_iter().filter(|n| !a.contains(n)).collect::<Vec<_>>());
+                        Some(a)
+                    }
+                    _ => None,
+                };
                 if earlier.alias.as_deref() != alias {
                     return Err(Diagnostic::new(
                         format!("`{name}` is used twice with different names"),
@@ -271,12 +301,14 @@ impl Walk<'_> {
                 })?,
             };
             self.stack.push(path.clone());
-            let body = self.visit(&module_source, path.parent().unwrap_or(dir), Some(used_at))?;
+            let body =
+                self.visit(&module_source, path.parent().unwrap_or(dir), Some(used_at))?;
             self.stack.pop();
             self.done.push(Done {
                 path,
                 name: name.replace('/', "_"),
                 alias: alias.map(str::to_string),
+                select,
                 used_at,
                 source: body,
             });
@@ -305,16 +337,14 @@ impl Walk<'_> {
 pub const STD_DIR: &str = "<std>";
 
 /// The modules that come with niminal: `use std/filters`.
-const STD: [(&str, &str); 9] = [
+const STD: [(&str, &str); 7] = [
     ("std/filters", include_str!("../std/filters.nml")),
     ("std/physical", include_str!("../std/physical.nml")),
     ("std/delays", include_str!("../std/delays.nml")),
-    ("std/reverb", include_str!("../std/reverb.nml")),
     ("std/spectral", include_str!("../std/spectral.nml")),
     ("std/instruments", include_str!("../std/instruments.nml")),
     ("std/drums", include_str!("../std/drums.nml")),
     ("std/fx", include_str!("../std/fx.nml")),
-    ("std/glitch", include_str!("../std/glitch.nml")),
 ];
 
 /// The source of a module that comes with niminal, if `name` is one.
@@ -324,19 +354,41 @@ pub fn embedded(name: &str) -> Option<&'static str> {
         .map(|(_, source)| *source)
 }
 
-/// `rig`, `score/verse`, or either followed by `as name`.
-fn parse_use(rest: &str, span: Span) -> Result<(&str, Option<&str>), Diagnostic> {
-    let words: Vec<&str> = rest.split_whitespace().collect();
+struct Use<'a> {
+    name: &'a str,
+    alias: Option<&'a str>,
+    select: Option<Vec<String>>,
+}
+
+/// `rig`, `score/verse`, or either followed by `as name`, and by `.{a, b}` to take only some of what
+/// it defines.
+fn parse_use(rest: &str, span: Span) -> Result<Use<'_>, Diagnostic> {
+    let bad = || {
+        Diagnostic::new(format!("`use {}` isn't a module name", rest.trim()), span)
+            .with_help("write `use rig`, `use score/verse`, `use rig as r` or `use rig.{a, b}`")
+    };
+    let (head, select, tail) = match rest.find(".{") {
+        Some(open) => {
+            let close = rest[open..].find('}').ok_or_else(bad)? + open;
+            let names: Vec<String> = rest[open + 2..close]
+                .split(',')
+                .map(|n| n.trim().to_string())
+                .collect();
+            if names.iter().any(|n| n.is_empty()) {
+                return Err(bad());
+            }
+            (&rest[..open], Some(names), &rest[close + 1..])
+        }
+        None => (rest, None, ""),
+    };
+    let words: Vec<&str> = head
+        .split_whitespace()
+        .chain(tail.split_whitespace())
+        .collect();
     let (name, alias) = match words.as_slice() {
         [name] => (*name, None),
         [name, "as", alias] => (*name, Some(*alias)),
-        _ => {
-            return Err(Diagnostic::new(
-                format!("`use {}` isn't a module name", rest.trim()),
-                span,
-            )
-            .with_help("write `use rig`, `use score/verse` or `use rig as r`"));
-        }
+        _ => return Err(bad()),
     };
     if name.is_empty()
         || !name
@@ -357,7 +409,40 @@ fn parse_use(rest: &str, span: Span) -> Result<(&str, Option<&str>), Diagnostic>
             span,
         ));
     }
-    Ok((name, alias))
+    Ok(Use {
+        name,
+        alias,
+        select,
+    })
+}
+
+/// `source`, a module's text, without the effects, instruments and nodes it defines that `keep` doesn't
+/// name. Functions and constants stay: they make nothing by themselves.
+fn keep_only(source: &str, module: &str, keep: &[String], at: Span) -> Result<String, Diagnostic> {
+    let Ok(defs) = symbols(source) else {
+        return Ok(source.to_string());
+    };
+    if let Some(missing) = keep.iter().find(|k| !defs.iter().any(|d| &d.name == *k)) {
+        return Err(Diagnostic::new(
+            format!("`{module}` defines no `{missing}`"),
+            at,
+        ));
+    }
+    let mut out = source.to_string();
+    for d in defs.iter().rev() {
+        let makes_something = matches!(
+            d.kind,
+            SymbolKind::Fx | SymbolKind::Node | SymbolKind::Instrument
+        );
+        if makes_something && !keep.contains(&d.name) {
+            let blank: String = out[d.span.start..d.span.end]
+                .chars()
+                .map(|c| if c == '\n' { c } else { ' ' })
+                .collect();
+            out.replace_range(d.span.start..d.span.end, &blank);
+        }
+    }
+    Ok(out)
 }
 
 fn check_private(source: &str, at: Option<Span>) -> Result<(), Diagnostic> {

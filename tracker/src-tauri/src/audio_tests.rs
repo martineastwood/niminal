@@ -1456,16 +1456,14 @@ fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
     server.stop();
 }
 
-/// The definitions in one of the library modules that come with niminal, each of which stands alone.
-fn library_definitions(text: &'static str) -> Vec<&'static str> {
-    text.split("\n\n")
-        .filter(|block| block.lines().any(|l| l.starts_with("fx ") || l.starts_with("instr ")))
-        .collect()
+/// The presets on one shelf of the library that comes with niminal, each of which stands alone.
+fn library_definitions(shelf: &str) -> Vec<&'static str> {
+    niminal_lang::presets::of_shelf(shelf).map(|p| p.source.as_str()).collect()
 }
 
 #[test]
 fn library_instruments_expose_controls_and_sound_on_mono_and_stereo_engines() {
-    let sources = library_definitions(include_str!("../../../crates/niminal-lang/std/instruments.nml"));
+    let sources = library_definitions("std/instruments");
     assert_eq!(sources.len(), 8);
     for layout in [Layout::Mono, Layout::Stereo] {
         let engine = Arc::new(Mutex::new(EngineServer::new(Session::new(48000.0, layout).without_limiter())));
@@ -1489,9 +1487,9 @@ fn library_instruments_expose_controls_and_sound_on_mono_and_stereo_engines() {
 /// The drum presets as the tracker adds them: the preset renamed, with its own copy of the `drum` function.
 #[test]
 fn library_drum_presets_carry_their_voice_and_sound_on_mono_and_stereo_engines() {
-    let text: &'static str = include_str!("../../../crates/niminal-lang/std/drums.nml");
-    let voice = text.split("\n\n").find(|b| b.lines().any(|l| l.starts_with("fn drum("))).expect("the drum voice");
-    let presets = library_definitions(text);
+    let presets = library_definitions("std/drums");
+    let voice = niminal_lang::presets::of_shelf("std/drums").next().expect("a drum preset").helpers.as_str();
+    assert!(voice.contains("fn drum("), "the drum voice comes with the presets");
     assert_eq!(presets.len(), 21);
     for layout in [Layout::Mono, Layout::Stereo] {
         let engine = Arc::new(Mutex::new(EngineServer::new(Session::new(48000.0, layout).without_limiter())));
@@ -1520,7 +1518,7 @@ fn library_drum_presets_carry_their_voice_and_sound_on_mono_and_stereo_engines()
 
 /// The sound of the tone through the library's overdrive with its drive at `drive`.
 fn overdriven_loudness(drive: f64) -> f32 {
-    let source = library_definitions(include_str!("../../../crates/niminal-lang/std/fx.nml"))
+    let source = library_definitions("std/fx")
         .into_iter()
         .find(|b| b.lines().any(|l| l.starts_with("fx overdrive(")))
         .expect("the overdrive");
@@ -1549,7 +1547,7 @@ fn overdriven_loudness(drive: f64) -> f32 {
 /// that is four times louder on the left, with the library's compressor on its track set to `link`, or
 /// with no compressor at all.
 fn left_over_right(compressor_link: Option<f64>) -> f32 {
-    let source = library_definitions(include_str!("../../../crates/niminal-lang/std/fx.nml"))
+    let source = library_definitions("std/fx")
         .into_iter()
         .find(|b| b.lines().any(|l| l.starts_with("fx compressor(")))
         .expect("the compressor");
@@ -1595,7 +1593,7 @@ fn the_overdrive_drive_control_changes_the_sound() {
 
 #[test]
 fn library_effects_expose_controls_and_render_on_mono_and_stereo_engines() {
-    let sources = library_definitions(include_str!("../../../crates/niminal-lang/std/fx.nml"));
+    let sources = library_definitions("std/fx");
     assert!(sources.len() >= 15);
     for layout in [Layout::Mono, Layout::Stereo] {
         let engine = Arc::new(Mutex::new(EngineServer::new(
@@ -1670,7 +1668,7 @@ fn glitched_loudness(hold: f64) -> f32 {
     let mut worker = Worker::default();
     worker.command(Command::Connect { port: server.port(), token: None }).unwrap();
     worker.command(Command::Apply { id: "tone".into(), source: TONE.into(), kind: Kind::Instr, dir: None }).unwrap();
-    let source = library_definitions(include_str!("../../../crates/niminal-lang/std/fx.nml")).into_iter().find(|s| s.contains("fx glitch(")).unwrap();
+    let source = library_definitions("std/fx").into_iter().find(|s| s.contains("fx glitch(")).unwrap();
     worker.command(Command::Apply { id: "glitch".into(), source: source.into(), kind: Kind::Fx, dir: None }).unwrap();
     let mut song = test_song(None);
     song.tracks[0].fx = vec![Device {
@@ -2263,7 +2261,7 @@ fn loop_edits_reach_held_pattern_and_midi_notes_without_retriggering() {
 
 #[test]
 fn an_effect_can_be_applied_before_any_instrument() {
-    let sources = library_definitions(include_str!("../../../crates/niminal-lang/std/fx.nml"));
+    let sources = library_definitions("std/fx");
     let (_engine, _server, mut worker) = engine_worker();
     worker
         .command(Command::Apply { id: "first".into(), source: sources[0].into(), kind: Kind::Fx, dir: None })

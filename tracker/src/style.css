@@ -146,6 +146,7 @@ aside.names-hidden { width: calc(84px + var(--sequence-cells, 0px)); min-width: 
 
 /* Bottom dock */
 #bottom-dock { display: flex; flex-direction: column; height: 240px; min-height: 110px; max-height: 80%; flex-shrink: 0; border-top: 1px solid var(--line); background: var(--bg-panel); }
+.dock-resize, .col-resize { user-select: none; -webkit-user-select: none; touch-action: none; }
 .dock-resize { height: 4px; margin-top: -2px; cursor: ns-resize; flex-shrink: 0; z-index: 5; }
 .dock-resize:hover { background: var(--accent); }
 .dock-bar { display: flex; align-items: center; gap: 4px; height: 24px; padding: 0 4px; background: var(--bg-bar); border-bottom: 1px solid var(--line); flex-shrink: 0; }

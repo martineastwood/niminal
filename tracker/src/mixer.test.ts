@@ -147,20 +147,17 @@ it('keeps effects in a library that devices on any track, or the master, can reu
 });
 
 it('reads its presets from the library that comes with niminal, each as a definition that stands alone', async () => {
-  const { instrumentPresets, effectPresets, parseLibrary } = await import('./library');
+  const { instrumentPresets, effectPresets } = await import('./library');
   expect(instrumentPresets.map(p => p.id).slice(0, 8)).toEqual(['kick', 'snare', 'hat', 'bass', 'pluck', 'pad', 'lead', 'bell']);
   expect(instrumentPresets.map(p => p.id)).toEqual(expect.arrayContaining(['kick_808', 'snare_tri', 'clap_room', 'hat_open', 'wobble_bass', 'rim', 'cowbell']));
   expect(instrumentPresets.length).toBe(29);
   expect(Object.fromEntries(instrumentPresets.map(p => [p.id, p.folder]))).toMatchObject({ kick: 'drums/kicks', kick_808: 'drums/kicks', snare_tri: 'drums/snares', hat_open: 'drums/hats', rim: 'drums/percussion', bass: 'synths/bass', wobble_bass: 'synths/bass', zap: 'sounds/fx' });
   expect(effectPresets.every(p => p.folder.length > 0)).toBe(true); expect(effectPresets.find(p => p.id === 'echo')!.folder).toBe('time/delay');
-  expect(parseLibrary('// folder: a/b\n\n/// One.\nfx one() {\n  out = in\n}\n\n/// Two.\nfx two() {\n  out = in\n}\n\n// folder: c\n\n/// Three.\nfx three() {\n  out = in\n}\n', 'fx').map(p => [p.id, p.folder])).toEqual([['one', 'a/b'], ['two', 'a/b'], ['three', 'c']]);
   expect(effectPresets.map(p => p.id)).toContain('compressor'); expect(effectPresets.length).toBeGreaterThanOrEqual(15); expect(effectPresets.find(p => p.id === 'glitch')!.folder).toBe('time/glitch');
   for (const preset of [...instrumentPresets, ...effectPresets]) {
     expect(preset.description.length).toBeGreaterThan(10); expect(preset.source).toMatch(new RegExp(`^(use .*\\n)*(///.*\\n)+(instr|fx) ${preset.id}\\(`)); expect(preset.source.trimEnd().endsWith('}')).toBe(true);
   }
   expect(instrumentPresets.find(p => p.id === 'kick')!.name).toBe('Kick'); expect(effectPresets.find(p => p.id === 'band_cut')!.name).toBe('Band cut');
-  expect(parseLibrary('// header\n\n/// One.\nfx one(a: 0..1 = 0) {\n  out = in\n}\n\n/// Two.\nfx two() {\n  out = in\n}\n', 'fx').map(p => p.id)).toEqual(['one', 'two']);
-  expect(parseLibrary('/// Not mine.\ninstr x(freq: hz) { osc(sine, freq) }\n', 'fx')).toEqual([]);
 });
 
 it('copies an instrument preset into a project under its own name in the code', async () => {

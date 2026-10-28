@@ -3,10 +3,9 @@
 // crush, one after another. Each has a control that switches it on, and the sound passes through untouched
 // while they are all off. The clip draws when each is on, one row per control: `.` is off and `x` is on, and
 // neighbouring `x`s are one long glitch. Change a row and render again.
-// `use std/glitch` brings in the functions the effect is made of. The `glitch` effect in `std/fx` is the same
-// chain, ready to put on a tracker track.
+// `repeat_last`, `rewind_last` and `slow_down` are opcodes, and `apply` comes with the language. The `glitch`
+// effect in `std/fx` is the same chain, ready to put on a tracker track.
 // Render with:  niminal render examples/glitch.nml --out glitch.wav --bars 4
-use std/glitch
 config { channels: stereo }
 tempo 130bpm
 

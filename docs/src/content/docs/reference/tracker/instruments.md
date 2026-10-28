@@ -27,7 +27,7 @@ An instrument or effect has one name, and its code is written to match: **Warm s
 
 ## Ready-made instruments and effects
 
-The folders below Project in the browser (drums/kicks, drums/snares, synths/bass, … for instruments; filters, equalizer, echo, reverb, chorus, phaser, tremolo, compressor, overdrive, lo-fi, limiter for effects) come from the language's own library, `std/instruments` and `std/fx` (see [the standard library](/reference/language/standard-library/)), so niminal-live can `use` the same ones by name.
+The folders below Project in the browser (drums/kicks, drums/snares, synths/bass, … for instruments; filters, equalizer, echo, reverb, chorus, phaser, tremolo, compressor, overdrive, lo-fi, soft clip for effects) come from the language's own library, `std/instruments` and `std/fx` (see [the standard library](/reference/language/standard-library/)), so niminal-live can `use` the same ones by name.
 
 **+ Add effect…** in a track's FX view opens the same list for effects. Adding one copies it into the project, so its code is yours to edit in place and a later change to the library does not touch your song.
 
