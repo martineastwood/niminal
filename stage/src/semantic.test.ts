@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Text } from '@codemirror/state';
-import { semanticMarks } from './semantic';
+import { semanticMarks } from '../../editors/codemirror/semantic';
 
 describe('semantic colours', () => {
   it('places each token by its line and column offsets', () => {

@@ -1279,6 +1279,45 @@ fn macro_knob_drives_linked_parameters_and_follows_updates() {
 }
 
 #[test]
+fn language_macro_scaling_reaches_audio_and_survives_effect_replacement() {
+    use crate::pattern::{Macro, MacroLink};
+    let engine = Arc::new(Mutex::new(EngineServer::new(Session::new(48000.0, Layout::Stereo).without_limiter())));
+    let server = Server::start(engine.clone(), ServerConfig { port: 0, ..Default::default() }).unwrap();
+    let mut worker = Worker::default();
+    worker.command(Command::Connect { port: server.port(), token: None }).unwrap();
+    worker.command(Command::Apply { id: "tone".into(), source: "instr constant(freq: hz) { [0.25, 0.25].to_layout(stereo) }".into(), kind: Kind::Instr, dir: None }).unwrap();
+    let source = "fx probe(cutoff: 200hz..4khz = 200hz, level: -60db..0db = 0db) { out = in * (cutoff / 4khz) * level }";
+    let apply = || Command::Apply { id: "probe".into(), source: source.into(), kind: Kind::Fx, dir: None };
+    worker.command(apply()).unwrap();
+    let mut song = test_song(Some("C-4"));
+    song.tracks[0].fx = vec![Device { id: "d0".into(), definition: "probe".into(), ..Default::default() }];
+    song.tracks[0].macros = vec![Macro { name: "Sweep".into(), value: 0.5, links: vec![
+        MacroLink { device: "d0".into(), parameter: "cutoff".into(), min: 0.0, max: 1.0 },
+        MacroLink { device: "d0".into(), parameter: "level".into(), min: 0.0, max: 1.0 },
+    ] }];
+    worker.command(Command::Update { song: song.clone() }).unwrap();
+    let expected = 0.25 * (200.0_f32 * 4000.0).sqrt() / 4000.0 * 10.0_f32.powf(-30.0 / 20.0);
+    let peak = |worker: &mut Worker| {
+        worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track: 0, ms: 200, commands: vec![] }).unwrap();
+        engine.lock().unwrap().session_mut().process(10000)[0][2000..6000].iter().copied().fold(0.0_f32, f32::max)
+    };
+    assert!((peak(&mut worker) - expected).abs() < 1e-5);
+    worker.command(apply()).unwrap();
+    assert!((peak(&mut worker) - expected).abs() < 1e-5, "Apply preserves the macro's mapped values");
+    // A held automation lane uses the same evaluator instead of a hidden macro node.
+    song.tracks[0].macros[0].value = 0.0;
+    song.patterns[0].fx[0][0].target = Some(crate::commands::FxTarget::Macro { index: 0 });
+    song.patterns[0].fx[0][0].held(&[(0, 0.5)]);
+    worker.command(Command::Play { song, mode: Mode::Pattern, pattern_id: "p0".into(), start_position: 0 }).unwrap();
+    let lead = (worker.playback.as_ref().unwrap().origin - worker.clock().unwrap()) as usize;
+    let audio = engine.lock().unwrap().session_mut().process(lead + 4000);
+    let actual = audio[0][lead + 2000..lead + 4000].iter().copied().fold(0.0_f32, f32::max);
+    assert!((actual - expected).abs() < 1e-5, "the lane uses language scaling: {actual} != {expected}");
+    worker.command(Command::Disconnect).unwrap();
+    server.stop();
+}
+
+#[test]
 fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
     use crate::pattern::Lfo;
     let engine = Arc::new(Mutex::new(EngineServer::new(

@@ -329,7 +329,20 @@ pub fn snapshot(shared: &Shared) -> Snapshot {
     let health = {
         let mut last = lock(&shared.health);
         if last.as_ref().is_none_or(|(at, _)| at.elapsed() >= HEALTH_EVERY) {
-            *last = Some((Instant::now(), health_from(&live.engine_status())));
+            // a status that can't be had means the engine has gone: let go of the session, so the window
+            // looks for the engine again and opens a new one
+            let Ok(status) = live.engine_status() else {
+                *last = None;
+                drop(last);
+                *guard = None;
+                shared.bump();
+                return Snapshot {
+                    connected: false,
+                    revision: shared.revision.load(Ordering::Relaxed),
+                    ..Default::default()
+                };
+            };
+            *last = Some((Instant::now(), health_from(&status)));
         }
         last.as_ref().and_then(|(_, health)| health.clone())
     };

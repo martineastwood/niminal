@@ -342,6 +342,21 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn editor_understands_macros_and_instrumentless_gestures() {
+        let mut server = niminal_lsp::Server::new();
+        let uri = "file:///niminal-tracker/gesture.nml";
+        let source = "fx gate(open: 0..1 = 0) { out = in * open }\nmacro lift {\n  gate.open: 0..1\n}\nclip hit {\n  length: 1bar\n  times: 1\n  gate {\n    open: .... xxxx .... ....\n  }\n}\nhit.start\n";
+        let replies = server.handle(&json!({"method":"textDocument/didOpen", "params": {
+            "textDocument":{"uri":uri, "text":source, "languageId":"niminal", "version":1}
+        }}));
+        assert_eq!(replies[0]["params"]["diagnostics"], json!([]), "{replies:?}");
+        let replies = server.handle(&json!({"id":1, "method":"textDocument/semanticTokens/full", "params": {
+            "textDocument":{"uri":uri}
+        }}));
+        assert!(!replies[0]["result"]["data"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
     fn editor_presets_have_documentation_and_report_errors() {
         let mut server = niminal_lsp::Server::new();
         let uri = "file:///niminal-tracker/tone.nml";

@@ -7,6 +7,7 @@ import { LSPClient, serverDiagnostics, serverCompletion, hoverTooltips, signatur
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import DOMPurify from 'dompurify';
 import { colours, niminal } from '../../editors/codemirror/language';
+import { semanticHighlighting } from '../../editors/codemirror/semantic';
 import { languageTransport } from './transport';
 
 export const lsp = new LSPClient({
@@ -41,7 +42,7 @@ export function editorState(uri: string, source: string, changed: (source: strin
   return EditorState.create({ doc: source, extensions: [
     Prec.highest(keymap.of([{ key: 'Mod-Enter', run: () => { apply(); return true; } }])),
     basicSetup, niminal, theme, colours, keymap.of([{ key: 'Tab', run: acceptCompletion }, indentWithTab]),
-    lsp.plugin(uri, 'niminal'),
+    lsp.plugin(uri, 'niminal'), semanticHighlighting,
     EditorView.updateListener.of(update => { if (update.docChanged) changed(update.state.doc.toString()); }),
   ] });
 }

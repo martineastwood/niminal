@@ -23,8 +23,8 @@ pub struct Track {
     pub macros: Vec<Macro>,
 }
 
-/// One macro knob: `value` (0 to 1) moves every linked parameter along its own range. The value is
-/// a plain engine node that feeds a bus, so lanes and the mixer move it like any parameter.
+/// One graphical language macro: `value` (0 to 1) expands to its linked parameter values.
+/// The mixer and lanes both use the composition language's macro evaluator.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct Macro {
     pub name: String,
@@ -1376,7 +1376,7 @@ impl Playback {
                 let end_at = self.origin + (self.seconds_at(self.next_row as f64 + pair[1] - start) * sample_rate).round() as u64;
                 let mut point_edits: Vec<_> =
                     target.unmap(slot, strip).into_iter().collect();
-                point_edits.push(crate::commands::edit(
+                point_edits.extend(crate::commands::edit(
                     target,
                     &value.to_string(),
                     slot,
@@ -1393,8 +1393,8 @@ impl Playback {
                         strip,
                         &self.parameters,
                     )?;
-                    ramp["glide"] = json!((end_at - point_at - 1) as f64 / sample_rate);
-                    events.push(json!({"op":"routing", "at":point_at+1, "tag":"tracker-pattern", "edits":[ramp]}));
+                    for edit in &mut ramp { edit["glide"] = json!((end_at - point_at - 1) as f64 / sample_rate); }
+                    events.push(json!({"op":"routing", "at":point_at+1, "tag":"tracker-pattern", "edits":ramp}));
                 }
             }
             if envelope.mode == "hold"
@@ -1411,7 +1411,7 @@ impl Playback {
                     strip,
                     &self.parameters,
                 )?;
-                events.push(json!({"op":"routing", "at":self.row_at(self.next_row+1, sample_rate), "tag":"tracker-pattern", "edits":[edit]}));
+                events.push(json!({"op":"routing", "at":self.row_at(self.next_row+1, sample_rate), "tag":"tracker-pattern", "edits":edit}));
             }
             return Ok(());
         }
@@ -1431,7 +1431,7 @@ impl Playback {
                 continue;
             }
             edits.extend(target.unmap(slot, strip));
-            edits.push(crate::commands::edit(&target, &value.to_string(), slot, strip, &self.parameters)?);
+            edits.extend(crate::commands::edit(&target, &value.to_string(), slot, strip, &self.parameters)?);
         }
         Ok(())
     }
@@ -2357,6 +2357,33 @@ mod tests {
         let mut column = column(4, &[(0, "C-4")]);
         column.fx = vec![vec![Some("S80".into()), Some("L80".into()), Some("12FF".into()), None]];
         column
+    }
+
+    #[test]
+    fn macro_automation_ramps_every_link_at_the_same_sample() {
+        let events = played_with(2, vec![column(2, &[])], Mode::Song, |play| {
+            let track = &mut play.song.tracks[0];
+            track.fx = ["a", "b"].map(|id| Device { id: id.into(), definition: "level".into(), ..Default::default() }).into();
+            track.macros = vec![Macro { name: "Crossfade".into(), value: 0.0, links: vec![
+                MacroLink { device: "a".into(), parameter: "amount".into(), min: 0.0, max: 1.0 },
+                MacroLink { device: "b".into(), parameter: "amount".into(), min: 1.0, max: 0.0 },
+            ] }];
+            play.parameters.insert("level".into(), vec![parameter("amount")]);
+            let lane = &mut play.song.patterns[0].fx[0][0];
+            lane.target = Some(crate::commands::FxTarget::Macro { index: 0 });
+            lane.envelope = Some(Envelope { enabled: true, mode: "linear".into(), points: vec![
+                EnvelopePoint { row: 0.0, value: 0.0 }, EnvelopePoint { row: 2.0, value: 1.0 },
+            ] });
+        });
+        let at = |sample| events.iter().find(|event| event["op"] == "routing" && event["at"] == sample).unwrap()["edits"].as_array().unwrap();
+        let midpoint = at(6000);
+        assert_eq!(midpoint.len(), 2);
+        assert!(midpoint.iter().all(|edit| edit["args"]["amount"] == 0.5));
+        let ramps = at(6001);
+        assert_eq!(ramps.len(), 2);
+        assert_eq!(ramps[0]["args"]["amount"], 1.0);
+        assert_eq!(ramps[1]["args"]["amount"], 0.0);
+        assert!(ramps.iter().all(|edit| edit["glide"] == json!(5999.0 / 48000.0)));
     }
 
     #[test]

@@ -2176,6 +2176,7 @@ name = "niminal-tracker"
 version = "0.0.1"
 dependencies = [
  "midir",
+ "niminal-compose",
  "niminal-lang",
  "niminal-lsp",
  "niminal-server",

@@ -51,10 +51,14 @@ impl ControlBinding {
 /// The value `t` (0 to 1) of the way from `lo` to `hi` (engine units), in the control's unit suffix: even by ear
 /// for hz and db, so sweeps sound the same all the way along.
 pub fn interpolate(control: &ControlDef, lo: f32, hi: f32, t: f64) -> f64 {
+    interpolate_range(control.unit, lo, hi, t)
+}
+
+fn interpolate_range(unit: niminal_lang::Unit, lo: f32, hi: f32, t: f64) -> f64 {
     let t = t.clamp(0.0, 1.0);
     let (lo, hi) = (f64::from(lo), f64::from(hi));
     let geometric = matches!(
-        control.unit,
+        unit,
         niminal_lang::Unit::Hz | niminal_lang::Unit::Db
     ) && lo > 0.0
         && hi > 0.0;
@@ -63,7 +67,7 @@ pub fn interpolate(control: &ControlDef, lo: f32, hi: f32, t: f64) -> f64 {
     } else {
         lo + (hi - lo) * t
     };
-    if control.unit == niminal_lang::Unit::Db {
+    if unit == niminal_lang::Unit::Db {
         20.0 * engine.log10()
     } else {
         engine
@@ -74,8 +78,16 @@ pub fn interpolate(control: &ControlDef, lo: f32, hi: f32, t: f64) -> f64 {
 #[derive(Clone, Debug, PartialEq)]
 pub struct MacroTarget {
     pub control: String,
+    pub unit: niminal_lang::Unit,
     pub lo: f32,
     pub hi: f32,
+}
+
+impl MacroTarget {
+    /// The target value in its declared unit, with the same scaling as control inputs.
+    pub fn value(&self, value: f64) -> f64 {
+        interpolate_range(self.unit, self.lo, self.hi, value)
+    }
 }
 
 /// A macro: a control from 0 to 1 that moves other controls along with it.
@@ -83,6 +95,13 @@ pub struct MacroTarget {
 pub struct MacroDef {
     pub name: String,
     pub targets: Vec<MacroTarget>,
+}
+
+impl MacroDef {
+    /// Expand one knob value into the parameter values it drives.
+    pub fn values(&self, value: f64) -> impl Iterator<Item = (&str, f64, niminal_lang::Unit)> {
+        self.targets.iter().map(move |target| (target.control.as_str(), target.value(value), target.unit))
+    }
 }
 
 /// Commands to run when something arrives from outside, as they are written.
@@ -689,7 +708,7 @@ fn compile_macros(items: &[Item], program: &Program, tempo: Tempo) -> Result<Vec
                 continue;
             };
             match (def.convert(lo, lo_unit, tempo), def.convert(hi, hi_unit, tempo)) {
-                (Ok(lo), Ok(hi)) => targets.push(MacroTarget { control, lo, hi }),
+                (Ok(lo), Ok(hi)) => targets.push(MacroTarget { control, unit: def.unit, lo, hi }),
                 (Err(why), _) | (_, Err(why)) => errors.push(Diagnostic::new(why, range.span)),
             }
         }

@@ -850,7 +850,7 @@ fn api_source(method: &str, params: &Value) -> Result<String, RpcError> {
 }
 
 fn status_json(live: &mut Live) -> Value {
-    let engine = live.engine_status();
+    let engine = live.engine_status().unwrap_or_else(|_| json!({}));
     json!({
         "transport": transport_json(&live.transport()),
         "pending": live.pending().iter().map(pending_json).collect::<Vec<_>>(),

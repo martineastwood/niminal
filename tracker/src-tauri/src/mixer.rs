@@ -11,7 +11,7 @@
 //! `sendout_<s>_<device>`. Post-fader (the default) it listens to the tap; pre-fader it listens at its
 //! place in the chain, and may *mute the source*, so nothing after it carries sound on.
 use crate::{
-    commands::{EffectParameters, fx_node, macro_node},
+    commands::{EffectParameters, fx_node, macro_edits},
     pattern::{Device, Output, Track},
 };
 use serde_json::{Value, json};
@@ -162,6 +162,9 @@ pub fn replacements(
         for device in strip.active() {
             edits.push(replacement(&label, device, effects, parameters)?);
         }
+        for (index, knob) in strip.macros.iter().enumerate() {
+            edits.extend(macro_value(&label, strip, index, knob.value, parameters));
+        }
     }
     Ok(edits)
 }
@@ -179,7 +182,6 @@ pub fn reset(
     let mut edits = Vec::new();
     for (label, strip) in strips(tracks, returns, master) {
         edits.push(base(&label, strip));
-        edits.extend(strip.macros.iter().enumerate().map(|(index, m)| macro_value(&label, index, m.value)));
         for device in strip.active() {
             let args = arguments(device, parameters);
             if !args.is_empty() {
@@ -188,13 +190,18 @@ pub fn reset(
                 );
             }
         }
+        for (index, knob) in strip.macros.iter().enumerate() {
+            edits.extend(macro_value(&label, strip, index, knob.value, parameters));
+        }
     }
     edits.extend(links(tracks, returns).iter().map(|(id, link)| gain(id, link.gain)));
     vec![json!({"op":"routing", "at":"now", "edits":edits})]
 }
 
-fn macro_value(label: &str, index: usize, value: f64) -> Value {
-    json!({"op":"set", "id":macro_node(label, index), "args":{"value":value}, "glide":0.01})
+fn macro_value(label: &str, strip: &Track, index: usize, value: f64, parameters: &EffectParameters) -> Vec<Value> {
+    let mut edits = macro_edits(label, strip, index, value, parameters);
+    for edit in &mut edits { edit["glide"] = json!(0.01); }
+    edits
 }
 
 fn find<'a>(strips: &[(String, &'a Track)], label: &str) -> Option<&'a Track> {
@@ -252,6 +259,7 @@ pub fn events(
         if before.is_none() {
             topology.extend(strip_nodes(&label));
         }
+        let devices_changed = chain.len() != old_chain.len() || chain.iter().zip(&old_chain).any(|(a, b)| a.id != b.id || a.definition != b.definition);
         for device in &chain {
             match old_chain.iter().find(|d| d.id == device.id) {
                 None => {
@@ -259,8 +267,25 @@ pub fn events(
                     topology.push(json!({"op":"node", "id":fx_node(&label, &device.id), "fx":fx, "args":arguments(device, parameters)}));
                 }
                 Some(old) if old.definition != device.definition => topology.push(replacement(&label, device, effects, parameters)?),
-                Some(old) if old.values != device.values => controls.push(json!({"op":"set", "id":fx_node(&label, &device.id), "args":arguments(device, parameters), "glide":0.01})),
+                Some(old) if old.values != device.values => {
+                    let mut args = arguments(device, parameters);
+                    args.retain(|parameter, _| strip.macro_of(&device.id, parameter).is_none());
+                    if !args.is_empty() {
+                        controls.push(json!({"op":"set", "id":fx_node(&label, &device.id), "args":args, "glide":0.01}));
+                    }
+                }
                 _ => {}
+            }
+        }
+        // A detached link returns to its device's base setting; other automated parameters stay put.
+        for device in &chain {
+            let args = arguments(device, parameters);
+            let restored: serde_json::Map<String, Value> = args.into_iter().filter(|(parameter, _)| {
+                before.is_some_and(|old| old.macro_of(&device.id, parameter).is_some())
+                    && strip.macro_of(&device.id, parameter).is_none()
+            }).collect();
+            if !restored.is_empty() {
+                controls.push(json!({"op":"set", "id":fx_node(&label, &device.id), "args":restored, "glide":0.01}));
             }
         }
         let shape = |chain: &[&Device]| chain.iter().map(|d| (d.id.clone(), d.target.is_some(), d.pre, d.mute_source)).collect::<Vec<_>>();
@@ -288,10 +313,10 @@ pub fn events(
         if before.is_none_or(|o| o.volume_db != strip.volume_db || o.pan != strip.pan) {
             controls.push(base(&label, strip));
         }
-        // a new macro starts at its value, so only one that was already there is moved
+        // Re-evaluate links after their devices and any former LFO maps have been updated.
         for (index, m) in strip.macros.iter().enumerate() {
-            if before.and_then(|o| o.macros.get(index)).is_some_and(|o| o.value != m.value) {
-                controls.push(macro_value(&label, index, m.value));
+            if devices_changed || before.and_then(|o| o.macros.get(index)) != Some(m) {
+                controls.extend(macro_value(&label, strip, index, m.value, parameters));
             }
         }
     }
@@ -320,4 +345,42 @@ pub fn events(
         .filter(|edits| !edits.is_empty())
         .map(|edits| json!({"op":"routing", "at":"now", "edits":edits}))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{commands::Parameter, pattern::{Lfo, Macro, MacroLink}};
+
+    #[test]
+    fn macros_handover_lfos_and_survive_unrelated_parameter_edits() {
+        let parameters: EffectParameters = [("level".into(), ["amount", "other"].map(|name| Parameter {
+            name: name.into(), min: 0.0, max: 1.0, default: 1.0, unit: None,
+        }).into())].into();
+        let effects = [("level".into(), "level".into())].into();
+        let mut strip = Track { fx: vec![Device {
+            id: "d0".into(), definition: "level".into(),
+            modulations: [("amount".into(), Lfo { enabled: true, shape: "sine".into(), period: 4.0, min: 0.0, max: 1.0 })].into(),
+            ..Default::default()
+        }], ..Default::default() };
+        let edits = |next: &Track, old: &Track| {
+            events(std::slice::from_ref(next), &[], &Track::default(), std::slice::from_ref(old), &[], &Track::default(), &effects, &parameters, 120.0, 4, false)
+                .unwrap().into_iter().flat_map(|event| event["edits"].as_array().unwrap().clone()).collect::<Vec<_>>()
+        };
+        let before = strip.clone();
+        strip.macros = vec![Macro { name: "Gain".into(), value: 0.5, links: vec![MacroLink { device: "d0".into(), parameter: "amount".into(), min: 0.0, max: 1.0 }] }];
+        let attached = edits(&strip, &before);
+        assert!(attached.iter().any(|edit| edit["op"] == "map" && edit["source"].is_null()));
+        assert!(attached.iter().any(|edit| edit["op"] == "free_node"));
+        assert_eq!(attached.last().unwrap()["args"]["amount"], 0.5);
+        let before = strip.clone();
+        strip.fx[0].values.insert("other".into(), 0.25);
+        let unrelated = edits(&strip, &before);
+        assert!(unrelated.iter().all(|edit| edit["args"].get("amount").is_none()), "an unrelated edit must not reset macro automation: {unrelated:?}");
+        let before = strip.clone();
+        strip.macros.clear();
+        let detached = edits(&strip, &before);
+        assert!(detached.iter().any(|edit| edit["op"] == "node" && edit["fx"] == "__tracker_lfo_sine"));
+        assert!(detached.iter().any(|edit| edit["op"] == "map" && edit["source"]["kind"] == "bus"));
+    }
 }

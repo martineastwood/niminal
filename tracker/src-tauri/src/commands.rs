@@ -34,9 +34,37 @@ pub fn fx_node(slot: impl std::fmt::Display, device: &str) -> String {
     format!("fx_{slot}_{device}")
 }
 
-/// The engine node that holds one macro knob's value, and the bus that carries it to the parameters it drives.
-pub fn macro_node(slot: impl std::fmt::Display, index: usize) -> String {
-    format!("macro_{slot}_{index}")
+/// Translate graphical links into the language's macro definition, then evaluate it.
+/// Link endpoints are fractions of the parameter's displayed range; language targets use engine units.
+pub fn macro_edits(slot: impl std::fmt::Display, track: &Track, index: usize, value: f64, parameters: &EffectParameters) -> Vec<Value> {
+    let Some(knob) = track.macros.get(index) else { return vec![] };
+    let targets = knob.links.iter().filter_map(|link| {
+        let device = track.device(&link.device).filter(|device| !device.bypass)?;
+        let parameter = parameters.get(&device.definition)?.iter().find(|p| p.name == link.parameter)?;
+        let unit = match parameter.unit.as_deref() {
+            Some("hz") => niminal_lang::Unit::Hz,
+            Some("db") => niminal_lang::Unit::Db,
+            Some("sec") => niminal_lang::Unit::Time,
+            Some("deg") => niminal_lang::Unit::Angle,
+            Some("st") => niminal_lang::Unit::Semitones,
+            _ => niminal_lang::Unit::Num,
+        };
+        let endpoint = |fraction| parameter.engine_value(parameter.min + fraction * (parameter.max - parameter.min)) as f32;
+        Some(niminal_compose::MacroTarget {
+            control: format!("{}::{}", fx_node(&slot, &device.id), parameter.name),
+            unit,
+            lo: endpoint(link.min),
+            hi: endpoint(link.max),
+        })
+    }).collect();
+    let definition = niminal_compose::MacroDef { name: knob.name.clone(), targets };
+    let mut nodes: BTreeMap<&str, serde_json::Map<String, Value>> = BTreeMap::new();
+    for (name, value, unit) in definition.values(value) {
+        let (node, parameter) = name.split_once("::").unwrap();
+        let value = unit.suffix().map_or_else(|| json!(value), |unit| json!(format!("{value}{unit}")));
+        nodes.entry(node).or_default().insert(parameter.into(), value);
+    }
+    nodes.into_iter().map(|(id, args)| json!({"op":"set", "id":id, "args":args, "glide":0.0})).collect()
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, Serialize)]
@@ -114,7 +142,7 @@ pub fn edit(
     slot: impl std::fmt::Display,
     track: &Track,
     parameters: &EffectParameters,
-) -> Result<Value, String> {
+) -> Result<Vec<Value>, String> {
     let value: f64 = value
         .parse()
         .map_err(|_| "Parameter lane needs a numeric value")?;
@@ -134,24 +162,22 @@ pub fn edit(
     match target {
         FxTarget::Volume => {
             bounded(-60.0, 6.0)?;
-            Ok(
+            Ok(vec![
                 json!({"op":"set", "id":format!("track_{slot}"), "args":{"level":10.0_f64.powf(value/20.0)}, "glide":0.0}),
-            )
+            ])
         }
         FxTarget::Pan => {
             bounded(-1.0, 1.0)?;
-            Ok(
+            Ok(vec![
                 json!({"op":"set", "id":format!("track_{slot}"), "args":{"balance":value}, "glide":0.0}),
-            )
+            ])
         }
         FxTarget::Macro { index } => {
             bounded(0.0, 1.0)?;
             if *index >= track.macros.len() {
                 return Err(format!("{}: lane addresses a missing macro", track.name));
             }
-            Ok(
-                json!({"op":"set", "id":macro_node(slot, *index), "args":{"value":value}, "glide":0.0}),
-            )
+            Ok(macro_edits(slot, track, *index, value, parameters))
         }
         FxTarget::Instrument { .. } => Err(format!(
             "{}: instrument parameters apply to notes, not to the mixer",
@@ -168,9 +194,9 @@ pub fn edit(
                 )
             })?;
             bounded(info.min, info.max)?;
-            Ok(
+            Ok(vec![
                 json!({"op":"set", "id":fx_node(slot, device), "args":{parameter:info.argument(value)}, "glide":0.0}),
-            )
+            ])
         }
     }
 }
@@ -182,11 +208,11 @@ mod tests {
     fn named_controls_use_exact_physical_values_and_validate_bounds() {
         let mut track = Track::default();
         assert_eq!(
-            edit(&FxTarget::Volume, "0", 2, &track, &BTreeMap::new()).unwrap()["args"]["level"],
+            edit(&FxTarget::Volume, "0", 2, &track, &BTreeMap::new()).unwrap()[0]["args"]["level"],
             1.0
         );
         assert_eq!(
-            edit(&FxTarget::Pan, "0", 2, &track, &BTreeMap::new()).unwrap()["args"]["balance"],
+            edit(&FxTarget::Pan, "0", 2, &track, &BTreeMap::new()).unwrap()[0]["args"]["balance"],
             0.0
         );
         assert!(edit(&FxTarget::Pan, "2", 0, &track, &BTreeMap::new()).is_err());
@@ -212,10 +238,42 @@ mod tests {
             parameter: "cutoff".into(),
         };
         assert_eq!(
-            edit(&target, "2345.6789", 0, &track, &parameters).unwrap()["args"]["cutoff"],
+            edit(&target, "2345.6789", 0, &track, &parameters).unwrap()[0]["args"]["cutoff"],
             "2345.6789hz"
         );
         assert!(edit(&target, "20001", 0, &track, &parameters).is_err());
+    }
+
+    #[test]
+    fn graphical_links_match_compiled_language_macros() {
+        use crate::pattern::{Macro, MacroLink};
+        let source = "fx probe(cutoff: 200hz..4khz = 200hz, gain: -60db..0db = 0db, amount: 0..1 = 0) { out = in * gain * amount }\nmacro sweep {\n  probe.cutoff: 200hz..4khz\n  probe.gain: 0db..-60db\n  probe.amount: 0.25..0.75\n}\n";
+        let program = niminal_compose::compile(source).unwrap();
+        let sound = crate::sound::Sound::parse(crate::sound::Kind::Fx, source.split("macro").next().unwrap().into(), None).unwrap();
+        let parameters = [("probe".into(), sound.parameters)].into();
+        let mut track = Track {
+            fx: vec![Device { id: "d0".into(), definition: "probe".into(), ..Default::default() }],
+            macros: vec![Macro { name: "Sweep".into(), value: 0.0, links: vec![
+                MacroLink { device: "d0".into(), parameter: "cutoff".into(), min: 0.0, max: 1.0 },
+                MacroLink { device: "d0".into(), parameter: "gain".into(), min: 1.0, max: 0.0 },
+                MacroLink { device: "d0".into(), parameter: "amount".into(), min: 0.25, max: 0.75 },
+            ] }], ..Default::default()
+        };
+        for value in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let edits = macro_edits(3, &track, 0, value, &parameters);
+            assert_eq!(edits.len(), 1, "targets on one device are updated together");
+            assert_eq!(edits[0]["id"], "fx_3_d0");
+            for (name, expected, unit) in program.macro_of("sweep").unwrap().values(value) {
+                let parameter = name.split_once("::").unwrap().1;
+                let actual = &edits[0]["args"][parameter];
+                let actual = unit.suffix().map_or_else(|| actual.as_f64().unwrap(), |suffix| actual.as_str().unwrap().trim_end_matches(suffix).parse::<f64>().unwrap());
+                assert!((actual - expected).abs() < 1e-4, "{parameter} at {value}: {actual} != {expected}");
+            }
+        }
+        track.fx[0].bypass = true;
+        assert!(macro_edits(3, &track, 0, 0.5, &parameters).is_empty());
+        track.fx.clear();
+        assert!(macro_edits(3, &track, 0, 0.5, &parameters).is_empty());
     }
 
     #[test]
@@ -230,7 +288,7 @@ mod tests {
         track.macros = vec![Macro { name: "Open".into(), value: 0.0, links: vec![] }];
         assert!(knob.available(&track, &parameters) && cutoff.available(&track, &parameters));
         let set = edit(&knob, "0.25", 3, &track, &parameters).unwrap();
-        assert_eq!((set["id"].as_str(), set["args"]["value"].as_f64()), (Some("macro_3_0"), Some(0.25)));
+        assert!(set.is_empty(), "a macro without links has no targets");
         assert!(edit(&knob, "1.5", 3, &track, &parameters).is_err());
         track.macros[0].links.push(MacroLink { device: "d0".into(), parameter: "cutoff".into(), min: 0.0, max: 1.0 });
         assert!(!cutoff.available(&track, &parameters), "the macro drives it now");

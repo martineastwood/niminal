@@ -65,12 +65,8 @@ impl Live {
         )];
         // a macro moves what it is made to move, each along its own scale and by its own smoothing
         if let Some(moves) = self.program.macro_of(name) {
-            for target in &moves.targets {
-                let Some(def) = self.program.controls.iter().find(|c| c.name == target.control) else {
-                    continue;
-                };
-                let at = niminal_compose::interpolate(def, target.lo, target.hi, value);
-                events.push(control(&target.control, at, def.unit.suffix().map(str::to_owned), None));
+            for (name, at, unit) in moves.values(value) {
+                events.push(control(name, at, unit.suffix().map(str::to_owned), None));
             }
         }
         self.link

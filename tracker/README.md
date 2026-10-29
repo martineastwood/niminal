@@ -33,7 +33,7 @@ npm --prefix tracker test
 npm --prefix tracker run build
 cargo clippy --manifest-path tracker/src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path tracker/src-tauri/Cargo.toml
-cargo install --path crates/niminal-cli
+scripts/dogfood.sh
 npm --prefix tracker run tauri -- build
 ```
 

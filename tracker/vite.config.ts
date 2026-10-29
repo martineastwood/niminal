@@ -4,7 +4,7 @@ import { defineConfig } from 'vite';
 
 // The shared editor code in ../editors/codemirror uses this app's copies of the editor libraries.
 const modules = (name: string) => fileURLToPath(new URL(`./node_modules/${name}`, import.meta.url));
-const alias = { '@codemirror/language': modules('@codemirror/language'), '@lezer/highlight': modules('@lezer/highlight') };
+const alias = Object.fromEntries(['@codemirror/language', '@codemirror/state', '@codemirror/view', '@codemirror/lsp-client', '@lezer/highlight'].map(name => [name, modules(name)]));
 
 // The ready-made instruments and effects are read from the language's own library, one level up.
 // The pattern grid tests build and click through a whole grid in a simulated browser, which is slow on a busy machine.

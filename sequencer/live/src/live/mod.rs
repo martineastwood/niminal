@@ -935,14 +935,16 @@ impl Live {
         &self.log
     }
 
-    /// The engine's own account of itself, for a status that wants it.
-    pub fn engine_status(&mut self) -> serde_json::Value {
+    /// The engine's own account of itself, for a status that wants it. An error means the engine could not be
+    /// reached.
+    pub fn engine_status(&mut self) -> Result<serde_json::Value, String> {
         match self.link.request(EngineRequest::Status {}) {
             Ok(EngineReply::Status(mut v)) => {
                 self.tidy_controls(&mut v);
-                v
+                Ok(v)
             }
-            _ => serde_json::json!({}),
+            Ok(_) => Err("the engine answered a status request with something else".into()),
+            Err(error) => Err(error.message),
         }
     }
 

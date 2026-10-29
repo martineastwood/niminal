@@ -4,7 +4,7 @@ import { defineConfig } from 'vite';
 
 // The shared editor code in ../editors/codemirror uses this app's copies of the editor libraries.
 const modules = (name: string) => fileURLToPath(new URL(`./node_modules/${name}`, import.meta.url));
-const alias = { '@codemirror/language': modules('@codemirror/language'), '@lezer/highlight': modules('@lezer/highlight') };
+const alias = Object.fromEntries(['@codemirror/language', '@codemirror/state', '@codemirror/view', '@codemirror/lsp-client', '@lezer/highlight'].map(name => [name, modules(name)]));
 
 export default defineConfig({
   resolve: { alias },

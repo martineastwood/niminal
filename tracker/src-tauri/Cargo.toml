@@ -18,6 +18,7 @@ serde = { version = "1", features = ["derive"] }
 niminal-ws = { path = "../../crates/niminal-ws" }
 niminal-lang = { path = "../../crates/niminal-lang" }
 rfd = "0.17"
+niminal-compose = { path = "../../sequencer/compose" }
 niminal-lsp = { path = "../../sequencer/lsp" }
 
 [profile.dev]

@@ -18,7 +18,7 @@ import { languageTransport } from './transport';
 import { stage } from './live';
 import { highlightExtensions } from './highlight';
 import { scrubbing } from './scrub';
-import { semanticHighlighting } from './semantic';
+import { semanticHighlighting } from '../../editors/codemirror/semantic';
 
 export const lsp = new LSPClient({
   extensions: [
