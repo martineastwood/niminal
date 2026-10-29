@@ -1494,7 +1494,7 @@ impl Live {
                 });
             }
         }
-        if ops.iter().any(|op| matches!(op, Op::Define { source, .. } | Op::Transaction { source, .. } if source.contains("clock."))) {
+        if ops.iter().any(|op| matches!(op, Op::Define { source, .. } | Op::Transaction { source, .. } if source.contains("clock.") || niminal_lang::reads_clock(source))) {
             let tempo = program.map_or(self.program.tempo, |p| p.tempo);
             let at = match at {
                 At::Sample(n) => n,

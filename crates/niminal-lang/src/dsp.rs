@@ -117,20 +117,13 @@ fn clock_reads(source: &str) -> Result<Vec<(usize, usize, String)>, Diagnostic> 
     Ok(edits)
 }
 
-/// `text` with its reads of the clock made into reads of the tempo controls, and nothing declared: for
-/// the library functions that come with the language, whose file declares the controls.
-pub(crate) fn lower_clock_reads(text: &str) -> String {
-    let mut text = text.to_string();
-    for (start, end, replacement) in clock_reads(&text).unwrap_or_default().into_iter().rev() {
-        text.replace_range(start..end, &replacement);
-    }
-    text
-}
-
 /// [`lower_clock`], with where it changed the text.
 pub fn lower_clock_edits(source: &str, clock: ClockState) -> Result<(String, Vec<ClockEdit>), Diagnostic> {
+    // a library function that reads the clock goes in the text of whoever calls it, so that it reads the
+    // controls declared with that text
+    let library = crate::prelude::clock_functions(source);
+    let source = &format!("{source}{library}");
     let edits = clock_reads(source)?;
-    // a file that calls a library function that reads the clock needs the controls too
     let declared = source.contains(&format!("ctl {CLOCK_BPM} "));
     if declared || (edits.is_empty() && !crate::prelude::reads_clock(source)) {
         return Ok((source.to_string(), Vec::new()));

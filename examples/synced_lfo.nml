@@ -1,0 +1,26 @@
+// Modulation that keeps time. `lfo(2hz)` runs at a fixed speed, so when the tempo changes it drifts out of
+// step with the music. `synced_lfo(beats)` takes a length in beats instead: one cycle every `beats` beats,
+// locked to the beat count. Here a pad's filter opens and closes twice a beat, and its level swells once a
+// bar. Live, play it and try  tempo 80bpm  then  tempo 140bpm : the sweep slows and quickens with the tempo
+// and keeps landing on the beat, with no change to the code.
+// `shape` is sine (default), tri, saw or square, and `phase` (0 to 1) shifts the cycle along.
+// Render with:  niminal-live render examples/synced_lfo.nml --out synced_lfo.wav --bars 4
+config { channels: stereo }
+tempo 120bpm
+
+instr pad(freq: hz = 220hz, amp: db = -8db) {
+  // a sine, one cycle every half beat, scaled to a cutoff between 300hz and 3khz
+  sweep = synced_lfo(1/2).unipolar.range(300hz..3khz).smooth(5ms)
+  // a triangle, one cycle every bar (four beats), dipping the level to 60%
+  swell = synced_lfo(4, shape: tri).unipolar.range(0.6..1)
+  osc(saw, freq).lpf(cutoff: sweep, res: 0.3).gain(amp) * swell
+}
+
+clip chords {
+  instrument: pad
+  length: 4bars
+  notes: [a2 c3 e3 g3]
+  dur: 1bar
+}
+
+chords.start

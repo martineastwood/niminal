@@ -111,3 +111,15 @@ fn an_echo_timed_from_the_length_of_a_beat_follows_the_tempo() {
     let at_60 = gap(&session.process(144_000).remove(0));
     assert!((at_60 as i64 - 48_000).abs() < 600, "{at_60}");
 }
+
+#[test]
+fn a_clip_whose_instrument_uses_a_synced_lfo_sounds_and_follows_the_tempo() {
+    // the sweep opens the filter twice a beat; the clip's node is built with the tempo controls it reads
+    let source = "instr pad(freq: hz = 220hz) {\n  sweep = synced_lfo(1/2).unipolar.range(300hz..3khz).smooth(5ms)\n  osc(saw, freq).lpf(cutoff: sweep) * 0.3\n}\nclip c {\n  instrument: pad\n  length: 4bars\n  notes: [a2]\n  dur: 4bars\n}\n";
+    let mut session = Offline::new(48_000.0, Layout::Stereo);
+    session.eval(source, Some("now")).unwrap();
+    assert!(session.take_notices().is_empty());
+    session.eval("c.start", Some("now")).unwrap();
+    let out = session.process(96_000).remove(0);
+    assert!(peak(&out) > 0.01 && out.iter().all(|v| v.is_finite()));
+}

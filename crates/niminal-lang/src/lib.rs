@@ -8,6 +8,7 @@ mod call;
 mod compile;
 mod diag;
 mod dsp;
+pub use prelude::reads_clock;
 pub use dsp::{CLOCK_BPM, CLOCK_METER, CLOCK_ORIGIN, ClockEdit, ClockState, dsp_value, lower_clock, lower_clock_edits, unlowered_span, validate_dsp};
 mod env_shortcut;
 mod explain;

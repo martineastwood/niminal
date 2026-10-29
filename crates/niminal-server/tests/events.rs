@@ -981,8 +981,8 @@ fn the_length_of_a_beat_and_a_bar_follow_the_tempo() {
 }
 
 #[test]
-fn a_tempo_lfo_stays_locked_to_the_beat_through_a_tempo_change() {
-    let source = "instr beat_sig(freq: hz) { tempo_lfo(beats: 1, shape: saw) * 0.001 }\nnode beat_node { instrument = beat_sig }\n";
+fn a_synced_lfo_stays_locked_to_the_beat_through_a_tempo_change() {
+    let source = "instr beat_sig(freq: hz) { synced_lfo(beats: 1, shape: saw) * 0.001 }\nnode beat_node { instrument = beat_sig }\n";
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
     s.eval(source, Some("now")).unwrap();
     hold_on(&mut s, 0);
@@ -996,8 +996,8 @@ fn a_tempo_lfo_stays_locked_to_the_beat_through_a_tempo_change() {
 }
 
 #[test]
-fn a_filter_swept_by_a_tempo_lfo_plays() {
-    let source = "instr beat_sig(freq: hz = 220hz) {\n  wobble = tempo_lfo(beats: 1/2).unipolar.range(300hz..3khz).smooth(5ms)\n  osc(saw, freq).lpf(cutoff: wobble) * 0.3\n}\nnode beat_node { instrument = beat_sig }\n";
+fn a_filter_swept_by_a_synced_lfo_plays() {
+    let source = "instr beat_sig(freq: hz = 220hz) {\n  wobble = synced_lfo(beats: 1/2).unipolar.range(300hz..3khz).smooth(5ms)\n  osc(saw, freq).lpf(cutoff: wobble) * 0.3\n}\nnode beat_node { instrument = beat_sig }\n";
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
     s.eval(source, Some("now")).unwrap();
     hold_on(&mut s, 0);

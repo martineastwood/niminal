@@ -27,6 +27,7 @@ spectral.nml: 2x478367
 spectral_delay.nml: 2x824064
 stereo.nml: 2x280705
 stutter.nml: 2x351522
+synced_lfo.nml: 2x384240
 synth_drums.nml: 2x356382
 tables.nml: 2x182400
 trance_gate.nml: 2x337043

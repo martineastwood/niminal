@@ -12,13 +12,6 @@ control fn lfo(rate: hz, shape: (sine | tri | saw | square) = sine) {
   else { osc(square, rate) }
 }
 fn unipolar(x) { x * 0.5 + 0.5 }
-control fn tempo_lfo(beats: num = 1, shape: (sine | tri | saw | square) = sine, phase: num = 0) {
-  at = fract(clock.beat / beats + phase)
-  if shape == sine { sin(at * 2 * pi) }
-  else if shape == tri { abs(fract(at + 0.75) - 0.5) * 4 - 1 }
-  else if shape == saw { fract(at + 0.5) * 2 - 1 }
-  else { (at < 0.5) * 2 - 1 }
-}
 control fn random_steps(rate: hz, seed: num = 0) {
   noise(seed: seed).sample_hold(impulse(rate))
 }
@@ -78,6 +71,18 @@ fn apply(x, make: fn, when: 0..1, blend: sec = 3ms) {
 }
 ";
 
+/// Prelude functions that read the clock. They are added to the text of the connection that calls them, where
+/// the tempo controls are declared, and not to every program like the rest.
+const CLOCK_SOURCE: &str = "
+control fn synced_lfo(beats: num = 1, shape: (sine | tri | saw | square) = sine, phase: num = 0) {
+  at = fract(clock.beat / beats + phase)
+  if shape == sine { sin(at * 2 * pi) }
+  else if shape == tri { abs(fract(at + 0.75) - 0.5) * 4 - 1 }
+  else if shape == saw { fract(at + 0.5) * 2 - 1 }
+  else { (at < 0.5) * 2 - 1 }
+}
+";
+
 /// What each prelude function is for, for completion and the opcode reference.
 pub const DOCS: [(&str, &str); 8] = [
     (
@@ -85,8 +90,8 @@ pub const DOCS: [(&str, &str); 8] = [
         "A low-frequency oscillator from -1 to 1, run once per block: `lfo(2hz)`, or `lfo(0.3hz, shape: tri)` (sine, tri, saw or square). Move it to 0..1 with `.unipolar`, scale it with `.range(300hz..3khz)` and smooth it where a step would be heard: `lfo(2hz).smooth`.",
     ),
     (
-        "tempo_lfo",
-        "A low-frequency oscillator from -1 to 1 with a cycle every `beats` beats, locked to the beat count: `tempo_lfo(1/4)` is four a beat, `tempo_lfo(8)` one in two bars. A tempo change speeds it up or slows it down without it losing its place, and each cycle starts on a beat. `phase` (0 to 1) shifts it along a cycle and `shape` is sine, tri, saw or square. Runs once per block, like `lfo`: `tempo_lfo(1/2).unipolar.range(300hz..3khz).smooth(5ms)`.",
+        "synced_lfo",
+        "A low-frequency oscillator from -1 to 1 with a cycle every `beats` beats, locked to the beat count: `synced_lfo(1/4)` is four a beat, `synced_lfo(8)` one in two bars. A tempo change speeds it up or slows it down without it losing its place, and each cycle starts on a beat. `phase` (0 to 1) shifts it along a cycle and `shape` is sine, tri, saw or square. Runs once per block, like `lfo`: `synced_lfo(1/2).unipolar.range(300hz..3khz).smooth(5ms)`.",
     ),
     (
         "unipolar",
@@ -116,10 +121,10 @@ pub const DOCS: [(&str, &str); 8] = [
 
 /// The text of the prelude function `name` as it is written here, for copying into a project.
 pub fn source_of(name: &str) -> Option<String> {
-    let start = SOURCE.find(&format!("fn {name}("))?;
+    let (text, start) = [SOURCE, CLOCK_SOURCE].into_iter().find_map(|t| t.find(&format!("fn {name}(")).map(|i| (t, i)))?;
     let mut depth = 0;
     let mut end = None;
-    for (i, c) in SOURCE[start..].char_indices() {
+    for (i, c) in text[start..].char_indices() {
         match c {
             '{' => depth += 1,
             '}' => {
@@ -133,7 +138,7 @@ pub fn source_of(name: &str) -> Option<String> {
         }
     }
     let doc = DOCS.iter().find(|(n, _)| *n == name).map(|(_, d)| *d)?;
-    Some(format!("/// {doc}\n{}\n", &SOURCE[start..end?]))
+    Some(format!("/// {doc}\n{}\n", &text[start..end?]))
 }
 
 fn defined_name(item: &Item) -> Option<&str> {
@@ -152,7 +157,16 @@ fn defined_name(item: &Item) -> Option<&str> {
 
 /// Whether `source` calls a prelude function that reads the clock, which needs the tempo controls declared.
 pub fn reads_clock(source: &str) -> bool {
-    source.contains("tempo_lfo")
+    source.contains("synced_lfo")
+}
+
+/// The prelude functions that read the clock which `source` calls and doesn't define.
+pub(crate) fn clock_functions(source: &str) -> String {
+    if reads_clock(source) && !source.contains("fn synced_lfo") {
+        CLOCK_SOURCE.to_string()
+    } else {
+        String::new()
+    }
 }
 
 /// The prelude functions `source` calls and `items` doesn't already define.
@@ -162,7 +176,7 @@ pub fn needed(source: &str, items: &[Item]) -> Vec<Item> {
     }
     // spans and the names made from them (`<fn@40>`) must not collide with the file's own, so the
     // prelude is read as if it came after all of the file's text
-    let shifted = format!("{}{}", " ".repeat(source.len() + 1), crate::dsp::lower_clock_reads(SOURCE));
+    let shifted = format!("{}{SOURCE}", " ".repeat(source.len() + 1));
     let parsed = parser::parse(&shifted).expect("the prelude parses");
     parsed
         .into_iter()
