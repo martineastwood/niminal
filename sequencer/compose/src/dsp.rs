@@ -7,10 +7,6 @@ use crate::parser::parse_spanned;
 use niminal_lang::{Diagnostic, Span};
 use niminal_score::Tempo;
 
-pub const LIVE_BPM: &str = "__niminal_live_bpm";
-pub const LIVE_ORIGIN: &str = "__niminal_live_origin";
-pub const LIVE_METER: &str = "__niminal_live_meter";
-
 /// DSP source made from a composition, and where each part of it came from.
 pub struct DspSource {
     pub text: String,
@@ -103,11 +99,53 @@ struct Piece {
     span: Span,
 }
 
+/// An effect parameter (`Some(effect)`) or a `ctl` (`None`) that starts at a length in beats or bars, with the
+/// number and whether it is `beats` or `bars`. The server keeps one to the tempo when the client sets it in
+/// those units, though the DSP it is sent has the default in seconds.
+pub struct BeatControl {
+    pub effect: Option<String>,
+    pub name: String,
+    pub value: f64,
+    pub unit: &'static str,
+}
+
+/// The effect parameters and controls whose default is written in beats or bars.
+pub fn beat_controls(source: &str) -> Vec<BeatControl> {
+    let Ok(items) = parse_spanned(source) else {
+        return Vec::new();
+    };
+    let musical = |expr: &Expr| match &expr.kind {
+        ExprKind::Num { value, unit: Some(unit) } if matches!(unit.as_str(), "beat" | "beats" | "bar" | "bars") => {
+            Some((*value, if unit.starts_with("bar") { "bars" } else { "beats" }))
+        }
+        _ => None,
+    };
+    let mut found = Vec::new();
+    for (item, _) in &items {
+        match item {
+            Item::Fx(fx) => {
+                for param in &fx.params {
+                    if let Some((value, unit)) = param.default.as_ref().and_then(musical) {
+                        found.push(BeatControl { effect: Some(fx.name.name.clone()), name: param.name.name.clone(), value, unit });
+                    }
+                }
+            }
+            Item::Control { name, value, input: None } => {
+                if let Some((value, unit)) = musical(value) {
+                    found.push(BeatControl { effect: None, name: name.name.clone(), value, unit });
+                }
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
 /// Project a composition's source into DSP-only source. The client owns this conversion; the server
 /// never accepts the composition constructs it removes.
 pub fn dsp_source(source: &str, tempo: Tempo) -> Result<String, Diagnostic> {
     let items = parse_spanned(source)?;
-    Ok(project(source, &items, tempo, false)?.text)
+    Ok(project(source, &items, tempo)?.text)
 }
 
 /// `text` with its lengths in beats and bars written out in seconds, and nothing else changed: a beat is a
@@ -135,13 +173,11 @@ pub fn resolve_musical_time(text: &str, bpm: f64, beats_per_bar: f64) -> Result<
     Ok(out)
 }
 
-/// Like [`dsp_source`], for items already parsed. With `standalone`, the controls that `clock.beat` and the
-/// like are made from are defined too, at the tempo given; otherwise whoever plays the DSP defines them.
+/// Like [`dsp_source`], for items already parsed.
 pub fn project(
     source: &str,
     items: &[(Item, Span)],
     tempo: Tempo,
-    standalone: bool,
 ) -> Result<DspSource, Diagnostic> {
     let mut pieces = Vec::new();
     let mut silent_defined = false;
@@ -261,7 +297,7 @@ pub fn project(
                         // Keep duration connected to the live tempo, including on held voices.
                         text.replace_range(
                             name.span.start - span.start..arg.value.span.end - span.start,
-                            &format!("duration({}sec / {LIVE_BPM}", value * 60.0),
+                            &format!("duration({}sec / clock.bpm", value * 60.0),
                         );
                         changed = true;
                     }
@@ -302,7 +338,6 @@ pub fn project(
     // Musical time becomes seconds. Tokens preserve strings, comments and paths, including words
     // that resemble musical units.
     let mut text = String::new();
-    let mut uses_clock = false;
     let mut segments = Vec::new();
     for (n, piece) in pieces.iter().enumerate() {
         if n > 0 {
@@ -316,10 +351,6 @@ pub fn project(
             };
             d
         })?;
-        uses_clock |= piece.text.contains(LIVE_BPM);
-        uses_clock |= edits
-            .iter()
-            .any(|(_, replacement)| replacement.contains(LIVE_BPM));
         let mut at = 0;
         let mut push =
             |out: &mut String, dsp_text: &str, from: usize, len: usize, replaced: bool| {
@@ -364,24 +395,6 @@ pub fn project(
             piece.text.len() - at,
             false,
         );
-    }
-    if standalone && uses_clock {
-        let own = Span::new(0, 0);
-        for line in [
-            format!("ctl {LIVE_BPM} = {}", tempo.bpm),
-            format!("ctl {LIVE_ORIGIN} = 0sec"),
-            format!("ctl {LIVE_METER} = {}", tempo.beats_per_bar),
-        ] {
-            text.push('\n');
-            segments.push(Segment {
-                dsp: text.len(),
-                len: line.len(),
-                src: own.start,
-                src_end: own.end,
-                verbatim: false,
-            });
-            text.push_str(&line);
-        }
     }
     Ok(DspSource { text, segments })
 }
@@ -463,7 +476,7 @@ fn instrument_of<'a>(
 fn token_edits(text: &str, tempo: Tempo) -> Result<Vec<(Span, String)>, Diagnostic> {
     let tokens = lex(text)?;
     let mut edits = Vec::new();
-    for (i, token) in tokens.iter().enumerate() {
+    for token in &tokens {
         if let Tok::Num {
             value,
             unit: Some(unit),
@@ -485,23 +498,6 @@ fn token_edits(text: &str, tempo: Tempo) -> Result<Vec<(Span, String)>, Diagnost
                     "`bpm` can only be used with `tempo`",
                     token.span,
                 ));
-            }
-        }
-        if matches!(&token.tok, Tok::Ident(n) if n == "clock")
-            && matches!(tokens.get(i + 1).map(|t| &t.tok), Some(Tok::Dot))
-        {
-            let Some(field) = tokens.get(i + 2) else {
-                continue;
-            };
-            let beat = format!("((clock.time - {LIVE_ORIGIN}) / 1sec * {LIVE_BPM} / 60)");
-            let replacement = match &field.tok {
-                Tok::Ident(n) if n == "beat" => Some(beat),
-                Tok::Ident(n) if n == "bar" => Some(format!("({beat} / {LIVE_METER})")),
-                Tok::Ident(n) if n == "bpm" => Some(LIVE_BPM.to_string()),
-                _ => None,
-            };
-            if let Some(replacement) = replacement {
-                edits.push((Span::new(token.span.start, field.span.end), replacement));
             }
         }
     }

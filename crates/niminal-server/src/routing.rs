@@ -226,6 +226,10 @@ pub(crate) struct Routing {
 pub(crate) fn node_name(client: u64, id: &str) -> String {
     format!("__routing_node_{client}_{id}")
 }
+/// The key of the control that is parameter `param` of the fx instance `id` of `client`.
+pub(crate) fn param_key(client: u64, id: &str, param: &str) -> String {
+    format!("{}::{param}", node_name(client, id))
+}
 fn valid(id: &str) -> Result<(), String> {
     if id.is_empty()
         || id.len() > 128

@@ -121,17 +121,12 @@ fn arguments(device: &Device, parameters: &EffectParameters) -> BTreeMap<String,
         .into_iter()
         .flatten()
         .map(|parameter| {
-            (
-                parameter.name.clone(),
-                parameter.argument(
-                    device
-                        .values
-                        .get(&parameter.name)
-                        .copied()
-                        .unwrap_or(parameter.default)
-                        .clamp(parameter.min, parameter.max),
-                ),
-            )
+            // left at its default, a length in beats stays to them as the tempo changes
+            let argument = match device.values.get(&parameter.name) {
+                None => parameter.default_argument(),
+                Some(value) => parameter.argument(value.clamp(parameter.min, parameter.max)),
+            };
+            (parameter.name.clone(), argument)
         })
         .collect()
 }
@@ -355,7 +350,7 @@ mod tests {
     #[test]
     fn macros_handover_lfos_and_survive_unrelated_parameter_edits() {
         let parameters: EffectParameters = [("level".into(), ["amount", "other"].map(|name| Parameter {
-            name: name.into(), min: 0.0, max: 1.0, default: 1.0, unit: None,
+            name: name.into(), min: 0.0, max: 1.0, default: 1.0, unit: None, ..Default::default()
         }).into())].into();
         let effects = [("level".into(), "level".into())].into();
         let mut strip = Track { fx: vec![Device {

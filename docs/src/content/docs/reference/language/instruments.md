@@ -128,7 +128,7 @@ y = curve.phase(p)
 | `note.start` | 1 for the first sample of the voice, then 0 |
 | `note.index` | How many notes of this instrument have started before this one |
 | `clock.time` | Elapsed engine time in seconds |
-| `clock.beat`, `clock.bar`, `clock.bpm` | The live client’s transport: beats and bars since its performance started, and its tempo. The client lowers these to ordinary DSP controls; the server has no musical transport. |
+| `clock.bpm`, `clock.beat`, `clock.bar`, `clock.meter`, `clock.beat_length`, `clock.bar_length` | This connection’s tempo, the beats and bars counted since its performance started, the beats in a bar, and how long a beat and a bar are in seconds. The clock can be read anywhere: in functions, `control { }` blocks and `control fn`s too. A length in a definition that follows the tempo is `3/16 * clock.beat_length`; a literal like `3/16beat` is fixed at the tempo it was sent at, which `delay`, `comb` and envelopes need. A delay that follows the tempo needs `max:`. The client tells the server the tempo with a `tempo` event; each connection has its own. |
 
 Functions don't see `note` or `clock`: pass these in as arguments.
 

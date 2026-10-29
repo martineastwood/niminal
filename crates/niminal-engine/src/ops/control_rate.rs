@@ -115,14 +115,16 @@ impl Opcode for ControlRate {
         if frames == 0 {
             return;
         }
-        let sub = ProcessCtx {
-            sample_rate: ctx.sample_rate / self.step as f32,
-            ..*ctx
-        };
         let mut at = 0;
         while at < frames {
             if self.since >= self.step {
                 self.since = 0;
+                // the body counts in steps, so its clock does too: a time read there is where this step is
+                let sub = ProcessCtx {
+                    sample_rate: ctx.sample_rate / self.step as f32,
+                    clock: crate::opcode::Clock { sample: (ctx.clock.sample + at as u64) / self.step as u64 },
+                    ..*ctx
+                };
                 for (input, &index) in self.inputs.iter_mut().zip(indices) {
                     input[0] = slots[index][at];
                 }

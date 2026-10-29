@@ -5,16 +5,28 @@ use std::collections::BTreeMap;
 
 pub type EffectParameters = BTreeMap<String, Vec<Parameter>>;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct Parameter {
     pub name: String,
     pub min: f64,
     pub max: f64,
     pub default: f64,
     pub unit: Option<String>,
+    /// For a length that starts at a number of `beats` or `bars` (such as `1/4beat`): which, and how many. The
+    /// engine keeps the parameter to the song's tempo while it is left at that, and holds it in seconds once it is set.
+    pub musical: Option<(f64, String)>,
 }
 
 impl Parameter {
+    /// The argument that sets the parameter to its default: in beats if it starts as a length in them, which the
+    /// engine then keeps to the tempo, and otherwise as `argument` has it.
+    pub fn default_argument(&self) -> Value {
+        match &self.musical {
+            Some((value, unit)) => json!(format!("{value}{unit}")),
+            None => self.argument(self.default),
+        }
+    }
+
     pub fn argument(&self, value: f64) -> Value {
         self.unit
             .as_ref()
@@ -231,6 +243,7 @@ mod tests {
                 max: 20000.0,
                 default: 2400.0,
                 unit: Some("hz".into()),
+                ..Default::default()
             }],
         )]
         .into();
@@ -281,7 +294,7 @@ mod tests {
     fn macro_lanes_set_the_knob_and_replace_a_linked_parameters_own_lane() {
         use crate::pattern::{Macro, MacroLink};
         let mut track = Track { fx: vec![Device { id: "d0".into(), definition: "filter".into(), ..Default::default() }], ..Default::default() };
-        let parameters: EffectParameters = [("filter".into(), vec![Parameter { name: "cutoff".into(), min: 20.0, max: 20000.0, default: 2400.0, unit: Some("hz".into()) }])].into();
+        let parameters: EffectParameters = [("filter".into(), vec![Parameter { name: "cutoff".into(), min: 20.0, max: 20000.0, default: 2400.0, unit: Some("hz".into()), ..Default::default() }])].into();
         let knob = FxTarget::Macro { index: 0 };
         let cutoff = FxTarget::Effect { device: "d0".into(), parameter: "cutoff".into() };
         assert!(!knob.available(&track, &parameters), "no such macro yet");

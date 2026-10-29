@@ -262,6 +262,8 @@ impl<'a> Defined<'a> {
 }
 
 pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, Vec<Diagnostic>> {
+    // a server has done this for its client already, with that client's tempo
+    let source = &crate::lower_clock(source, crate::ClockState::default()).map_err(|d| vec![d])?;
     crate::validate_dsp(source).map_err(|d| vec![d])?;
     let mut parsed = parser::parse(source).map_err(|d| vec![d])?;
     crate::namespace::qualify(&mut parsed, &options.namespaces);

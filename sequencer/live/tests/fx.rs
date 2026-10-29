@@ -72,3 +72,42 @@ fn a_gesture_row_draws_a_trance_gate_over_a_held_sound() {
     assert!(rms(6_000 * 5 + 1_500) < 0.01, "a closed step is cut: {}", rms(6_000 * 5 + 1_500));
     assert!(rms(6_000 * 6 + 1_500) > 0.2, "the next open step sounds again");
 }
+
+#[test]
+fn an_effect_parameter_that_starts_at_a_length_in_beats_follows_the_tempo() {
+    // the effect passes the level of its input times its length in seconds, so the level says the length
+    let source = "bus src: stereo\ninstr drone(freq: hz) {\n  src += osc(sine, freq)\n}\nfx timed(length: 1ms..4sec = 1/2beat) {\n  out = src * (length / 1sec)\n}\nclip c {\n  instrument: drone\n  length: 8bars\n  notes: [c4]\n  dur: 8bars\n}\n";
+    let mut session = Offline::new(48_000.0, Layout::Stereo);
+    session.eval(source, Some("now")).unwrap();
+    session.process(480);
+    session.eval("c.start", Some("now")).unwrap();
+    let level = |session: &mut Offline| peak(&session.process(24_000).remove(0)[12_000..]);
+    // half a beat at 120 bpm is a quarter of a second, and twice that at 60
+    let first = level(&mut session);
+    assert!((first - 0.25 * std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-3, "{first}");
+    session.eval("tempo 60bpm", Some("now")).unwrap();
+    session.process(48_000);
+    let second = level(&mut session);
+    assert!((second / first - 2.0).abs() < 0.01, "{first} then {second}");
+}
+
+#[test]
+fn an_echo_timed_from_the_length_of_a_beat_follows_the_tempo() {
+    // a one-beat echo of a short click: it arrives half a second after the click at 120 bpm, a second after at 60
+    let source = "bus src: stereo\ninstr click(freq: hz) {\n  src += env[1 1ms 0] * 0.5\n}\nfx echo {\n  out = src.delay(time: clock.beat_length, max: 2sec)\n}\nclip c {\n  instrument: click\n  length: 8bars\n  notes: [c4]\n  dur: 1/100beat\n}\n";
+    let mut session = Offline::new(48_000.0, Layout::Stereo);
+    session.eval(source, Some("now")).unwrap();
+    session.eval("c.start", Some("now")).unwrap();
+    // only the echo is heard, so the first sound in a block is how long after the click it came
+    let gap = |block: &[f32]| block.iter().position(|v| v.abs() > 0.01).unwrap();
+    let at_120 = gap(&session.process(48_000).remove(0));
+    assert!((at_120 as i64 - 24_000).abs() < 600, "{at_120}");
+    // at 60 bpm the echo of the next click is a second behind it, not half
+    session.eval("tempo 60bpm", Some("now")).unwrap();
+    session.process(96_000);
+    session.eval("c.stop", Some("now")).unwrap();
+    session.process(96_000);
+    session.eval("c.start", Some("now")).unwrap();
+    let at_60 = gap(&session.process(144_000).remove(0));
+    assert!((at_60 as i64 - 48_000).abs() < 600, "{at_60}");
+}

@@ -2832,6 +2832,15 @@ impl Kb<'_> {
             "ifft" => return self.ifft_call(name, args, span),
             _ => {}
         }
+        if let [receiver] = args
+            && receiver.receiver
+            && n == "time"
+            && matches!(&receiver.value.kind, ExprKind::Name(c) if c == "clock")
+        {
+            use niminal_engine::ops::{Context, ReadContext};
+            let op = Box::new(ReadContext::new(Context::ClockTime));
+            return Ok(self.emit_native(op, Vec::new(), Unit::Time));
+        }
         if self.instrument_scope
             && let [receiver] = args
             && receiver.receiver

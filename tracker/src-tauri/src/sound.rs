@@ -40,6 +40,7 @@ fn parameter(
         max,
         default,
         unit: unit.suffix().map(str::to_string),
+        musical: None,
     }
 }
 
@@ -63,7 +64,9 @@ impl Sound {
         // before a song has been sent there is no tempo or meter yet
         let (bpm, beats_per_bar) = (if bpm > 0.0 { bpm } else { 120.0 }, if beats_per_bar > 0.0 { beats_per_bar } else { 4.0 });
         // pasted code often carries non-breaking spaces, which the language's own lexer takes as spaces
-        let source = niminal_compose::resolve_musical_time(&source.replace('\u{a0}', " "), bpm, beats_per_bar).map_err(|e| e.message)?;
+        let written = source.replace('\u{a0}', " ");
+        let musical = niminal_compose::beat_controls(&written);
+        let source = niminal_compose::resolve_musical_time(&written, bpm, beats_per_bar).map_err(|e| e.message)?;
         let definitions = symbols(&source).map_err(|e| e.message)?;
         let wanted = if kind == Kind::Instr {
             SymbolKind::Instrument
@@ -124,12 +127,12 @@ impl Sound {
                 else {
                     continue;
                 };
-                parameters.push(parameter(
-                    &param.name,
-                    control.unit,
-                    control.range,
-                    f64::from(control.initial),
-                ));
+                let mut made = parameter(&param.name, control.unit, control.range, f64::from(control.initial));
+                made.musical = musical
+                    .iter()
+                    .find(|m| m.effect.as_deref() == Some(definition.name.as_str()) && m.name == param.name)
+                    .map(|m| (m.value, m.unit.to_string()));
+                parameters.push(made);
             }
         }
         if kind == Kind::Instr
@@ -181,6 +184,7 @@ impl Sound {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     #[test]
     fn a_library_effect_with_tempo_synced_defaults_follows_the_tempo() {
         let source = "fx stutter(length: 1ms..1sec = 1/4beat, bar: 100ms..4sec = 1bar) { out = in }";
@@ -190,6 +194,17 @@ mod tests {
         // a bar is as long as the meter says: 3 beats in 3/4 or 6/8, 3.5 in 7/8
         assert_eq!(at(120.0, 3.0), vec![0.125, 1.5]);
         assert_eq!(at(120.0, 3.5), vec![0.125, 1.75]);
+    }
+
+    #[test]
+    fn a_length_in_beats_is_sent_to_the_engine_in_beats_until_it_is_set() {
+        let source = "fx stutter(length: 1ms..1sec = 1/4beat, bar: 100ms..4sec = 1bar, other: 1ms..1sec = 20ms) { out = in }";
+        let parameters = Sound::parse(Kind::Fx, source.into(), None, 120.0, 4.0).unwrap().parameters;
+        let sent: Vec<_> = parameters.iter().map(|p| p.default_argument()).collect();
+        assert_eq!(sent[..2], [json!("0.25beats"), json!("1bars")]);
+        assert!(sent[2].as_str().is_some_and(|s| s.ends_with("sec")), "an ordinary default is in seconds: {}", sent[2]);
+        // set by hand, it is the number of seconds that was set
+        assert_eq!(parameters[0].argument(0.3), json!("0.3sec"));
     }
 
     #[test]
@@ -212,6 +227,7 @@ mod tests {
 #[cfg(test)]
 mod parameter_tests {
     use super::*;
+    use serde_json::json;
     #[test]
     fn exposes_typed_fx_parameters_in_signature_order() {
         let sound = Sound::parse(Kind::Fx, "fx filter(cutoff: hz = 2400hz, resonance: 0..1 = 0.2) { out = in.lpf(cutoff: cutoff, res: resonance) }".into(), None, 120.0, 4.0).unwrap();

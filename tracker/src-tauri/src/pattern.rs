@@ -1995,7 +1995,7 @@ mod tests {
     }
 
     fn parameter(name: &str) -> crate::commands::Parameter {
-        crate::commands::Parameter { name: name.into(), min: 0.0, max: 1.0, default: 0.0, unit: None }
+        crate::commands::Parameter { name: name.into(), min: 0.0, max: 1.0, default: 0.0, unit: None, ..Default::default() }
     }
     fn with_commands(rows: usize, cells: &[(usize, &str)], commands: &[(usize, &str)]) -> NoteColumn {
         let mut column = column(rows, cells);
@@ -2011,7 +2011,7 @@ mod tests {
     fn a_sampler_with_a_source_tempo_is_stretched_to_the_tempo_of_the_song() {
         let fitted = |from: f64, stretch: Option<f64>, timing: Option<Timing>| {
             let events = played_with(2, vec![column(2, &[(0, "C-4")])], Mode::Song, |play| {
-                let ranged = |name: &str, min, max, default| crate::commands::Parameter { name: name.into(), min, max, default, unit: None };
+                let ranged = |name: &str, min, max, default| crate::commands::Parameter { name: name.into(), min, max, default, unit: None, ..Default::default() };
                 play.instrument_parameters.insert("tone".into(), vec![ranged("stretch", 0.25, 4.0, 1.0), ranged("from_bpm", 0.0, 400.0, 0.0)]);
                 let values = play.song.instrument_values.entry("tone".into()).or_default();
                 values.insert("from_bpm".into(), from);
@@ -2313,7 +2313,7 @@ mod tests {
             assert_eq!(TrackCommand::parse(bad), None, "{bad}");
         }
         let strip = Track { fx: vec![Device { id: "d0".into(), definition: "filter".into(), ..Device::default() }], ..Track::default() };
-        let parameters: crate::commands::EffectParameters = [("filter".into(), vec![crate::commands::Parameter { name: "cutoff".into(), min: 20.0, max: 20000.0, default: 2400.0, unit: Some("hz".into()) }])].into();
+        let parameters: crate::commands::EffectParameters = [("filter".into(), vec![crate::commands::Parameter { name: "cutoff".into(), min: 20.0, max: 20000.0, default: 2400.0, unit: Some("hz".into()), ..Default::default() }])].into();
         let aim = |text: &str| TrackCommand::parse(text).and_then(|c| c.target(&strip, &parameters));
         assert_eq!(aim("L00"), Some((FxTarget::Volume, -60.0)));
         let (target, db) = aim("LFF").unwrap();
@@ -2465,7 +2465,7 @@ mod tests {
         }];
         song.sequence = vec!["a".into()];
         let mut play = Playback::new(0, song, Mode::Song, "a".into(), 0).unwrap();
-        let cutoff = crate::commands::Parameter { name: "cutoff".into(), min: 20.0, max: 20000.0, default: 2400.0, unit: Some("hz".into()) };
+        let cutoff = crate::commands::Parameter { name: "cutoff".into(), min: 20.0, max: 20000.0, default: 2400.0, unit: Some("hz".into()), ..Default::default() };
         play.instrument_parameters = BTreeMap::from([("tone".into(), vec![cutoff.clone()]), ("alt".into(), vec![cutoff])]);
         let targets = BTreeMap::from([("tone".into(), "voice".into()), ("alt".into(), "other".into())]);
         let (events, _) = play.events_until(0, play.row_at(4, 48000.0), 48000.0, &targets).unwrap();
@@ -2516,6 +2516,7 @@ mod tests {
                 max: 20000.0,
                 default: 2400.0,
                 unit: Some("hz".into()),
+                ..Default::default()
             }],
         )]);
         let targets = BTreeMap::from([("tone".into(), "voice".into())]);

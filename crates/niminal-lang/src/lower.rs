@@ -4744,6 +4744,22 @@ impl<'a> Lower<'a> {
             let value = self.value(&arg.value)?;
             return self.math_value(f, value, arg.value.span);
         }
+        // `x.lag(time)` and `x.smooth(time)` keep the unit of what they smooth: `cutoff.smooth(5ms)` is still hz
+        if n == "lag"
+            && args.len() == 2
+            && args[0].receiver
+            && let Datum::Sig(sig) = self.value(&args[0].value)?
+            && sig.unit != Unit::Num
+        {
+            let unit = sig.unit;
+            let hidden = "__lag_input";
+            self.scope.insert(hidden.into(), Datum::Sig(Sig { unit: Unit::Num, ..sig }));
+            let mut plain = args.to_vec();
+            plain[0].value = Expr { kind: ExprKind::Name(hidden.into()), span: args[0].value.span };
+            let smoothed = self.call(name, &plain, span);
+            self.scope.remove(hidden);
+            return self.map_value(smoothed?, span, move |_, s| Ok(Sig { unit, ..s }));
+        }
         match n {
             "map" | "sum" | "len" | "channels" | "indices" | "at" | "phase" | "step" | "active"
             | "normalize" | "reverse" | "rotate" | "resample" | "concat" | "integrate" | "mix" => {
@@ -5676,6 +5692,24 @@ impl Lower<'_> {
                 name.span,
             ));
         }
+        // A kernel can't see the file's `ctl`s, so the ones its body reads go in as inputs, which includes
+        // the connection's tempo for a body that reads `clock.beat`.
+        let mut def = def.clone();
+        let mut params = params.to_vec();
+        let mut given = given;
+        for control in self.names.controls.clone() {
+            let shadowed = def.params.iter().any(|p| p.name.name == control.name)
+                || self.scope.contains_key(&control.name);
+            if shadowed || !funcs::reads(&def, &control.name) {
+                continue;
+            }
+            let id = Ident { name: control.name.clone(), span };
+            def.params.push(ParamDef { name: id.clone(), rate: None, ty: None, default: None });
+            params.push(PParam { name: id.clone(), rate: None, kind: PKind::Any, default: None });
+            let value = Datum::Sig(self.name(&control.name, span)?);
+            given.push(Some((value, Expr { kind: ExprKind::Name(control.name.clone()), span })));
+        }
+        let (def, params) = (&def, &params[..]);
         let mut kargs = Vec::with_capacity(params.len());
         let mut wires: Vec<(String, Sig)> = Vec::new();
         let mut width = 1;
@@ -6623,12 +6657,11 @@ impl Lower<'_> {
 
     /// `clock.time`: where the session's transport is, in seconds.
     fn clock_context(&mut self, name: &Ident) -> Res<Sig> {
-        if self.mode == Mode::Plain || self.in_fn {
+        if self.mode == Mode::Plain {
             return Err(Diagnostic::new(
                 "`clock` is only available in an instrument, node or bus",
                 name.span,
-            )
-            .with_help("pass `clock.time` to a function as an argument"));
+            ));
         }
         match name.name.as_str() {
             "time" => Ok(self.read_context(Context::ClockTime, Unit::Time, Rate::Audio)),

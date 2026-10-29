@@ -228,7 +228,10 @@ struct Asked {
 
 pub struct Live {
     link: Box<dyn EngineLink>,
-    clock_names: [String; 3],
+    /// Whether the engine has been told the tempo yet, so that the first count of beats starts from the origin.
+    tempo_sent: std::cell::Cell<bool>,
+    /// The controls the engine keeps to a number of beats, as they were last told.
+    linked_sent: std::cell::RefCell<HashMap<String, (f64, String)>>,
     sample_rate: f32,
     layout: Layout,
     /// Where the project's sample files are found, and the ones already read.
@@ -386,7 +389,8 @@ impl Live {
                 arrangement: None,
             },
         );
-        self.send(self.clock_ops(self.clock));
+        let tempo = self.program.tempo;
+        self.send(vec![self.tempo_op(self.samples(at), tempo, true)]);
     }
 
     /// Ask for a tempo, to land a little ahead of what has been sent, without saying so.
@@ -409,12 +413,8 @@ impl Live {
         let schedule = program.schedule();
         Live {
             link,
-            clock_names: {
-                static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-                let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                ["bpm", "origin", "meter"]
-                    .map(|name| format!("__live_{}_{}_{name}", std::process::id(), id))
-            },
+            tempo_sent: std::cell::Cell::new(false),
+            linked_sent: std::cell::RefCell::new(HashMap::new()),
             sample_rate,
             layout,
             samples: Samples::default(),
@@ -1063,7 +1063,7 @@ impl Live {
         self.playing = playing;
 
         self.rebuild_schedule(at);
-        self.send(self.clock_ops(at));
+        self.send(vec![self.tempo_op(at, self.program.tempo, false)]);
         let mut changes = summary;
         for (bars, name) in captures {
             if let Some(notice) = self.capture_section(bars, &name, at) {
@@ -1273,7 +1273,7 @@ impl Live {
                 && h.at < to
                 && matches!(h.action, NamedAction::Reset | NamedAction::Origin)
         }) {
-            ops.extend(self.clock_ops(self.samples(origin.at)));
+            ops.push(self.tempo_op(self.samples(origin.at), self.program.tempo, true));
         }
         // panics
         let panics = self.schedule.panics().to_vec();
@@ -1383,35 +1383,6 @@ impl Live {
         at: At,
     ) -> Vec<Op> {
         let mut ops = definition_ops(statements, program, at, self.sample_dirs.first());
-        for op in &mut ops {
-            if let Op::Define { source, .. } = op {
-                let names = [
-                    niminal_compose::LIVE_BPM,
-                    niminal_compose::LIVE_ORIGIN,
-                    niminal_compose::LIVE_METER,
-                ];
-                let tempo = program.map_or(self.program.tempo, |p| p.tempo);
-                let values = [
-                    tempo.bpm.to_string(),
-                    format!(
-                        "{}sec",
-                        self.clock_origin(match at {
-                            At::Sample(n) => n,
-                            At::Now => self.clock,
-                        })
-                    ),
-                    tempo.beats_per_bar.to_string(),
-                ];
-                let mut controls = String::new();
-                for ((old, name), value) in names.iter().zip(&self.clock_names).zip(values) {
-                    if source.contains(old) {
-                        *source = source.replace(old, name);
-                        controls.push_str(&format!("ctl {name} = {value}\n"));
-                    }
-                }
-                source.insert_str(0, &controls);
-            }
-        }
         if let Some(program) = program {
             let mut edits = Vec::new();
             let mut nodes = Vec::new();
@@ -1481,6 +1452,56 @@ impl Live {
                 tag: None,
             });
         }
+        if statements.iter().any(Statement::clears) {
+            self.linked_sent.borrow_mut().clear();
+        }
+        if let Some(program) = program {
+            // effect parameters that start at a length in beats follow the tempo; one already told, and perhaps
+            // changed by hand since, is left as it is
+            let mut sent = self.linked_sent.borrow_mut();
+            for control in niminal_compose::beat_controls(&program.source) {
+                let key = match &control.effect {
+                    Some(effect) => format!("{effect}::{}", control.name),
+                    None => control.name.clone(),
+                };
+                let told = (control.value, control.unit.to_string());
+                if sent.get(&key) == Some(&told) {
+                    continue;
+                }
+                sent.insert(key, told);
+                ops.push(match &control.effect {
+                    Some(effect) => Op::Routing {
+                        at,
+                        edits: vec![RoutingEdit::Set {
+                            id: routing_id(effect),
+                            args: [(
+                                control.name.clone(),
+                                if control.unit == "bars" { Value::Bars(control.value) } else { Value::Beats(control.value) },
+                            )]
+                            .into(),
+                            glide: 0.0,
+                        }],
+                        tag: None,
+                    },
+                    None => Op::Control {
+                        name: control.name.clone(),
+                        at,
+                        value: control.value,
+                        unit: Some(control.unit.to_string()),
+                        glide: Some(Time::Seconds(0.0)),
+                        tag: None,
+                    },
+                });
+            }
+        }
+        if ops.iter().any(|op| matches!(op, Op::Define { source, .. } | Op::Transaction { source, .. } if source.contains("clock."))) {
+            let tempo = program.map_or(self.program.tempo, |p| p.tempo);
+            let at = match at {
+                At::Sample(n) => n,
+                At::Now => self.clock,
+            };
+            ops.insert(0, self.tempo_op(at, tempo, false));
+        }
         ops
     }
 
@@ -1495,28 +1516,25 @@ impl Live {
             .map_or(0.0, |h| h.at)
     }
 
-    fn clock_ops(&self, at: u64) -> Vec<Op> {
-        let tempo = self.program.tempo;
-        let source = niminal_compose::dsp_source(&self.program.source, tempo)
-            .expect("compiled source projects");
-        let values = [tempo.bpm, self.clock_origin(at), tempo.beats_per_bar];
-        [
-            niminal_compose::LIVE_BPM,
-            niminal_compose::LIVE_ORIGIN,
-            niminal_compose::LIVE_METER,
-        ]
-        .iter()
-        .enumerate()
-        .filter(|(_, name)| source.contains(**name))
-        .map(|(i, _)| Op::Control {
-            name: self.clock_names[i].clone(),
+    /// Tell the engine the tempo from `at`: this connection's `clock.beat` carries on through a change, and
+    /// counts from 0 at `at` when `restart` says the bars start there. The first time, it counts from the
+    /// origin the project has.
+    fn tempo_op(&self, at: u64, tempo: Tempo, restart: bool) -> Op {
+        let beat = if restart {
+            Some(0.0)
+        } else if !self.tempo_sent.get() {
+            Some((self.seconds(at) - self.clock_origin(at)) * tempo.bpm / 60.0)
+        } else {
+            None
+        };
+        self.tempo_sent.set(true);
+        Op::Tempo {
             at: At::Sample(at),
-            value: values[i],
-            unit: None,
-            glide: Some(Time::Seconds(0.0)),
+            bpm: tempo.bpm,
+            meter: Some(tempo.beats_per_bar),
+            beat,
             tag: Some(SCHEDULED.into()),
-        })
-        .collect()
+        }
     }
 
     /// Play `program` as it is compiled: the notes it writes out, and `schedule` (usually

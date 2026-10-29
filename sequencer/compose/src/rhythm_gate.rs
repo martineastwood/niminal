@@ -123,13 +123,13 @@ fn signal(
         ));
     }
     let beats = match grid.over {
-        None => super::dsp::LIVE_METER.to_string(),
+        None => "clock.meter".to_string(),
         Some(expr) => match &expr.kind {
             ExprKind::Num {
                 value,
                 unit: Some(unit),
             } if value.is_finite() && *value > 0.0 => match unit.as_str() {
-                "bar" | "bars" => format!("({value} * {})", super::dsp::LIVE_METER),
+                "bar" | "bars" => format!("({value} * clock.meter)"),
                 "beat" | "beats" => value.to_string(),
                 _ => {
                     return Err(Diagnostic::new(
@@ -194,11 +194,10 @@ fn signal(
     }
     let array = |values: Vec<String>| format!("[{}]", values.join(","));
     Ok(format!(
-        "__niminal_rhythm_gate({}, {}, {}, clock.beat / ({beats}) * {n}, 60sec / {} * ({beats}) / {n}, {}, {}, {}, {})",
+        "__niminal_rhythm_gate({}, {}, {}, clock.beat / ({beats}) * {n}, 60sec / clock.bpm * ({beats}) / {n}, {}, {}, {}, {})",
         array(levels.iter().map(ToString::to_string).collect()),
         array(before.iter().map(ToString::to_string).collect()),
         array(after.iter().map(ToString::to_string).collect()),
-        super::dsp::LIVE_BPM,
         width.map_or("1", |e| text(source, e)),
         attack.map_or(if shaped { "2ms" } else { "0sec" }, |e| text(source, e)),
         release.map_or(if shaped { "8ms" } else { "0sec" }, |e| text(source, e)),

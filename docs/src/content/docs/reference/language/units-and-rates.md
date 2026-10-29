@@ -78,6 +78,7 @@ These are `control fn`s every file can call; a file that defines its own `lfo` (
 | Call | Gives |
 | --- | --- |
 | `lfo(2hz)`, `lfo(0.3hz, shape: tri)` | -1 to 1; `shape` is `sine` (default), `tri`, `saw` or `square` |
+| `tempo_lfo(1/4)`, `tempo_lfo(8, shape: tri)` | -1 to 1, one cycle every that many beats and locked to the beat count, so it follows tempo changes; `phase` shifts it along a cycle |
 | `random_steps(4hz)` | A new random value from -1 to 1 at that rate, held between |
 | `random_glide(3hz, glide: 200ms)` | The same, sliding to each new value |
 

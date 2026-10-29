@@ -261,7 +261,7 @@ pub fn compile_with(
         }
     }
 
-    let dsp = project(source, &parsed, tempo, true).map_err(|d| vec![d])?;
+    let dsp = project(source, &parsed, tempo).map_err(|d| vec![d])?;
     let mut program = match niminal_lang::compile_with(&dsp.text, options) {
         Ok(program) => program,
         Err(found) => {

@@ -30,6 +30,15 @@ use niminal_lang::{Entry, Located, Problem, Project};
 /// How many MIDI messages are kept waiting to be taken, at most.
 const MAX_MIDI_QUEUE: usize = 65_536;
 
+/// A control that is kept to a number of beats, so that it follows its connection's tempo.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Link {
+    pub client: ClientId,
+    pub beats: f64,
+    /// A parameter of an effect instance, which is set through routing and named by its key, and not a `ctl`.
+    pub node: bool,
+}
+
 /// The key of a note that is not held open by one.
 pub(crate) const NO_KEY: u32 = u32::MAX;
 
@@ -224,6 +233,10 @@ pub struct Session {
     /// Where the project's sample files are found, and the ones already read.
     samples: Samples,
     client_samples: HashMap<u64, Samples>,
+    /// Each connection's tempo, which its `clock.bpm` and the like read.
+    clocks: HashMap<ClientId, niminal_lang::ClockState>,
+    /// The controls that are kept to a number of beats, by name, and how many: they follow their connection's tempo.
+    linked: HashMap<String, Link>,
     sample_dirs: Vec<std::path::PathBuf>,
     clock: u64,
 
@@ -296,6 +309,8 @@ impl Session {
             panic_epoch: Arc::new(AtomicU64::new(0)),
             samples: Samples::default(),
             client_samples: HashMap::new(),
+            clocks: HashMap::new(),
+            linked: HashMap::new(),
             controls: Vec::new(),
             control_changes: Vec::new(),
             next_control: 0,

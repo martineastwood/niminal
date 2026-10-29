@@ -318,7 +318,6 @@ fn musical_time_and_composition_are_rejected_at_the_engine_boundary() {
         "config { quantize: { default: 1bar } }",
         "ctl x = midi.cc(7).range(0..1)",
         "instr x() { osc(sine, 100hz) * env[1 | 1beat 0] }",
-        "instr x() { clock.beat }",
     ] {
         let reply = call(
             &mut d,

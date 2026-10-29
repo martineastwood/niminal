@@ -201,9 +201,9 @@ impl Session {
                 Op::Control { glide, unit, .. } => {
                     if unit
                         .as_deref()
-                        .is_some_and(|u| matches!(u, "beat" | "beats" | "bar" | "bars" | "bpm"))
+                        .is_some_and(|u| u == "bpm")
                     {
-                        invalid.push(problem_at(index, "resolve musical units in the client"));
+                        invalid.push(problem_at(index, "`bpm` is not a unit a control takes"));
                     }
                     (*glide, None)
                 }
@@ -245,6 +245,9 @@ impl Session {
         // taken back.
         let mut resolved: Vec<Option<Op>> = vec![None; ops.len()];
         let mut early = Vec::new();
+        let mut clock_state = self.clocks.get(&client).copied().unwrap_or_default();
+        // controls that are now kept to a number of beats (`Some`) or let go of (`None`), once the batch is accepted
+        let mut linked: HashMap<String, Option<Link>> = HashMap::new();
         let mut accepted = Vec::new();
         for (n, op) in ops.iter().enumerate() {
             let (source, dir, at, what, edits, tag) = match op {
@@ -262,7 +265,7 @@ impl Session {
                         None,
                         self.resolve(*at),
                         What::Definitions,
-                        edits.clone(),
+                        in_seconds(edits, client, &clock_state, &mut linked),
                         tag.clone(),
                     )
                 }
@@ -324,7 +327,7 @@ impl Session {
                         dir.as_deref(),
                         self.resolve(*at),
                         What::Definitions,
-                        edits.clone(),
+                        in_seconds(edits, client, &clock_state, &mut linked),
                         tag.clone(),
                     )
                 }
@@ -549,18 +552,47 @@ impl Session {
                         glide: *glide,
                         tag: tag.clone(),
                     });
+                    // a control the definitions waiting to land make is set once they have
+                    let at = if self.program_at(at).controls.iter().any(|c| c.name == *name) {
+                        at
+                    } else {
+                        self.pending
+                            .iter()
+                            .find(|p| p.lands_at > at && p.program.controls.iter().any(|c| c.name == *name))
+                            .map_or(at, |p| p.lands_at)
+                    };
                     let program = self.program_at(at);
                     let Some(def) = program.controls.iter().find(|c| c.name == *name) else {
                         fail(format!("unknown control `{name}`"));
                         continue;
                     };
-                    let converted = match def.convert(*value, unit.as_deref(), program.tempo) {
+                    // a length in beats or bars is kept to them: it follows the tempo from here on
+                    let musical = unit
+                        .as_deref()
+                        .is_some_and(|u| matches!(u, "beat" | "beats" | "bar" | "bars"));
+                    let tempo = niminal_score::Tempo {
+                        bpm: clock_state.bpm,
+                        beats_per_bar: clock_state.beats_per_bar,
+                        ..program.tempo
+                    };
+                    let converted = match def.convert(*value, unit.as_deref(), tempo) {
                         Ok(v) => v,
                         Err(e) => {
                             fail(e);
                             continue;
                         }
                     };
+                    linked.insert(
+                        name.clone(),
+                        musical.then(|| {
+                            let per_unit = if unit.as_deref().is_some_and(|u| u.starts_with("bar")) {
+                                clock_state.beats_per_bar
+                            } else {
+                                1.0
+                            };
+                            Link { client, beats: value * per_unit, node: false }
+                        }),
+                    );
                     let seconds = glide.map_or(def.smooth_seconds, |g| g.to_seconds(program.tempo));
                     if !seconds.is_finite() || !(0.0..=60.0).contains(&seconds) {
                         fail("`glide` must be between 0 and 60sec".into());
@@ -575,6 +607,109 @@ impl Session {
                         op: n,
                         tag: tag.clone(),
                     });
+                }
+                Op::Tempo {
+                    at,
+                    bpm,
+                    meter,
+                    beat,
+                    tag,
+                } => {
+                    let valid = |v: f64| v.is_finite() && v > 0.0;
+                    if !valid(*bpm)
+                        || meter.is_some_and(|m| !valid(m))
+                        || beat.is_some_and(|b| !b.is_finite())
+                    {
+                        fail("`bpm` and `meter` must be positive numbers".into());
+                        continue;
+                    }
+                    let start = self.resolve(*at);
+                    resolved[n] = Some(Op::Tempo {
+                        at: self.logged(*at),
+                        bpm: *bpm,
+                        meter: *meter,
+                        beat: *beat,
+                        tag: tag.clone(),
+                    });
+                    let old = clock_state;
+                    let new = old.changed(
+                        start as f64 / f64::from(self.sample_rate),
+                        *bpm,
+                        meter.unwrap_or(old.beats_per_bar),
+                        *beat,
+                    );
+                    clock_state = new;
+                    let program = self.program_at(start);
+                    for (name, value, unit) in [
+                        (niminal_lang::CLOCK_BPM, new.bpm, None),
+                        (niminal_lang::CLOCK_ORIGIN, new.origin, Some("sec")),
+                        (niminal_lang::CLOCK_METER, new.beats_per_bar, None),
+                    ] {
+                        let name = definitions::scoped(client, name);
+                        let Some(def) = program.controls.iter().find(|c| c.name == name) else {
+                            continue;
+                        };
+                        match def.convert(value, unit, program.tempo) {
+                            Ok(value) => {
+                                controls += 1;
+                                plans.push(Plan::Control {
+                                    name,
+                                    value,
+                                    frames: 0,
+                                    at: start,
+                                    op: n,
+                                    tag: tag.clone(),
+                                });
+                            }
+                            Err(e) => fail(e),
+                        }
+                    }
+                    // what is kept to a number of beats is as many of them at the new tempo
+                    let mut kept: HashMap<&String, Link> = self
+                        .linked
+                        .iter()
+                        .filter(|(_, link)| link.client == client)
+                        .map(|(name, link)| (name, *link))
+                        .collect();
+                    for (name, link) in &linked {
+                        match link {
+                            Some(link) => kept.insert(name, *link),
+                            None => kept.remove(name),
+                        };
+                    }
+                    let tempo = niminal_score::Tempo {
+                        bpm: new.bpm,
+                        beats_per_bar: new.beats_per_bar,
+                        ..program.tempo
+                    };
+                    let mut kept: Vec<_> = kept.into_iter().collect();
+                    kept.sort_by(|a, b| a.0.cmp(b.0));
+                    for (name, link) in kept {
+                        let Some(def) = program
+                            .controls
+                            .iter()
+                            .find(|c| if link.node { c.key == *name } else { c.name == *name })
+                        else {
+                            continue;
+                        };
+                        let Ok(value) = def.convert(link.beats, Some("beats"), tempo) else {
+                            continue;
+                        };
+                        let frames = (def.smooth_seconds * rate).round() as u64;
+                        if link.node {
+                            plans.push(Plan::Node { key: name.clone(), value, frames, at: start, tag: tag.clone() });
+                        } else {
+                            controls += 1;
+                            plans.push(Plan::Control {
+                                name: name.clone(),
+                                value,
+                                frames,
+                                at: start,
+                                op: n,
+                                tag: tag.clone(),
+                            });
+                        }
+                    }
                 }
                 Op::Routing { at, edits, tag } => {
                     let start = self.resolve(*at);
@@ -680,9 +815,27 @@ impl Session {
                             edits: edits.clone(),
                             tag: tag.clone(),
                         });
+                        // an effect that the changes waiting to land make is set once they have
+                        let ids: Vec<&String> = edits
+                            .iter()
+                            .filter_map(|e| match e {
+                                crate::RoutingEdit::Set { id, .. } => Some(id),
+                                _ => None,
+                            })
+                            .collect();
+                        let start = if ids.iter().all(|id| self.routing_at(start).has_node(client, id)) {
+                            start
+                        } else {
+                            self.pending
+                                .iter()
+                                .find(|p| p.lands_at > start && ids.iter().all(|id| p.routing.has_node(client, id)))
+                                .map_or(start, |p| p.lands_at)
+                        };
+                        // a length in beats or bars is kept to them, as it is for a control
+                        let edits = in_seconds(edits, client, &clock_state, &mut linked);
                         match self
                             .routing_at(start)
-                            .updates(client, edits, self.program_at(start))
+                            .updates(client, &edits, self.program_at(start))
                         {
                             Ok(updates) => {
                                 for (key, value, glide) in updates {
@@ -983,6 +1136,13 @@ impl Session {
             return Err(problems);
         }
 
+        self.clocks.insert(client, clock_state);
+        for (name, link) in linked {
+            match link {
+                Some(link) => self.linked.insert(name, link),
+                None => self.linked.remove(&name),
+            };
+        }
         let log_index = self.log.len();
         self.log.push(LogEntry {
             sample: clock,
@@ -1598,6 +1758,8 @@ impl Session {
             self.notify(format!("routing cleanup failed: {}", problems[0].message));
         }
         self.client_samples.remove(&client);
+        self.clocks.remove(&client);
+        self.linked.retain(|_, link| link.client != client);
         self.buffer_budgets.remove(&client);
         self.hidden_buffers
             .retain(|name| definitions::owner(name) != client);
@@ -1638,4 +1800,38 @@ fn problem_at(event: usize, message: impl Into<String>) -> Problem {
     let mut p = Problem::plain(message);
     p.event = Some(event);
     p
+}
+
+/// `edits` with the lengths in beats and bars of the arguments set in seconds, at the tempo of `clock`; `linked`
+/// is told which of the controls they are for are now kept to beats, and which are set to something else.
+fn in_seconds(
+    edits: &[crate::RoutingEdit],
+    client: ClientId,
+    clock: &niminal_lang::ClockState,
+    linked: &mut HashMap<String, Option<Link>>,
+) -> Vec<crate::RoutingEdit> {
+    let mut edits = edits.to_vec();
+    for edit in &mut edits {
+        let (crate::RoutingEdit::Node { id, args, .. }
+        | crate::RoutingEdit::Replace { id, args, .. }
+        | crate::RoutingEdit::Set { id, args, .. }) = edit
+        else {
+            continue;
+        };
+        for (param, value) in args.iter_mut() {
+            let beats = match *value {
+                Value::Beats(b) => Some(b),
+                Value::Bars(b) => Some(b * clock.beats_per_bar),
+                _ => None,
+            };
+            if let Some(beats) = beats {
+                *value = Value::Seconds(beats * 60.0 / clock.bpm);
+            }
+            linked.insert(
+                crate::routing::param_key(client, id, param),
+                beats.map(|beats| Link { client, beats, node: true }),
+            );
+        }
+    }
+    edits
 }

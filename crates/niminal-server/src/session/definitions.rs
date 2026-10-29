@@ -69,13 +69,25 @@ impl Pending {
 struct Uses {
     expanded: Expanded,
     sent: String,
+    /// Where `clock.beat` and the like were written out as the controls they read, in the joined text.
+    clock: Vec<niminal_lang::ClockEdit>,
 }
 
 impl Uses {
     fn locate(&self, problems: Vec<Problem>) -> Vec<Problem> {
+        let joined = &self.expanded.text;
         problems
             .into_iter()
-            .map(|p| p.in_module(&self.expanded, &self.sent))
+            .map(|mut p| {
+                if let Some(span) = p.span.filter(|_| !self.clock.is_empty()) {
+                    let span = niminal_lang::unlowered_span(&self.clock, span, joined.len());
+                    let before = &joined[..span.start.min(joined.len())];
+                    p.line = Some(before.matches('\n').count() + 1);
+                    p.column = Some(before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1);
+                    p.span = Some(span);
+                }
+                p.in_module(&self.expanded, &self.sent)
+            })
             .collect()
     }
 }
@@ -175,6 +187,7 @@ impl Session {
                 Some(Uses {
                     expanded,
                     sent: source.to_string(),
+                    clock: Vec::new(),
                 }),
             ),
             Err(d) => {
@@ -185,6 +198,16 @@ impl Session {
                 )]);
             }
         };
+        let clock = self.clocks.get(&client).copied().unwrap_or_default();
+        let joined = text;
+        let (text, clock_edits) = niminal_lang::lower_clock_edits(&joined, clock).map_err(|d| {
+            let problems = vec![Problem::from_diagnostic(&d, &joined, Located::Snippet(d.span))];
+            match &uses {
+                Some(u) => u.locate(problems),
+                None => problems,
+            }
+        })?;
+        let uses = uses.map(|u| Uses { clock: clock_edits, ..u });
         {
             niminal_lang::validate_dsp(&text).map_err(|d| {
                 let problems = vec![Problem::from_diagnostic(

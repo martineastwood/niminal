@@ -5,7 +5,7 @@ description: "JSON-RPC 2.0 over WebSocket for the niminal server: timestamped no
 
 **Compiled by niminal.** This is the server's own API: the notes and definitions every client sends, whichever one you use.
 
-The **engine** is the audio server that `niminal server` runs. It holds the instruments, effects, nodes, buses and controls that niminal code defines, and plays timestamped events sent to it: notes, parameter changes, control changes, definitions. It knows nothing of clips, scenes, patterns, tempo, meter or quantize: those belong to a client such as the [live sequencer](/reference/protocol/), which uses this very API. A tracker, a score editor or a bridge to another tool can be a client too.
+The **engine** is the audio server that `niminal server` runs. It holds the instruments, effects, nodes, buses and controls that niminal code defines, and plays timestamped events sent to it: notes, parameter changes, control changes, definitions. It knows nothing of clips, scenes, patterns or quantize, and keeps only a tempo and a meter for each connection (see [Tempo](#tempo)): the rest belongs to a client such as the [live sequencer](/reference/protocol/), which uses this very API. A tracker, a score editor or a bridge to another tool can be a client too.
 
 `niminal server` runs only the generic engine on port **7401** (`--port`). Any client can connect with its own sequencing model. VS Code owns a separate live sequencer process; the server never starts one. Messages are **JSON-RPC 2.0** text frames over **WebSocket**, on loopback only.
 
@@ -31,23 +31,42 @@ One batched method for every timed thing a client can do. The whole batch is che
 ] } }
 ```
 
-**`at`** is a nonnegative whole number (an absolute sample) or `"now"` (as soon as possible). `dur` and `glide` are physical durations (`"250ms"`, `"0.5sec"`). Beats and bars must be converted by the client, including durations and parameter values.
+**`at`** is a nonnegative whole number (an absolute sample) or `"now"` (as soon as possible). `dur` and `glide` are physical durations (`"250ms"`, `"0.5sec"`). Durations (`dur`, `glide`) are in seconds, and the client converts beats and bars for them. A `control`, or an argument of an fx instance, may be given in `beats` or `bars`: see [Tempo](#tempo).
 
 | `op` | Fields | Meaning |
 | --- | --- | --- |
 | `note` | `target`, `at`, optional `to`, `args`, `dur`, `id`, `tag` | Play a note on a node or instrument. With `to`, play the named instrument into that connection’s collection/fx node. `args` are named parameters as in [Score model](/reference/score-model/). With `dur` and no `id` it is fire-and-forget. With an `id` and no `dur` it is held until an `off`. With both it is held for at most `dur`. |
 | `set` | `id`, `at`, `args`, optional `glide` | Change parameters of a sounding note, or of one that hasn't started yet (it then starts with the value). Any declared parameter will do. With a `glide`, the instrument’s declared pitch parameter moves evenly in semitones (exponentially in Hz); other parameters move in a straight line. Pitch glides with a nonpositive endpoint use a straight line. |
 | `off` | `id`, `at` | Release a note, so its envelope runs its release stage. An `off` before the note starts makes it a short blip. |
-| `control` | `name`, `at`, `value`, optional `unit`, `glide` | Move a `ctl`. `unit` defaults to the declaration's unit; compatible units are converted. `glide` defaults to the control's own smoothing. |
+| `control` | `name`, `at`, `value`, optional `unit`, `glide` | Move a `ctl`. `unit` defaults to the declaration's unit; compatible units are converted, and `beats` or `bars` keep a time to the tempo (see [Tempo](#tempo)). `glide` defaults to the control's own smoothing. |
 
 An **`id`** is a whole number the client picks, and it belongs to that connection: another client can use the same one. Using an id that is still sounding, or one that was never opened or has been let go of, fails the batch. Because the client picks it, a `note`, a `set` and an `off` can go in one batch with no round trip. When a client disconnects its held notes are released and its notes still waiting never sound.
 
-| `define` | `source`, `at`, optional `dir` | Compile definitions (`instr`, `node`, effects, `bus`, `ctl`, `config`, tables, buffers, `fn`, `const`, samples) and swap them in at `at`, sample-exactly: the new mixer is built ahead and running notes carry over. Performance statements, clips, scenes, arrangements, patterns, input bindings, quantize settings and `tempo`/`meter` are errors. DSP source uses physical time units. `clock.time` is elapsed engine time in seconds; musical clock signals must be supplied by a client through controls. Compile problems come back like `eval`'s. `dir` is where sample files and `use` modules are looked for. |
+| `tempo` | `at`, `bpm`, optional `meter`, `beat` | Set this connection's tempo from `at`: what `clock.bpm`, `clock.beat` and `clock.bar` read in its definitions. See [Tempo](#tempo). |
+| `define` | `source`, `at`, optional `dir` | Compile definitions (`instr`, `node`, effects, `bus`, `ctl`, `config`, tables, buffers, `fn`, `const`, samples) and swap them in at `at`, sample-exactly: the new mixer is built ahead and running notes carry over. Performance statements, clips, scenes, arrangements, patterns, input bindings, quantize settings and `tempo`/`meter` are errors. DSP source uses physical time units. `clock.time` is elapsed engine time in seconds; `clock.bpm`, `clock.beat`, `clock.bar`, `clock.meter`, `clock.beat_length` and `clock.bar_length` read the connection's [tempo](#tempo). Compile problems come back like `eval`'s. `dir` is where sample files and `use` modules are looked for. |
 | `forget` | `at` | Drop every definition, as `new` does. The output layout is kept. |
 
-**Time ownership.** The engine owns a monotonically increasing sample clock. Each client owns its tempo map, meter, musical origin, looping and quantization. Clients convert their positions to samples and send events ahead of playback. A tempo edit can cancel and replace that client's pending events; another client's events stay at their submitted samples. The engine never retimes accepted events.
+### Tempo
 
-**Tempo authority.** The engine has no tempo, so it cannot arbitrate one. When several clients play together, exactly one of them must own the tempo map, and the others follow it by converting the same beats to samples with that client's map (for example from a value it publishes on a shared bus). If two clients each keep their own map, their events are all accepted and they drift apart. A client that changes tempo cancels and replaces only its own pending events.
+Each connection has a tempo and a meter, which belong to it alone: another connection at another tempo does not change them, and they go when the connection does. A `tempo` op sets them from `at`.
+
+```json
+{ "op": "tempo", "at": 96000, "bpm": 128, "meter": 4 }
+```
+
+`bpm` and `meter` (beats in a bar) are positive numbers; `meter` stays as it was when left out. The count of beats carries on through a change as if nothing had happened, unless `beat` says what it is at `at`: `"beat": 0` starts the bars again there. A connection that never sends one has 120 bpm and 4 beats in a bar, counting from engine time 0.
+
+In a definition, `clock.bpm` is the tempo, `clock.beat` the beats since the count started, `clock.bar` the bars, `clock.meter` the beats in a bar, and `clock.beat_length` and `clock.bar_length` how long a beat and a bar are, in seconds. They are signals, so they follow every `tempo` op, and a ramp is a series of them. A gradual tempo change is the client's to send as steps. The server logs `tempo` ops with the other events, so a replay is identical.
+
+**Lengths in beats.** A `control` with `"unit": "beats"` or `"bars"`, and an fx instance argument given as `"0.25beats"` or `"1bar"` (in a `node`, `replace` or `set` edit), is set to that many seconds at the connection's tempo and then kept to the beats: every `tempo` op moves it to the same number of beats at the new tempo, over the control's own smoothing. Setting it again in seconds (or any other unit) lets go of it. A control another connection owns is not touched. This is how an echo stays a dotted eighth, or a stutter a sixteenth, through a tempo change or ramp.
+
+Beats and bars written inside definitions are still resolved by the client into seconds; the engine's tempo is for what is read while it plays and for the controls kept to beats.
+
+**Time ownership.** The engine owns a monotonically increasing sample clock. Each client owns its tempo map, meter, musical origin, looping and quantization, and tells the engine the tempo it is at. Clients convert their positions to samples and send events ahead of playback. A tempo edit can cancel and replace that client's pending events; another client's events stay at their submitted samples. The engine never retimes accepted events.
+
+**Following another client.** The engine does not make clients agree. Two connections at different tempos run at them. To play together, one client owns the tempo map and the others follow it, converting the same beats to samples with that client's map (for example from a value it publishes on a shared bus).
+
+### Ordering and results
 
 **Events at the same sample.** Events with the same `at` take effect in this order: resets and panics, then definition swaps, `control` changes and buffer writes, then notes, then everything that changes a sounding note (`off`, `set` and parameter mappings). Within one step the order is the order the events were accepted: the order of a batch, and batches in the order they arrived. Two consequences clients can rely on, and that the replay test suite pins:
 

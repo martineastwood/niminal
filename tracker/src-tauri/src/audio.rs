@@ -217,6 +217,11 @@ struct Worker {
     dir: Option<String>,
 }
 
+/// The bar's length in quarter-note beats, from the song's first pattern.
+fn bar_beats_of(song: &Song) -> f64 {
+    song.patterns.first().and_then(|p| p.timing.as_ref()).map_or(4.0, |t| f64::from(t.beats_per_bar) * 4.0 / f64::from(t.beat_unit))
+}
+
 impl Worker {
     /// Connects to the engine on `port`. The engine is the user's to run (`niminal server`).
     fn connect(&mut self, port: u16, token: Option<&str>) -> Result<(Client, Value), String> {
@@ -260,6 +265,15 @@ impl Worker {
                 Err(format!("Engine disconnected: {error}"))
             }
         }
+    }
+
+    /// The engine's tempo and meter from `at`, as the song has them; `restart` counts the beats from 0 there.
+    fn tempo_event(&self, at: Value, restart: bool) -> Value {
+        let mut event = json!({"op":"tempo", "at":at, "bpm":self.mixer_timing.0, "meter":self.bar_beats});
+        if restart {
+            event["beat"] = json!(0.0);
+        }
+        event
     }
 
     fn send_events(&mut self, events: Vec<Value>) -> Result<(), String> {
@@ -553,6 +567,7 @@ impl Worker {
                 playback.instrument_parameters = self.status.instrument_parameters.clone();
                 playback.instrument_slices = self.status.instrument_slices.clone();
                 playback.origin = self.clock()? + (self.status.sample_rate * 0.15).round() as u64;
+                self.send_events(vec![self.tempo_event(json!(playback.origin), true)])?;
                 self.send_events(crate::modulation::reset(
                     &playback.song.tracks,
                     &playback.song.returns,
@@ -761,8 +776,13 @@ impl Worker {
         self.mixer = song.tracks.clone();
         self.mixer_returns = song.returns.clone();
         self.mixer_master = song.master.clone();
+        let (old_bpm, old_bar) = (self.mixer_timing.0, self.bar_beats);
         self.mixer_timing = (song.bpm, song.rows_per_beat);
-        self.bar_beats = song.patterns.first().and_then(|p| p.timing.as_ref()).map_or(4.0, |t| f64::from(t.beats_per_bar) * 4.0 / f64::from(t.beat_unit));
+        self.bar_beats = bar_beats_of(song);
+        // what an effect reads as `clock.bpm` follows the song's tempo
+        if (old_bpm, old_bar) != (song.bpm, self.bar_beats) {
+            self.send_events(vec![self.tempo_event(json!("now"), false)])?;
+        }
         // strips may have come or gone
         if self.strip_scopes && self.client.is_some() {
             self.sync_scopes()?;
@@ -796,6 +816,7 @@ impl Worker {
             transaction["dir"] = json!(dir);
         }
         let mut events = vec![json!({"op":"routing", "at":"now", "edits":mixer::setup()}), transaction];
+        events.push(json!({"op":"tempo", "at":origin, "bpm":song.bpm, "meter":bar_beats_of(&song), "beat":0.0}));
         events.extend(mixer::events(
             &song.tracks, &song.returns, &song.master, &[], &[], &Track::default(),
             &self.status.effects, &self.status.effect_parameters, song.bpm, song.rows_per_beat, true,

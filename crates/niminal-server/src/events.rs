@@ -168,6 +168,19 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tag: Option<String>,
     },
+    /// Set this connection's tempo from `at`, which is what its `clock.bpm`, `clock.beat` and `clock.bar` read.
+    /// Another connection's tempo is its own. The beat in progress carries on through the change unless
+    /// `beat` says which beat it is at `at`; the meter stays as it was unless `meter` gives beats a bar.
+    Tempo {
+        at: At,
+        bpm: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        meter: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        beat: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
+    },
     /// Move a `ctl`.
     Control {
         name: String,

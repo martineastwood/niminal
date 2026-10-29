@@ -12,6 +12,13 @@ control fn lfo(rate: hz, shape: (sine | tri | saw | square) = sine) {
   else { osc(square, rate) }
 }
 fn unipolar(x) { x * 0.5 + 0.5 }
+control fn tempo_lfo(beats: num = 1, shape: (sine | tri | saw | square) = sine, phase: num = 0) {
+  at = fract(clock.beat / beats + phase)
+  if shape == sine { sin(at * 2 * pi) }
+  else if shape == tri { abs(fract(at + 0.75) - 0.5) * 4 - 1 }
+  else if shape == saw { fract(at + 0.5) * 2 - 1 }
+  else { (at < 0.5) * 2 - 1 }
+}
 control fn random_steps(rate: hz, seed: num = 0) {
   noise(seed: seed).sample_hold(impulse(rate))
 }
@@ -72,10 +79,14 @@ fn apply(x, make: fn, when: 0..1, blend: sec = 3ms) {
 ";
 
 /// What each prelude function is for, for completion and the opcode reference.
-pub const DOCS: [(&str, &str); 7] = [
+pub const DOCS: [(&str, &str); 8] = [
     (
         "lfo",
         "A low-frequency oscillator from -1 to 1, run once per block: `lfo(2hz)`, or `lfo(0.3hz, shape: tri)` (sine, tri, saw or square). Move it to 0..1 with `.unipolar`, scale it with `.range(300hz..3khz)` and smooth it where a step would be heard: `lfo(2hz).smooth`.",
+    ),
+    (
+        "tempo_lfo",
+        "A low-frequency oscillator from -1 to 1 with a cycle every `beats` beats, locked to the beat count: `tempo_lfo(1/4)` is four a beat, `tempo_lfo(8)` one in two bars. A tempo change speeds it up or slows it down without it losing its place, and each cycle starts on a beat. `phase` (0 to 1) shifts it along a cycle and `shape` is sine, tri, saw or square. Runs once per block, like `lfo`: `tempo_lfo(1/2).unipolar.range(300hz..3khz).smooth(5ms)`.",
     ),
     (
         "unipolar",
@@ -139,6 +150,11 @@ fn defined_name(item: &Item) -> Option<&str> {
     })
 }
 
+/// Whether `source` calls a prelude function that reads the clock, which needs the tempo controls declared.
+pub fn reads_clock(source: &str) -> bool {
+    source.contains("tempo_lfo")
+}
+
 /// The prelude functions `source` calls and `items` doesn't already define.
 pub fn needed(source: &str, items: &[Item]) -> Vec<Item> {
     if !DOCS.iter().any(|(name, _)| source.contains(name)) {
@@ -146,7 +162,7 @@ pub fn needed(source: &str, items: &[Item]) -> Vec<Item> {
     }
     // spans and the names made from them (`<fn@40>`) must not collide with the file's own, so the
     // prelude is read as if it came after all of the file's text
-    let shifted = format!("{}{SOURCE}", " ".repeat(source.len() + 1));
+    let shifted = format!("{}{}", " ".repeat(source.len() + 1), crate::dsp::lower_clock_reads(SOURCE));
     let parsed = parser::parse(&shifted).expect("the prelude parses");
     parsed
         .into_iter()

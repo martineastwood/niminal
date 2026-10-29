@@ -816,3 +816,39 @@ fn a_native_fx_reset_restarts_dsp_without_releasing_voices_or_changing_parameter
         assert_eq!(&channel[..256], &channel[512..768]);
     }
 }
+
+#[test]
+fn an_fx_parameter_in_beats_follows_the_tempo_and_one_in_seconds_does_not() {
+    let mut s = ready();
+    // `level` is the fx's output, so the level that comes out says its length in seconds
+    s.send_events(
+        1,
+        vec![route(
+            0,
+            vec![
+                Edit::Fx { output_channels: None, name: "timed".into(), source: "(level: num = 1, length: sec = 0.5sec) { out = in * length / 1sec }".into() },
+                Edit::Node {
+                    id: "a".into(),
+                    fx: Some("timed".into()),
+                    instrument: None,
+                    args: [("length".into(), Value::Beats(1.0))].into(),
+                },
+                Edit::Node {
+                    id: "b".into(),
+                    fx: Some("timed".into()),
+                    instrument: None,
+                    args: [("length".into(), Value::Seconds(0.1))].into(),
+                },
+                connect("a_out", node("a"), Endpoint::Master, 1.0),
+                connect("b_out", node("b"), Endpoint::Master, 1.0),
+            ],
+        )],
+    )
+    .unwrap();
+    let tempo = |at: u64, bpm: f64| Op::Tempo { at: At::Sample(at), bpm, meter: None, beat: None, tag: None };
+    s.send_events(1, vec![note("a", 0, 5.0), note("b", 0, 5.0), tempo(0, 120.0), tempo(9_600, 60.0)]).unwrap();
+    let out = s.process(24_000).remove(0);
+    // a beat at 120 bpm is half a second, and the other is a tenth: 0.6 together; at 60 bpm, 1.1
+    assert!((out[4_000] - 0.6).abs() < 1e-3, "{}", out[4_000]);
+    assert!((out[23_999] - 1.1).abs() < 1e-3, "{}", out[23_999]);
+}
