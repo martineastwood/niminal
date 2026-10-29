@@ -24,6 +24,18 @@ export function withFit(source: string, bpm: number): string {
   return source.replace(/from_bpm: 0\.\.400 = [\d.]+/, `from_bpm: 0..400 = ${bpm}`);
 }
 
+/** How a fitted sampler follows the song's tempo: `stretch` keeps its pitch, `repitch` changes speed and pitch together, as tape would. */
+export type FitMode = 'stretch' | 'repitch';
+
+export const readFitMode = (source: string): FitMode => /fit_mode: 0\.\.1 = 1/.test(source) ? 'repitch' : 'stretch';
+
+/** `source` with its fit mode set, adding the parameter (and `from_bpm`, which it goes with) to a sampler that lacks it. */
+export function withFitMode(source: string, mode: FitMode): string {
+  source = withFit(source, readFit(source));
+  if (!/fit_mode: 0\.\.1 = /.test(source)) source = source.replace(/from_bpm: 0\.\.400 = [\d.]+/, '$&, fit_mode: 0..1 = 0');
+  return source.replace(/fit_mode: 0\.\.1 = [01]/, `fit_mode: 0..1 = ${mode === 'repitch' ? 1 : 0}`);
+}
+
 /** The tempo a sample of `seconds` is at if it lasts `beats` beats, to two places, or null when that is outside what a tempo can be. */
 export function sourceTempo(beats: number, seconds: number): number | null {
   const bpm = Math.round(beats * 60 / seconds * 100) / 100;

@@ -408,6 +408,51 @@ const CHORDS: [(&str, &[i32]); 16] = [
     ("minor9", &[0, 3, 7, 10, 14]),
 ];
 
+/// Split a chord name into a root (octave 4 by default) and interval offsets.
+fn chord_notes(atom: &str) -> Option<Vec<Value>> {
+    let bytes = atom.as_bytes();
+    if !matches!(bytes.first()?, b'A'..=b'G' | b'a'..=b'g') {
+        return None;
+    }
+    let mut end = 1;
+    if matches!(bytes.get(end), Some(b'#' | b'b')) {
+        end += 1;
+    }
+    let root_end = end;
+    if bytes.get(end) == Some(&b'-') {
+        end += 1;
+    }
+    while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+        end += 1;
+    }
+    let quality = match &atom[end..] {
+        "maj" => "major",
+        "min" | "m" => "minor",
+        "maj7" => "major7",
+        "min7" | "m7" => "minor7",
+        "maj6" => "major6",
+        "min6" | "m6" => "minor6",
+        "maj9" => "major9",
+        "min9" | "m9" => "minor9",
+        name => name,
+    };
+    let intervals = CHORDS.iter().find(|(name, _)| *name == quality)?.1;
+    let root = if end == root_end {
+        format!("{}4", &atom[..root_end])
+    } else {
+        atom[..end].to_string()
+    };
+    let Value::Note(root) = root.to_ascii_lowercase().parse::<Value>().ok()? else {
+        return None;
+    };
+    Some(
+        intervals
+            .iter()
+            .map(|offset| Value::Note(root + offset))
+            .collect(),
+    )
+}
+
 /// How arpeggios can run, lowest note first.
 /// Whose timing `add`, `sub`, `mul` and `div` keep.
 const TIMINGS: [(&str, &Structure); 3] = [
@@ -857,7 +902,7 @@ impl Perform<'_> {
     }
 
     fn pattern(&self, raw: &str, span: Span) -> Res<Pattern<Step>> {
-        parse_with(raw, |atom, at| {
+        let pattern = parse_with(raw, |atom, at| {
             // the token's text starts after its opening bracket
             let start = span.start + 1 + at;
             let written = |v: Value| Step {
@@ -865,22 +910,37 @@ impl Perform<'_> {
                 ..Step::from(v)
             };
             if let Ok(v) = atom_value(atom, self.cx.sample_names) {
-                return Ok(written(v));
+                return Ok(vec![written(v)]);
+            }
+            if let Some(notes) = chord_notes(atom) {
+                return Ok(notes.into_iter().map(written).collect());
             }
             // Score `def` params and lets: `[root ~]` resolves `root` from bindings.
             // A lone note name is stored as a one-step pattern; take its value.
             match self.bindings.get(atom).and_then(|v| v.as_num()) {
-                Some(v) => Ok(written(v)),
+                Some(v) => Ok(vec![written(v)]),
                 None => match self.bindings.get(atom) {
                     Some(other) => Err(format!(
                         "`{atom}` is {}, not a note or value for a pattern",
                         other.describe()
                     )),
-                    None => atom_value(atom, self.cx.sample_names).map(written),
+                    None => atom_value(atom, self.cx.sample_names).map(|v| vec![written(v)]),
                 },
             }
         })
-        .map_err(|e| at_offset(e.message, span, e.offset))
+        .map_err(|e| at_offset(e.message, span, e.offset))?;
+        Ok(Pattern::new(move |span| {
+            pattern
+                .query(span)
+                .into_iter()
+                .flat_map(|hit| {
+                    hit.value
+                        .clone()
+                        .into_iter()
+                        .map(move |step| hit.clone().map(|_| step))
+                })
+                .collect()
+        }))
     }
 
     /// A list of notes, rests or patterns as one pattern in sequence.

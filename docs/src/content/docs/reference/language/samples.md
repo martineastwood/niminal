@@ -70,11 +70,11 @@ A sample is a plain binding, and its settings are chained methods: `amen = sampl
 | `.duration(2sec)` | Fit to a fixed length, preserving pitch and ignoring tempo; also available directly in DSP definitions |
 | `.mode(stretch)` | Preserve pitch when fitting (the default); `.mode(repitch)` changes speed and pitch together |
 | `.root(c4)` | The note (or frequency) at which the sample plays as recorded |
-| `.interp(sinc)` | Rate-aware windowed sinc playback; `.interp(cubic)` is the faster default |
+| `.interp(sinc)` | Rate-aware windowed sinc playback; `.interp(cubic)` is the faster default, and `.interp(linear)` the cheapest and roughest |
 | `.loop(forward)` | Sustain a loop while a note is held; `.loop(bidirectional)` alternates direction |
 | `.choke(group)` | On a kit sample: starting this sample ends others in the group |
 
-Use `pad = sample("pad.wav").interp(sinc)` for higher-quality pitch and sample-rate conversion. The same setting works on kits and slices, such as `chops = amen.slices(16).interp(sinc)`. Sinc filtering costs more CPU and reduces aliasing when playing faster. Its filter is limited to 512 taps, so suppression decreases at extreme playback rates.
+Use `pad = sample("pad.wav").interp(sinc)` for higher-quality pitch and sample-rate conversion. The same setting works on kits and slices, such as `chops = amen.slices(16).interp(sinc)`. Linear joins neighbouring frames with straight lines, which is rough at low pitches (it adds a dull, aliased edge, useful for wavetable-style loops). Sinc filtering costs more CPU and reduces aliasing when playing faster. Its filter is limited to 512 taps, so suppression decreases at extreme playback rates.
 
 For a sustain region inside a whole sample, call a looped sampler with `loop_start` and `loop_end` as shares of its length:
 

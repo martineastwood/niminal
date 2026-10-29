@@ -1,16 +1,16 @@
 //! Finding where the hits of a sample begin, so it can be cut there instead of into equal pieces.
 
 /// The shares of the sample's length (0 up to 1) at which pieces start: always 0 first, then each
-/// transient, at most `max` of them in all, at least 60 ms apart. Silence or a steady sound give just 0.
-pub fn transients(samples: &[f32], rate: f32, max: usize) -> Vec<f64> {
-    niminal_lang::detect_transients(samples, rate, max).into_iter()
+/// transient, at most `max` of them in all, at least 60 ms apart (`sensitivity` 0 to 1, 0.5 the usual: higher finds softer hits). Silence or a steady sound give just 0.
+pub fn transients(samples: &[f32], rate: f32, max: usize, sensitivity: f32) -> Vec<f64> {
+    niminal_lang::detect_transients_at(samples, rate, max, sensitivity).into_iter()
         .map(|frame| frame as f64 / samples.len().max(1) as f64).collect()
 }
 
 /// The places to cut `file` (relative to the project folder `dir`) at, from [`transients`].
-pub fn detect(dir: &std::path::Path, file: &str, max: usize) -> Result<Vec<f64>, String> {
+pub fn detect(dir: &std::path::Path, file: &str, max: usize, sensitivity: f32) -> Result<Vec<f64>, String> {
     let (mixed, rate) = mono(dir, file)?;
-    Ok(transients(&mixed, rate, max))
+    Ok(transients(&mixed, rate, max, sensitivity))
 }
 
 /// A sample as mixed to mono: its frames and rate, and the lowest and highest value in each of `buckets`
@@ -76,13 +76,28 @@ mod tests {
 
     #[test]
     fn finds_where_each_hit_begins() {
-        let found = transients(&hits(&[0.0, 0.25, 0.5, 0.8]), RATE, 64);
+        let found = transients(&hits(&[0.0, 0.25, 0.5, 0.8]), RATE, 64, 0.5);
         assert_eq!(found.len(), 4, "{found:?}");
         for (share, expected) in found.iter().zip([0.0, 0.25, 0.5, 0.8]) {
             assert!((share - expected).abs() < 0.01, "{found:?}");
         }
         // the cut falls just before the hit, not after it
         assert!(found[2] <= 0.5 && found[2] > 0.49, "{found:?}");
+    }
+
+    #[test]
+    fn a_higher_sensitivity_finds_softer_hits() {
+        // a loud hit, then one a tenth as loud, then one a twentieth as loud
+        let mut audio = hits(&[0.0, 0.3]);
+        let soft = hits(&[0.6]);
+        let softer = hits(&[0.8]);
+        for (i, sample) in audio.iter_mut().enumerate() {
+            *sample += soft[i] * 0.07 + softer[i] * 0.03;
+        }
+        let count = |sensitivity| transients(&audio, RATE, 64, sensitivity).len();
+        assert!(count(0.0) <= count(0.5) && count(0.5) <= count(1.0), "{} {} {}", count(0.0), count(0.5), count(1.0));
+        assert!(count(1.0) > count(0.5), "{} {}", count(0.5), count(1.0));
+        assert_eq!(count(0.5), transients(&audio, RATE, 64, 0.5).len());
     }
 
     #[test]
@@ -107,19 +122,19 @@ mod tests {
 
     #[test]
     fn a_hit_after_a_silent_start_leaves_the_start_as_the_first_piece() {
-        let found = transients(&hits(&[0.3, 0.6]), RATE, 64);
+        let found = transients(&hits(&[0.3, 0.6]), RATE, 64, 0.5);
         assert_eq!(found.len(), 3, "{found:?}");
         assert_eq!(found[0], 0.0);
     }
 
     #[test]
     fn keeps_the_strongest_when_there_are_too_many_and_ignores_silence_and_steady_tones() {
-        let found = transients(&hits(&[0.0, 0.2, 0.4, 0.6, 0.8]), RATE, 3);
+        let found = transients(&hits(&[0.0, 0.2, 0.4, 0.6, 0.8]), RATE, 3, 0.5);
         assert_eq!(found.len(), 3);
         assert_eq!(found[0], 0.0);
-        assert_eq!(transients(&vec![0.0; 48_000], RATE, 16), [0.0]);
+        assert_eq!(transients(&vec![0.0; 48_000], RATE, 16, 0.5), [0.0]);
         let steady: Vec<f32> = (0..48_000).map(|n| (n as f32 * 0.05).sin() * 0.5).collect();
-        assert_eq!(transients(&steady, RATE, 16), [0.0]);
-        assert_eq!(transients(&[], RATE, 16), [0.0]);
+        assert_eq!(transients(&steady, RATE, 16, 0.5), [0.0]);
+        assert_eq!(transients(&[], RATE, 16, 0.5), [0.0]);
     }
 }

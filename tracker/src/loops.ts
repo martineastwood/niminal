@@ -1,6 +1,6 @@
 /** Loop points are shares of the whole sample, updated at loop boundaries. */
 export interface SampleLoop { mode: 'none' | 'forward' | 'bidirectional'; start: number; end: number; crossfade?: number }
-const binding = /^(\w+\s*=\s*sample\("[^"\n]+"\)[^\n]*?)(?=[ \t]*\/\/|$)/m;
+export const binding = /^(\w+\s*=\s*sample\("[^"\n]+"\)[^\n]*?)(?=[ \t]*\/\/|$)/m;
 const modeCall = /\.loop\(\s*(none|false|forward|true|bidirectional|pingpong)\s*\)/;
 
 export function readLoop(source: string): SampleLoop {

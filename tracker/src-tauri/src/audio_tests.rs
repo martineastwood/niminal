@@ -2299,6 +2299,42 @@ fn loop_edits_reach_held_pattern_and_midi_notes_without_retriggering() {
 }
 
 #[test]
+fn a_one_shot_sampler_played_as_a_held_note_plays_once() {
+    let base = std::env::temp_dir().join(format!("niminal-tracker-oneshot-{}", std::process::id()));
+    std::fs::create_dir_all(&base).unwrap();
+    let file = base.join("hit.wav");
+    write_wav(&file, 4800, 16384); // a tenth of a second
+    let (engine, server, mut worker) = engine_worker();
+    build_strips(&mut worker);
+    // as the tracker writes a sampler of a short sample: gate 0, so the note's end changes nothing
+    let source = format!("s = sample(\"{}\").root(c4)\ninstr hit(freq: hz, begin: 0..1 = 0, rate: -4..4 = 1, stretch: 0.25..4 = 1, stretch_mode: 0..2 = 0, gate: 0..1 = 0, release: 0ms..2sec = 10ms) {{ s(freq: freq, begin: begin, rate: rate, stretch: stretch, stretch_mode: stretch_mode) * (1 - gate + gate * env[1 | release 0]) }}", file.display());
+    worker.command(Command::Apply { id: "tone".into(), kind: Kind::Instr, dir: None, source }).unwrap();
+    for held in [false, true] {
+        if held {
+            worker.command(Command::MidiOn { key: 2096, instrument: "tone".into(), note: "C-4".into(), track: 0, velocity: 127 }).unwrap();
+        } else {
+            worker.command(Command::Audition { instrument: "tone".into(), note: "C-4".into(), track: 0, ms: 300, commands: vec![] }).unwrap();
+        }
+        let audio = run(&engine, &mut worker, 48000);
+        let early = audio[1000..4000].iter().map(|s| s.abs()).sum::<f32>() / 3000.0;
+        let late = audio[8000..48000].iter().map(|s| s.abs()).sum::<f32>() / 40000.0;
+        assert!(early > 0.2, "it sounds, held={held}: {early}");
+        assert!(late < 0.001, "and stops with the sample instead of repeating, held={held}: {late}");
+        worker.command(Command::Stop).unwrap();
+    }
+    // a key pressed, repeated by the keyboard (a second note on for the same key) and let go of while the sample is still playing
+    worker.command(Command::MidiOn { key: 2096, instrument: "tone".into(), note: "C-4".into(), track: 0, velocity: 127 }).unwrap();
+    let first = run(&engine, &mut worker, 1000);
+    worker.command(Command::MidiOff { key: Some(2096) }).unwrap();
+    let rest = run(&engine, &mut worker, 47000);
+    assert!(first[500..].iter().map(|s| s.abs()).sum::<f32>() / 500.0 > 0.2, "it sounds while the key is down");
+    let late = rest[8000..].iter().map(|s| s.abs()).sum::<f32>() / 39000.0;
+    assert!(late < 0.001, "letting go early does not make it repeat: {late}");
+    drop(worker); drop(server); drop(engine);
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
 fn an_effect_can_be_applied_before_any_instrument() {
     let sources = library_definitions("std/fx");
     let (_engine, _server, mut worker) = engine_worker();

@@ -79,15 +79,16 @@ const wave = harmonics([1], size: 64)
 pad = sample(wave).interp(sinc).loop(forward)
 chops = pad.slices(4).interp(sinc)
 plain = sample(wave).interp(cubic)
+rough = sample(wave).interp(linear)
 instr a(freq: hz) { pad(freq: freq) }
 "#);
-    let errors = compile("const wave = zeros(64)\npad = sample(wave).interp(linear)\n")
+    let errors = compile("const wave = zeros(64)\npad = sample(wave).interp(nearest)\n")
         .err()
         .unwrap();
     assert!(
         errors
             .iter()
-            .any(|e| e.message.contains("`interp` is `cubic` or `sinc`"))
+            .any(|e| e.message.contains("`interp` is `linear`, `cubic` or `sinc`"))
     );
 }
 

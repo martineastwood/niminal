@@ -72,8 +72,9 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
   const volume = slider('Volume', track.volume_db, -60, 6, 'dB', value => { track.volume_db = value; edited(); }, () => write({ kind: 'volume' }, track.volume_db));
   volume.querySelector('input')!.setAttribute('aria-label', `${track.name} volume in dB`); output.append(volume);
   const pan = slider('Pan', track.pan, -1, 1, '', value => { track.pan = value; edited(); }, () => write({ kind: 'pan' }, track.pan));
-  pan.querySelector('input')!.setAttribute('aria-label', `${track.name} pan`); output.append(pan); parent.append(output);
-  parent.append(macrosCard(project, activeTrack, edited, write, refresh, fx.lanesRemoved));
+  pan.querySelector('input')!.setAttribute('aria-label', `${track.name} pan`); output.append(pan);
+  const channel = document.createElement('div'); channel.className = 'mixer-channel';
+  channel.append(output, macrosCard(project, activeTrack, edited, write, refresh, fx.lanesRemoved)); parent.append(channel);
   const effects = document.createElement('section'); effects.className = 'device-card effect-device';
   const title = document.createElement('div'); title.className = 'device-heading';
   const label = document.createElement('span'); label.className = 'section-title'; label.textContent = 'FX';

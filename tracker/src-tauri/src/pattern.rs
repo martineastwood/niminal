@@ -911,16 +911,21 @@ pub fn hit_args(args: &Value, gain: f64, parameters: &[crate::commands::Paramete
 }
 
 /// A sampler with a `from_bpm` plays in time with the song: it is stretched by the tempo its sample was
-/// recorded at over the tempo `bpm` now, on top of its own `stretch`, and so keeps its pitch.
+/// recorded at over the tempo `bpm` now, on top of its own `stretch`, and so keeps its pitch. With a `fit_mode`
+/// of 1 (repitch) it plays faster or slower by that same ratio instead, on top of its own `rate`, as tape would,
+/// and the pitch follows.
 pub fn fit_to_tempo(args: &mut Value, parameters: &[crate::commands::Parameter], bpm: f64) {
     let value = |name: &str| args.get(name).and_then(Value::as_f64).or_else(|| parameters.iter().find(|p| p.name == name).map(|p| p.default));
-    if !parameters.iter().any(|p| p.name == "stretch") {
-        return;
-    }
-    let (Some(from), stretch) = (value("from_bpm").filter(|from| *from > 0.0), value("stretch").unwrap_or(1.0)) else {
+    let Some(from) = value("from_bpm").filter(|from| *from > 0.0) else {
         return;
     };
-    args["stretch"] = json!((stretch * from / bpm).clamp(0.25, 4.0));
+    if value("fit_mode").is_some_and(|mode| mode >= 0.5) {
+        if parameters.iter().any(|p| p.name == "rate") {
+            args["rate"] = json!((value("rate").unwrap_or(1.0) * bpm / from).clamp(-4.0, 4.0));
+        }
+    } else if parameters.iter().any(|p| p.name == "stretch") {
+        args["stretch"] = json!((value("stretch").unwrap_or(1.0) * from / bpm).clamp(0.25, 4.0));
+    }
 }
 
 /// The arguments that make an instrument play `note`: its pitch, or for a sliced sample (one with
@@ -2051,6 +2056,27 @@ mod tests {
             column.fx[0][*row] = Some((*text).into());
         }
         column
+    }
+
+    #[test]
+    fn a_repitch_fit_changes_the_speed_of_the_sampler_and_leaves_its_stretch_alone() {
+        let fitted = |mode: f64, rate: Option<f64>| {
+            let events = played_with(2, vec![column(2, &[(0, "C-4")])], Mode::Song, |play| {
+                let ranged = |name: &str, min, max, default| crate::commands::Parameter { name: name.into(), min, max, default, unit: None, ..Default::default() };
+                play.instrument_parameters.insert("tone".into(), vec![ranged("stretch", 0.25, 4.0, 1.0), ranged("rate", -4.0, 4.0, 1.0), ranged("from_bpm", 0.0, 400.0, 0.0), ranged("fit_mode", 0.0, 1.0, 0.0)]);
+                let values = play.song.instrument_values.entry("tone".into()).or_default();
+                values.insert("from_bpm".into(), 100.0); values.insert("fit_mode".into(), mode);
+                if let Some(rate) = rate { values.insert("rate".into(), rate); }
+            });
+            (events[0]["args"]["rate"].as_f64(), events[0]["args"]["stretch"].as_f64())
+        };
+        // a 100 bpm sample in a 120 bpm song plays 1.2 times as fast, and backwards stays backwards
+        let (rate, stretch) = fitted(1.0, None);
+        assert!((rate.unwrap() - 1.2).abs() < 1e-9); assert_eq!(stretch, None);
+        assert!((fitted(1.0, Some(-1.0)).0.unwrap() + 1.2).abs() < 1e-9);
+        // stretch mode keeps the rate as it was, and stretches instead
+        let (rate, stretch) = fitted(0.0, None);
+        assert_eq!(rate, None); assert!((stretch.unwrap() - 100.0 / 120.0).abs() < 1e-9);
     }
 
     #[test]

@@ -9,13 +9,17 @@ A panel at the top of the right-hand side holds the project's instruments, alway
 
 **Option+↑ / ↓** (from anywhere except a text box) moves to the previous or next instrument and plays a note, so you can pick a sound without the mouse; clicking one, or ↑ / ↓ with the list focused, does the same, **Enter** or a double-click opens its code, and **Escape** returns to the grid.
 
-The buttons above the list add a blank (**+**), duplicate (**⧉**) or delete (**−**) the current one, import WAV files (**♪**), make a kit (**▦**) and cut a sampler into pieces (**✂**, see [Sliced samples](/reference/tracker/grid/#sliced-samples)). Each imported WAV is copied into the project's folder and becomes a sampler instrument written as ordinary code (`sample("samples/kick.wav").root(c4)`), so root note, looping and tuning are edited in the editor. The engine resolves sample paths against the project folder, so it needs to run on the same machine.
+**+ Add** above the list opens a menu: a blank instrument, a sampler from audio files, a kit from audio files, or the instrument library. Each row has a **⋯** button (and a right-click does the same) with Edit code, Duplicate and Delete. Cutting a sampler into pieces is done in the Sample view (see [Sliced samples](/reference/tracker/grid/#sliced-samples)). **Delete** or **Backspace** with the list focused removes the current instrument. Drop audio files from Finder anywhere on the window to import them: one file becomes a sampler, and several ask whether you want a sampler each or one kit. Each imported audio file is copied into the project's folder and becomes a sampler instrument written as ordinary code (`sample("samples/kick.wav").root(c4)`), so root note, looping and tuning are edited in the editor. The engine resolves sample paths against the project folder, so it needs to run on the same machine.
 
-A **Project** folder at the top of the browser's **Effects** tab lists the project's own effects in the same way, with buttons under the list.
+The browser below holds the library only: the project's own instruments are the panel above it, and its effects are on the tracks (open one from its track's FX chain). **+ New effect**, under the Effects tab's list, makes a blank one.
 
 ## The sound browser
 
-The panel on the right stays open beside the grid. **Instruments** and **Effects** tabs list the ready-made sounds in folders, with a search box. The folders start closed, except **Project** on the Effects tab; the arrow keys move over folders and items alike (**→** or **Enter** opens a folder, **←** closes it) and clicking a folder toggles it.
+The panel on the right stays open beside the grid. **Instruments**, **Samples** and **Effects** tabs list the ready-made instruments, the project's samples (loose ones at the top, kits as folders) and the ready-made effects, with a search box. The folders start closed, except **Favourites**; the arrow keys move over folders and items alike (**→** or **Enter** opens a folder, **←** closes it) and clicking a folder toggles it.
+
+The **Samples** tab lists the audio files of the project's `samples` folder (kits as sub-folders), each with a small waveform and its length; landing on one plays it at its recorded pitch. **Import files…** and **Import as kit…** sit under the list. Enter or double-click makes a sampler of the sample, and **Shift+Enter** puts it in the current slot (swapping the sample of a sampler, or turning another instrument into a sampler of it).
+
+Every row has a **☆** to keep it under **Favourites** at the top of its tab, and a **⋯** menu (also on right-click). **Drag** an instrument or sample from the browser onto a slot of the project panel to replace that slot, or onto the empty space below the list to add it.
 
 Move through the sounds with the **arrow keys** (or click): each one plays as you land on it, an instrument as a note on the selected track and an effect added to that track's chain while you browse (and over the song if it is playing), without changing the project.
 
@@ -27,13 +31,13 @@ An instrument or effect has one name, and its code is written to match: **Warm s
 
 ## Ready-made instruments and effects
 
-The folders below Project in the browser (drums/kicks, drums/snares, synths/bass, … for instruments; filters, equalizer, echo, reverb, chorus, phaser, tremolo, compressor, overdrive, lo-fi, soft clip for effects) come from the language's own library, `std/instruments` and `std/fx` (see [the standard library](/reference/language/standard-library/)), so niminal-live can `use` the same ones by name.
+The folders in the browser (drums/kicks, drums/snares, synths/bass, … for instruments; filters, equalizer, echo, reverb, chorus, phaser, tremolo, compressor, overdrive, lo-fi, soft clip for effects) come from the language's own library, `std/instruments` and `std/fx` (see [the standard library](/reference/language/standard-library/)), so niminal-live can `use` the same ones by name.
 
 **+ Add effect…** in a track's FX view opens the same list for effects. Adding one copies it into the project, so its code is yours to edit in place and a later change to the library does not touch your song.
 
 ## Applying code
 
-Open an instrument from the project instrument panel, an effect from the browser's Project folder, or double-click a ready-made sound. Hover for compiler documentation, Ctrl+Space for completion, and Shift+Alt+F to format. Change `saw` to `sawz` to try error diagnostics.
+Open an instrument from the project instrument panel, an effect from its track's FX chain, or double-click a ready-made sound. Hover for compiler documentation, Ctrl+Space for completion, and Shift+Alt+F to format. Change `saw` to `sawz` to try error diagnostics.
 
 Click **Apply** (or **Cmd/Ctrl+Enter** in the editor, which also plays a note through it) to compile code into the engine. Rejected edits leave the last applied source sounding. Apply updates every track using an effect with a short crossfade.
 
@@ -53,8 +57,8 @@ An effect used on several tracks, or on the master, is one piece of code: editin
 
 ## What a note's end does to a sample
 
-A sampler made by the tracker has a `gate` parameter and a `release`. With `gate` at 0 the sample plays out whatever the note, which suits a drum hit. With `gate` at 1 the sample ends, fading over `release` (10 ms by default), where its note does: at an OFF or CUT, or when the next note starts in the same column. That is what a loop, pad or held vocal needs, and it makes OFF work on a sample. Samples of two seconds or longer start with `gate` at 1 and shorter ones at 0; pieces of a sliced sample start at 1, and a kit at 0. Change it with its slider, a parameter lane, or the default in the code.
+Every sampler row in the instrument list carries a small tag (**one-shot**, **hold**, **loop** or **ping-pong**), and the **Plays** choice in the Sample tab changes it. A sampler made by the tracker has a `gate` parameter and a `release`. With `gate` at 0 the sample plays out whatever the note, which suits a drum hit. With `gate` at 1 the sample ends, fading over `release` (10 ms by default), where its note does: at an OFF or CUT, or when the next note starts in the same column. That is what a loop, pad or held vocal needs, and it makes OFF work on a sample. On import the name decides first (`loop`, `pad`, `drone`, `ambience`, `atmos` or `texture` make a loop; `kick`, `snare`, `hat`, `clap`, `hit`, `shot`, `perc`, `tom`, `rim`, `stab`, `crash` or `cymbal` a one-shot), and otherwise samples of two seconds or longer start with `gate` at 1 and shorter ones at 0; pieces of a sliced sample start at 1, and a kit at 0. Change it with its slider, a parameter lane, or the default in the code.
 
 ## Kits
 
-**▦** (or File → Import Samples as a Kit…) asks for several WAV files and makes **one** instrument that plays them: they are copied into a folder of the project (`samples/<name>`, named for the folder they came from) and each file gets a key, counting up from **C-4** in the order of their names. The code lists the keys (`/// C-4 hat · C#4 kick · D-4 snare`), uses the language's `kit("samples/drums")`, and takes the same `begin`, `rate`, `gate` and `release` as any sampler, so **O**, **V** and **R** work on its hits. A kit holds 1 to 48 samples; sample names may use letters, digits and underscores, and a name that starts with a digit gets an `s` in front. Rename a file before importing to change which key it gets.
+**Kit from audio files…** in the Add menu, File → Import Samples as a Kit…, or **Import as kit…** on the Samples tab asks for several WAV files and makes **one** instrument that plays them: they are copied into a folder of the project (`samples/<name>`, named for the folder they came from) and each file gets a key, counting up from **C-4** in the order of their names. The code lists the keys (`/// C-4 hat · C#4 kick · D-4 snare`), uses the language's `kit("samples/drums")`, and takes the same `begin`, `rate`, `gate` and `release` as any sampler, so **O**, **V** and **R** work on its hits. A kit holds 1 to 48 samples; sample names may use letters, digits and underscores, and a name that starts with a digit gets an `s` in front. Rename a file before importing to change which key it gets.

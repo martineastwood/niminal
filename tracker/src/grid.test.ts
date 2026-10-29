@@ -34,7 +34,7 @@ it('enters and auditions a note, then undoes/redoes it through grid keyboard sho
   const { project, key, click, audition, edited } = setup();
   click(1, 0); key('z');
   expect(project.patterns[0].notes[0][0].notes[1]).toBe('C-4');
-  expect(audition).toHaveBeenCalledWith('tone', 'C-4', 0);
+  expect(audition).toHaveBeenCalledWith('tone', 'C-4', 0, { hold: 2096 });
   key('z', { metaKey: true }); expect(project.patterns[0].notes[0][0].notes[1]).toBeNull();
   key('z', { metaKey: true, shiftKey: true }); expect(project.patterns[0].notes[0][0].notes[1]).toBe('C-4');
   expect(edited).toHaveBeenCalledTimes(3);
@@ -356,7 +356,7 @@ it('stamps the current instrument\'s number on each note entered in record mode,
   project.definitions.push({ id: 'bell', name: 'Bell', kind: 'instr', source: 'instr bell(freq: hz) { osc(sine, freq) }' });
   grid.selectTrack(1); key('s');
   const column = project.patterns[0].notes[1][0];
-  expect(column.notes[0]).toBe('C#4'); expect(column.inst[0]).toBe('tone'); expect(audition).toHaveBeenLastCalledWith('tone', 'C#4', 1);
+  expect(column.notes[0]).toBe('C#4'); expect(column.inst[0]).toBe('tone'); expect(audition).toHaveBeenLastCalledWith('tone', 'C#4', 1, { hold: 2097 });
   key('a'); expect(column.notes[1]).toBe('OFF'); expect(column.inst[1]).toBeNull(); // an OFF has no instrument
   grid.undo(); grid.undo();
   expect(column.notes[0]).toBeNull(); expect(column.inst[0]).toBeNull();
@@ -366,7 +366,7 @@ it('previews the selected instrument instead of the pattern instrument, and show
   const { parent, project, grid, key, audition } = setup(undefined, () => 'bell');
   const column = project.patterns[0].notes[0][0];
   grid.recording = false; grid.selectTrack(0); parent.querySelector<HTMLElement>('#cell-5-0')!.click();
-  key('s'); expect(audition).toHaveBeenLastCalledWith('bell', 'C#4', 0);
+  key('s'); expect(audition).toHaveBeenLastCalledWith('bell', 'C#4', 0, { hold: 2097 });
   expect(column.inst[5]).toBeNull();
   expect(parent.querySelectorAll('[data-column]:not([id*="-0-0"])').length).toBeGreaterThan(0);
   expect(parent.querySelector('#cell-0-0-0-inst')).not.toBeNull(); expect(parent.querySelector('#cell-0-1-0-inst')).not.toBeNull();
@@ -424,7 +424,7 @@ it('previews from instrument and command columns outside record mode without edi
     parent.querySelector<HTMLElement>(cell)!.click();
     const cursor = parent.getAttribute('aria-activedescendant');
     key('s');
-    expect(audition).toHaveBeenLastCalledWith('bell', 'C#4', 0);
+    expect(audition).toHaveBeenLastCalledWith('bell', 'C#4', 0, { hold: 2097 });
     expect(parent.getAttribute('aria-activedescendant')).toBe(cursor);
   }
   expect(audition).toHaveBeenCalledTimes(2);
@@ -708,4 +708,28 @@ it('keeps the keyboard in the grid when a header button redraws it', () => {
   expect(document.activeElement).toBe(mute);
   mute.click();
   expect(document.activeElement).toBe(parent); // the button was replaced; the cursor did not go with it
+});
+
+it('holds a note for as long as its key is down: not again when the key repeats, and until it comes up or the window loses focus', () => {
+  const { grid, parent, audition } = setup(undefined, () => 'tone');
+  const release = vi.fn(); grid.releaseHeld = release;
+  const down = (key: string, code: string, repeat = false) => parent.dispatchEvent(new KeyboardEvent('keydown', { key, code, repeat, bubbles: true, cancelable: true }));
+  const up = (code: string) => document.dispatchEvent(new KeyboardEvent('keyup', { code, bubbles: true }));
+  down('z', 'KeyZ'); expect(audition).toHaveBeenCalledOnce(); expect(audition).toHaveBeenLastCalledWith('tone', 'C-4', 0, { hold: 2096 });
+  down('z', 'KeyZ', true); down('z', 'KeyZ', true); expect(audition).toHaveBeenCalledOnce(); expect(release).not.toHaveBeenCalled();
+  down('x', 'KeyX'); expect(audition).toHaveBeenLastCalledWith('tone', 'D-4', 0, { hold: 2098 }); // a chord: each key is held on its own
+  up('KeyZ'); expect(release).toHaveBeenCalledOnce(); expect(release).toHaveBeenLastCalledWith(2096);
+  up('KeyZ'); expect(release).toHaveBeenCalledOnce(); // a key that is not held releases nothing
+  window.dispatchEvent(new Event('blur')); expect(release).toHaveBeenLastCalledWith(2098); expect(release).toHaveBeenCalledTimes(2);
+});
+
+it('holds a note started from outside the grid too, and an entered note in record mode', () => {
+  const { grid, audition, key } = setup(undefined, () => 'tone');
+  const release = vi.fn(); grid.releaseHeld = release;
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', code: 'KeyZ', bubbles: true, cancelable: true }));
+  grid.auditionKey(new KeyboardEvent('keydown', { key: 'x', code: 'KeyX', cancelable: true }));
+  expect(audition).toHaveBeenLastCalledWith('tone', 'D-4', 0, { hold: 2098 });
+  document.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyX' })); expect(release).toHaveBeenLastCalledWith(2098);
+  grid.setRecording(true); audition.mockClear(); key('s', { code: 'KeyS' }); expect(audition).toHaveBeenLastCalledWith('tone', 'C#4', 0, { hold: 2097 });
+  document.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyS' })); expect(release).toHaveBeenLastCalledWith(2097);
 });

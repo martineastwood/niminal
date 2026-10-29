@@ -102,6 +102,24 @@ pub fn import_kit(dir: &Path, sources: &[PathBuf], name: &str) -> Result<(String
     Ok((format!("samples/{folder}"), filenames.into_iter().map(|(_, member)| member).collect()))
 }
 
+/// Every audio file under the project's `samples` folder, as paths relative to the project folder, in name order.
+pub fn list_samples(dir: &Path) -> Vec<String> {
+    fn walk(base: &Path, folder: &Path, found: &mut Vec<String>) {
+        let Ok(entries) = fs::read_dir(folder) else { return };
+        for path in entries.flatten().map(|e| e.path()) {
+            if path.is_dir() {
+                walk(base, &path, found);
+            } else if let (true, Ok(relative)) = (niminal_lang::is_audio(&path), path.strip_prefix(base)) {
+                found.push(relative.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(dir, &dir.join("samples"), &mut found);
+    found.sort();
+    found
+}
+
 /// Copies every file in `from` into `to`, replacing files of the same name.
 pub fn copy_samples(from: &Path, to: &Path) -> Result<(), String> {
     let Ok(entries) = fs::read_dir(from) else {
@@ -174,6 +192,7 @@ mod tests {
         assert_eq!(import_kit(&dir, std::slice::from_ref(&original), "My kit!").unwrap().0, "samples/My_kit__2");
         assert!(import_kit(&dir, &[base.join("notes.txt")], "x").is_err() && import_kit(&dir, &[], "x").is_err());
         assert_eq!(member_name("808 kick"), "s808_kick");
+        assert_eq!(list_samples(&dir), ["samples/Kick_Drum_-2.wav", "samples/Kick_Drum_.wav", "samples/My_kit_/Kick_Drum_.wav", "samples/My_kit_/Kick_Drum__2.wav", "samples/My_kit_/snare.wav", "samples/My_kit__2/Kick_Drum_.wav"]);
 
         let package = base.join("package");
         copy_samples(&dir.join("samples"), &package.join("samples")).unwrap();

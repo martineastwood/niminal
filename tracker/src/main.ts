@@ -4,16 +4,18 @@ import { mountMidi, type MidiMessage } from './midi';
 import { ProjectHistory } from './history';
 import { patternTiming, validTiming, type Project } from './project';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { editorState, connectLanguageServer } from './editor';
 import type { BrowserItem } from './browser';
 import { ProjectPanel, neighbour } from './projectpanel';
-import { openMenu } from './menu';
+import { openMenu, type MenuEntry } from './menu';
 import { openPalette, openShortcuts, type Command } from './palette';
 import { shortcutSections } from './shortcuts';
 import { loadView, saveView, applyView, stepScale, clampFont, dragWidth, defaultView, type ViewPrefs } from './view';
 import { SamplePanel } from './waveform';
 import { pieceKey } from './slices';
-import { SoundBrowser, type SoundKind, type ManageOp } from './soundbrowser';
+import { SoundBrowser, type SoundKind, type SoundBrowserActions, type SamplePeaks } from './soundbrowser';
+import type { Dragged } from './drag';
 import { instrumentPresets, effectPresets, type Preset } from './library';
 import { emptyProject, columnCount, emptyFxLane, blankColumn, type Device, readProject, storageKey, maxReturns, resizePattern, removeTrack, restoreTrack, duplicateTrack, trackSource, type Definition, type Song, type DeletedTrack } from './project';
 import { Arrangement } from './arrangement';
@@ -24,7 +26,8 @@ import { addDevice, removeDevice, moveDevice, commandsFor, newEffect, duplicateE
 import { MixPanel } from './mix';
 import { drawScope } from './scope';
 import { renameDefinition, freeCodeName, slug } from './naming';
-import { presetSource, addInstrument, addInstrumentFromPreset, duplicateInstrument, instrumentUsers, removeInstrument, sliceInstrument, sampleFile, maxSlices, addKit } from './instruments';
+import { presetSource, addInstrument, addInstrumentFromPreset, duplicateInstrument, instrumentUsers, removeInstrument, sliceInstrument, sampleFile, maxSlices, addKit, samplerSource, withSample } from './instruments';
+import { readPlayback, playbackNames, playbackHints } from './playback';
 import { audioCommand, audioStatus, observeAudio } from './audio';
 import './style.css';
 
@@ -142,6 +145,7 @@ function refreshProjectDir() {
     projectDir = dir;
     // Documents opened before the folder was known have the wrong address; reopen them.
     states.clear(); if (editor) editor.setState(documentState(selected));
+    void refreshSamples();
   }, error => status(`Project folder unavailable: ${error}`)) : Promise.resolve();
 }
 /** An effect opened from the library to edit its code, apart from any track's chain. */
@@ -326,15 +330,16 @@ async function audition(id: string, note: string, track: number, ms = 300, expre
 /** Slots in the engine for what the sound browser is playing; they are not part of the project. */
 const previewInstrument = 'preview_instr', previewEffect = 'preview_fx';
 let previewingEffect = false;
-/** Plays a ready-made instrument on the selected track, without adding it to the project. */
-async function previewPreset(preset: Preset) {
+/** Plays instrument code on the selected track, without adding it to the project. */
+async function previewSource(source: string, note = 'C-3', ms = 700) {
   const track = noteTrack();
   await projectDirReady;
   await ensureAssignments();
-  await audioCommand({ op: 'apply', id: previewInstrument, source: presetSource(preset, 'browser_preview'), kind: 'instr', dir: projectDir });
+  await audioCommand({ op: 'apply', id: previewInstrument, source, kind: 'instr', dir: projectDir });
   await audioCommand({ op: 'update', song: song() });
-  await audioCommand({ op: 'audition', instrument: previewInstrument, note: 'C-3', track, ms: 700 });
+  await audioCommand({ op: 'audition', instrument: previewInstrument, note, track, ms });
 }
+const previewPreset = (preset: Preset) => previewSource(presetSource(preset, 'browser_preview'));
 /** Hears a ready-made effect on the selected track: added to its chain for as long as the browser is previewing, with a note played through it unless the song is playing. */
 async function previewEffectPreset(preset: { source: string }) {
   const track = noteTrack(), instrument = currentInstrument;
@@ -362,7 +367,10 @@ const arrangement = new Arrangement(element('sequence'), () => project, manual =
   grid.render(); deviceTrack = activeStrip(); mixerView(); patternControls();
 }, editedPattern);
 const grid = new PatternGrid(element('grid'), () => project, () => arrangement.pattern, () => Number(element<HTMLInputElement>('octave').value), () => { editedPattern(); mixerView(); },
-  (id, note, track, expression) => { if (audioStatus.connected) void action(() => audition(id, note, track, 300, expression)); },
+  (id, note, track, expression) => {
+    if (!audioStatus.connected) return;
+    if (expression?.hold !== undefined) holdNote(expression.hold, id, note, track); else void action(() => audition(id, note, track, 300, expression));
+  },
   () => { void action(() => togglePlay()); },
   column => { const strip = columnToStrip(project, column); if (deviceTrack !== strip) { deviceTrack = strip; followTrack(); } },
   () => Number(element<HTMLInputElement>('entry-step').value), status, action => {
@@ -381,6 +389,17 @@ let midiPending = Promise.resolve();
 let midiRevision = 0;
 const midiKeys = new Set<number>();
 function midiAction(work: () => Promise<unknown>) { midiPending = midiPending.then(() => action(work)); }
+/** A note of the computer keyboard sounds until its key comes up, in order with the MIDI keys it shares the engine's held notes with. */
+function holdNote(key: number, instrument: string, note: string, track: number) {
+  const revision = midiRevision;
+  midiAction(async () => {
+    if (!audioStatus.connected || revision !== midiRevision) return;
+    await ensureSound(instrument); await ensureAssignments();
+    if (revision !== midiRevision) return;
+    await audioCommand({ op: 'update', song: song() });
+    await audioCommand({ op: 'midi_on', key, instrument, note, track, velocity: 127 });
+  });
+}
 function receiveMidi(message: MidiMessage) {
   if (message.kind === 'on') {
     const target = grid.midiNoteOn(message.note, message.velocity);
@@ -407,6 +426,7 @@ function receiveMidi(message: MidiMessage) {
     }
   }
 }
+grid.releaseHeld = key => midiAction(async () => { if (audioStatus.connected) await audioCommand({ op: 'midi_off', key }); });
 void mountMidi(element('midi-controls'), receiveMidi, status).catch(error => status(`MIDI: ${error}`));
 const presetItem = (p: Preset): BrowserItem => ({ value: p.id, name: p.name, folder: p.folder, description: p.description });
 /** Loads a ready-made instrument into an existing slot: its name and code are replaced, and the slot keeps its number. */
@@ -448,59 +468,117 @@ function addEffectToStrip(choice: string) {
   chosenDevice.set(deviceTrack, added.device.id); showFx(); editedPattern(); grid.render();
   if (audioStatus.connected) void action(() => ensureSound(added.definition.id));
 }
-/** What the browser lists: the project's own effects first, then the ready-made sounds. The project's instruments have their own panel. */
-function browserItems(kind: SoundKind): BrowserItem[] {
-  const own = kind === 'instr' ? [] : project.definitions.filter(d => d.kind === 'fx').map(definition => {
-    const users = effectUsers(project, definition.id).length;
-    return { value: `project:${definition.id}`, name: definition.name, folder: 'Project', description: 'An effect of this project', note: users ? `×${users}` : undefined };
-  });
-  return [...own, ...(kind === 'instr' ? instrumentPresets : effectPresets).map(presetItem)];
+/** The project's samples (paths relative to its folder), as the Samples tab lists them. */
+let samples: string[] = [];
+async function refreshSamples() {
+  if (!isTauri()) return;
+  try { samples = await invoke<string[]>('list_samples', { id: project.id }); } catch { samples = []; }
+  soundBrowser.refresh();
 }
-/** The project's own definition behind an item of the Project folder. */
-const ownDefinition = (item: BrowserItem) => item.value.startsWith('project:') ? project.definitions.find(d => d.id === item.value.slice(8)) : undefined;
-const soundBrowser = new SoundBrowser(element('sound-browser'), browserItems, {
+/** What each sample looks like and how long it plays, read once. */
+const looks = new Map<string, Promise<SamplePeaks | null>>();
+function samplePeaks(file: string): Promise<SamplePeaks | null> {
+  const key = `${project.id}/${file}`;
+  if (!looks.has(key)) {
+    looks.set(key, !isTauri() ? Promise.resolve(null) : invoke<{ frames: number; rate: number; peaks: number[] }>('sample_peaks', { id: project.id, file, buckets: 160 })
+      .then(({ frames, rate, peaks }) => ({ peaks, seconds: frames / rate }), () => null));
+  }
+  return looks.get(key)!;
+}
+/** What the browser lists: the library only. The project's own instruments have their panel above, and its effects are on the tracks. The samples are the project's own, since that is the pool to choose them from: loose ones at the top, kits as folders. */
+function browserItems(kind: SoundKind): BrowserItem[] {
+  if (kind === 'sample') return samples.map(file => {
+    const parts = file.replace(/^samples\//, '').split('/'), name = parts.pop()!.replace(/\.[^.]+$/, '');
+    return { value: `sample:${file}`, name, folder: parts.join('/'), description: file };
+  });
+  return (kind === 'instr' ? instrumentPresets : effectPresets).map(presetItem);
+}
+const sampleOf = (item: { value: string }) => item.value.slice('sample:'.length);
+/** Makes a sampler for a sample of the project. */
+async function newSampler(file: string) {
+  newInstrument(file, (await samplePeaks(file))?.seconds ?? 0);
+}
+/** Puts a sample in a slot: a sampler plays it instead of its old one, any other instrument becomes a sampler of it. */
+async function loadSampleIntoSlot(definition: Definition, file: string) {
+  const seconds = (await samplePeaks(file))?.seconds ?? 0, swapped = withSample(definition.source, file);
+  if (!swapped) definition.name = file.split('/').pop()!.replace(/\.[^.]+$/, '');
+  setDefinitionSource(definition, swapped ?? samplerSource(freeCodeName(project, slug(definition.name), definition), file, seconds));
+  delete definition.values;
+  renderDefinitions(); grid.render(); mixerView(); save();
+  applyNewInstrument(definition);
+}
+const browserActions: SoundBrowserActions = {
   audition: (kind, item) => {
-    const own = ownDefinition(item), preset = own ? undefined : (kind === 'instr' ? instrumentPresets : effectPresets).find(p => p.id === item.value)!;
-    // landing on an instrument of the project chooses it: its code shows, and the notes entered next use it
-    if (own && kind === 'instr') selectDefinition(own, false);
     if (!audioStatus.connected) return;
-    if (kind === 'instr') void action(() => own ? audition(own.id, 'C-3', noteTrack(), 700) : previewPreset(preset!));
-    else void action(() => previewEffectPreset(own ?? preset!));
+    if (kind === 'sample') { void action(() => previewSource(samplerSource('browser_preview', sampleOf(item)), 'C-4', 2000)); return; }
+    const preset = (kind === 'instr' ? instrumentPresets : effectPresets).find(p => p.id === item.value)!;
+    if (kind === 'instr') void action(() => previewPreset(preset)); else void action(() => previewEffectPreset(preset));
   },
   pick: (kind, item, replace) => {
-    const own = ownDefinition(item);
     void action(endPreview).then(() => {
-      if (kind === 'fx') { addEffectToStrip(own ? `fx:${own.id}` : item.value); return; }
+      if (kind === 'fx') { addEffectToStrip(item.value); return; }
       // an instrument becomes the current one, and the cursor goes back to the grid to enter notes with it
-      const preset = own ? undefined : instrumentPresets.find(p => p.id === item.value)!, slot = project.definitions.find(d => d.id === currentInstrument);
-      if (own) selectDefinition(own, false);
-      else if (replace && slot) loadPresetIntoSlot(slot, preset!);
-      else useInstrumentPreset(preset!);
+      const slot = project.definitions.find(d => d.id === currentInstrument);
+      if (kind === 'sample') { if (replace && slot) void loadSampleIntoSlot(slot, sampleOf(item)); else void newSampler(sampleOf(item)); element('grid').focus(); return; }
+      const preset = instrumentPresets.find(p => p.id === item.value)!;
+      if (replace && slot) loadPresetIntoSlot(slot, preset);
+      else useInstrumentPreset(preset);
       element('grid').focus();
     });
   },
-  manage: manageSound,
+  menu: (kind, item, anchor) => {
+    const replacing = project.definitions.find(d => d.id === currentInstrument)?.name ?? 'the current instrument';
+    const use = (replace: boolean) => () => browserActions.pick(kind, item, replace);
+    openMenu(anchor, kind === 'fx' ? [{ text: 'Add to the selected track', run: use(false) }]
+      : [{ text: kind === 'sample' ? 'New sampler' : 'Add as a new instrument', run: use(false) }, { text: `Put in "${replacing}"`, run: use(true) }]);
+  },
+  manage: op => { if (op === 'new') newLibraryEffect(); else if (op === 'kit') void importKit(); else void importSamples(); },
+  peaks: item => item.value.startsWith('sample:') ? samplePeaks(sampleOf(item)) : Promise.resolve(null),
   leave: () => { void action(endPreview); },
-}, () => element('grid').focus());
+};
+const soundBrowser = new SoundBrowser(element('sound-browser'), browserItems, browserActions, () => element('grid').focus());
 const projectInstruments = () => project.definitions.filter(d => d.kind === 'instr');
 /** Makes an instrument the current one and shows its code. */
 function chooseInstrument(definition: Definition) {
   selectDefinition(definition, false);
 }
+/** Asks whether a cut instrument may play its whole sample as one, which drops its pieces and makes the notes written for them play the whole sample. */
+const askToPlayAsOne = (definition: Definition) => isTauri()
+  ? invoke<boolean>('confirm', { message: `Play "${definition.name}" as one sample? Its pieces go, and notes written for them (C-4, C#4, …) will each play the whole sample from its start.` })
+  : Promise.resolve(true);
+/** What can be done to an instrument or effect of the project. */
+function definitionMenu(definition: Definition): MenuEntry[] {
+  const library = definition.kind === 'fx';
+  return [
+    { text: 'Edit code', run: () => { selectDefinition(definition, true, library); editor.focus(); } },
+    { text: 'Duplicate', run: () => duplicateSound(definition) },
+    { text: 'Delete', run: () => deleteSound(definition) },
+  ];
+}
 const projectPanel = new ProjectPanel(element('project-panel'),
-  () => projectInstruments().map(d => { const users = instrumentUsers(project, d.id).length; return { id: d.id, name: d.name, note: users ? `×${users}` : undefined }; }),
+  () => projectInstruments().map(d => { const users = instrumentUsers(project, d.id).length; const how = readPlayback(d.source); return { id: d.id, name: d.name, note: users ? `×${users}` : undefined, tag: how ? { text: playbackNames[how].toLowerCase(), title: playbackHints[how] } : undefined }; }),
   () => currentInstrument, {
     choose: id => { const definition = project.definitions.find(d => d.id === id); if (definition) chooseInstrument(definition); },
     edit: id => { const definition = project.definitions.find(d => d.id === id); if (definition) { selectDefinition(definition); editor.focus(); } },
-    manage: op => manageSound(op, 'instr', { value: `project:${currentInstrument}`, name: '', folder: '' }),
-    kit: () => void importKit(),
-    slice: anchor => openMenu(anchor, [
-      { heading: 'Cut into equal pieces' }, ...[4, 8, 16, 32].map(count => ({ text: `${count} pieces`, run: () => sliceCurrent(count) })),
-      { number: 'Pieces', value: 12, min: 2, max: maxSlices, run: count => sliceCurrent(count) },
-      { heading: 'Cut at the hits' }, { text: 'At transients', run: () => void sliceAtTransients() },
+    add: anchor => openMenu(anchor, [
+      { text: 'Blank instrument', run: () => newInstrument() },
+      { text: 'Sampler from audio files…', run: () => void importSamples() },
+      { text: 'Kit from audio files…', run: () => void importKit() },
+      { text: 'Browse the instrument library', run: () => toggleBrowser('instr') },
     ]),
+    menu: (id, anchor) => { const definition = project.definitions.find(d => d.id === id); if (definition) openMenu(anchor, definitionMenu(definition)); },
+    remove: id => { const definition = project.definitions.find(d => d.id === id); if (definition) deleteSound(definition); },
+    drop: (item, id) => dropOnSlot(item, id),
     leave: () => element('grid').focus(),
   });
+/** A row of the browser dropped on an instrument of the project (which it replaces) or on the empty space of the list (which adds it). */
+function dropOnSlot(item: Dragged, id: string | null) {
+  const slot = id ? project.definitions.find(d => d.id === id) : undefined;
+  if (item.kind === 'sample') { const file = sampleOf(item); if (slot) { selectDefinition(slot, false); void loadSampleIntoSlot(slot, file); } else void newSampler(file); return; }
+  const preset = instrumentPresets.find(p => p.id === item.value);
+  if (!preset) return;
+  if (slot) { selectDefinition(slot, false); loadPresetIntoSlot(slot, preset); } else useInstrumentPreset(preset);
+}
 /** Puts new code in an instrument, in the editor if it is the one open, and applies it so the change is heard. */
 function setDefinitionSource(definition: Definition, source: string) {
   if (shown[definition.kind] === definition) replaceSource(definition, source);
@@ -511,7 +589,10 @@ const samplePanel = new SamplePanel(element('sample'), {
   loadPeaks: file => invoke('sample_peaks', { id: project.id, file, buckets: 2000 }),
   edit: (definition, source) => { setDefinitionSource(definition, source); if (audioStatus.connected) void action(() => applyDefinition(definition)); },
   hear: (definition, piece) => { if (audioStatus.connected) void action(() => audition(definition.id, pieceKey(piece), noteTrack())); },
-  detect: (file, max = maxSlices) => invoke('detect_slices', { id: project.id, file, max }),
+  detect: (file, max = maxSlices, sensitivity = 0.5) => invoke('detect_slices', { id: project.id, file, max, sensitivity }),
+  cut: (_, pieces) => sliceCurrent(pieces),
+  tempo: () => Number(element<HTMLInputElement>('bpm').value) || 120,
+  uncut: definition => askToPlayAsOne(definition),
 });
 let sampleTimer = 0;
 /** Draws the Sample tab again shortly after the instrument or its code changes, if it is showing. */
@@ -524,20 +605,10 @@ function sampleChanged() {
 function sliceCurrent(pieces: number | number[]) {
   const source = project.definitions.find(d => d.id === currentInstrument);
   const definition = source && sliceInstrument(project, source, pieces);
-  if (!definition) { status(`Choose a sampler first: the scissors cut the sample an instrument plays, into 2 to ${maxSlices} pieces`); return; }
-  selectDefinition(definition); editor.focus(); grid.render(); mixerView(); save();
+  if (!definition) { status(`Choose a sampler first: cutting needs an instrument that plays a sample, into 2 to ${maxSlices} pieces`); return; }
+  selectDefinition(definition, false); grid.render(); mixerView(); save();
   applyNewInstrument(definition);
   status(`${definition.name}: C-4 plays the first of ${typeof pieces === 'number' ? pieces : pieces.length} pieces`);
-}
-/** Cuts the current sampler where its hits begin. */
-async function sliceAtTransients() {
-  const source = project.definitions.find(d => d.id === currentInstrument), file = source && sampleFile(source);
-  if (!file) { status('Choose a sampler first: the scissors cut the sample an instrument plays'); return; }
-  if (!isTauri()) { status('Finding hits needs the desktop app'); return; }
-  try {
-    const places = await invoke<number[]>('detect_slices', { id: project.id, file, max: maxSlices });
-    if (places.length < 2) status('No separate hits found in that sample; cut it into equal pieces instead'); else sliceCurrent(places);
-  } catch (error) { status(`Could not read the sample: ${error}`); }
 }
 /** Option+Up and Option+Down: the previous or next instrument of the project, from anywhere but a text box. */
 function stepInstrument(delta: number) {
@@ -633,19 +704,35 @@ window.addEventListener('keydown', event => {
   // the cursor goes back to the grid, once a popup that took the Escape has put focus back on its button; the code editor keeps its own
   if (!(event.target as HTMLElement).closest?.('.cm-editor')) setTimeout(() => element('grid').focus());
 }, true);
-// As in Renoise, whatever you click leaves the cursor in the grid: a button of the toolbar, sequence or footer, or a choice made in one of their menus,
-// unless it took focus somewhere on purpose (a text box, the code editor, a panel). These look at the target before its own handler can redraw it.
+// As in Renoise, whatever you click or choose leaves the cursor in the grid, so the keys sound notes and enter them at once: a button, a tick box or
+// slider, a choice made in a drop-down, and Enter in a text or number box. Not where the keyboard is wanted: the code editor and its bar, the grid's own
+// cell editor, the sound browser's search, and pop-ups (menus, the palette). These look at the target before its own handler can redraw it.
+const keepsKeys = '.cm-editor, .modal-backdrop, .palette, .menu, .browser, #grid, #sound-browser';
 const keepInGrid = (target: Element) => setTimeout(() => { const active = document.activeElement; if (!active || active === document.body || active === target) element('grid').focus(); });
 document.addEventListener('click', event => {
-  const button = (event.target as HTMLElement).closest?.('#toolbar button, #sequencer button, footer button');
-  if (button) keepInGrid(button);
+  const target = event.target as HTMLElement;
+  const control = target.closest?.('button, input[type=checkbox]');
+  if (control && !control.closest(`${keepsKeys}, .code-bar`)) keepInGrid(control);
 }, true);
-let pickedSelect: Element | null = null;
-document.addEventListener('pointerdown', event => { const target = event.target as HTMLElement; pickedSelect = target instanceof HTMLSelectElement ? target : target.closest?.('select') ?? null; }, true);
+let pickedSelect: Element | null = null, slid: Element | null = null, lastKey = '';
+document.addEventListener('pointerdown', event => {
+  const target = event.target as HTMLElement;
+  pickedSelect = target instanceof HTMLSelectElement ? target : target.closest?.('select') ?? null;
+  slid = target instanceof HTMLInputElement && target.type === 'range' ? target : null;
+}, true);
+document.addEventListener('pointerup', () => { if (slid && !slid.closest(keepsKeys)) keepInGrid(slid); slid = null; }, true);
+// a choice, as opposed to arrowing through the options of a closed drop-down, which also fires change: picked with the pointer, or confirmed with Enter or Space
+document.addEventListener('keydown', event => { lastKey = event.key; }, true);
 document.addEventListener('change', event => {
   const select = event.target;
-  if (select instanceof HTMLSelectElement && select === pickedSelect && select.closest('#toolbar, #sequencer')) keepInGrid(select);
+  if (select instanceof HTMLSelectElement && !select.closest(keepsKeys) && (select === pickedSelect || lastKey === 'Enter' || lastKey === ' ')) keepInGrid(select);
   pickedSelect = null;
+}, true);
+// Enter in a text or number box commits it (as leaving it does) and gives the keyboard back
+document.addEventListener('keydown', event => {
+  const box = event.target;
+  if (event.key !== 'Enter' || !(box instanceof HTMLInputElement) || !['text', 'number', 'search', 'password'].includes(box.type) || box.closest(keepsKeys)) return;
+  setTimeout(() => { if (document.activeElement === box) { box.blur(); element('grid').focus(); } });
 }, true);
 grid.projectUndo = undoProject;
 element('undo').onclick = () => undoProject();
@@ -764,42 +851,56 @@ function newInstrument(sample?: string, seconds = 0) {
   applyNewInstrument(definition);
   return definition;
 }
+/** Adds samplers for copied-in audio files, and lists them in the browser. */
+function addImported(files: { file: string; seconds: number }[]) {
+  for (const { file, seconds } of files) newInstrument(file, seconds);
+  if (files.length) status(`Added ${files.length} sampler${files.length > 1 ? 's' : ''}`);
+  void refreshSamples();
+}
+/** Adds an instrument that plays a copied-in kit folder, and lists its samples in the browser. */
+function addImportedKit(kit: { folder: string; members: string[] } | null) {
+  void refreshSamples();
+  if (!kit) return;
+  const definition = addKit(project, kit.folder, kit.members);
+  if (!definition) { status(`A kit holds 1 to ${maxSlices} samples, one on each key from C-4`); return; }
+  selectDefinition(definition); editor.focus(); grid.render(); mixerView(); save();
+  applyNewInstrument(definition);
+  status(`${definition.name}: ${kit.members.length} samples, C-4 plays ${kit.members[0]}`);
+}
 async function importSamples() {
   if (!isTauri()) { status('Importing samples needs the desktop app'); return; }
-  try {
-    const files = await invoke<{ file: string; seconds: number }[]>('import_samples', { id: project.id });
-    for (const { file, seconds } of files) newInstrument(file, seconds);
-    if (files.length) status(`Added ${files.length} sampler${files.length > 1 ? 's' : ''}`);
-  } catch (error) { status(`Could not import samples: ${error}`); }
+  try { addImported(await invoke<{ file: string; seconds: number }[]>('import_samples', { id: project.id })); }
+  catch (error) { status(`Could not import samples: ${error}`); }
 }
 /** Several audio files as one instrument with a sample on each key from C-4. */
 async function importKit() {
   if (!isTauri()) { status('Importing samples needs the desktop app'); return; }
-  try {
-    const kit = await invoke<{ folder: string; members: string[] } | null>('import_kit', { id: project.id });
-    if (!kit) return;
-    const definition = addKit(project, kit.folder, kit.members);
-    if (!definition) { status(`A kit holds 1 to ${maxSlices} samples, one on each key from C-4`); return; }
-    selectDefinition(definition); editor.focus(); grid.render(); mixerView(); save();
-    applyNewInstrument(definition);
-    status(`${definition.name}: ${kit.members.length} samples, C-4 plays ${kit.members[0]}`);
-  } catch (error) { status(`Could not import the kit: ${error}`); }
+  try { addImportedKit(await invoke<{ folder: string; members: string[] } | null>('import_kit', { id: project.id })); }
+  catch (error) { status(`Could not import the kit: ${error}`); }
 }
-/** The buttons under the browser's list: new, import, and what can be done to a sound of this project. */
-function manageSound(op: ManageOp, kind: SoundKind, item: BrowserItem | null) {
-  if (op === 'new') { if (kind === 'instr') newInstrument(); else newLibraryEffect(); return; }
-  if (op === 'import') { void importSamples(); return; }
-  const definition = item?.value.startsWith('project:') ? project.definitions.find(d => d.id === item.value.slice(8)) : undefined;
-  if (!definition) { status('Select one of this project\'s own sounds, in the Project folder'); return; }
-  const library = kind === 'fx';
-  if (op === 'edit') { selectDefinition(definition, true, library); editor.focus(); return; }
-  if (op === 'duplicate') {
-    const copy = library ? duplicateEffect(project, definition) : duplicateInstrument(project, definition);
-    selectDefinition(copy, true, library); editor.focus(); save();
-    if (!library) applyNewInstrument(copy);
-    return;
-  }
-  const problem = library ? removeEffect(project, definition.id) : removeInstrument(project, definition.id);
+/** Audio files dropped on the window from outside: one is a sampler, several are asked about. */
+async function importDropped(paths: string[]) {
+  try {
+    if (paths.length === 1) { addImported(await invoke<{ file: string; seconds: number }[]>('import_dropped', { id: project.id, paths })); return; }
+    openMenu(element('right-bar'), [
+      { text: `${paths.length} samplers, one for each file`, run: () => void invoke<{ file: string; seconds: number }[]>('import_dropped', { id: project.id, paths }).then(addImported, error => status(`Could not import samples: ${error}`)) },
+      { text: 'One kit, a sample on each key', run: () => void invoke<{ folder: string; members: string[] } | null>('import_dropped_kit', { id: project.id, paths }).then(addImportedKit, error => status(`Could not import the kit: ${error}`)) },
+    ]);
+  } catch (error) { status(`Could not import samples: ${error}`); }
+}
+if (isTauri()) void getCurrentWebview().onDragDropEvent(event => {
+  const bar = element('right-bar'), kind = event.payload.type;
+  bar.classList.toggle('file-drop', kind === 'enter' || kind === 'over');
+  if (kind === 'drop' && event.payload.paths.length) void importDropped(event.payload.paths);
+});
+function duplicateSound(definition: Definition) {
+  const library = definition.kind === 'fx';
+  const copy = library ? duplicateEffect(project, definition) : duplicateInstrument(project, definition);
+  selectDefinition(copy, true, library); editor.focus(); save();
+  if (!library) applyNewInstrument(copy);
+}
+function deleteSound(definition: Definition) {
+  const problem = definition.kind === 'fx' ? removeEffect(project, definition.id) : removeInstrument(project, definition.id);
   if (problem) { status(problem); return; }
   states.delete(definition.id);
   selectDefinition(project.definitions.find(d => d.kind === 'instr')!, false); grid.render(); save();

@@ -9,11 +9,12 @@ const instruments: BrowserItem[] = [
   { value: 'bass', name: 'Bass', folder: 'synths', description: 'A round bass' },
 ];
 const effects: BrowserItem[] = [{ value: 'echo', name: 'Echo', folder: 'time/delay', description: 'An echo' }];
+const samples: BrowserItem[] = [{ value: 'sample:samples/kick.wav', name: 'kick', folder: '' }, { value: 'sample:samples/kit/hat.wav', name: 'hat', folder: 'kit' }];
 
 function setup() {
   const root = document.createElement('section'); document.body.append(root);
-  const actions = { audition: vi.fn(), pick: vi.fn(), manage: vi.fn(), leave: vi.fn() }, focusGrid = vi.fn();
-  const browser = new SoundBrowser(root, kind => kind === 'instr' ? instruments : effects, actions, focusGrid);
+  const actions = { audition: vi.fn(), pick: vi.fn(), menu: vi.fn(), manage: vi.fn(), peaks: vi.fn(() => Promise.resolve(null)), leave: vi.fn() }, focusGrid = vi.fn();
+  const browser = new SoundBrowser(root, kind => kind === 'instr' ? instruments : kind === 'sample' ? samples : effects, actions, focusGrid);
   const key = (name: string, target: Element = root.querySelector('input')!) => target.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true }));
   return { root, actions, focusGrid, browser, key };
 }
@@ -26,7 +27,7 @@ function openAll(root: HTMLElement, browser: SoundBrowser) {
   }
   browser.show('instr', false); // clicking put the cursor on a folder; this puts it back at the top and keeps them open
 }
-beforeEach(() => { vi.useFakeTimers(); });
+beforeEach(() => { vi.useFakeTimers(); localStorage.clear(); });
 afterEach(() => { vi.useRealTimers(); document.body.replaceChildren(); });
 
 it('starts with its folders closed, and opens and closes one with Enter or the right and left arrows', () => {
@@ -90,14 +91,14 @@ it('stops previewing and gives the grid focus on Escape', () => {
 
 it('lists what the project gives it again when asked, keeping the selection, and shows a note at the end of a row', () => {
   const root = document.createElement('section'); document.body.append(root);
-  let list: BrowserItem[] = [{ value: 'project:a', name: '00  Lead', folder: 'Project', note: '×2' }, { value: 'project:b', name: '01  Pad', folder: 'Project' }];
-  const actions = { audition: vi.fn(), pick: vi.fn(), manage: vi.fn(), leave: vi.fn() };
+  let list: BrowserItem[] = [{ value: 'a', name: '00  Lead', folder: '', note: '×2' }, { value: 'b', name: '01  Pad', folder: '' }];
+  const actions = { audition: vi.fn(), pick: vi.fn(), menu: vi.fn(), manage: vi.fn(), peaks: vi.fn(() => Promise.resolve(null)), leave: vi.fn() };
   const browser = new SoundBrowser(root, () => list, actions, vi.fn());
   const input = root.querySelector('input')!;
-  for (let i = 0; i < 3; i++) input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })); // Project (open already), Lead, Pad
+  for (let i = 0; i < 2; i++) input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })); // Lead, Pad
   expect(root.querySelector('.sb-item[aria-selected=true]')!.textContent).toBe('01  Pad');
   expect(root.querySelector('.sb-item .browser-path')!.textContent).toBe('×2');
-  list = [{ value: 'project:b', name: '00  Pad', folder: 'Project' }];
+  list = [{ value: 'b', name: '00  Pad', folder: '' }];
   browser.refresh();
   expect(root.querySelector('.sb-item[aria-selected=true]')!.textContent).toBe('00  Pad');
   list = [];
@@ -105,16 +106,47 @@ it('lists what the project gives it again when asked, keeping the selection, and
   expect(root.querySelector('.sb-item[aria-selected=true]')).toBeNull();
 });
 
-it('has no buttons under the instruments, which have a panel of their own, and passes the effects buttons on with the selected item', () => {
-  const { root, actions, key, browser } = setup();
-  const button = (title: string) => root.querySelector<HTMLButtonElement>(`.sb-tools [aria-label="${title}"]`)!;
-  expect(root.querySelector<HTMLElement>('.sb-tools')!.hidden).toBe(true);
-  expect(root.querySelector('.sb-tools [aria-label="New sampler from WAV files"]')).toBeNull();
-  browser.show('fx', false); expect(root.querySelector<HTMLElement>('.sb-tools')!.hidden).toBe(false);
-  button('New blank sound').click(); expect(actions.manage).toHaveBeenLastCalledWith('new', 'fx', null);
-  openAll(root, browser); browser.show('fx', false);
-  for (let i = 0; i < 3; i++) key('ArrowDown'); // time, delay, Echo
-  button('Edit the code of the selected sound of this project').click();
-  expect(actions.manage).toHaveBeenLastCalledWith('edit', 'fx', effects[0]);
+it('has footer buttons that belong to the tab: none for instruments, import for samples, new for effects', () => {
+  const { root, actions, browser } = setup();
+  const tools = root.querySelector<HTMLElement>('.sb-tools')!, labels = () => [...tools.querySelectorAll('button')].map(b => b.textContent);
+  expect(tools.hidden).toBe(true);
+  browser.show('sample', false); expect(tools.hidden).toBe(false); expect(labels()).toEqual(['Import files…', 'Import as kit…']);
+  tools.querySelectorAll('button')[1].click(); expect(actions.manage).toHaveBeenLastCalledWith('kit', 'sample');
+  browser.show('fx', false); expect(labels()).toEqual(['+ New effect']);
+  tools.querySelector('button')!.click(); expect(actions.manage).toHaveBeenLastCalledWith('new', 'fx');
 });
 
+it('lists the samples of the project in their folders, and tells a project with none how to add them', () => {
+  const { root, browser } = setup();
+  browser.show('sample', false);
+  expect([...root.querySelectorAll('.sb-folder')].map(f => f.textContent)).toEqual(['▸ kit']); // no folder of the project's own: the loose samples are at the top
+  expect([...root.querySelectorAll('.sb-name')].map(n => n.textContent)).toEqual(['kick']);
+  expect(root.querySelector('.sb-thumb')).not.toBeNull();
+  const empty = document.createElement('section'); document.body.append(empty);
+  new SoundBrowser(empty, () => [], { audition: vi.fn(), pick: vi.fn(), menu: vi.fn(), manage: vi.fn(), peaks: vi.fn(), leave: vi.fn() }, vi.fn()).show('sample', false);
+  expect(empty.querySelector('.sb-none')!.textContent).toContain('drop audio files');
+});
+
+it('stars a row to list it under Favourites, and remembers it', () => {
+  const { root, browser } = setup();
+  openAll(root, browser);
+  const star = root.querySelector<HTMLButtonElement>('.sb-item .sb-star')!;
+  star.click();
+  expect([...root.querySelectorAll('.sb-folder')][0].textContent).toBe('▾ Favourites');
+  expect(root.querySelector('.sb-item')!.firstChild!.textContent).toBe('Kick'); // the first row of the Favourites folder
+  const again = document.createElement('section'); document.body.append(again);
+  new SoundBrowser(again, () => instruments, { audition: vi.fn(), pick: vi.fn(), menu: vi.fn(), manage: vi.fn(), peaks: vi.fn(), leave: vi.fn() }, vi.fn());
+  expect(again.querySelector('.sb-folder')!.textContent).toBe('▾ Favourites');
+  root.querySelector<HTMLButtonElement>('.sb-item .sb-star')!.click();
+  expect([...root.querySelectorAll('.sb-folder')].map(f => f.textContent)).not.toContain('▾ Favourites');
+});
+
+it('opens a menu for a row from its button or a right-click, selecting it first', () => {
+  const { root, actions, browser } = setup();
+  openAll(root, browser);
+  const more = root.querySelector<HTMLButtonElement>('.sb-item .sb-more')!;
+  more.click(); expect(actions.menu).toHaveBeenLastCalledWith('instr', instruments[0], more);
+  vi.advanceTimersByTime(10); expect(actions.audition).toHaveBeenCalledWith('instr', instruments[0]);
+  const row = root.querySelectorAll<HTMLElement>('.sb-item')[1];
+  row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); expect(actions.menu).toHaveBeenLastCalledWith('instr', instruments[1], row);
+});

@@ -1,5 +1,6 @@
 import { noteAt, type Definition, type Project } from './project';
 import type { Preset } from './library';
+import { guessPlayback, writePlayback } from './playback';
 import { codeNameOf, freeCodeName, renameInSource, slug, uniqueName } from './naming';
 
 const identifier = () => crypto.randomUUID().replaceAll('-', '_');
@@ -53,7 +54,7 @@ function create(project: Project, base: string, write: (code: string) => string)
 /** A new synth, or a sampler for an imported file (`seconds` long, if known). */
 export function addInstrument(project: Project, sample?: string, seconds = 0): Definition {
   const stem = sample?.split('/').pop()?.replace(/\.[^.]+$/, '');
-  return create(project, stem ?? 'Synth', code => sample ? samplerSource(code, sample, seconds) : synthSource(code));
+  return create(project, stem ?? 'Synth', code => sample ? writePlayback(samplerSource(code, sample, seconds), guessPlayback(stem ?? '', seconds, longSample)) : synthSource(code));
 }
 
 /** A new instrument that plays the samples of an imported kit folder, one key each from C-4, or null when there are none or too many. */
@@ -64,6 +65,12 @@ export function addKit(project: Project, folder: string, members: string[]): Def
 
 /** The file a sampler's code plays, or undefined when it plays none. */
 export const sampleFile = (source: Definition) => /\bsample\("([^"]+)"\)/.exec(source.source)?.[1];
+
+/** The code of a sampler with its sample changed to `file`, or null when `source` plays no sample. */
+export function withSample(source: string, file: string): string | null {
+  const old = /\bsample\("([^"]+)"\)/.exec(source)?.[1];
+  return old ? source.replaceAll(old, () => file) : null;
+}
 
 /** A new instrument that plays the sample of a sampler cut into `pieces` (a count, or the shares of its length where each starts), or null when `source` plays no sample. */
 export function sliceInstrument(project: Project, source: Definition, pieces: number | number[]): Definition | null {

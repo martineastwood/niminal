@@ -68,7 +68,7 @@ pub enum Command {
         #[serde(default)]
         stems: bool,
     },
-    /// A MIDI key owns one held preview, independent of pattern playback.
+    /// A MIDI key owns one held preview, independent of pattern playback. Keys 0 to 2047 are MIDI's, by channel and note; the computer keyboard's start at 2048.
     MidiOn { key: u16, instrument: String, note: String, track: usize, velocity: u8 },
     /// None releases all MIDI previews; a key releases only its own preview.
     MidiOff { key: Option<u16> },
@@ -608,7 +608,7 @@ impl Worker {
             }
             Command::Export { song, path, stems } => self.export(song, &path, stems)?,
             Command::MidiOn { key, instrument, note, track, velocity } => {
-                if key >= 2048 || track >= self.mixer.len() || !(1..=127).contains(&velocity) {
+                if key >= 4096 || track >= self.mixer.len() || !(1..=127).contains(&velocity) {
                     return Err("Invalid MIDI note, track or velocity".into());
                 }
                 self.release_midi(Some(key))?;

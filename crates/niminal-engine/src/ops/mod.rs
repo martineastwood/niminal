@@ -116,4 +116,4 @@ mod stream;
 pub use stream::{STREAM_PAGE, StreamCache, StreamOut};
 
 mod transients;
-pub use transients::detect_transients;
+pub use transients::{detect_transients, detect_transients_at};

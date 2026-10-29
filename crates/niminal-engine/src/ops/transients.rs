@@ -2,6 +2,15 @@
 
 /// Source frame positions, always including 0, separated by at least 60 ms.
 pub fn detect_transients(samples: &[f32], rate: f32, max: usize) -> Vec<usize> {
+    detect_transients_at(samples, rate, max, 0.5)
+}
+
+/// Like [`detect_transients`], with a `sensitivity` from 0 to 1: 0.5 is the usual, higher finds softer hits (and
+/// more of them), lower only the clearest.
+pub fn detect_transients_at(samples: &[f32], rate: f32, max: usize, sensitivity: f32) -> Vec<usize> {
+    let s = sensitivity.clamp(0.0, 1.0);
+    // how far a hit must jump above what came before it, and how loud it must be next to the loudest part
+    let (jump, floor) = if s < 0.5 { (2.5 * (6.0f32 / 2.5).powf((0.5 - s) * 2.0), 0.1 * 2.0f32.powf((0.5 - s) * 2.0)) } else { (2.5 * (1.4f32 / 2.5).powf((s - 0.5) * 2.0), 0.1 * 0.5f32.powf((s - 0.5) * 2.0)) };
     let window = ((rate * 0.005) as usize).max(16);
     let hop = window / 2;
     let energy: Vec<f32> = (0..samples.len().saturating_sub(window) / hop + 1)
@@ -21,7 +30,7 @@ pub fn detect_transients(samples: &[f32], rate: f32, max: usize) -> Vec<usize> {
         let recent = before.iter().sum::<f32>() / before.len() as f32;
         // a hit is a jump to well above what came just before, and to a level that is not noise
         let strength = energy[i] / (recent + 0.02 * loudest);
-        if strength < 2.5 || energy[i] < 0.1 * loudest || energy[i] < energy[i - 1] {
+        if strength < jump || energy[i] < floor * loudest || energy[i] < energy[i - 1] {
             continue;
         }
         // it began where the last quiet frame before the jump ends, a millisecond early so the attack is whole

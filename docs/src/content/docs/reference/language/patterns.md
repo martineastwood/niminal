@@ -37,6 +37,24 @@ Steps divide one cycle evenly (one bar by default). `[c2 g2 bb2 f2]` is four ste
 | `{a b c}%4` | Polymeter: read the list four steps a cycle, carrying on where it left off (`%` is optional: the first list sets the pace). `{a b, x y z}` squeezes each list to that pace; `%` can be a pattern |
 | `~` | A rest, which can take `@` and `!` too |
 
+### Chord names
+
+Add a chord quality after the root and optional octave. An omitted octave defaults to 4:
+
+```nml
+notes: [C4maj D3min7 Dmin].over(2bars)
+```
+
+This plays C major, D minor seventh rooted in octave 3, then D minor rooted in octave 4.
+Spaces sequence chords; commas play them simultaneously. Sharps and flats work too:
+`C#4min`, `Bb3maj7`. Root letters may be uppercase or lowercase.
+
+Qualities are `maj` / `major`, `min` / `minor` / `m`, `dim`, `aug`, `sus2`, `sus4`,
+`power`, `maj6`, `min6`, `maj7`, `min7`, `dom7`, `dim7`, `half_dim7`, `maj9`, and
+`min9`. The full names used by `.chord(...)` also work, as do `m6`, `m7`, and `m9`.
+Use `C4dom7` or `Cdom7` for a dominant seventh: `c7` is the single note C in octave 7.
+Chord names work with pattern transforms such as `.arpeggiate(up)` and `.strum(25%)`.
+
 ## Grids
 
 Each character is one step; spaces group steps for readability. `x` hit, `X` accent, `o` ghost, `.` rest.

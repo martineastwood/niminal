@@ -17,7 +17,7 @@ export interface ViewPrefs {
 
 export const scales = [0.85, 1, 1.15, 1.3, 1.5, 1.75, 2];
 export const fontRange = { min: 9, max: 32 };
-export const defaultView: ViewPrefs = { scale: 1, codeFont: 12, sequence: true, side: true, sequenceWidth: 168, sideWidth: 220, contrast: false };
+export const defaultView: ViewPrefs = { scale: 1, codeFont: 12, sequence: true, side: true, sequenceWidth: 168, sideWidth: 280, contrast: false };
 export const widthRange = { min: 120, max: 520 };
 const storageKey = 'niminal-tracker-view';
 

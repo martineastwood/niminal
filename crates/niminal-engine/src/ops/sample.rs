@@ -23,9 +23,10 @@ const PORTS: &[Port] = &[
 /// Frames over which a slice fades in and out.
 const SLICE_FADE: f64 = 16.0;
 
-/// Sample playback quality. Cubic is the inexpensive default.
+/// Sample playback quality. Cubic is the default; linear is cheaper and rougher, sinc dearer and cleaner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SampleInterp {
+    Linear,
     #[default]
     Cubic,
     Sinc,
@@ -213,6 +214,15 @@ impl Sampler {
         let (a, b, c, d) = (self.at(i - 1), self.at(i), self.at(i + 1), self.at(i + 2));
         // Catmull-Rom spline through b and c.
         b + 0.5 * t * (c - a + t * (2.0 * a - 5.0 * b + 4.0 * c - d + t * (3.0 * (b - c) + d - a)))
+    }
+
+    /// A straight line between the two frames around the position.
+    fn read_linear(&self) -> f32 {
+        let i = self.position.floor();
+        let t = (self.position - i) as f32;
+        let i = i as i64;
+        let (a, b) = (self.at(i), self.at(i + 1));
+        a + t * (b - a)
     }
 
     fn loop_position(&self, position: f64) -> f64 {
@@ -417,6 +427,7 @@ impl Sampler {
 
     fn read_loop(&mut self, step: f64, fade: f64, next_range: (usize, usize)) -> f32 {
         let read = |s: &Self| match s.interp {
+            SampleInterp::Linear => s.read_linear(),
             SampleInterp::Cubic => s.read(),
             SampleInterp::Sinc => s.read_sinc(step),
         };
@@ -1239,6 +1250,20 @@ mod tests {
         let mut s = sampler(ramp(100, 48_000.0), None).with_interp(SampleInterp::Sinc);
         s.position = 40.0;
         assert!((s.read_sinc(1.0) - 40.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn linear_reads_a_straight_line_between_frames_and_loops_with_a_crossfade() {
+        let mut s = sampler(ramp(100, 48_000.0), None).with_interp(SampleInterp::Linear);
+        for (position, expected) in [(40.0, 40.0), (40.25, 40.25), (40.5, 40.5), (98.75, 98.75)] {
+            s.position = position;
+            assert!((s.read_linear() - expected).abs() < 1e-4, "{position}");
+        }
+        // between a frame and the next, cubic bends and linear does not
+        let data = Arc::new(Table::from_f32(vec![0.0, 0.0, 1.0, 0.0, 0.0], Some(48_000.0)));
+        let mut s = sampler(data, None).with_interp(SampleInterp::Linear);
+        s.position = 1.5;
+        assert!((s.read_linear() - 0.5).abs() < 1e-6 && (s.read() - 0.5625).abs() < 1e-6);
     }
 
     #[test]

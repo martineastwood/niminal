@@ -1956,6 +1956,62 @@ fn atoms_carry_units_and_note_names() {
 }
 
 #[test]
+fn chord_names_expand_with_explicit_and_default_octaves() {
+    assert_eq!(
+        notes_of("lead.__update([C4maj D3min7 Dmin])", 1),
+        [
+            (r(0, 1), midi(60)),
+            (r(0, 1), midi(64)),
+            (r(0, 1), midi(67)),
+            (r(1, 3), midi(50)),
+            (r(1, 3), midi(53)),
+            (r(1, 3), midi(57)),
+            (r(1, 3), midi(60)),
+            (r(2, 3), midi(62)),
+            (r(2, 3), midi(65)),
+            (r(2, 3), midi(69)),
+        ]
+    );
+    assert_eq!(
+        notes_of("lead.__update([Bb3maj7 C#4dim])", 1),
+        [
+            (r(0, 1), midi(58)),
+            (r(0, 1), midi(62)),
+            (r(0, 1), midi(65)),
+            (r(0, 1), midi(69)),
+            (r(1, 2), midi(61)),
+            (r(1, 2), midi(64)),
+            (r(1, 2), midi(67)),
+        ]
+    );
+    assert_eq!(
+        notes_of("lead.__update([Cdom7].over(2bars))", 1),
+        [60, 64, 67, 70].map(|n| (r(0, 1), midi(n)))
+    );
+    assert!(msg(&stage("lead.__update([C4nonsense])")).contains("isn't a note"));
+}
+
+#[test]
+fn chord_names_keep_pattern_timing_and_transforms() {
+    assert_eq!(
+        notes_of("lead.__update([C4maj ~].arpeggiate(up))", 1),
+        [
+            (r(0, 1), midi(60)),
+            (r(1, 6), midi(64)),
+            (r(1, 3), midi(67))
+        ]
+    );
+    assert_eq!(
+        notes_of("lead.__update([C4maj,D3min].over(2bars))", 1).len(),
+        6
+    );
+    assert_eq!(
+        notes_of("lead.__update([c4 c7])", 1),
+        [(r(0, 1), midi(60)), (r(1, 2), midi(96))]
+    );
+}
+
+#[test]
 fn time_operations() {
     assert_eq!(notes_of("lead.__update([c4 e4].fast(2))", 1).len(), 4);
     let slow = notes_of("lead.__update([c4 e4].slow(2))", 2);

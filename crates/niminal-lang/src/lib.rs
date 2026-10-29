@@ -53,4 +53,4 @@ pub use program::{
 pub use sample::{AUDIO_EXTENSIONS, Samples, is_audio};
 pub use unit::Unit;
 
-pub use niminal_engine::ops::detect_transients;
+pub use niminal_engine::ops::{detect_transients, detect_transients_at};

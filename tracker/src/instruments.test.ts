@@ -90,3 +90,11 @@ it('makes a kit instrument that lists which key plays which sample', () => {
   const copy = duplicateInstrument(project, kit);
   expect(copy.source).toContain('instr drums_copy('); expect(copy.source).toContain('drums_copy_kit = kit("samples/drums")');
 });
+
+it('swaps the sample of a sampler, wherever its code names it, and says when there is none to swap', async () => {
+  const { samplerSource, slicedSource, withSample } = await import('./instruments');
+  const swapped = withSample(samplerSource('kick', 'samples/a.wav'), 'samples/b.wav')!;
+  expect(swapped).toContain('sample("samples/b.wav")'); expect(swapped).toContain('Plays samples/b.wav'); expect(swapped).not.toContain('a.wav');
+  expect(withSample(slicedSource('loop', 'samples/a.wav', 4), 'samples/b.wav')).toContain('sample("samples/b.wav").root(c4)');
+  expect(withSample('instr x(freq: hz) { osc(sine, freq) }', 'samples/b.wav')).toBeNull();
+});

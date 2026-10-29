@@ -84,7 +84,8 @@ export class PatternGrid {
     private pattern: () => Pattern,
     private octave: () => number,
     private edited: () => void,
-    private audition: (id: string, note: string, track: number, expression?: { commands?: string[] }) => void,
+    /** Plays a note: for a moment, or with `hold` (a number for the key) until `releaseHeld` is given it. */
+    private audition: (id: string, note: string, track: number, expression?: { commands?: string[]; hold?: number }) => void,
     private togglePlay: () => void,
     private trackSelected: (track: number) => void = () => {},
     private step: () => number = () => 1,
@@ -95,6 +96,8 @@ export class PatternGrid {
     /** The volume (0 to 100) given to notes entered in record mode, or null to leave it unset. */
     private defaultVelocity: () => number | null = () => null,
   ) {
+    document.addEventListener('keyup', event => this.release(event.code));
+    window.addEventListener('blur', () => { for (const code of [...this.held.keys()]) this.release(code); });
     this.playhead.className = 'playhead'; this.playhead.hidden = true; this.frame.className = 'track-frame'; this.frame.hidden = true;
     parent.parentElement?.append(this.playhead, this.frame);
     parent.addEventListener('scroll', () => this.placeFrame());
@@ -684,12 +687,12 @@ export class PatternGrid {
     return { note, track, instrument, velocity };
   }
 
-  private writeNote(note: string, velocity: number | null, preview = true) {
+  private writeNote(note: string, velocity: number | null, preview = true, key?: KeyboardEvent) {
     const lane = this.lanes[this.column], ending = note === 'OFF' || note === 'CUT';
     const live = this.live; if (live) { this.row = this.nearestRow(); this.anchor = { row: this.row, column: this.column }; }
     const column = this.pattern().notes[lane.track][lane.col], inst = ending ? undefined : this.currentInstrument();
     const instrument = !ending && (inst ?? instrumentAt(column.inst, this.row));
-    if (instrument && preview) this.audition(instrument, note, lane.track);
+    if (instrument && preview) { if (key) this.hold(key, instrument, note, lane.track); else this.audition(instrument, note, lane.track); }
     const track = this.project().tracks[lane.track];
     if (velocity !== null && !track.show?.vol) track.show = { ...track.show, vol: true };
     this.column = this.lanes.findIndex(other => other.track === lane.track && other.col === lane.col && other.kind === 'note');
@@ -700,13 +703,34 @@ export class PatternGrid {
     this.render();
   }
 
+  /** Called when a note started by a key is to stop, because the key came up: the number it was started with. */
+  releaseHeld: (key: number) => void = () => {};
+  /** The notes sounding for keys held down, by physical key, with the number each was started with. */
+  private readonly held = new Map<string, number>();
+  /** Plays a note for as long as its key is held. A key that repeats does not start it again. */
+  private hold(event: KeyboardEvent, instrument: string, note: string, track: number) {
+    if (event.repeat) return;
+    const number = noteNumber(note);
+    if (number === null) { this.audition(instrument, note, track); return; }
+    const key = 2048 + number;
+    this.release(event.code);
+    this.held.set(event.code, key);
+    this.audition(instrument, note, track, { hold: key });
+  }
+  private release(code: string) {
+    const key = this.held.get(code);
+    if (key === undefined) return;
+    this.held.delete(code);
+    this.releaseHeld(key);
+  }
+
   /** Plays the key as a note on the cursor's track while focus is outside the grid, so the keyboard sounds from anywhere. */
   auditionKey(event: KeyboardEvent) {
     if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
     const note = keyboardNote(event.key, this.octave()), instrument = this.currentInstrument();
     if (!note || !instrument) return;
     event.preventDefault();
-    this.audition(instrument, note, Math.min(this.lanes[this.column].track, this.project().tracks.length - 1));
+    this.hold(event, instrument, note, Math.min(this.lanes[this.column].track, this.project().tracks.length - 1));
   }
   private keydown(event: KeyboardEvent) {
     if (this.marked && !event.metaKey && !event.ctrlKey) this.marked = null;
@@ -757,7 +781,7 @@ export class PatternGrid {
           event.preventDefault();
           const track = Math.min(lane.track, this.project().tracks.length - 1);
           const instrument = this.currentInstrument() ?? instrumentAt(this.pattern().notes[track]?.[lane.col]?.inst ?? [], this.row);
-          if (instrument) this.audition(instrument, note, track);
+          if (instrument) this.hold(event, instrument, note, track);
           return;
         }
         if (lane.kind !== 'note') {
@@ -769,7 +793,7 @@ export class PatternGrid {
         const ending = event.key.toLowerCase() === 'a' ? 'OFF' : event.key === '-' ? 'CUT' : null;
         const note = ending ?? keyboardNote(event.key, this.octave()); if (!note) return;
         event.preventDefault();
-        this.writeNote(note, ending ? null : this.defaultVelocity()); return;
+        this.writeNote(note, ending ? null : this.defaultVelocity(), true, event); return;
       }
     }
     if (!event.shiftKey) this.anchor = { row: this.row, column: this.column };

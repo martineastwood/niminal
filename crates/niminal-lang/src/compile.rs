@@ -1634,11 +1634,12 @@ fn compile_sample(
     for arg in &decl.options {
         if arg.name.as_ref().is_some_and(|n| n.name == "interp") {
             let interp = match &arg.value.kind {
+                ExprKind::Name(n) if n == "linear" => niminal_engine::ops::SampleInterp::Linear,
                 ExprKind::Name(n) if n == "cubic" => niminal_engine::ops::SampleInterp::Cubic,
                 ExprKind::Name(n) if n == "sinc" => niminal_engine::ops::SampleInterp::Sinc,
                 _ => {
                     return Err(Diagnostic::new(
-                        "`interp` is `cubic` or `sinc`",
+                        "`interp` is `linear`, `cubic` or `sinc`",
                         arg.value.span,
                     ));
                 }

@@ -61,3 +61,20 @@ export function cutNear(points: number[], share: number, reach: number): number 
 
 /** The key that plays piece `index`: C-4 for the first. */
 export const pieceKey = (index: number) => noteAt(48 + index) ?? '?';
+
+/**
+ * `source` of a sliced sampler written as one that plays its whole sample: the cut binding goes (its settings, such as
+ * `.interp(sinc)`, move to the sample's), and the instrument plays the sample by pitch instead of by piece. Null when it is not cut.
+ */
+export function unslice(source: string): string | null {
+  const cut = /^(\w+)\s*=\s*(\w+)\.slices\((?:\d+(?:\.\d+)?|\[[^\]]*\])\)([^\n]*?)(?=[ \t]*\/\/|$)[^\n]*\n/m.exec(source);
+  if (!cut) return null;
+  const [line, slices, base, settings] = cut;
+  let text = source.replace(line, '');
+  if (settings) text = text.replace(new RegExp(`^(${base}\\s*=\\s*sample\\("[^"\\n]+"\\)[^\\n]*?)(?=[ \\t]*\\/\\/|$)`, 'm'), (found: string) => `${found}${settings}`);
+  text = text.replace(new RegExp(`\\b${slices}\\(([^)]*)\\)`, 'g'), (_, args: string) => {
+    const kept = args.split(/,\s*/).filter(arg => arg.trim() && arg.trim() !== 'sample: sample');
+    return `${base}(${['freq: freq', ...kept].join(', ')})`;
+  });
+  return text.replace(/sample: num = 0,\s*/, '').replace(/^\/\/\/ Plays (.+?) in \d+ pieces.*$/m, '/// Plays $1. Change .root(...) to retune, or add .loop(forward) to sustain it.');
+}

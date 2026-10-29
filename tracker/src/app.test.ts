@@ -43,6 +43,7 @@ vi.mock('@tauri-apps/api/event', () => ({
     return () => {};
   },
 }));
+vi.mock('@tauri-apps/api/webview', () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
 vi.mock('./midi', () => ({ mountMidi: async () => () => {} }));
 vi.mock('./editor', async importOriginal => ({
   ...await importOriginal<typeof import('./editor')>(), connectLanguageServer: async () => {},
@@ -102,6 +103,28 @@ it('leaves the cursor in the grid after Escape and after clicks on buttons and m
   content.focus(); content.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
   await new Promise(resolve => setTimeout(resolve, 20));
   expect(active()).toBe(content); editor.remove();
+});
+
+it('gives the keyboard back to the grid after Enter in a box, a tick box, a slider or a choice from a drop-down, but not while arrowing through one', async () => {
+  const grid = document.getElementById('grid')!, active = () => document.activeElement, tick = () => new Promise(done => setTimeout(done, 20));
+  const velocity = document.getElementById('velocity') as HTMLInputElement; velocity.focus();
+  velocity.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  await vi.waitFor(() => expect(active()).toBe(grid));
+  const follow = document.getElementById('follow') as HTMLInputElement; follow.focus(); follow.click();
+  await vi.waitFor(() => expect(active()).toBe(grid));
+  const picker = document.getElementById('pattern-picker') as HTMLSelectElement; picker.focus();
+  picker.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })); picker.dispatchEvent(new Event('change', { bubbles: true }));
+  await tick(); expect(active()).toBe(picker); // moving through the options is not a choice
+  picker.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); picker.dispatchEvent(new Event('change', { bubbles: true }));
+  await vi.waitFor(() => expect(active()).toBe(grid));
+  // a range slider after the pointer is let go
+  const slider = document.createElement('input'); slider.type = 'range'; document.getElementById('app')!.append(slider); slider.focus();
+  slider.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); slider.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+  await vi.waitFor(() => expect(active()).toBe(grid)); slider.remove();
+  // but a text box in the sound browser keeps it, for its own Enter
+  const search = document.querySelector<HTMLInputElement>('#sound-browser input')!; search.focus();
+  search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  await tick(); expect(active()).toBe(search);
 });
 
 it('applies an effect as soon as it is added to a track, so its controls appear without pressing Apply', async () => {

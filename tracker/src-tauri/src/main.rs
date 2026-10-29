@@ -71,6 +71,18 @@ struct ImportedSample {
     seconds: f64,
 }
 
+/// Copies audio files into the project; returns them with how long each plays.
+fn import_files(dir: &std::path::Path, paths: &[PathBuf]) -> Result<Vec<ImportedSample>, String> {
+    paths
+        .iter()
+        .map(|path| {
+            let file = files::import_sample(dir, path)?;
+            let seconds = slicing::seconds(dir, &file).unwrap_or(0.0);
+            Ok(ImportedSample { file, seconds })
+        })
+        .collect()
+}
+
 /// Asks for audio files and copies them into the project; returns them with how long each plays.
 #[tauri::command]
 async fn import_samples(app: tauri::AppHandle, id: String) -> Result<Vec<ImportedSample>, String> {
@@ -83,18 +95,34 @@ async fn import_samples(app: tauri::AppHandle, id: String) -> Result<Vec<Importe
         return Ok(vec![]);
     };
     let paths: Vec<_> = picked.iter().map(|f| f.path().to_path_buf()).collect();
-    tauri::async_runtime::spawn_blocking(move || {
-        paths
-            .iter()
-            .map(|path| {
-                let file = files::import_sample(&dir, path)?;
-                let seconds = slicing::seconds(&dir, &file).unwrap_or(0.0);
-                Ok(ImportedSample { file, seconds })
-            })
-            .collect()
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || import_files(&dir, &paths))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// What was dropped on the window, without anything that is not an audio file.
+fn audio_files(mut paths: Vec<PathBuf>) -> Result<Vec<PathBuf>, String> {
+    paths.retain(|path| niminal_lang::is_audio(path));
+    if paths.is_empty() { Err("Drop audio files: WAV, FLAC, MP3, OGG or AIFF".into()) } else { Ok(paths) }
+}
+
+/// Copies audio files that were dropped on the window into the project.
+#[tauri::command]
+async fn import_dropped(app: tauri::AppHandle, id: String, paths: Vec<PathBuf>) -> Result<Vec<ImportedSample>, String> {
+    let dir = files::project_dir(&app_data(&app)?, &id)?;
+    let paths = audio_files(paths)?;
+    tauri::async_runtime::spawn_blocking(move || import_files(&dir, &paths))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Every audio file of the project's `samples` folder, relative to the project folder.
+#[tauri::command]
+async fn list_samples(app: tauri::AppHandle, id: String) -> Result<Vec<String>, String> {
+    let dir = files::project_dir(&app_data(&app)?, &id)?;
+    tauri::async_runtime::spawn_blocking(move || files::list_samples(&dir))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// A folder of samples copied into the project to play as a kit.
@@ -102,6 +130,13 @@ async fn import_samples(app: tauri::AppHandle, id: String) -> Result<Vec<Importe
 struct ImportedKit {
     folder: String,
     members: Vec<String>,
+}
+
+/// Copies audio files into a kit folder of the project, named for the folder they came from.
+fn import_kit_files(dir: &std::path::Path, paths: &[PathBuf]) -> Result<Option<ImportedKit>, String> {
+    let name = paths.first().and_then(|p| p.parent()).and_then(|p| p.file_name()).and_then(|n| n.to_str()).unwrap_or("kit");
+    let (folder, members) = files::import_kit(dir, paths, name)?;
+    Ok(Some(ImportedKit { folder, members }))
 }
 
 /// Asks for audio files and copies them into a kit folder of the project, named for the folder they came from.
@@ -117,13 +152,19 @@ async fn import_kit(app: tauri::AppHandle, id: String) -> Result<Option<Imported
         return Ok(None);
     };
     let paths: Vec<_> = picked.iter().map(|f| f.path().to_path_buf()).collect();
-    let name = paths.first().and_then(|p| p.parent()).and_then(|p| p.file_name()).and_then(|n| n.to_str()).unwrap_or("kit").to_string();
-    tauri::async_runtime::spawn_blocking(move || {
-        let (folder, members) = files::import_kit(&dir, &paths, &name)?;
-        Ok(Some(ImportedKit { folder, members }))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || import_kit_files(&dir, &paths))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Copies audio files that were dropped on the window into a kit folder of the project.
+#[tauri::command]
+async fn import_dropped_kit(app: tauri::AppHandle, id: String, paths: Vec<PathBuf>) -> Result<Option<ImportedKit>, String> {
+    let dir = files::project_dir(&app_data(&app)?, &id)?;
+    let paths = audio_files(paths)?;
+    tauri::async_runtime::spawn_blocking(move || import_kit_files(&dir, &paths))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// The waveform of an imported sample, for drawing.
@@ -164,9 +205,9 @@ async fn open_project(app: tauri::AppHandle) -> Result<Option<String>, String> {
 
 /// Where the hits of an imported sample begin, as shares of its length, for cutting it into pieces there.
 #[tauri::command]
-async fn detect_slices(app: tauri::AppHandle, id: String, file: String, max: usize) -> Result<Vec<f64>, String> {
+async fn detect_slices(app: tauri::AppHandle, id: String, file: String, max: usize, sensitivity: Option<f32>) -> Result<Vec<f64>, String> {
     let dir = files::project_dir(&app_data(&app)?, &id)?;
-    tauri::async_runtime::spawn_blocking(move || slicing::detect(&dir, &file, max))
+    tauri::async_runtime::spawn_blocking(move || slicing::detect(&dir, &file, max, sensitivity.unwrap_or(0.5)))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -317,7 +358,10 @@ fn main() {
             confirm,
             project_dir,
             import_samples,
+            import_dropped,
+            list_samples,
             import_kit,
+            import_dropped_kit,
             sample_peaks,
             export_path,
             detect_slices,

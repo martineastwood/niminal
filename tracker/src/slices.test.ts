@@ -32,3 +32,18 @@ it('finds the piece at a place, the cut near a click, and the key a piece sits o
   expect(cutNear(points, 0.255, 0.01)).toBe(1); expect(cutNear(points, 0.3, 0.01)).toBe(-1); expect(cutNear(points, 0.003, 0.01)).toBe(-1);
   expect([0, 1, 12].map(pieceKey)).toEqual(['C-4', 'C#4', 'C-5']);
 });
+
+it('writes a sliced sampler as one that plays its whole sample, keeping its settings', async () => {
+  const { slicedSource, samplerSource } = await import('./instruments');
+  const { unslice } = await import('./slices');
+  const whole = unslice(slicedSource('amen', 'samples/amen.wav', 8))!;
+  expect(whole).not.toContain('slices'); expect(whole).not.toContain('sample: num'); expect(whole).not.toContain('sample: sample');
+  expect(whole).toContain('amen_sample(freq: freq, begin: begin, rate: rate, stretch: stretch, stretch_mode: stretch_mode)');
+  expect(whole).toContain('/// Plays samples/amen.wav. Change .root(...)');
+  expect(whole.replace(/gate: 0\.\.1 = 1/, 'gate: 0..1 = 0').replace(/\/\/\/ Plays.*\n/, '')).toContain('amen_sample = sample("samples/amen.wav").root(c4)');
+  expect(whole.match(/^instr amen\(/m)).not.toBeNull();
+  // the settings of the cut binding move to the sample's
+  const tuned = slicedSource('amen', 'samples/amen.wav', 8).replace('.slices(8)', '.slices(8).interp(sinc)');
+  expect(unslice(tuned)).toContain('amen_sample = sample("samples/amen.wav").root(c4).interp(sinc)');
+  expect(unslice(samplerSource('kick', 'samples/kick.wav'))).toBeNull();
+});
