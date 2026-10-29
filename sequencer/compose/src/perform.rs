@@ -134,6 +134,8 @@ pub(crate) struct Compiled {
 }
 
 pub(crate) struct Context<'a> {
+    /// The macros, which a clip lane can move.
+    pub macros: &'a [crate::compile::MacroDef],
     pub tempo: Tempo,
     pub names: &'a Names<'a>,
     /// The `notes` line of each node, which changes the notes of every clip played on it.
@@ -271,6 +273,37 @@ fn lit_step(v: &EnvValue) -> Res<&EnvNum> {
         Diagnostic::new("this envelope's steps are written as numbers", v.span())
             .with_help("only an instrument's envelopes can read names, at note start")
     })
+}
+
+/// Where a macro's `target` is when the macro is at `level` (0 to 1), as a value in the control's unit.
+fn macro_value(target: &crate::compile::MacroTarget, level: f64) -> Value {
+    use niminal_lang::Unit;
+    let x = target.value(level);
+    match target.unit {
+        Unit::Hz => Value::Hz(x),
+        Unit::Db => Value::Db(x),
+        Unit::Time => Value::Seconds(x),
+        Unit::Angle => Value::Degrees(x),
+        Unit::Semitones => Value::Semitones(x),
+        Unit::Num => Value::Num(x),
+    }
+}
+
+/// A macro's envelope as one for each thing it moves, glides and curves kept, levels turned into where each
+/// control is.
+fn fan_out_env(def: &crate::compile::MacroDef, curve: &EnvLane, curves: &mut Vec<(String, EnvLane)>) {
+    for target in &def.targets {
+        let at = |v: &Value| macro_value(target, v.as_number().unwrap_or(0.0));
+        curves.push((
+            target.control.clone(),
+            EnvLane {
+                start: at(&curve.start),
+                segments: curve.segments.iter().map(|(time, shape, level)| (*time, *shape, at(level))).collect(),
+                looped: curve.looped,
+                unit: curve.unit,
+            },
+        ));
+    }
 }
 
 fn env_lane(lit: &EnvLit) -> Res<EnvLane> {
@@ -2625,6 +2658,36 @@ impl Perform<'_> {
                 scored = parse_events(raw, value.span, self.cx)?;
                 continue;
             }
+            // a lane named for a macro moves everything the macro moves, each along its own range
+            if !in_block && let Some(def) = self.cx.macros.iter().find(|m| m.name == key.name) {
+                let found = |name: &str| lanes.iter().any(|(n, _)| n == name) || curves.iter().any(|(n, _)| n == name);
+                if let Some(target) = def.targets.iter().find(|t| found(&t.control)) {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "macro `{}` moves `{}`, which this clip also has a lane for",
+                            def.name,
+                            crate::compile::written(&target.control)
+                        ),
+                        key.span,
+                    ));
+                }
+                match self.eval(value, None)? {
+                    PerfValue::Pattern(p) => self.fan_out(def, &p, &mut lanes),
+                    PerfValue::Env(curve) => fan_out_env(def, &curve, &mut curves),
+                    PerfValue::Num(v) => self.fan_out(def, &Pattern::pure(Step::from(v)), &mut lanes),
+                    PerfValue::List(items) => {
+                        let p = self.list_pattern(items, value.span)?;
+                        self.fan_out(def, &p, &mut lanes);
+                    }
+                    other => {
+                        return Err(Diagnostic::new(
+                            format!("a macro lane holds levels from 0 to 1, but this is {}", other.describe()),
+                            value.span,
+                        ));
+                    }
+                }
+                continue;
+            }
             if lanes.iter().any(|(n, _)| *n == key.name)
                 || curves.iter().any(|(n, _)| *n == key.name)
             {
@@ -2676,7 +2739,8 @@ impl Perform<'_> {
         }
         // a clip with rows for an effect and no notes is a gesture: a silent note on every sixteenth gives
         // the rows a step to land on
-        let rows_only = crate::dsp::drives_effects(block) && !block.entries.iter().any(|(k, _)| k.name == "instrument");
+        let macro_names: Vec<&str> = self.cx.macros.iter().map(|m| m.name.as_str()).collect();
+        let rows_only = crate::dsp::drives_effects(block, &macro_names) && !block.entries.iter().any(|(k, _)| k.name == "instrument");
         if rows_only && keys.is_none() && scored.is_empty() && !lanes.iter().any(|(n, _)| n == "notes") {
             let steps = 16 * length.map_or(1, |l| l.to_f64().ceil().max(1.0) as usize);
             let step = Pattern::pure(Step::from(niminal_score::Value::Note(60)));
@@ -2703,6 +2767,21 @@ impl Perform<'_> {
             signals: Vec::new(),
             fx_params: Vec::new(),
         })
+    }
+
+    /// A macro's lane as the lanes of everything it moves: each level from 0 to 1 becomes where that control is
+    /// at that level.
+    fn fan_out(&self, def: &crate::compile::MacroDef, pattern: &Pattern<Step>, lanes: &mut Vec<(String, Pattern<Step>)>) {
+        for target in &def.targets {
+            let target = target.clone();
+            lanes.push((
+                target.control.clone(),
+                pattern.map(move |step| {
+                    let level = step.value.as_number().unwrap_or(0.0);
+                    step.with(macro_value(&target, level))
+                }),
+            ));
+        }
     }
 
     /// `then: chorus.start`: what to do when a clip has played its last time, as the statement to run.

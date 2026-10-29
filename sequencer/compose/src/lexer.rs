@@ -86,6 +86,12 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
     let mut scopes: Vec<Scope> = Vec::new();
     let mut statement_start = true;
     let mut statement_keyword: Option<String> = None;
+    // the macros, which a clip's lane can be named for, wherever in the file they are declared
+    let macros: Vec<&str> = src
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix("macro "))
+        .filter_map(|rest| rest.split(|c: char| !(c.is_alphanumeric() || c == '_')).find(|n| !n.is_empty()))
+        .collect();
     let mut i = 0;
 
     while i < bytes.len() {
@@ -109,7 +115,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 }
                 continue;
             }
-            b'.' | b'x' | b'X' | b'o' | b'<' if takes_steps(&tokens, scopes.last()) && steps_end(src, i).is_some() => {
+            b'.' | b'x' | b'X' | b'o' | b'<' if takes_steps(&tokens, scopes.last(), &macros) && steps_end(src, i).is_some() => {
                 let end = steps_end(src, i).unwrap_or(i);
                 let text = src[i..end].to_string();
                 i = end;
@@ -396,15 +402,16 @@ fn matching_bracket(bytes: &[u8], open: usize) -> Option<usize> {
 }
 
 /// Whether a row of steps can start here: after the colon of an effect's lane in a clip, either inside the
-/// effect's block or written `fx_name.param:`.
-fn takes_steps(tokens: &[Token], scope: Option<&Scope>) -> bool {
+/// effect's block or written `fx_name.param:`, or after the name of a macro.
+fn takes_steps(tokens: &[Token], scope: Option<&Scope>, macros: &[&str]) -> bool {
     let [.., before, Token { tok: Tok::Colon, .. }] = tokens else {
         return false;
     };
     match scope {
         Some(Scope::FxLanes) => true,
         Some(Scope::Clip) => {
-            matches!(before.tok, Tok::Ident(_))
+            matches!(&before.tok, Tok::Ident(name) if macros.contains(&name.as_str()))
+                || matches!(before.tok, Tok::Ident(_))
                 && matches!(
                     tokens.len().checked_sub(4).map(|n| (&tokens[n].tok, &tokens[n + 1].tok)),
                     Some((Tok::Ident(_), Tok::Dot))

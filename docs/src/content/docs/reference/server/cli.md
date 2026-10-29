@@ -20,6 +20,7 @@ cargo install --path crates/niminal-cli
 | `niminal server` | Generic audio server and [events API](/reference/engine-api/) on port 7401 (`--port`), with audio, `--log`, `--token`, `--no-audio`. |
 | `niminal replay` | Render a session log (what a server recorded with `--log`, or any client wrote) to WAV. |
 | `niminal devices` | List the sound cards with the ids `--out-device` and `--in-device` take. |
+| `niminal presets` | List the ready-made instruments and effects. `niminal presets NAME` prints one to paste into a file, `--kind instr` or `--kind fx` narrows the list, and `--json` prints the whole catalog. |
 | `niminal docs` | Emit the built-in opcode reference as Markdown (used when building this site). |
 
 ## `niminal server`
@@ -39,6 +40,10 @@ Default listen `127.0.0.1:7401`, stereo output. `--channels` supports 1, 2, 4, 6
 | `--input-channels N` | all the device has | Keep only the first N input channels; needs `--audio-input`. |
 | `--max-voices N` | 512 | Most notes sounding at once; past it the oldest end early. |
 | `--render-threads N` | cores, up to 4 | Threads that render together. |
+| `--render-fork MODE` | `auto` | When a node's voices are shared among the render threads: `auto`, `always`, `never`, or the microseconds of work a block needs before it is shared. The sound is the same whichever you choose. |
+| `--token TOKEN` | none | Require clients to give this token when they say hello. |
+| `--no-audio` | off | Run without a sound card, at real speed, throwing the audio away. |
+| `--log PATH`, `--no-log` | `~/.niminal/sessions` | Where to record the session, or don't. |
 | `--listen ADDR` | `127.0.0.1` | Address to listen on (local only for now). |
 | `-v`, `-vv` | off | See below. |
 

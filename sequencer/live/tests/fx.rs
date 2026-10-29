@@ -42,3 +42,33 @@ fn stopping_a_clip_lets_go_of_the_effect_controls_it_was_holding() {
         assert!(peak(&freed[12_000..]) > 0.05, "{stop}: the note is heard again once the clip is stopped: {}", peak(&freed[12_000..]));
     }
 }
+
+#[test]
+fn ending_a_render_lets_go_of_the_effect_controls_still_held() {
+    use niminal_live::Offline;
+    let source = "bus src: stereo\ninstr drone(freq: hz) {\n  src += osc(sine, freq) * 0.5\n}\nfx gate(mute: 0..1 = 0) {\n  out = src * (1 - mute)\n}\nclip c {\n  instrument: drone\n  length: 8bars\n  notes: [c4]\n  dur: 8bars\n  gate {\n    mute: x\n  }\n}\n";
+    let mut session = Offline::new(48_000.0, Layout::Stereo);
+    session.eval(source, Some("now")).unwrap();
+    session.eval("c.start", Some("now")).unwrap();
+    session.process(48_000);
+    session.end_schedule();
+    session.process(9_600);
+    let freed = session.process(48_000).remove(0);
+    assert!(peak(&freed[12_000..]) > 0.05, "the note is heard again: {}", peak(&freed[12_000..]));
+}
+
+#[test]
+fn a_gesture_row_draws_a_trance_gate_over_a_held_sound() {
+    use niminal_live::Offline;
+    // 120bpm: a sixteenth is 6000 samples; the row opens the first and third steps of every four
+    let source = "bus src: stereo\ninstr drone(freq: hz) {\n  src += osc(sine, freq) * 0.5\n}\nfx chop(open: 0..1 = 1) {\n  out = src * open.follow(attack: 1ms, release: 2ms)\n}\nclip pad {\n  instrument: drone\n  length: 1bar\n  notes: [c4]\n  dur: 1bar\n}\nclip gate {\n  length: 1bar\n  chop {\n    open: x.x. x.x. x.x. x.x.\n  }\n}\n";
+    let mut session = Offline::new(48_000.0, Layout::Stereo);
+    session.eval(source, Some("now")).unwrap();
+    session.eval("pad.start\ngate.start", Some("now")).unwrap();
+    let out = session.process(96_000).remove(0);
+    let rms = |from: usize| (out[from..from + 3000].iter().map(|v| v * v).sum::<f32>() / 3000.0).sqrt();
+    // the second half of a step, past the edges
+    assert!(rms(6_000 * 4 + 1_500) > 0.2, "an open step sounds: {}", rms(6_000 * 4 + 1_500));
+    assert!(rms(6_000 * 5 + 1_500) < 0.01, "a closed step is cut: {}", rms(6_000 * 5 + 1_500));
+    assert!(rms(6_000 * 6 + 1_500) > 0.2, "the next open step sounds again");
+}

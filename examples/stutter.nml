@@ -6,7 +6,7 @@
 //   bar 2, beat 4    a riser: a fast roll whose pitch climbs an octave, with an `accent` on every other repeat,
 //                    landing on the next downbeat
 // The length of a repeat is read when it starts, so a `length` that moves gives clean repeats.
-// Render with:  niminal render examples/stutter.nml --out stutter.wav --bars 4
+// Render with:  niminal-live render examples/stutter.nml --out stutter.wav --bars 4
 config { channels: stereo }
 tempo 130bpm
 

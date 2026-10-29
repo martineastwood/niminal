@@ -68,6 +68,10 @@ The [VS Code / Cursor extension](editors/vscode/) adds syntax highlighting, diag
 
 The language server (`niminal-live lsp`) works without a server for hover, completion, and errors.
 
+## Stage
+
+[`stage/`](stage/) is a Tauri desktop app for live coding: the editor beside scenes, lanes that light up as clips play, meters, and a controls dock. It has the sequencer built in, so it needs only `niminal server`. See the [Stage page](https://niminal.dev/reference/stage/).
+
 ## Tracker
 
 [`tracker/`](tracker/) is an independent Tauri desktop app with a keyboard-driven pattern grid and a CodeMirror instrument/effect editor using the niminal LSP. It supports looping playback, auditioning, a track mixer with effects, pattern selection/copy/paste/undo, and project save/load. See the [tracker manual](https://niminal.dev/reference/tracker/) for how to use it, and its [README](tracker/README.md) for build commands.

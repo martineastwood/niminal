@@ -1291,31 +1291,7 @@ impl Live {
             self.next_panic += 1;
         }
         // envelope lanes moving node parameters
-        for set in found.controls {
-            let Some(def) = self.program.controls.iter().find(|c| c.name == set.name) else {
-                continue;
-            };
-            let Some((node, param)) = set.name.split_once("::") else {
-                continue;
-            };
-            let value = match def.unit {
-                niminal_lang::Unit::Hz => Value::Hz(set.target),
-                // the engine takes a bare number as a linear gain
-                niminal_lang::Unit::Db | niminal_lang::Unit::Num => Value::Num(set.target),
-                niminal_lang::Unit::Time => Value::Seconds(set.target),
-                niminal_lang::Unit::Angle => Value::Degrees(set.target),
-                niminal_lang::Unit::Semitones => Value::Semitones(set.target),
-            };
-            ops.push(Op::Routing {
-                at: At::Sample(self.samples(set.at)),
-                edits: vec![RoutingEdit::Set {
-                    id: routing_id(node),
-                    args: [(param.to_string(), value)].into(),
-                    glide: set.glide,
-                }],
-                tag: Some(SCHEDULED.into()),
-            });
-        }
+        ops.extend(found.controls.iter().filter_map(|set| self.control_op(set)));
         let (events, problem) = (found.events, found.problem);
         for event in events {
             let start = self.samples(event.at.to_seconds(self.program.tempo));
@@ -1329,6 +1305,29 @@ impl Live {
         }
         self.fetched_until = horizon;
         self.send(ops);
+    }
+
+    /// The op that makes a control change from a clip's lanes, if the control exists.
+    fn control_op(&self, set: &niminal_compose::ControlSet) -> Option<Op> {
+        let def = self.program.controls.iter().find(|c| c.name == set.name)?;
+        let (node, param) = set.name.split_once("::")?;
+        let value = match def.unit {
+            niminal_lang::Unit::Hz => Value::Hz(set.target),
+            // the engine takes a bare number as a linear gain
+            niminal_lang::Unit::Db | niminal_lang::Unit::Num => Value::Num(set.target),
+            niminal_lang::Unit::Time => Value::Seconds(set.target),
+            niminal_lang::Unit::Angle => Value::Degrees(set.target),
+            niminal_lang::Unit::Semitones => Value::Semitones(set.target),
+        };
+        Some(Op::Routing {
+            at: At::Sample(self.samples(set.at)),
+            edits: vec![RoutingEdit::Set {
+                id: routing_id(node),
+                args: [(param.to_string(), value)].into(),
+                glide: set.glide,
+            }],
+            tag: Some(SCHEDULED.into()),
+        })
     }
 
     /// Keep the engine's pending definitions and routing in sync with the client, at
@@ -1554,13 +1553,22 @@ impl Live {
     }
 
     /// Start no more notes from the schedule; what is sounding carries on. Notes already sent from it that
-    /// are still to start are taken back.
+    /// are still to start are taken back. The effect controls those clips were holding go back to where the
+    /// effects start, as they do when a clip stops.
     pub fn end_schedule(&mut self) {
+        let now = self.seconds(self.clock);
+        let released: Vec<Op> = self
+            .schedule
+            .release_all(now)
+            .iter()
+            .filter_map(|set| self.control_op(set))
+            .collect();
         let names = self.program.nodes.iter().map(|t| t.name.clone()).collect();
         self.schedule = Schedule::from_commands(self.program.tempo, names, &[]);
         self.take_back(SCHEDULED, self.clock);
         self.fetched_until = self.clock;
         self.next_panic = 0;
+        self.send(released);
     }
 
     /// Notes from outside, such as a score: each carries the time (since the start) at which it should sound.

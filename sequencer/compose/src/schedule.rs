@@ -885,6 +885,22 @@ impl Schedule {
         }
     }
 
+    /// Put back the effect parameters of every clip still running at `at` seconds, as if they all stopped there.
+    pub fn release_all(&self, at: f64) -> Vec<ControlSet> {
+        let mut out: Vec<ControlSet> = Vec::new();
+        for segment in &self.segments {
+            if segment.start > at || self.ends_at(segment).is_some_and(|end| end <= at) {
+                continue;
+            }
+            for (name, _, glide, initial) in &segment.clip.fx_params {
+                if !out.iter().any(|c| &c.name == name) {
+                    out.push(ControlSet { at, name: name.clone(), target: *initial, glide: *glide });
+                }
+            }
+        }
+        out
+    }
+
     /// What `segment`'s envelope lanes do to their node's parameters in `from..to` seconds. A curved
     /// segment becomes a few straight glides that follow the same curve an `env` in an instrument does.
     fn segment_controls(

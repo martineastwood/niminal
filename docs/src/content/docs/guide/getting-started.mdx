@@ -21,8 +21,7 @@ cargo install --path sequencer/live-cli    # niminal-live
 Or install from GitHub without cloning:
 
 ```sh
-cargo install --git https://github.com/martineastwood/niminal niminal-cli
-cargo install --git https://github.com/martineastwood/niminal niminal-live
+cargo install --git https://github.com/martineastwood/niminal niminal-cli niminal-live-cli
 ```
 
 Check them:
@@ -50,7 +49,7 @@ More examples live under `examples/` — kits and grids (`drums.nml`, `breakbeat
 
 ## Live coding in an editor
 
-The [VS Code / Cursor extension](/reference/editor/) is the main way to live-code: highlighting, diagnostics while you type, and evaluate-while-playing.
+The [VS Code / Cursor extension](/reference/editor/) brings live coding to your own editor: highlighting, diagnostics while you type, and evaluate-while-playing. [Stage](/reference/stage/) does the same in a window of its own, with scenes, lanes and meters beside the code.
 
 ```sh
 cd editors/vscode && npm install && node install.js   # --cursor for Cursor
@@ -80,6 +79,7 @@ See [Live coding](/guide/live-coding/) for quantization, MIDI, and session repla
 | [The pieces](/guide/the-pieces/) | Which program does what |
 | [Live coding](/guide/live-coding/) | Editor, REPL, quantization, MIDI |
 | [Offline rendering](/guide/offline-rendering/) | Arrangements, stems, scores |
+| [Stage](/reference/stage/) | Live coding with scenes and lanes in a desktop app |
 | [Tracker](/reference/tracker/) | Grid, mixer and code in a desktop app |
 | [Language overview](/reference/language/) | Instruments, patterns, performance |
 | [Command line](/reference/server/cli/) | The server's subcommands and flags |

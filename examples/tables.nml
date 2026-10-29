@@ -1,5 +1,5 @@
 // First-class tables: constructors, waveshaping, a wavetable bank, and a shared buffer.
-// Render with:  niminal render examples/tables.nml --out tables.wav
+// Render with:  niminal-live render examples/tables.nml --out tables.wav
 config { channels: stereo }
 tempo 100bpm
 

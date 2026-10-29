@@ -2883,6 +2883,36 @@ fn a_macro_is_a_control_that_moves_others_over_ranges() {
 }
 
 #[test]
+fn a_gesture_can_move_a_macro_and_so_everything_it_moves() {
+    let p = ok(&format!(
+        "{MACRO_SETUP}macro lift {{\n  g {{\n    open: 0..1\n    release: 10ms..110ms\n  }}\n}}\nclip hit {{\n  length: 1bar\n  times: 1\n  lift: .... .... .... xxxx\n}}\nhit.start\n"
+    ));
+    let open = fx_levels(&p, "g::open", 0.0, 10.0);
+    assert!(open.contains(&(1.5, 1.0)), "the last beat opens it: {open:?}");
+    assert_eq!(open.last().map(|o| o.1), Some(0.0), "and it is put back: {open:?}");
+    // the other control follows along its own range
+    let release = fx_levels(&p, "g::release", 0.0, 10.0);
+    assert!(release.iter().any(|(_, v)| (*v - 0.11).abs() < 1e-6), "{release:?}");
+}
+
+#[test]
+fn a_macros_curve_bends_its_run_and_an_envelope_lane_moves_it() {
+    let p = ok(&format!("{MACRO_SETUP}macro m {{\n  cutoff: (0..1).curve(2)\n  drive: 0..1\n}}"));
+    let m = p.macro_of("m").unwrap();
+    assert_eq!(m.targets[0].curve, 2.0);
+    assert!((m.targets[0].value(0.5) - 0.25).abs() < 1e-9, "half way is a quarter along");
+    assert!((m.targets[1].value(0.5) - 0.5).abs() < 1e-9);
+    let d = first_error(&format!("{MACRO_SETUP}macro m {{\n  drive: (0..1).curve(0)\n}}"));
+    assert!(d.message.contains("above 0"), "{}", d.message);
+    // an envelope on the macro in a clip glides every control it moves
+    let q = ok(&format!(
+        "{MACRO_SETUP}macro lift {{\n  g {{\n    open: 0..1\n  }}\n}}\nclip hit {{\n  length: 1bar\n  times: 1\n  lift: env[0 1bar 1]\n}}\nhit.start\n"
+    ));
+    let open = fx_levels(&q, "g::open", 0.0, 10.0);
+    assert!(open.iter().any(|(_, v)| *v > 0.9), "it rises: {open:?}");
+}
+
+#[test]
 fn a_macro_without_an_input_is_still_a_control() {
     let p = ok(&format!("{MACRO_SETUP}macro open {{\n  cutoff: 200hz..4khz\n}}"));
     assert!(p.controls.iter().any(|c| c.name == "open"));
@@ -2981,4 +3011,19 @@ fn changing_a_playing_clip_does_not_put_its_lanes_back() {
         "{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [c4 c4 c4 c4]\n  g {{\n    open: xxxx\n  }}\n}}\nc.start\nat 1bar c.set(notes: [d4 d4 d4 d4])\n"
     ));
     assert!(fx_levels(&p, "g::open", 0.0, 20.0).iter().all(|(_, v)| *v == 1.0));
+}
+
+#[test]
+fn musical_lengths_alone_become_seconds_at_the_tempo_and_meter() {
+    use crate::resolve_musical_time as resolve;
+    let text = "fx f(a: 1ms..2sec = 1/4beat, b: 1ms..4sec = 1bar, c: hz = 3hz) { out = in } // 2beats beat1";
+    assert_eq!(
+        resolve(text, 120.0, 4.0).unwrap(),
+        "fx f(a: 1ms..2sec = 0.125sec, b: 1ms..4sec = 2sec, c: hz = 3hz) { out = in } // 2beats beat1"
+    );
+    // a bar is as long as the meter says
+    assert!(resolve("x = 1bar", 120.0, 3.0).unwrap().contains("1.5sec"));
+    assert!(resolve("x = 1bar", 120.0, 3.5).unwrap().contains("1.75sec"));
+    // percentages and the clock are left for whoever plays it
+    assert_eq!(resolve("x = 50%", 120.0, 4.0).unwrap(), "x = 50%");
 }

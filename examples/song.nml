@@ -1,7 +1,7 @@
 // A finished piece: scenes in order, each for a length. Each section stops the clips the one before it had going
 // that it does not use, and starts its own.
-// Render with:  niminal render examples/song.nml song --out song.wav
-// ...or just a passage:  niminal render examples/song.nml song --from "bar 5" --to "bar 9" --out passage.wav
+// Render with:  niminal-live render examples/song.nml song --out song.wav
+// ...or just a passage:  niminal-live render examples/song.nml song --from "bar 5" --to "bar 9" --out passage.wav
 config { channels: stereo }
 tempo 110bpm
 

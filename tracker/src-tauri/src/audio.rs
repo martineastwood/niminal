@@ -212,6 +212,8 @@ struct Worker {
     scope_labels: BTreeSet<String>,
     playback: Option<Playback>,
     mixer_timing: (f64, u32),
+    /// The bar's length in quarter-note beats, from the song's first pattern: what `1bar` in an effect is worked out at.
+    bar_beats: f64,
     dir: Option<String>,
 }
 
@@ -406,7 +408,7 @@ impl Worker {
                 kind,
                 dir,
             } => {
-                let sound = Sound::parse(kind, source, dir.as_deref().or(self.dir.as_deref()))?;
+                let sound = Sound::parse(kind, source, dir.as_deref().or(self.dir.as_deref()), self.mixer_timing.0, self.bar_beats)?;
                 if self
                     .sounds
                     .iter()
@@ -760,6 +762,7 @@ impl Worker {
         self.mixer_returns = song.returns.clone();
         self.mixer_master = song.master.clone();
         self.mixer_timing = (song.bpm, song.rows_per_beat);
+        self.bar_beats = song.patterns.first().and_then(|p| p.timing.as_ref()).map_or(4.0, |t| f64::from(t.beats_per_bar) * 4.0 / f64::from(t.beat_unit));
         // strips may have come or gone
         if self.strip_scopes && self.client.is_some() {
             self.sync_scopes()?;

@@ -55,6 +55,7 @@ pub fn macro_edits(slot: impl std::fmt::Display, track: &Track, index: usize, va
             unit,
             lo: endpoint(link.min),
             hi: endpoint(link.max),
+            curve: 1.0,
         })
     }).collect();
     let definition = niminal_compose::MacroDef { name: knob.name.clone(), targets };
@@ -249,7 +250,7 @@ mod tests {
         use crate::pattern::{Macro, MacroLink};
         let source = "fx probe(cutoff: 200hz..4khz = 200hz, gain: -60db..0db = 0db, amount: 0..1 = 0) { out = in * gain * amount }\nmacro sweep {\n  probe.cutoff: 200hz..4khz\n  probe.gain: 0db..-60db\n  probe.amount: 0.25..0.75\n}\n";
         let program = niminal_compose::compile(source).unwrap();
-        let sound = crate::sound::Sound::parse(crate::sound::Kind::Fx, source.split("macro").next().unwrap().into(), None).unwrap();
+        let sound = crate::sound::Sound::parse(crate::sound::Kind::Fx, source.split("macro").next().unwrap().into(), None, 120.0, 4.0).unwrap();
         let parameters = [("probe".into(), sound.parameters)].into();
         let mut track = Track {
             fx: vec![Device { id: "d0".into(), definition: "probe".into(), ..Default::default() }],

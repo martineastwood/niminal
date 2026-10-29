@@ -1,11 +1,13 @@
 // Glitching a break, the way a glitch plugin does it. The one-bar loop in break.wav is chopped into 16
-// slices and played for two bars through an effect that is a chain: a stutter, a rewind, a tape-stop and a
-// crush, one after another. Each has a control that switches it on, and the sound passes through untouched
-// while they are all off. The clip draws when each is on, one row per control: `.` is off and `x` is on, and
-// neighbouring `x`s are one long glitch. Change a row and render again.
-// `repeat_last`, `rewind_last` and `slow_down` are opcodes, and `apply` comes with the language. The `glitch`
-// effect in `std/fx` is the same chain, ready to put on a tracker track.
-// Render with:  niminal render examples/glitch.nml --out glitch.wav --bars 4
+// slices and played for two bars through an effect that is a chain: a stutter, a rewind, a tape-stop, a
+// scatter, a freeze and a crush, one after another. Each has a control that switches it on, and the sound
+// passes through untouched while they are all off. The clip draws when each is on, one row per control: `.`
+// is off and `x` is on, and neighbouring `x`s are one long glitch. Change a row and render again.
+// `repeat_last`, `rewind_last`, `slow_down`, `scatter` and `freeze` are opcodes, and `apply` comes with the
+// language. `scatter` shuffles slices of the last bar (the same seed shuffles the same way) and `freeze`
+// holds the last moment as a cloud of grains. The `glitch` effect in `std/fx` is the same chain, ready to
+// put on a tracker track. The `gate` row is a trance gate and the one control that starts open.
+// Render with:  niminal-live render examples/glitch.nml --out glitch.wav --bars 4
 config { channels: stereo }
 tempo 130bpm
 
@@ -25,13 +27,21 @@ fx break_glitch(
   stutter: 0..1 = 0, stutter_length: 1ms..1sec = 1/4beat, stutter_pitch: -24..24 = 0, stutter_shrink: 0.5..1 = 1,
   rewind: 0..1 = 0, rewind_length: 1ms..1sec = 1/4beat,
   slow: 0..1 = 0, slow_time: 10ms..1sec = 400ms,
-  crush: 0..1 = 0, crush_bits: 2..16 = 5
+  scatter: 0..1 = 0, scatter_slices: 2..32 = 8, scatter_seed: 0..999 = 0, scatter_reverse: 0..1 = 0,
+  scatter_repeat: 0..1 = 0, scatter_drop: 0..1 = 0, scatter_detune: 0..12 = 0,
+  freeze: 0..1 = 0, freeze_spread: 0..1 = 0.5,
+  crush: 0..1 = 0, crush_bits: 2..16 = 5,
+  gate: 0..1 = 1, gate_release: 0.1ms..500ms = 8ms
 ) {
-  out = break_audio
+  chain = break_audio
     .repeat_last(hold: stutter, length: stutter_length, pitch: stutter_pitch, shrink: stutter_shrink)
     .rewind_last(hold: rewind, length: rewind_length)
     .slow_down(hold: slow, time: slow_time)
+    .scatter(hold: scatter, length: 1bar, slices: scatter_slices, seed: scatter_seed, reverse: scatter_reverse, repeat: scatter_repeat, drop: scatter_drop,
+      detune: scatter_detune, max: 4sec)
+    .freeze(hold: freeze, length: 1/4beat, spread: freeze_spread)
     .apply(fn(s) { s.bitcrush(rate: 4000hz, bits: crush_bits) }, when: crush)
+  out = chain * gate.follow(attack: 2ms, release: gate_release)
 }
 
 // bar 1 as recorded, bar 2 re-cut
@@ -48,11 +58,19 @@ clip glitched {
     stutter: .... .... .... .... .... .... .... xxx.
     rewind:  .... .... xx.. .... .... .... .... .xx.
     slow:    ...x xxx. .... .... .... .... .... ....
+    scatter: .... .... .... .... xxxx xxxx .... ....
+    freeze:  .... .... .... .... .... .... .... .xx.
     crush:   .... .... .... .... .... xxxx xxxx ....
+    // a trance gate is the one row that starts open: `x` lets the break through and `.` cuts it
+    gate:    xxx. xx.x x.xx .x.x xxxx xxxx xxxx xxxx
 
     // anything else is an ordinary lane: this stutter rolls faster the longer it is held, and the crush gets
     // harsher in the second half
     stutter_shrink: 0.7
+    scatter_seed: 7
+    scatter_reverse: 0.3
+    scatter_drop: 0.15
+    scatter_detune: 5
     crush_bits: [8@16 4@16]
   }
 }

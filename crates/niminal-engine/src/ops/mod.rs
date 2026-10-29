@@ -66,7 +66,7 @@ pub use fold::{Clip, Fold};
 pub use follow::Follow;
 pub use formant::Formant;
 pub use gate::Gate;
-pub use glitch::{DEFAULT_MAX_SECONDS as GLITCH_MAX_SECONDS, RepeatLast, RewindLast, SlowDown};
+pub use glitch::{DEFAULT_MAX_SECONDS as GLITCH_MAX_SECONDS, RepeatLast, RewindLast, Scatter, SlowDown, Freeze};
 pub use impulse::Impulse;
 pub use ladder::Ladder;
 pub use lag::Lag;

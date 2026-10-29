@@ -425,3 +425,363 @@ impl Opcode for SlowDown {
         }
     }
 }
+
+/// The next number of a seeded stream (splitmix64).
+fn next_random(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// A number from 0 up to (not including) 1.
+fn random_unit(state: &mut u64) -> f64 {
+    (next_random(state) >> 11) as f64 / (1u64 << 53) as f64
+}
+
+/// A stream for `seed` and `salt` that is the same every time.
+fn seeded(seed: f32, salt: u64) -> u64 {
+    let mut state = (seed.round() as i64 as u64) ^ salt.wrapping_mul(0xD6E8_FEB8_6659_FD93);
+    next_random(&mut state);
+    state
+}
+
+const MAX_SLICES: usize = 32;
+
+/// Cuts the last `length` of the sound into `slices` and plays them back shuffled while `hold` is above zero.
+/// Each pass through the pieces is a new shuffle, and the same `seed` gives the same shuffles every time.
+/// Each slice then gets a roll of the dice: `reverse` is the chance (0 to 1) that it plays backwards, `repeat`
+/// that it is swapped for a slice picked at random (so some come twice and some not at all), `drop` that it is
+/// silent, and `detune` is how many semitones, up to, it may be shifted either way.
+#[derive(Clone)]
+pub struct Scatter {
+    ring: Ring,
+    hold: Hold,
+    sample_rate: f32,
+    frozen: usize,
+    phase: f64,
+    size: f64,
+    count: usize,
+    pass: u64,
+    seed: f32,
+    reverse: f32,
+    repeat: f32,
+    drop: f32,
+    detune: f32,
+    order: [u8; MAX_SLICES],
+    flipped: [bool; MAX_SLICES],
+    dropped: [bool; MAX_SLICES],
+    speed: [f64; MAX_SLICES],
+}
+
+impl Scatter {
+    pub fn new(max_seconds: f32) -> Self {
+        Scatter {
+            ring: Ring::new(max_seconds),
+            hold: Hold::default(),
+            sample_rate: 48_000.0,
+            frozen: 0,
+            phase: 0.0,
+            size: 1.0,
+            count: 2,
+            pass: 0,
+            seed: 0.0,
+            reverse: 0.0,
+            repeat: 0.0,
+            drop: 0.0,
+            detune: 0.0,
+            order: [0; MAX_SLICES],
+            flipped: [false; MAX_SLICES],
+            dropped: [false; MAX_SLICES],
+            speed: [1.0; MAX_SLICES],
+        }
+    }
+
+    /// Deal the slices out in a new order for this pass.
+    fn shuffle(&mut self) {
+        let mut state = seeded(self.seed, self.pass);
+        for i in 0..self.count {
+            self.order[i] = i as u8;
+        }
+        for i in (1..self.count).rev() {
+            let j = (random_unit(&mut state) * (i + 1) as f64) as usize;
+            self.order.swap(i, j);
+        }
+        for i in 0..self.count {
+            if random_unit(&mut state) < f64::from(self.repeat) {
+                self.order[i] = (random_unit(&mut state) * self.count as f64) as u8;
+            }
+            self.flipped[i] = random_unit(&mut state) < f64::from(self.reverse);
+            self.dropped[i] = random_unit(&mut state) < f64::from(self.drop);
+            let shift = (random_unit(&mut state) * 2.0 - 1.0) * f64::from(self.detune);
+            self.speed[i] = (shift * 0.057_762_265).exp();
+        }
+    }
+}
+
+impl Opcode for Scatter {
+    fn name(&self) -> &str {
+        "scatter"
+    }
+
+    fn ports(&self) -> &[Port] {
+        const PORTS: &[Port] = &[
+            Port::required("x"),
+            Port::required("hold"),
+            Port::required("length"),
+            Port::optional("slices", 8.0),
+            Port::optional("seed", 0.0),
+            Port::optional("reverse", 0.0),
+            Port::optional("repeat", 0.0),
+            Port::optional("drop", 0.0),
+            Port::optional("detune", 0.0),
+            Port::optional("blend", 0.003),
+        ];
+        PORTS
+    }
+
+    fn box_clone(&self) -> Box<dyn Opcode> {
+        let mut c = Scatter::new(self.ring.max_seconds);
+        c.prepare(self.sample_rate);
+        Box::new(c)
+    }
+
+    fn prepare(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate;
+        self.ring.prepare(sample_rate);
+        self.reset();
+    }
+
+    fn reset(&mut self) {
+        self.ring.clear();
+        self.hold = Hold::default();
+        self.frozen = 0;
+        self.phase = 0.0;
+        self.size = 1.0;
+        self.count = 2;
+        self.pass = 0;
+        self.order = [0; MAX_SLICES];
+        self.flipped = [false; MAX_SLICES];
+        self.dropped = [false; MAX_SLICES];
+        self.speed = [1.0; MAX_SLICES];
+    }
+
+    fn carry_state(&mut self, old: &mut dyn Opcode) {
+        if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>()
+            && self.sample_rate == old.sample_rate
+        {
+            self.ring.carry(&mut old.ring);
+            self.hold = old.hold.clone();
+            self.frozen = old.frozen;
+            self.phase = old.phase;
+            self.size = old.size;
+            self.count = old.count;
+            self.pass = old.pass;
+            self.seed = old.seed;
+            self.reverse = old.reverse;
+            self.repeat = old.repeat;
+            self.drop = old.drop;
+            self.detune = old.detune;
+            self.order = old.order;
+            self.flipped = old.flipped;
+            self.dropped = old.dropped;
+            self.speed = old.speed;
+        }
+    }
+
+    fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
+        let sr = f64::from(self.sample_rate);
+        let seam = 0.001 * sr;
+        let longest = (self.ring.buf.len() - 1) as f64;
+        for (i, o) in out.iter_mut().enumerate() {
+            let x = inputs[0][i];
+            let (held, rising, mix) = self.hold.step(inputs[1][i], inputs[9][i], self.sample_rate);
+            if rising {
+                self.frozen = self.ring.pos;
+                self.phase = 0.0;
+                self.pass = 0;
+                self.count = (inputs[3][i].round().max(2.0) as usize).min(MAX_SLICES);
+                self.size = (f64::from(inputs[2][i]) * sr).clamp(self.count as f64 * 4.0 * seam, longest.max(1.0));
+                self.seed = inputs[4][i];
+                self.reverse = inputs[5][i];
+                self.repeat = inputs[6][i];
+                self.drop = inputs[7][i];
+                self.detune = inputs[8][i];
+                self.shuffle();
+            }
+            let mut wet = x;
+            if held || mix > 0.0 {
+                let slice = self.size / self.count as f64;
+                let index = ((self.phase / slice) as usize).min(self.count - 1);
+                let within = self.phase - index as f64 * slice;
+                let base = self.frozen as f64 - self.size + f64::from(self.order[index]) * slice;
+                let along = within * self.speed[index];
+                let at = if self.flipped[index] { base + slice - along } else { base + along };
+                // a slice shifted up must not read on past the end of what was held
+                let at = at.min(self.frozen as f64 - 1.0);
+                wet = if self.dropped[index] { 0.0 } else { self.ring.at(at) * edge(within, slice, seam) };
+                self.phase += 1.0;
+                if self.phase >= self.size {
+                    self.phase -= self.size;
+                    self.pass += 1;
+                    self.shuffle();
+                }
+            }
+            if !held {
+                self.ring.push(x);
+            }
+            *o = x + (wet - x) * mix;
+        }
+    }
+}
+
+const MAX_GRAINS: usize = 24;
+
+#[derive(Clone, Copy, Default)]
+struct Grain {
+    read: f64,
+    speed: f64,
+    age: f64,
+    size: f64,
+}
+
+/// Holds the last `length` of the sound as a cloud of short grains while `hold` is above zero: a grain of
+/// `grain` seconds is started `density` times per grain length, each at a place picked around `position`
+/// (0 the start of the held piece, 1 its end) by up to `spread` and pitched by `pitch` (semitones) plus up to
+/// `detune` either way. The same `seed` gives the same cloud every time.
+#[derive(Clone)]
+pub struct Freeze {
+    ring: Ring,
+    hold: Hold,
+    sample_rate: f32,
+    frozen: usize,
+    region: f64,
+    until_next: f64,
+    random: u64,
+    grains: [Grain; MAX_GRAINS],
+}
+
+impl Freeze {
+    pub fn new(max_seconds: f32) -> Self {
+        Freeze {
+            ring: Ring::new(max_seconds),
+            hold: Hold::default(),
+            sample_rate: 48_000.0,
+            frozen: 0,
+            region: 1.0,
+            until_next: 0.0,
+            random: 0,
+            grains: [Grain::default(); MAX_GRAINS],
+        }
+    }
+}
+
+impl Opcode for Freeze {
+    fn name(&self) -> &str {
+        "freeze"
+    }
+
+    fn ports(&self) -> &[Port] {
+        const PORTS: &[Port] = &[
+            Port::required("x"),
+            Port::required("hold"),
+            Port::optional("length", 0.25),
+            Port::optional("grain", 0.08),
+            Port::optional("density", 4.0),
+            Port::optional("position", 1.0),
+            Port::optional("spread", 0.5),
+            Port::optional("pitch", 0.0),
+            Port::optional("detune", 0.0),
+            Port::optional("seed", 0.0),
+            Port::optional("blend", 0.01),
+        ];
+        PORTS
+    }
+
+    fn box_clone(&self) -> Box<dyn Opcode> {
+        let mut c = Freeze::new(self.ring.max_seconds);
+        c.prepare(self.sample_rate);
+        Box::new(c)
+    }
+
+    fn prepare(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate;
+        self.ring.prepare(sample_rate);
+        self.reset();
+    }
+
+    fn reset(&mut self) {
+        self.ring.clear();
+        self.hold = Hold::default();
+        self.frozen = 0;
+        self.region = 1.0;
+        self.until_next = 0.0;
+        self.random = 0;
+        self.grains = [Grain::default(); MAX_GRAINS];
+    }
+
+    fn carry_state(&mut self, old: &mut dyn Opcode) {
+        if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>()
+            && self.sample_rate == old.sample_rate
+        {
+            self.ring.carry(&mut old.ring);
+            self.hold = old.hold.clone();
+            self.frozen = old.frozen;
+            self.region = old.region;
+            self.until_next = old.until_next;
+            self.random = old.random;
+            self.grains = old.grains;
+        }
+    }
+
+    fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
+        let sr = f64::from(self.sample_rate);
+        let longest = (self.ring.buf.len() - 1) as f64;
+        for (i, o) in out.iter_mut().enumerate() {
+            let x = inputs[0][i];
+            let (held, rising, mix) = self.hold.step(inputs[1][i], inputs[10][i], self.sample_rate);
+            if rising {
+                self.frozen = self.ring.pos;
+                self.region = (f64::from(inputs[2][i]) * sr).clamp(64.0, longest.max(64.0));
+                self.until_next = 0.0;
+                self.random = seeded(inputs[9][i], 1);
+                self.grains = [Grain::default(); MAX_GRAINS];
+            }
+            let mut wet = x;
+            if held || mix > 0.0 {
+                let density = f64::from(inputs[4][i]).clamp(1.0, 16.0);
+                let size = (f64::from(inputs[3][i]) * sr).clamp(64.0, longest.max(64.0));
+                if held {
+                    self.until_next -= 1.0;
+                    if self.until_next <= 0.0 {
+                        self.until_next += size / density;
+                        if let Some(slot) = self.grains.iter_mut().find(|g| g.age >= g.size) {
+                            let detune = (random_unit(&mut self.random) * 2.0 - 1.0) * f64::from(inputs[8][i]);
+                            let speed = ((f64::from(inputs[7][i]) + detune) * 0.057_762_265).exp();
+                            let span = (size * speed).min(self.region);
+                            let place = f64::from(inputs[5][i])
+                                + (random_unit(&mut self.random) * 2.0 - 1.0) * f64::from(inputs[6][i]);
+                            let back = span + (1.0 - place.clamp(0.0, 1.0)) * (self.region - span);
+                            *slot = Grain { read: self.frozen as f64 - back, speed, age: 0.0, size };
+                        }
+                    }
+                }
+                let mut cloud = 0.0;
+                for g in self.grains.iter_mut().filter(|g| g.age < g.size) {
+                    let t = g.age / g.size;
+                    let window = 0.5 - 0.5 * (std::f64::consts::TAU * t).cos();
+                    cloud += self.ring.at(g.read) * window as f32;
+                    g.read += g.speed;
+                    g.age += 1.0;
+                }
+                // grains start at random places, so they add up in power rather than in level
+                wet = cloud / (0.375 * density as f32).sqrt();
+            }
+            if !held {
+                self.ring.push(x);
+            }
+            *o = x + (wet - x) * mix;
+        }
+    }
+}

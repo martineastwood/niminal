@@ -11,7 +11,7 @@ A track's **Fx** columns, the command columns beside its notes (each track start
 | --- | --- |
 | `Lxx` | Sets the track's volume: `00` is silent, `FF` is +3 dB (about `B4` is 0 dB). |
 | `Pxx` | Sets its pan: `00` is left, `80` centre, `FF` right. |
-| `xyzz` | Sets parameter `y` of the effect in place `x` of the track's chain to `zz`, from its least at `00` to its most at `FF`. Both counts start at 1, in the order of the code pane's FX view and of the effect's sliders, so `12FF` turns the first effect's second parameter right up. |
+| `xyzz` | Sets parameter `y` of the effect in place `x` of the track's chain to `zz`, from its least at `00` to its most at `FF`. Both counts start at 1, in the order of the code pane's FX view and of the effect's sliders, so `12FF` turns the first effect's second parameter right up. The parameter is one hex digit, so a command reaches an effect's first 15 parameters; sliders and automation lanes reach all of them. |
 | `0yzz` | Sets macro `y` of the track (from 1, up to 8) to `zz`, from 0% at `00` to 100% at `FF`. It moves every parameter linked to that macro. |
 
 Hovering a cell, or typing one, explains it in words (`L80 sets the track volume to -1.1 dB`, `12FF sets parameter 2 of effect 1 (Echo) …`, `0180 sets macro 1 (Open) to 50%`).

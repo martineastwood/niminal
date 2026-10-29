@@ -1,5 +1,5 @@
 // Instruments built from functions: a plucked string, a wavetable, a filter with a mode switch.
-// Render with:  niminal render examples/functions.nml --out functions.wav
+// Render with:  niminal-live render examples/functions.nml --out functions.wav
 config { channels: stereo }
 tempo 96bpm
 

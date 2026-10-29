@@ -40,11 +40,12 @@ fx break_stutter(
 // A macro is one control that moves several: the controller on CC 1 sweeps the stutter's tape-echo `damp` and its
 // `shape` together (a range written backwards runs the other way). Nothing needs to be playing: it only sets the
 // controls, so the gestures below sound different as it moves. The dock shows it as a slider, too.
+// `(0..0.8).curve(2)` bends a run: `shape` holds back at first and rushes at the end.
 macro tension {
   input: midi.cc(1)
   break_stutter {
     damp:  0..0.6
-    shape: 0..0.8
+    shape: (0..0.8).curve(2)
   }
 }
 
@@ -107,6 +108,17 @@ clip rewind {
     reverse: 1
     shape:   -0.8
   }
+}
+
+// pad 41: a clip can play the macro too, by naming it as a lane. This one winds `tension` up over a bar (the
+// same `env[...]` ramps any control) and lets it fall, and `damp` and `shape` follow it, each along its own range.
+// It only sets the controls, so it is heard through the stutters above.
+clip wind_up {
+  length: 1bar
+  times: 1
+  quantize: 1/4beat
+  launch: midi.note(41)
+  tension: env[0 3/4bar 1 1/4bar 0]
 }
 
 chop.start

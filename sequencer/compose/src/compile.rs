@@ -81,12 +81,15 @@ pub struct MacroTarget {
     pub unit: niminal_lang::Unit,
     pub lo: f32,
     pub hi: f32,
+    /// How the macro's 0 to 1 is bent on the way: `t` becomes `t` to the power of this, so above 1 the control
+    /// holds back at first and below 1 it hurries (1 is a straight run).
+    pub curve: f64,
 }
 
 impl MacroTarget {
     /// The target value in its declared unit, with the same scaling as control inputs.
     pub fn value(&self, value: f64) -> f64 {
-        interpolate_range(self.unit, self.lo, self.hi, value)
+        interpolate_range(self.unit, self.lo, self.hi, value.clamp(0.0, 1.0).powf(self.curve))
     }
 }
 
@@ -279,7 +282,16 @@ pub fn compile_with(
     };
 
     let names = names_of(&items, &program.controls);
+    let macros = match compile_macros(&items, &program, tempo) {
+        Ok(macros) => macros,
+        Err(mut found) => {
+            errors.append(&mut found);
+            Vec::new()
+        }
+    };
+
     let cx = Context {
+        macros: &macros,
         tempo,
         names: &names,
         instruments: &program.instruments,
@@ -313,14 +325,6 @@ pub fn compile_with(
         Ok(inputs) => inputs,
         Err(d) => {
             errors.push(d);
-            Vec::new()
-        }
-    };
-
-    let macros = match compile_macros(&items, &program, tempo) {
-        Ok(macros) => macros,
-        Err(mut found) => {
-            errors.append(&mut found);
             Vec::new()
         }
     };
@@ -689,6 +693,25 @@ fn compile_macros(items: &[Item], program: &Program, tempo: Tempo) -> Result<Vec
                 ));
                 continue;
             }
+            // `(0..0.6).curve(2)` bends the run: the macro's 0 to 1 is raised to that power on the way
+            let (range, curve) = match &range.kind {
+                ExprKind::Call { name, args }
+                    if name.name == "curve" && args.len() == 2 && args[0].receiver =>
+                {
+                    match &args[1].value.kind {
+                        ExprKind::Num { value, unit: None } if *value > 0.0 => (&args[0].value, *value),
+                        _ => {
+                            errors.push(Diagnostic::new(
+                                "`curve` takes a number above 0",
+                                args[1].value.span,
+                            )
+                            .with_help("above 1 holds the control back at first, below 1 hurries it: `(0..0.6).curve(2)`"));
+                            continue;
+                        }
+                    }
+                }
+                _ => (range, 1.0),
+            };
             let bounds = match &range.kind {
                 ExprKind::Range {
                     lo,
@@ -708,7 +731,7 @@ fn compile_macros(items: &[Item], program: &Program, tempo: Tempo) -> Result<Vec
                 continue;
             };
             match (def.convert(lo, lo_unit, tempo), def.convert(hi, hi_unit, tempo)) {
-                (Ok(lo), Ok(hi)) => targets.push(MacroTarget { control, unit: def.unit, lo, hi }),
+                (Ok(lo), Ok(hi)) => targets.push(MacroTarget { control, unit: def.unit, lo, hi, curve }),
                 (Err(why), _) | (_, Err(why)) => errors.push(Diagnostic::new(why, range.span)),
             }
         }

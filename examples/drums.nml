@@ -1,7 +1,7 @@
 // Samples and kits. Every .wav in the folder is a sample you can name in a pattern.
 // One instrument wraps the whole kit; individual drums can use their own routing.
 // Rows can take pan/gain/pitch and mini-notation.
-// Render with:  niminal render examples/drums.nml --out drums.wav --bars 4
+// Render with:  niminal-live render examples/drums.nml --out drums.wav --bars 4
 config { channels: stereo }
 tempo 100bpm
 

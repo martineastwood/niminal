@@ -64,6 +64,9 @@ export default defineConfig({
           { label: 'Sequencer protocol', slug: 'reference/protocol' },
           { label: 'Editor and LSP', slug: 'reference/editor' },
         ] },
+        { label: 'Stage', items: [
+          { label: 'niminal stage', slug: 'reference/stage' },
+        ] },
         { label: 'Tracker', items: [
           { label: 'Overview', slug: 'reference/tracker' },
           { label: 'The grid', slug: 'reference/tracker/grid' },

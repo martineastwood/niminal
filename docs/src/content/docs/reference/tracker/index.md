@@ -5,6 +5,12 @@ description: A desktop tracker for niminal — pattern grid, mixer and a code pa
 
 **Compiled by niminal.** The instrument and effect code you edit in the tracker is the same language as the server's half of a `.nml` file, compiled by the server as you press **Apply**. The notes, patterns, tracks and automation belong to the tracker's own project, not to a `.nml` file.
 
+## What is a tracker?
+
+A tracker is a way of writing music as a spreadsheet. Time runs down the page in rows, and each column is a track, with an instrument and its own effects. You type a note into a cell (`C-4`, `E-4`, `G-4`), and when you press play a cursor steps down the rows and plays whatever it reaches. A block of rows is a pattern, and a song is a list of patterns played in order.
+
+The style comes from home computers and the demoscene of the late 1980s, and it is still used because it is fast and exact. You work from the keyboard, you see every note and every row at once, and you can't nudge a note off the grid by accident. Where [niminal's text files](/reference/language/) describe music in code, a tracker describes it in a grid.
+
 The tracker is a desktop app: a keyboard-driven pattern grid, a mixer, and an editor for the code behind each sound. It connects directly to `niminal` and does not need `niminal-live`, so the only program you need installed beside it is the server.
 
 ## Open it

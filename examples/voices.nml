@@ -1,5 +1,5 @@
 // Voices that know their length and place, delayed layers, tuning and a counter shared by notes.
-// Render with:  niminal render examples/voices.nml --out voices.wav
+// Render with:  niminal-live render examples/voices.nml --out voices.wav
 config {
   channels: stereo,
   tuning: { a4: 432hz, scale: just },

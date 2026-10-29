@@ -79,8 +79,8 @@ const features = [
             <a class="btn btn-solid" href="/guide/getting-started/">Get started</a>
             <a class="btn" href={REPO}>View on GitHub ↗</a>
           </div>
-          <button class="install" data-copy="cargo install --git https://github.com/martineastwood/niminal niminal-cli" title="Copy">
-            <span class="prompt">$</span> cargo install --git github.com/martineastwood/niminal niminal-cli <span class="copy-hint">copy</span>
+          <button class="install" data-copy="cargo install --git https://github.com/martineastwood/niminal niminal-cli niminal-live-cli" title="Copy">
+            <span class="prompt">$</span> cargo install --git github.com/martineastwood/niminal niminal-cli niminal-live-cli <span class="copy-hint">copy</span>
           </button>
         </div>
         <div class="hero-right">
@@ -166,8 +166,11 @@ const features = [
           <p class="eyebrow">the loop</p>
           <h2>Start a server. Send it code. Hear it change.</h2>
         </div>
-        <pre class="term"><code><span class="c"># play sound and listen for code</span>
-<span class="p">$</span> niminal server examples/groove.nml --midi
+        <pre class="term"><code><span class="c"># start the audio server</span>
+<span class="p">$</span> niminal server
+
+<span class="c"># in another terminal: play a piece, and listen for changes</span>
+<span class="p">$</span> niminal-live live examples/groove.nml --midi
 
 <span class="c"># change the music, landing four bars from now</span>
 <span class="p">$</span> niminal-live send 'chorus.start' --quantize "next 4bars"

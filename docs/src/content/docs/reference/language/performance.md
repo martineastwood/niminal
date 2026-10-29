@@ -398,7 +398,37 @@ macro tension {
 }
 ```
 
-With the macro at 0 every control is at the start of its range, and at 1 at the end. A range written backwards (`1..0`) runs the other way, and a frequency or a level in dB sweeps evenly by ear. The macro is a control like any other: a controller or OSC moves it, and the code can read it by name (`tension`). It can move `ctl`s and the parameters of effects, in any file of the project. A macro can't move another macro, and lists a control once. Two macros may share a control: the one moved last wins. Only a move from a controller or OSC moves the targets; a clip lane or an envelope that drives the macro's own control does not.
+With the macro at 0 every control is at the start of its range, and at 1 at the end. A range written backwards (`1..0`) runs the other way, and a frequency or a level in dB sweeps evenly by ear. The macro is a control like any other: a controller or OSC moves it, and the code can read it by name (`tension`). It can move `ctl`s and the parameters of effects, in any file of the project. A macro can't move another macro, and lists a control once. Two macros may share a control: the one moved last wins. 
+
+**Bending a run.** A range runs straight from one end to the other. Write `(0..0.6).curve(2)` to bend it: the macro's 0 to 1 is raised to that power on the way, so above 1 the control holds back at first and then rushes at the end, and below 1 it hurries off and settles. Each control has its own, so one macro can open a filter slowly and a stutter quickly.
+
+```nml
+macro tension {
+  input: midi.cc(1)
+  break_stutter {
+    damp:  (0..0.6).curve(2)
+    shape: 0..1
+  }
+}
+```
+
+**Playing a macro from a clip.** A lane named for a macro moves everything the macro moves, so a gesture can be written once and shaped in time: steps, a list of levels, or an `env[...]` of 0 to 1 all work, and each control follows along its own range and curve.
+
+```nml
+clip build {
+  length: 2bars
+  times: 1
+  tension: env[0 2bars 1]       // the filter, the stutter and the crush all rise together
+}
+
+clip hit {
+  length: 1bar
+  times: 1
+  tension: .... .... .... xxxx  // all of it, for the last beat
+}
+```
+
+A clip can't also have a lane of its own for a control the macro moves. Moving the macro with a controller or OSC sets the same targets by hand.
 
 **Launching a scene or clip from a pad:** the usual case has a shorter form. Say which key launches it where it is defined, and `launch:` is the same as an `on` line that starts it:
 

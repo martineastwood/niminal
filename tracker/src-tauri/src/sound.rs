@@ -55,8 +55,15 @@ pub struct Sound {
 }
 
 impl Sound {
-    /// `dir` is the project folder, where the files a sampler names are found.
-    pub fn parse(kind: Kind, source: String, dir: Option<&str>) -> Result<Self, String> {
+    /// `dir` is the project folder, where the files a sampler names are found. `bpm` and `beats_per_bar` (in
+    /// quarter-note beats: 3 in 6/8) say how long the lengths in beats and bars are, which the language works
+    /// out and the engine, taking only seconds, never sees. They are set when the slot is applied, so they
+    /// follow a tempo change the next time it is.
+    pub fn parse(kind: Kind, source: String, dir: Option<&str>, bpm: f64, beats_per_bar: f64) -> Result<Self, String> {
+        // before a song has been sent there is no tempo or meter yet
+        let (bpm, beats_per_bar) = (if bpm > 0.0 { bpm } else { 120.0 }, if beats_per_bar > 0.0 { beats_per_bar } else { 4.0 });
+        // pasted code often carries non-breaking spaces, which the language's own lexer takes as spaces
+        let source = niminal_compose::resolve_musical_time(&source.replace('\u{a0}', " "), bpm, beats_per_bar).map_err(|e| e.message)?;
         let definitions = symbols(&source).map_err(|e| e.message)?;
         let wanted = if kind == Kind::Instr {
             SymbolKind::Instrument
@@ -110,10 +117,8 @@ impl Sound {
                     .collect::<Vec<_>>()
                     .join("; ")
             })?;
+            // every parameter is listed for sliders and automation; a command column reaches the first 15
             for param in &definition.params {
-                if parameters.len() == 15 {
-                    break;
-                }
                 let key = format!("{}::{}", definition.name, param.name);
                 let Some(control) = program.controls.iter().find(|control| control.name == key)
                 else {
@@ -177,11 +182,24 @@ impl Sound {
 mod tests {
     use super::*;
     #[test]
+    fn a_library_effect_with_tempo_synced_defaults_follows_the_tempo() {
+        let source = "fx stutter(length: 1ms..1sec = 1/4beat, bar: 100ms..4sec = 1bar) { out = in }";
+        let at = |bpm, per_bar| Sound::parse(Kind::Fx, source.into(), None, bpm, per_bar).unwrap().parameters.iter().map(|p| p.default).collect::<Vec<_>>();
+        assert_eq!(at(120.0, 4.0), vec![0.125, 2.0]);
+        assert_eq!(at(60.0, 4.0), vec![0.25, 4.0]);
+        // a bar is as long as the meter says: 3 beats in 3/4 or 6/8, 3.5 in 7/8
+        assert_eq!(at(120.0, 3.0), vec![0.125, 1.5]);
+        assert_eq!(at(120.0, 3.5), vec![0.125, 1.75]);
+    }
+
+    #[test]
     fn separates_reusable_fx_from_its_helper_definitions() {
         let sound = Sound::parse(
             Kind::Fx,
             "fn soften(x) { x * 0.5 }\nfx low { out = soften(in) }\n".into(),
             None,
+            120.0,
+            4.0,
         )
         .unwrap();
         assert_eq!(sound.target, "low");
@@ -196,7 +214,7 @@ mod parameter_tests {
     use super::*;
     #[test]
     fn exposes_typed_fx_parameters_in_signature_order() {
-        let sound = Sound::parse(Kind::Fx, "fx filter(cutoff: hz = 2400hz, resonance: 0..1 = 0.2) { out = in.lpf(cutoff: cutoff, res: resonance) }".into(), None).unwrap();
+        let sound = Sound::parse(Kind::Fx, "fx filter(cutoff: hz = 2400hz, resonance: 0..1 = 0.2) { out = in.lpf(cutoff: cutoff, res: resonance) }".into(), None, 120.0, 4.0).unwrap();
         assert_eq!(
             sound
                 .parameters
@@ -215,7 +233,7 @@ mod parameter_tests {
 
     #[test]
     fn a_gain_in_decibels_has_its_bounds_in_decibels_too() {
-        let sound = Sound::parse(Kind::Fx, "fx squeeze(threshold: -60db..0db = -18db, makeup: 0db..24db = 3db) { out = in.compress(threshold: threshold, makeup: makeup) }".into(), None).unwrap();
+        let sound = Sound::parse(Kind::Fx, "fx squeeze(threshold: -60db..0db = -18db, makeup: 0db..24db = 3db) { out = in.compress(threshold: threshold, makeup: makeup) }".into(), None, 120.0, 4.0).unwrap();
         let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
         let (threshold, makeup) = (&sound.parameters[0], &sound.parameters[1]);
         assert!(near(threshold.min, -60.0) && near(threshold.max, 0.0) && near(threshold.default, -18.0), "{threshold:?}");

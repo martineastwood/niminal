@@ -110,6 +110,31 @@ pub fn dsp_source(source: &str, tempo: Tempo) -> Result<String, Diagnostic> {
     Ok(project(source, &items, tempo, false)?.text)
 }
 
+/// `text` with its lengths in beats and bars written out in seconds, and nothing else changed: a beat is a
+/// quarter note at `bpm`, and a bar is `beats_per_bar` of them (3 in 6/8, 3.5 in 7/8). For a client that sends
+/// the audio server a definition on its own, with no composition around it.
+pub fn resolve_musical_time(text: &str, bpm: f64, beats_per_bar: f64) -> Result<String, Diagnostic> {
+    let tempo = Tempo {
+        beats_per_bar,
+        ..Tempo::new(bpm)
+    };
+    let mut edits = token_edits(text, tempo)?;
+    edits.retain(|(span, _)| {
+        let written = &text[span.start..span.end];
+        ["beat", "beats", "bar", "bars"].iter().any(|unit| written.ends_with(unit))
+    });
+    edits.sort_by_key(|(span, _)| span.start);
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for (span, replacement) in edits {
+        out.push_str(&text[at..span.start]);
+        out.push_str(&replacement);
+        at = span.end;
+    }
+    out.push_str(&text[at..]);
+    Ok(out)
+}
+
 /// Like [`dsp_source`], for items already parsed. With `standalone`, the controls that `clock.beat` and the
 /// like are made from are defined too, at the tempo given; otherwise whoever plays the DSP defines them.
 pub fn project(
@@ -385,15 +410,24 @@ pub fn warnings(source: &str) -> Vec<Diagnostic> {
         .collect()
 }
 
-/// Does the clip have rows for an effect, such as `stutter_fx { hold: ..x. }`? With no instrument it is a
-/// gesture: it plays no notes and only moves those controls.
-pub fn drives_effects(clip: &crate::ast::NamedBlock) -> bool {
-    clip.entries.iter().any(|(_, v)| matches!(v.kind, ExprKind::FxLanes(_)))
+/// Does the clip have rows for an effect, such as `stutter_fx { hold: ..x. }`, or a lane for one of the
+/// `macros`? With no instrument it is a gesture: it plays no notes and only moves those controls.
+pub fn drives_effects(clip: &crate::ast::NamedBlock, macros: &[&str]) -> bool {
+    clip.entries
+        .iter()
+        .any(|(k, v)| matches!(v.kind, ExprKind::FxLanes(_)) || macros.contains(&k.name.as_str()))
 }
 
 /// Is the clip a gesture: rows for an effect of its own, or made from a clip that has them?
 fn is_gesture(clip: &crate::ast::NamedBlock, items: &[(Item, Span)], depth: usize) -> bool {
-    if drives_effects(clip) {
+    let macros: Vec<&str> = items
+        .iter()
+        .filter_map(|(item, _)| match item {
+            Item::Macro(b) => Some(b.name.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    if drives_effects(clip, &macros) {
         return true;
     }
     let Some(root) = clip.base.as_deref().and_then(|b| b.root_name()) else {

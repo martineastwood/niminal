@@ -413,14 +413,9 @@ fn the_instrument_library_compiles_and_every_instrument_sounds() {
 #[test]
 fn the_effect_library_compiles() {
     let expanded = expand(&take_all("std/fx"), Path::new(".")).unwrap();
-    let program = compile(&expanded.text).unwrap_or_else(|errors| {
-        panic!(
-            "{}",
-            errors
-                .iter()
-                .map(|e| e.render("std", &expanded.text))
-                .collect::<String>()
-        )
+    let text = at_120bpm(&expanded.text);
+    let program = compile(&text).unwrap_or_else(|errors| {
+        panic!("{}", errors.iter().map(|e| e.render("std", &text)).collect::<String>())
     });
     assert!(program.instruments.is_empty());
     assert!(expanded.text.matches("\nfx ").count() >= 15);
@@ -674,6 +669,64 @@ fn slow_down_lowers_the_pitch_and_comes_to_a_stop() {
 }
 
 #[test]
+fn scatter_plays_the_slices_of_the_last_piece_shuffled_and_the_seed_decides_the_order() {
+    // a slow ramp held from 0.5 s, cut into 4 slices of 12.5 ms: each slice is a short rising run, and the
+    // order of their starting levels is the shuffle
+    let render_with = |seed: u32| {
+        render(
+            &format!(
+                "instr a() {{ phasor(0.5hz).scatter(hold: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.9), length: 50ms, slices: 4, seed: {seed}) }}"
+            ),
+            1000,
+        )
+    };
+    let (a, b, again) = (render_with(1), render_with(2), render_with(1));
+    assert!(finite(&a) && finite(&b));
+    assert_eq!(a, again, "the same seed shuffles the same way");
+    let starts = |out: &[f32]| -> Vec<i32> {
+        (0..4).map(|k| (out[24_000 + 600 * k + 300] * 1000.0).round() as i32).collect()
+    };
+    assert_ne!(starts(&a), starts(&b), "another seed, another order");
+    let mut sorted = starts(&a);
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), 4, "every slice is played once per pass: {:?}", starts(&a));
+    assert!(rms(&a[40_000..46_000]) > 0.0, "the sound returns after the hold");
+}
+
+#[test]
+fn scatter_can_drop_repeat_and_detune_slices() {
+    let render_with = |args: &str| {
+        render(
+            &format!(
+                "instr a() {{ osc(saw, 220hz).scatter(hold: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.9), length: 80ms, slices: 8, seed: 3{args}) }}"
+            ),
+            1000,
+        )
+    };
+    let held = |out: &[f32]| rms(&out[24_500..28_000]);
+    let (plain, dropped, all_dropped) = (render_with(""), render_with(", drop: 0.5"), render_with(", drop: 1"));
+    assert!(finite(&dropped) && held(&all_dropped) < 0.001, "every slice dropped is silent: {}", held(&all_dropped));
+    assert!(held(&dropped) < held(&plain) * 0.9, "dropping some slices lowers the level");
+    assert_ne!(render_with(", repeat: 1"), plain, "swapping slices changes the order");
+    let detuned = render_with(", detune: 12");
+    assert!(finite(&detuned) && detuned != plain, "detuned slices differ");
+    assert_eq!(detuned, render_with(", detune: 12"), "and the same way every time");
+}
+
+#[test]
+fn freeze_holds_the_last_piece_as_a_steady_cloud() {
+    // a tone that stops at 0.5 s: frozen, it carries on sounding
+    let out = render(
+        "instr a() { (osc(sine, 440hz) * (phasor(1hz) < 0.5)).freeze(hold: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.9), length: 200ms, spread: 0) }",
+        1000,
+    );
+    assert!(finite(&out));
+    assert!(rms(&out[28_000..36_000]) > 0.2, "the held tone sounds: {}", rms(&out[28_000..36_000]));
+    assert!(rms(&out[46_000..47_900]) < 0.01, "silence returns after the hold");
+}
+
+#[test]
 fn bitcrush_keeps_silence_silent_and_full_scale_exact() {
     // a quantizer with no zero level would leave a constant offset on silence
     for bits in [2, 4, 8, 16] {
@@ -795,6 +848,8 @@ fn a_hold_starts_and_ends_without_a_click() {
         "repeat_last(hold: gate, length: 47ms)",
         "rewind_last(hold: gate, length: 50ms)",
         "slow_down(hold: gate, time: 100ms)",
+        "scatter(hold: gate, length: 50ms, slices: 4, reverse: 0.5, repeat: 0.5, drop: 0.2, detune: 7)",
+        "freeze(hold: gate, length: 50ms)",
     ] {
         let out = render(
             &format!("instr a() {{ gate = (phasor(1hz) > 0.5) * (phasor(1hz) < 0.7)\n osc(sine, 220hz).{call} }}"),
@@ -842,7 +897,7 @@ fn std_fx_is_taken_by_name() {
     assert!(err.message.contains("no `nope`"), "{}", err.message);
     let expanded = expand("use std/fx.{echo, soft_clip}\n", Path::new(".")).unwrap();
     assert_eq!(expanded.text.matches("\nfx ").count(), 2);
-    assert!(compile(&expanded.text).is_ok());
+    assert!(compile(&at_120bpm(&expanded.text)).is_ok());
 }
 
 /// A file and a module it uses can each take their own effects from `std/fx`; the piece gets all of them, once.
@@ -855,11 +910,20 @@ fn separate_uses_of_std_fx_add_up() {
     assert_eq!(expanded.text.matches("\nfx echo(").count(), 1);
     assert_eq!(expanded.text.matches("\nfx soft_clip(").count(), 1);
     assert_eq!(expanded.text.matches("\nfx lofi(").count(), 0);
-    assert!(compile(&expanded.text).is_ok());
+    assert!(compile(&at_120bpm(&expanded.text)).is_ok());
     std::fs::remove_dir_all(&dir).ok();
 }
 
 /// `use` for every preset on a shelf.
+/// The library's defaults that follow the tempo (`1/4beat`, `1bar`) written out at 120bpm, the way a client does
+/// before it hands the audio server a definition.
+fn at_120bpm(text: &str) -> String {
+    text.replace("3/4beat", "375ms")
+        .replace("1/2beat", "250ms")
+        .replace("1/4beat", "125ms")
+        .replace("1bar", "2sec")
+}
+
 fn take_all(shelf: &str) -> String {
     let names: Vec<&str> = niminal_lang::presets::of_shelf(shelf).map(|p| p.id.as_str()).collect();
     format!("use {shelf}.{{{}}}\n", names.join(", "))
@@ -878,7 +942,7 @@ fn the_preset_catalog_is_complete_and_its_json_is_current() {
         assert!(!p.folder.is_empty() && !p.description.is_empty(), "{} needs a folder and a description", p.id);
         assert!(!p.params.is_empty(), "{} lists its parameters", p.id);
         let alone = format!("{}\n{}", p.helpers, p.source);
-        compile(&alone).unwrap_or_else(|e| panic!("{} on its own: {}", p.id, e[0].message));
+        compile(&at_120bpm(&alone)).unwrap_or_else(|e| panic!("{} on its own: {}", p.id, e[0].message));
     }
     assert_eq!(find("kick_808").unwrap().folder, "drums/kicks");
     assert!(find("kick_808").unwrap().helpers.starts_with("/// A drum voice") || find("kick_808").unwrap().helpers.contains("fn drum("));

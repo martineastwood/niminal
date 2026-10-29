@@ -11,7 +11,7 @@ use niminal_engine::ops::{
     Allpass, Biquad, BiquadMode, Bitcrush, Chorus, Clip, Comb, Compressor, Convolve, DcBlock, Delay, Distortion, Eq,
     EqMode, Fdn, FilterMode, FinishWhen, Fn1, Fold, Follow, Formant, Func, GLITCH_MAX_SECONDS, Gain, Gate, Impulse,
     IrSpectrum, Ladder, Lag, Limiter, Modal, Noise, NoiseColor, Osc, Phaser, Phasor, PitchShift, Resonator,
-    RepeatLast, Reverb, RewindLast, SampleHold, SlowDown, SpectralDelay, SpectralFreeze, Svf, Waveshape, Wavetable,
+    RepeatLast, Reverb, RewindLast, SampleHold, Scatter, SlowDown, Freeze, SpectralDelay, SpectralFreeze, Svf, Waveshape, Wavetable,
 };
 
 use crate::unit::Unit;
@@ -642,6 +642,43 @@ impl Registry {
                     setting("max", Kind::Signal(Unit::Time)),
                 ],
                 Build::Builtin(|a| Ok(Box::new(SlowDown::new(glitch_max(a)?)))),
+            ),
+            OpSpec::new(
+                "scatter",
+                "Cuts the last `length` of the sound (a bar, say) into `slices` and plays them back in a shuffled order for as long as `hold` is above zero, then lets the sound through again. Each pass through the pieces is a new shuffle, and the same `seed` gives the same shuffles every time, so a seed you like is a glitch you can keep. Each slice then rolls the dice, all from the same seed: `reverse` (0 to 1) is the chance it plays backwards, `repeat` the chance it is swapped for a slice picked at random (so some come twice and some not at all), `drop` the chance it is silent, and `detune` is how many semitones, up to, it may be shifted either way. `slices` is 2 to 32 (default 8). `blend` is the fade in and out (3ms). `max:` is the longest `length` (default 2 seconds, at most 30).",
+                vec![
+                    req("x", SIGNAL),
+                    req("hold", SIGNAL),
+                    req("length", Kind::Signal(Unit::Time)),
+                    opt("slices", SIGNAL),
+                    opt("seed", SIGNAL),
+                    opt("reverse", SIGNAL),
+                    opt("repeat", SIGNAL),
+                    opt("drop", SIGNAL),
+                    opt("detune", SIGNAL),
+                    opt("blend", Kind::Signal(Unit::Time)),
+                    setting("max", Kind::Signal(Unit::Time)),
+                ],
+                Build::Builtin(|a| Ok(Box::new(Scatter::new(glitch_max(a)?)))),
+            ),
+            OpSpec::new(
+                "freeze",
+                "Holds the last `length` of the sound (default 250ms) as a cloud of tiny grains for as long as `hold` is above zero, so a moment of the sound hangs in the air while the rest carries on unheard. A grain of `grain` seconds (80ms) starts `density` times per grain length (4), each at a place picked around `position` (0 is the start of the held piece, 1 the end) by up to `spread` (0 to 1): a spread of 0 holds one spot and a wide spread smears the whole piece. `pitch` (semitones) shifts every grain and `detune` adds up to that many semitones either way at random. The same `seed` gives the same cloud every time. `blend` is the fade in and out (10ms). `max:` is the most sound kept (default 2 seconds, at most 30).",
+                vec![
+                    req("x", SIGNAL),
+                    req("hold", SIGNAL),
+                    opt("length", Kind::Signal(Unit::Time)),
+                    opt("grain", Kind::Signal(Unit::Time)),
+                    opt("density", SIGNAL),
+                    opt("position", SIGNAL),
+                    opt("spread", SIGNAL),
+                    opt("pitch", SIGNAL),
+                    opt("detune", SIGNAL),
+                    opt("seed", SIGNAL),
+                    opt("blend", Kind::Signal(Unit::Time)),
+                    setting("max", Kind::Signal(Unit::Time)),
+                ],
+                Build::Builtin(|a| Ok(Box::new(Freeze::new(glitch_max(a)?)))),
             ),
             OpSpec::new(
                 "ladder",

@@ -332,6 +332,8 @@ op_enum! {
         RepeatLast(ops::RepeatLast),
         RewindLast(ops::RewindLast),
         SlowDown(ops::SlowDown),
+        Scatter(ops::Scatter),
+        Freeze(ops::Freeze),
         Follow(ops::Follow),
         Phaser(ops::Phaser),
         PitchShift(ops::PitchShift),

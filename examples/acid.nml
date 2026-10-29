@@ -1,5 +1,5 @@
 // An acid bassline. A mono saw through a squelchy resonant low-pass, with slides and accents.
-// Render with:  niminal render examples/acid.nml --out acid.wav --bars 4
+// Render with:  niminal-live render examples/acid.nml --out acid.wav --bars 4
 // Live, try:  line.set(cutoff: 300hz)   then   line.set(envmod: 4khz)   then   line.set(res: 0.95)
 //             then   line.transpose(+5st)   then   line.undo
 config { channels: stereo }
