@@ -467,7 +467,7 @@ fn oscillator_controls_example_sounds_and_releases_at_device_sample_rates() {
         let p = program(include_str!("../../../../examples/oscillator_controls.nml"));
         let schedule = p.schedule();
         let mut session = niminal_live::Offline::new(rate, p.master).without_limiter();
-        session.play_program(p, schedule);
+        session.play_program(p, schedule).unwrap();
         let out = session.process((rate * 10.0) as usize);
         let peak = out.iter().flatten().fold(0.0f32, |p, x| p.max(x.abs()));
         assert!(peak > 0.01, "silent example at {rate}hz");

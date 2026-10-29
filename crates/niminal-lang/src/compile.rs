@@ -66,6 +66,41 @@ impl Default for CompileOptions {
 }
 
 /// Lower fx parameters to named controls.
+/// A parameter typed `division` is a length that the body sees snapped to the nearest musical division at the
+/// tempo: the body's uses of it read `snap_division` of the parameter, bound to a name of its own. This runs
+/// before names are qualified, so the call is qualified with the rest of the text it came from.
+fn snap_divisions(items: &mut [Item]) {
+    for item in items {
+        let (params, body) = match item {
+            Item::Instr(d) => (&d.params, &mut d.body),
+            Item::Fn(d) => (&d.params, &mut d.body),
+            Item::Node(d) | Item::Fx(d) => (&d.params, &mut d.body),
+            _ => continue,
+        };
+        for param in params {
+            if !matches!(&param.ty, Some(TypeSpec::Unit(t)) if t.name == "division") {
+                continue;
+            }
+            let snapped = format!("{}__snapped", param.name.name);
+            for stmt in body.iter_mut() {
+                for e in stmt.exprs_mut() {
+                    rename(e, &param.name.name, &snapped);
+                }
+            }
+            let at = param.name.span;
+            let read = Expr { kind: ExprKind::Name(param.name.name.clone()), span: at };
+            let call = Expr {
+                kind: ExprKind::Call {
+                    name: Ident { name: "snap_division".into(), span: at },
+                    args: vec![Arg { name: None, value: read, receiver: false }],
+                },
+                span: at,
+            };
+            body.insert(0, Stmt::Bind { name: Ident { name: snapped, span: at }, value: call });
+        }
+    }
+}
+
 fn desugar(items: Vec<Item>) -> Vec<Item> {
     let mut out = Vec::with_capacity(items.len());
     for mut item in items {
@@ -266,6 +301,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     let source = &crate::lower_clock(source, crate::ClockState::default()).map_err(|d| vec![d])?;
     crate::validate_dsp(source).map_err(|d| vec![d])?;
     let mut parsed = parser::parse(source).map_err(|d| vec![d])?;
+    snap_divisions(&mut parsed);
     crate::namespace::qualify(&mut parsed, &options.namespaces);
     let mut namespace_tempos = HashMap::new();
     let mut configs_by_owner: HashMap<&str, Vec<Item>> = HashMap::new();

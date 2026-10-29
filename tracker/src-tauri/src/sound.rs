@@ -41,6 +41,7 @@ fn parameter(
         default,
         unit: unit.suffix().map(str::to_string),
         musical: None,
+        division: false,
     }
 }
 
@@ -66,6 +67,7 @@ impl Sound {
         // pasted code often carries non-breaking spaces, which the language's own lexer takes as spaces
         let written = source.replace('\u{a0}', " ");
         let musical = niminal_compose::beat_controls(&written);
+        let divisions = niminal_compose::division_controls(&written);
         let source = niminal_compose::resolve_musical_time(&written, bpm, beats_per_bar).map_err(|e| e.message)?;
         let definitions = symbols(&source).map_err(|e| e.message)?;
         let wanted = if kind == Kind::Instr {
@@ -128,10 +130,21 @@ impl Sound {
                     continue;
                 };
                 let mut made = parameter(&param.name, control.unit, control.range, f64::from(control.initial));
-                made.musical = musical
+                let beats = musical
                     .iter()
                     .find(|m| m.effect.as_deref() == Some(definition.name.as_str()) && m.name == param.name)
                     .map(|m| (m.value, m.unit.to_string()));
+                if divisions.iter().any(|(effect, name)| *effect == definition.name && *name == param.name) {
+                    // a division is held in beats, whatever it started as, and picked from the list of divisions
+                    let default = match &beats {
+                        Some((value, unit)) if unit == "bars" => value * beats_per_bar,
+                        Some((value, _)) => *value,
+                        None => made.default * bpm / 60.0,
+                    };
+                    (made.min, made.max, made.default, made.unit, made.division) = (0.125, 4.0, default, Some("beats".into()), true);
+                } else {
+                    made.musical = beats;
+                }
                 parameters.push(made);
             }
         }
@@ -208,6 +221,20 @@ mod tests {
     }
 
     #[test]
+    fn a_division_parameter_is_held_in_beats_whatever_the_tempo() {
+        let source = "fx stutter(length: division = 1/4beat, other: division = 0.2sec) { out = in }";
+        for bpm in [90.0, 120.0] {
+            let parameters = Sound::parse(Kind::Fx, source.into(), None, bpm, 4.0).unwrap().parameters;
+            assert!(parameters.iter().all(|p| p.division && p.unit.as_deref() == Some("beats") && (p.min, p.max) == (0.125, 4.0)));
+            assert_eq!(parameters[0].default, 0.25);
+            assert_eq!(parameters[0].default_argument(), json!("0.25beats"));
+            // a default in seconds is that many beats at the tempo it was read at
+            assert!((parameters[1].default - 0.2 * bpm / 60.0).abs() < 1e-6, "{}", parameters[1].default);
+            assert_eq!(parameters[0].argument(0.5), json!("0.5beats"));
+        }
+    }
+
+    #[test]
     fn separates_reusable_fx_from_its_helper_definitions() {
         let sound = Sound::parse(
             Kind::Fx,
@@ -227,7 +254,6 @@ mod tests {
 #[cfg(test)]
 mod parameter_tests {
     use super::*;
-    use serde_json::json;
     #[test]
     fn exposes_typed_fx_parameters_in_signature_order() {
         let sound = Sound::parse(Kind::Fx, "fx filter(cutoff: hz = 2400hz, resonance: 0..1 = 0.2) { out = in.lpf(cutoff: cutoff, res: resonance) }".into(), None, 120.0, 4.0).unwrap();

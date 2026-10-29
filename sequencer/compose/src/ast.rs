@@ -71,6 +71,8 @@ pub enum Item {
 pub struct ControlInput {
     pub source: InputSource,
     pub hi: Expr,
+    /// `.quantize(1/8beat)`: a change lands on the next such boundary, not at once.
+    pub quantize: Option<Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -49,9 +49,22 @@ impl Live {
         unit: Option<&str>,
         smooth_ms: Option<f64>,
     ) -> Result<(), Vec<Problem>> {
+        self.set_control_at(name, value, unit, smooth_ms, None)
+    }
+
+    /// Like [`Live::set_control`], at sample `at` (now if none).
+    pub fn set_control_at(
+        &mut self,
+        name: &str,
+        value: f64,
+        unit: Option<&str>,
+        smooth_ms: Option<f64>,
+        at: Option<u64>,
+    ) -> Result<(), Vec<Problem>> {
+        let at = at.map_or(At::Now, At::Sample);
         let control = |name: &str, value: f64, unit: Option<String>, glide: Option<Time>| Op::Control {
             name: name.into(),
-            at: At::Now,
+            at,
             value,
             unit,
             glide,
@@ -202,7 +215,7 @@ impl Live {
             _ => {}
         }
         self.learn(signal);
-        let targets: Vec<(String, f64, Option<&'static str>)> = self
+        let targets: Vec<(String, f64, Option<&'static str>, Option<u64>)> = self
             .program
             .controls
             .iter()
@@ -246,16 +259,21 @@ impl Live {
                         .then(|| f64::from(*velocity) / 127.0)?,
                     _ => return None,
                 };
+                // a bound control that is quantized moves on the next boundary, so a hold begins and ends on the beat
+                let at = binding
+                    .quantize
+                    .map(|q| self.grid().landing(q, self.clock));
                 Some((
                     def.name.clone(),
                     binding.map_input(def, t),
                     def.unit.suffix(),
+                    at,
                 ))
             })
             .collect();
         keys + targets
             .iter()
-            .filter(|(name, value, unit)| self.set_control(name, *value, *unit, None).is_ok())
+            .filter(|(name, value, unit, at)| self.set_control_at(name, *value, *unit, None, *at).is_ok())
             .count()
     }
 

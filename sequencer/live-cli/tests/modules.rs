@@ -28,7 +28,7 @@ fn peak(source: &str, dir: &Path) -> f32 {
         });
     let mut session = niminal_live::Offline::new(48_000.0, niminal_lang::Layout::Mono);
     let schedule = program.schedule();
-    session.play_program(program, schedule);
+    session.play_program(program, schedule).unwrap();
     let out = session.process(24_000);
     let notices = session.take_notices();
     assert!(notices.is_empty(), "{notices:?}");

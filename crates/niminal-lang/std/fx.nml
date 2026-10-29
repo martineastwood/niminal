@@ -108,7 +108,7 @@ fx echo(
 /// through untouched while all are off. The `gate` is the one control that starts open: a row of steps for it is a trance gate (`x` lets the sound through and `.` cuts it), with `gate_attack` and `gate_release` rounding the edges. A `stutter_shrink` below 1 makes a held stutter roll faster, a `stutter_gate` below 1 makes the repeats staccato, and a `stutter_reverse` above 0 plays them backwards, a `stutter_shape` gives each a fade-out (above 0) or swell (below 0), `stutter_damp` darkens each repeat more than the last, `stutter_attack` and `stutter_bend` shape the envelope of each repeat (a slow attack, or an exponential pluck), and `stutter_accent` makes every second repeat quieter.
 fx glitch(
   stutter: 0..1 = 0,
-  stutter_length: 1ms..1sec = 1/4beat,
+  stutter_length: division = 1/4beat,
   stutter_pitch: -24..24 = 0,
   stutter_shrink: 0.5..1 = 1,
   stutter_gate: 0.05..1 = 1,
@@ -119,7 +119,7 @@ fx glitch(
   stutter_bend: 0..1 = 0,
   stutter_accent: 0..1 = 0,
   rewind: 0..1 = 0,
-  rewind_length: 1ms..1sec = 1/2beat,
+  rewind_length: division = 1/2beat,
   slow: 0..1 = 0,
   slow_time: 10ms..1sec = 400ms,
   scatter: 0..1 = 0,

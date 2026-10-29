@@ -439,15 +439,19 @@ pub(super) fn prepare_pending(
         })
         .collect();
     // Clips that carry on from a pattern or clip this change redefines take the new version, in place, unless
-    // the commands here start or change them anyway.
+    // the commands here start (from stopped) or change them anyway.
     let mut replays = Vec::new();
     for (node, now) in playing.clone().into_iter().filter(|(_, p)| p.running()) {
         let started = actions.iter().any(|a| {
             a.program.performance.iter().any(|s| {
                 matches!(
                     name_action(&a.program, &s.action),
-                    Some(NamedAction::Start { node: n, .. } | NamedAction::Update { node: n, .. })
-                        if n == node
+                    Some(NamedAction::Update { node: n, .. }) if n == node
+                ) || matches!(
+                    name_action(&a.program, &s.action),
+                    // `start` on a clip that is already running does nothing, so it cannot carry the new version
+                    Some(NamedAction::Start { node: n, .. })
+                        if n == node && !base_playing.get(&node).is_some_and(Playing::running)
                 )
             })
         });
@@ -798,6 +802,13 @@ impl Live {
         }
         self.version += 1;
         self.advance();
+        // the engine takes a change as soon as it is sent, so a refusal is known by now: say so, not just in a
+        // notice that can go unread
+        let refused: Vec<_> = std::mem::take(&mut self.refused);
+        if let Some((_, message)) = refused.iter().find(|(refused, _)| *refused == id) {
+            self.notices.retain(|n| n != message);
+            return Err(vec![Problem::plain(message.clone())]);
+        }
         Ok(accepted)
     }
 

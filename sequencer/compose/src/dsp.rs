@@ -141,6 +141,24 @@ pub fn beat_controls(source: &str) -> Vec<BeatControl> {
     found
 }
 
+/// The effect parameters declared as a `division` (a length snapped to a musical division), as (effect, name).
+pub fn division_controls(source: &str) -> Vec<(String, String)> {
+    let Ok(items) = parse_spanned(source) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for (item, _) in &items {
+        if let Item::Fx(fx) = item {
+            for param in &fx.params {
+                if matches!(&param.ty, Some(crate::ast::TypeSpec::Unit(t)) if t.name == "division") {
+                    found.push((fx.name.name.clone(), param.name.name.clone()));
+                }
+            }
+        }
+    }
+    found
+}
+
 /// Project a composition's source into DSP-only source. The client owns this conversion; the server
 /// never accepts the composition constructs it removes.
 pub fn dsp_source(source: &str, tempo: Tempo) -> Result<String, Diagnostic> {

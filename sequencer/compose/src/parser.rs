@@ -316,9 +316,9 @@ impl Parser {
             kind: ExprKind::Num { value, unit: None },
             span,
         };
-        let (mut lo, mut hi, mut smooth) = (number(0.0, start), number(1.0, start), None);
+        let (mut lo, mut hi, mut smooth, mut quantize) = (number(0.0, start), number(1.0, start), None, None);
         while self.eat(&Tok::Dot) {
-            let method = self.ident("`range` or `smooth`")?;
+            let method = self.ident("`range`, `smooth` or `quantize`")?;
             self.expect(&Tok::LParen)?;
             match method.name.as_str() {
                 "range" => {
@@ -338,9 +338,10 @@ impl Parser {
                     hi = *h;
                 }
                 "smooth" => smooth = Some(self.expr()?),
+                "quantize" => quantize = Some(self.expr()?),
                 other => {
                     return Err(Diagnostic::new(
-                        format!("a control input has no `.{other}`; use `.range` or `.smooth`"),
+                        format!("a control input has no `.{other}`; use `.range`, `.smooth` or `.quantize`"),
                         method.span,
                     ));
                 }
@@ -378,7 +379,7 @@ impl Parser {
         Ok(Item::Control {
             name,
             value,
-            input: Some(ControlInput { source, hi }),
+            input: Some(ControlInput { source, hi, quantize }),
         })
     }
 

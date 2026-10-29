@@ -383,12 +383,15 @@ clip roll_hard = roll.set(break_stutter.accent: 0.9, break_stutter.damp: 0.5)
 
 **Hold until the key comes up:** a gesture runs for its set length. For a stutter that lasts as long as a pad is held, bind a control to the key: `ctl held = midi.note(39)` is above zero while the key is down and back to zero when it comes up (the velocity sets how far; `.range(...)` sets the span, 0 to 1 if left out). Read it where the effect takes its hold, for example `repeat_last(hold: hold + held, ...)`.
 
+**Land a held effect on the beat:** a bound control moves the moment the key does, so a stutter can start a little off the grid. `.quantize(1/8beat)` makes it wait for the next boundary, both when the key goes down and when it comes up: `ctl held = midi.note(39).quantize(1/8beat)`. The boundaries are the same as for any quantized change (`1/8beat`, `1beat`, `bar`, `2bars`), counted from the start of the bar. A control driven by a controller or OSC takes `.quantize` the same way. A gesture clip already starts on its own `quantize:`, and a `macro` takes a `quantize:` line the same way.
+
 **Macros: one knob, many controls.** A `macro` is a control from 0 to 1 that moves other controls along with it, each over a range of its own. It is written like a clip: `input:` says what drives it, and every other line is a control and the range to move it over.
 
 ```nml
 macro tension {
   input:  midi.cc(1)                 // or osc_in("/tension")
   smooth: 20ms                       // optional, as `.smooth` on a ctl
+  quantize: 1/8beat                  // optional: a move waits for the next such boundary
   cutoff: 200hz..4khz                // a ctl
   break_stutter {                    // the parameters of an effect, as in a clip
     damp:  0..0.6

@@ -123,3 +123,68 @@ fn a_clip_whose_instrument_uses_a_synced_lfo_sounds_and_follows_the_tempo() {
     let out = session.process(96_000).remove(0);
     assert!(peak(&out) > 0.01 && out.iter().all(|v| v.is_finite()));
 }
+
+#[test]
+fn a_definition_the_engine_refuses_fails_the_evaluation() {
+    // the client compiles this, but the engine keeps these names for itself
+    let mut session = Offline::new(48_000.0, Layout::Stereo);
+    let refused = session.eval("instr __routing_x(freq: hz) { osc(sine, freq) }", Some("now")).unwrap_err();
+    assert!(refused[0].message.contains("refused by the engine"), "{refused:?}");
+    assert!(session.take_notices().is_empty(), "the refusal is reported once");
+}
+
+#[test]
+fn a_division_parameter_is_snapped_to_the_nearest_musical_division_at_the_tempo() {
+    // the effect passes the level of its input times its length in seconds, so the level says the length
+    let level = |length: &str, tempo: &str| {
+        let source = format!("{tempo}\nbus src: stereo\ninstr drone(freq: hz) {{\n  src += osc(sine, freq)\n}}\nfx timed(length: division = 1/2beat) {{\n  out = src * (length / 1sec)\n}}\nclip c {{\n  instrument: drone\n  length: 8bars\n  notes: [c4]\n  dur: 8bars\n  timed {{\n    length: {length}\n  }}\n}}\n");
+        let mut session = Offline::new(48_000.0, Layout::Stereo);
+        session.eval(&source, Some("now")).unwrap();
+        session.process(480);
+        session.eval("c.start", Some("now")).unwrap();
+        session.process(24_000);
+        peak(&session.process(24_000).remove(0)[12_000..]) / std::f32::consts::FRAC_1_SQRT_2
+    };
+    // at 120 bpm a beat is half a second: 0.26s is nearest an eighth note (0.25s), 0.3s a quarter-note
+    // triplet (0.333s), 0.8s a dotted quarter (0.75s) and 0.1s a dotted 32nd (0.094s)
+    for (written, wanted) in [("0.26sec", 0.25), ("0.3sec", 1.0 / 3.0), ("0.8sec", 0.75), ("0.1sec", 0.09375)] {
+        let heard = level(written, "tempo 120bpm");
+        assert!((heard - wanted).abs() < 1e-3, "{written}: {heard}, wanted {wanted}");
+    }
+    // the same 0.26s at 60 bpm is a quarter of a beat of a one-second beat: a sixteenth note
+    let slower = level("0.26sec", "tempo 60bpm");
+    assert!((slower - 0.25).abs() < 1e-3, "{slower}");
+}
+
+#[test]
+fn a_quantized_held_control_starts_and_ends_on_its_boundary() {
+    use niminal_live::ControlSignal;
+    // 120 bpm: a half beat is 12000 samples. The key goes down at 5000 and up at 17000
+    let source = "ctl held = midi.note(39).quantize(1/2beat)\ninstr gate(freq: hz) {\n  osc(sine, 440hz) * held * 0.5\n}\nclip c {\n  instrument: gate\n  length: 8bars\n  notes: [c4]\n  dur: 8bars\n}\n";
+    let mut session = Offline::new(48_000.0, Layout::Stereo);
+    session.eval(source, Some("now")).unwrap();
+    session.eval("c.start", Some("now")).unwrap();
+    let mut out = session.process(5_000).remove(0);
+    session.control_input(&ControlSignal::MidiNote { note: 39, channel: 1, velocity: 127 });
+    out.extend(session.process(12_000).remove(0));
+    session.control_input(&ControlSignal::MidiNote { note: 39, channel: 1, velocity: 0 });
+    out.extend(session.process(12_000).remove(0));
+    let on = out.iter().position(|v| v.abs() > 0.1).expect("it opens");
+    let off = out.iter().rposition(|v| v.abs() > 0.1).expect("it closes");
+    assert!((on as i64 - 12_000).abs() < 200, "opens on the half beat: {on}");
+    assert!((off as i64 - 24_000).abs() < 500, "closes on the next half beat: {off}");
+}
+
+#[test]
+fn a_quantized_macro_moves_what_it_drives_on_its_boundary() {
+    use niminal_live::ControlSignal;
+    let source = "ctl level = 0\nmacro open {\n  input: midi.note(39)\n  quantize: 1/2beat\n  level: 0..1\n}\ninstr tone(freq: hz) {\n  osc(sine, 440hz) * level * 0.5\n}\nclip c {\n  instrument: tone\n  length: 8bars\n  notes: [c4]\n  dur: 8bars\n}\n";
+    let mut session = Offline::new(48_000.0, Layout::Stereo);
+    session.eval(source, Some("now")).unwrap();
+    session.eval("c.start", Some("now")).unwrap();
+    let mut out = session.process(5_000).remove(0);
+    session.control_input(&ControlSignal::MidiNote { note: 39, channel: 1, velocity: 127 });
+    out.extend(session.process(12_000).remove(0));
+    let on = out.iter().position(|v| v.abs() > 0.1).expect("it opens");
+    assert!((on as i64 - 12_000).abs() < 200, "opens on the half beat: {on}");
+}

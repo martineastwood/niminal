@@ -136,7 +136,7 @@ pub fn render(
     let stop = ((until.unwrap_or(0.0) * sr).max(note_end).round() as usize).max(input_len) as u64;
 
     let mut session = Offline::new(SAMPLE_RATE as f32, program.master).without_limiter();
-    session.play_program(program.clone(), schedule);
+    session.play_program(program.clone(), schedule).map_err(|e| error(&e))?;
     session
         .sequencer()
         .send_notes(extra)

@@ -567,7 +567,9 @@ impl Worker {
                 playback.instrument_parameters = self.status.instrument_parameters.clone();
                 playback.instrument_slices = self.status.instrument_slices.clone();
                 playback.origin = self.clock()? + (self.status.sample_rate * 0.15).round() as u64;
-                self.send_events(vec![self.tempo_event(json!(playback.origin), true)])?;
+                // the tempo and meter of the first pattern, which the rows say when it changes
+                let (bpm, meter) = playback.start_tempo();
+                self.send_events(vec![json!({"op":"tempo", "at":playback.origin, "bpm":bpm, "meter":meter, "beat":0.0})])?;
                 self.send_events(crate::modulation::reset(
                     &playback.song.tracks,
                     &playback.song.returns,

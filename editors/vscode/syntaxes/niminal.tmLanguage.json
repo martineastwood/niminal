@@ -142,7 +142,7 @@
       }
     },
     {
-      "begin": "\\b(instr|mono|fn|def)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(\\()",
+      "begin": "\\b(instr|mono|fn|def|fx)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(\\()",
       "end": "\\)",
       "beginCaptures": {
         "1": {
@@ -234,7 +234,7 @@
       "patterns": [
         {
           "name": "storage.type.niminal",
-          "match": "\\b(hz|khz|db|sec|ms|samples|beats?|bars?|deg|st|ct|bpm|int|num|init|control|const|fn)\\b"
+          "match": "\\b(hz|khz|db|sec|ms|samples|beats?|bars?|deg|st|ct|bpm|int|num|division|init|control|const|fn)\\b"
         },
         {
           "begin": "\\(",

@@ -38,6 +38,8 @@ pub struct ControlBinding {
     pub source: InputSource,
     pub lo: f32,
     pub hi: f32,
+    /// Where a change lands, if not at once.
+    pub quantize: Option<Quantize>,
 }
 
 impl ControlBinding {
@@ -503,6 +505,11 @@ fn control_inputs(
                         },
                         span: value.span,
                     },
+                    quantize: block
+                        .entries
+                        .iter()
+                        .find(|(key, _)| key.name == "quantize")
+                        .map(|(_, value)| value.clone()),
                 },
             ));
         }
@@ -595,6 +602,7 @@ ctl __input_hi_{n} = {}",
                 source: input.source.clone(),
                 lo: def.initial,
                 hi: hi_initial,
+                quantize: input.quantize.as_ref().map(crate::perform::quantum_of).transpose()?,
             },
         ));
     }
@@ -640,7 +648,7 @@ fn compile_macros(items: &[Item], program: &Program, tempo: Tempo) -> Result<Vec
         let mut wanted: Vec<(String, &Expr, Span)> = Vec::new();
         for (key, value) in &block.entries {
             match key.name.as_str() {
-                "input" | "smooth" => {}
+                "input" | "smooth" | "quantize" => {}
                 _ => match &value.kind {
                     ExprKind::FxLanes(rows) => {
                         for (row, range) in rows {

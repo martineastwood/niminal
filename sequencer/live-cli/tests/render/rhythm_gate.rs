@@ -9,7 +9,7 @@ fn audio(expression: &str, bpm: f64) -> Vec<f32> {
     let schedule = p.schedule();
     let mut session =
         niminal_live::Offline::new(SR as f32, niminal_lang::Layout::Mono).without_limiter();
-    session.play_program(p, schedule);
+    session.play_program(p, schedule).unwrap();
     let mut out = session.process((1.1 * SR) as usize);
     let notices = session.take_notices();
     assert!(notices.is_empty(), "{notices:?}");
@@ -173,7 +173,7 @@ fn an_fx_generator_reopens_after_a_long_silent_run() {
     let schedule = p.schedule();
     let mut session =
         niminal_live::Offline::new(SR as f32, niminal_lang::Layout::Mono).without_limiter();
-    session.play_program(p, schedule);
+    session.play_program(p, schedule).unwrap();
     let out = session.process(SR as usize).remove(0);
     for time in [0.150, 0.250, 0.650, 0.750] {
         level(&out, time, 0.5);

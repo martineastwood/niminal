@@ -3,7 +3,7 @@
 // Here two of them stutter a break and a third fires a hit like a machine gun. On a controller, `launch:` puts each on a pad (notes 36 to 38, and 40), and
 // `quantize:` lands it on the next sixteenth, so a pad hit a little early is still in time. In a file, as below,
 // `at` starts them in turn so you can render it. Pad 39 is different: it holds the stutter for as long as the key
-// is down, because `ctl held = midi.note(39)` is open while the key is.
+// is down, because `ctl held = midi.note(39)` is open while the key is; `.quantize(1/8beat)` on it makes the hold start and end on the next eighth of a beat.
 // Render with:  niminal-live render examples/gestures.nml --out gestures.wav --bars 4
 config { channels: stereo }
 tempo 130bpm
@@ -25,7 +25,7 @@ instr break_voice(sample) {
 // darkens each repeat more than the last, like a tape echo. `attack` is how much of a repeat it takes to rise to full
 // level, `bend` turns the straight `shape` fade into an exponential one (a pluck), and `accent` makes every second
 // repeat quieter, so a roll has a beat in it.
-ctl held = midi.note(39)
+ctl held = midi.note(39).quantize(1/8beat)
 
 fx break_stutter(
   hold: 0..1 = 0, length: 1ms..1sec = 1/4beat, pitch: -12..12 = 0, fade: 0..1 = 0.9,

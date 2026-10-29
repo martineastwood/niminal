@@ -20,7 +20,7 @@ export interface Macro { name: string; value: number; links: MacroLink[] }
 /** Where a track's or return's signal goes: the master, a return (a return can only feed a later one), or nowhere, leaving only its sends. */
 export type Output = { kind: 'master' } | { kind: 'return'; index: number } | { kind: 'none' };
 export interface Track { macros?: Macro[]; output?: Output; solo?: boolean; colour?: string; show?: Partial<Record<SubColumn, boolean>>; name: string; fx: Device[]; muted: boolean; volume_db: number; pan: number }
-export interface Parameter { name: string; min: number; max: number; default: number; unit: string | null }
+export interface Parameter { name: string; min: number; max: number; default: number; unit: string | null; /** A length picked from the musical divisions, held in beats. */ division?: boolean }
 export type EffectParameters = Record<string, Parameter[]>;
 export type FxTarget = { kind: 'volume' } | { kind: 'pan' } | { kind: 'macro'; index: number } | { kind: 'effect'; device: string; parameter: string } | { kind: 'instrument'; instrument: string; parameter: string };
 export interface EnvelopePoint { row: number; value: number }

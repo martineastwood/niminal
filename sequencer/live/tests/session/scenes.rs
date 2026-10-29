@@ -542,6 +542,29 @@ fn redefining_a_running_clip_keeps_its_place_in_the_loop() {
 }
 
 #[test]
+fn redefining_a_running_clip_in_a_snippet_that_also_starts_it_still_changes_it() {
+    let first_of_bar = |s: &mut Offline| hz(&run(s, BAR)[2000..22_000]);
+    let mut s = ready();
+    s.eval(
+        "clip long { instrument: pluck\n notes: [c4 e4 g4 b4]\n length: 4bars }\nlong.start",
+        Some("now"),
+    )
+    .unwrap();
+    run(&mut s, 2 * BAR);
+    // `start` on a running clip does nothing, so the new definition has to be applied anyway
+    s.eval(
+        "clip long { instrument: pluck\n notes: [c5 e5 g5 b5]\n length: 4bars }\nlong.start",
+        Some("now"),
+    )
+    .unwrap();
+    let heard = first_of_bar(&mut s);
+    assert!(
+        (heard - 784.0).abs() < 20.0,
+        "the new notes sound from the third step: {heard}"
+    );
+}
+
+#[test]
 fn mute_and_solo_survive_stop_and_hush_and_go_with_reset() {
     let mut s = session();
     s.eval(PARTS, Some("now")).unwrap();

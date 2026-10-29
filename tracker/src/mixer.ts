@@ -3,6 +3,7 @@ import type { EffectParameters, Definition, Device, Lfo, MacroLink, Parameter, P
 import { maxDevices, maxMacros } from './project';
 import { trackColour, masterColour } from './grid';
 import { openBrowser } from './browser';
+import { divisions, nearestDivision } from './divisions';
 import { readLfos, setLfo, lfoShapes, modulatable, type SourceLfo } from './modulation';
 /** An instrument's parameters as sliders. Notes start with these values; lanes change them from a row on. */
 export function renderInstrument(parent: HTMLElement, definition: Definition, parameters: EffectParameters, edited: () => void, write: (target: FxTarget, value: number) => void, activeTrack: number, changeSource: (source: string) => void) {
@@ -139,13 +140,13 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
         pick.add(new Option('—', '')); macros.forEach((knob, i) => pick.add(new Option(String(i + 1), String(i)))); pick.value = driver < 0 ? '' : String(driver); pick.disabled = !macros.length;
         pick.onchange = () => { linkParameter(project, activeTrack, device.id, parameter.name, pick.value === '' ? null : Number(pick.value)); edited(); refresh(); };
         const extras = document.createElement('span'); extras.className = 'row-extras'; extras.append(toggle, pick);
-        const row = slider(parameter.name, value, parameter.min, parameter.max, parameter.unit ?? '', value => { device.values[parameter.name] = value; edited(); }, () => {
-          write({ kind: 'effect', device: device.id, parameter: parameter.name }, Math.min(parameter.max, Math.max(parameter.min, device.values[parameter.name] ?? parameter.default)));
-        }, extras);
-        row.querySelector('input')!.setAttribute('aria-label', `${track.name} FX ${parameter.name}`); row.classList.add('with-macro'); card.append(row);
+        const change = (value: number) => { device.values[parameter.name] = value; edited(); };
+        const record = () => write({ kind: 'effect', device: device.id, parameter: parameter.name }, Math.min(parameter.max, Math.max(parameter.min, device.values[parameter.name] ?? parameter.default)));
+        const row = parameter.division ? divisionRow(parameter.name, value, change, record, extras) : slider(parameter.name, value, parameter.min, parameter.max, parameter.unit ?? '', change, record, extras);
+        row.querySelector('input, select')!.setAttribute('aria-label', `${track.name} FX ${parameter.name}`); row.classList.add('with-macro'); card.append(row);
         if (link) {
           // the macro sets the parameter, so its own slider, lanes and LFO have nothing to say
-          row.classList.add('driven'); row.querySelectorAll('input, button:not(.macro-link)').forEach(control => { if (control.parentElement !== extras) (control as HTMLInputElement).disabled = true; });
+          row.classList.add('driven'); row.querySelectorAll('input, select:not(.macro-link), button:not(.macro-link)').forEach(control => { if (control.parentElement !== extras) (control as HTMLInputElement).disabled = true; });
           toggle.disabled = true; toggle.title = 'A macro drives this parameter';
           card.append(macroLinkControls(link, parameter, edited));
         } else if (lfo) card.append(lfoControls(device, parameter, lfo, edited));
@@ -199,6 +200,15 @@ function slider(name: string, initial: number, min: number, max: number, unit: s
   value.onchange = () => { if (!Number.isFinite(value.valueAsNumber)) { display(); return; } input.value = String(Math.min(max, Math.max(min, value.valueAsNumber))); display(); change(Number(input.value)); };
   const numeric = document.createElement('span'); numeric.className = 'parameter-numeric'; const suffix = document.createElement('small'); suffix.textContent = unit; numeric.append(value, suffix);
   row.append(label, input, numeric, button('↳', `Write ${name} to pattern`, record)); if (extra) row.append(extra); return row;
+}
+/** A length picked from the musical divisions (1/8, 1/8t, 1/8d...), held in beats so it follows the tempo. */
+function divisionRow(name: string, beats: number, change: (value: number) => void, record: () => void, extra?: HTMLElement) {
+  const row = document.createElement('label'); row.className = 'parameter-row'; const label = document.createElement('span'); label.textContent = name;
+  const pick = document.createElement('select'); pick.className = 'division-pick'; pick.setAttribute('aria-label', name);
+  for (const d of divisions) pick.add(new Option(d.name, String(d.beats)));
+  pick.value = String(nearestDivision(beats).beats);
+  pick.onchange = () => change(Number(pick.value)); pick.oncontextmenu = event => { event.preventDefault(); record(); };
+  row.append(label, pick, button('↳', `Write ${name} to pattern`, record)); if (extra) row.append(extra); return row;
 }
 /** The shape, rate and depth of an LFO that the instrument's code carries; each change rewrites the code. */
 function sourceLfoControls(source: string, parameter: Parameter, lfo: SourceLfo, changeSource: (source: string) => void) {

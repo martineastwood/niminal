@@ -267,6 +267,8 @@ pub struct Live {
     written: Vec<Written>,
     /// Changes of definitions or the tempo that the engine has been asked to make, in order.
     asked: Vec<Asked>,
+    /// Changes the engine refused, with what it said, until the evaluation that sent them has reported it.
+    refused: Vec<(u64, String)>,
 
     pending: Vec<Pending>,
     next_id: u64,
@@ -442,6 +444,7 @@ impl Live {
             next_panic: 0,
             written: Vec::new(),
             asked: Vec::new(),
+            refused: Vec::new(),
             pending: Vec::new(),
             next_id: 1,
             playing: BTreeMap::new(),
@@ -1364,10 +1367,9 @@ impl Live {
                 Ok(_) => self.asked.push(Asked { id, lands_at }),
                 Err(e) => {
                     // the engine would not take it, so it must not land here either
-                    self.notify(format!(
-                        "change {id} was refused by the engine: {}",
-                        describe(&e)
-                    ));
+                    let message = format!("change {id} was refused by the engine: {}", describe(&e));
+                    self.notify(message.clone());
+                    self.refused.push((id, message));
                     self.pending.remove(index);
                     self.version += 1;
                     return;
@@ -1539,8 +1541,9 @@ impl Live {
 
     /// Play `program` as it is compiled: the notes it writes out, and `schedule` (usually
     /// `program.schedule()`) for the rest. This is how a file is rendered offline.
-    pub fn play_program(&mut self, program: Composition, schedule: Schedule) {
+    pub fn play_program(&mut self, program: Composition, schedule: Schedule) -> Result<(), String> {
         self.look();
+        let mut refused = Ok(());
         for dir in program.samples.bases().iter().rev() {
             self.set_sample_dir(dir);
         }
@@ -1548,7 +1551,7 @@ impl Live {
         if let Ok(statements) = analyze(&program.source) {
             let ops = self.definition_ops(&statements, Some(&program), At::Sample(at));
             if !ops.is_empty() {
-                self.send(ops);
+                refused = self.send_definitions(ops);
             }
         }
         self.program = Arc::new(program);
@@ -1568,6 +1571,15 @@ impl Live {
             ops.extend(self.note_op(&event, start, dur, WRITTEN));
         }
         self.send(ops);
+        refused
+    }
+
+    /// Send definitions, and say what the engine said if it would not take them.
+    fn send_definitions(&mut self, ops: Vec<Op>) -> Result<(), String> {
+        match self.link.request(EngineRequest::EventsSend { events: ops }) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(describe(&e)),
+        }
     }
 
     /// Start no more notes from the schedule; what is sounding carries on. Notes already sent from it that

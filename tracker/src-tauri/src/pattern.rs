@@ -963,6 +963,8 @@ pub struct Playback {
     random: Cell<u64>,
     /// Each track's instrument parameter lanes, by instrument and parameter, as of the last row played.
     lane_state: Vec<BTreeMap<(String, String), f64>>,
+    /// The tempo and meter (beats in a bar) the engine was last told, so it hears of a change and no more.
+    told_tempo: Cell<Option<(f64, f64)>>,
     pub song: Song,
     pub mode: Mode,
     pub pattern_id: String,
@@ -989,7 +991,7 @@ impl Playback {
         {
             return Err("Select an existing pattern and sequence position".into());
         }
-        Ok(Self {
+        let play = Self {
             seconds: RefCell::new(vec![0.0]),
             origin,
             next_row: 0,
@@ -1005,11 +1007,26 @@ impl Playback {
             ),
             sounding: Vec::new(),
             lane_state: Vec::new(),
+            told_tempo: Cell::new(None),
             song,
             mode,
             pattern_id,
             start_position,
-        })
+        };
+        // the start of playing says this tempo, so only a change from it is told
+        play.told_tempo.set(Some(play.start_tempo()));
+        Ok(play)
+    }
+
+    /// The tempo and meter (beats in a bar) the first row plays at.
+    pub fn start_tempo(&self) -> (f64, f64) {
+        let meter = self.location(0).map_or(4.0, |p| Self::meter_of(p.pattern));
+        (self.bpm_at(0), meter)
+    }
+
+    /// The beats in a bar of `pattern`, counted in quarter notes.
+    fn meter_of(pattern: &Pattern) -> f64 {
+        pattern.timing.as_ref().map_or(4.0, |t| f64::from(t.beats_per_bar) * 4.0 / f64::from(t.beat_unit))
     }
 
     /// The next number from 0 up to 1 (splitmix64, seeded from the clock: nothing about the song fixes it).
@@ -1462,6 +1479,14 @@ impl Playback {
                 continue;
             }
             sounding.retain(|note| note.until > at);
+            // what an effect reads as `clock.bpm`, and what a length in beats lasts, follows the song's tempo as it
+            // moves along a ramp or changes with the pattern
+            let meter = Self::meter_of(position.pattern);
+            let bpm = self.bpm_at(self.next_row);
+            if self.told_tempo.get().is_none_or(|(told, bar)| (told - bpm).abs() > 0.01 || bar != meter) {
+                events.push(json!({"op":"tempo", "at":at, "bpm":bpm, "meter":meter, "tag":"tracker-pattern"}));
+                self.told_tempo.set(Some((bpm, meter)));
+            }
             events.extend(crate::modulation::timing(&self.song, &self.parameters, self.row_seconds(self.next_row, 1.0), at));
             for (index, track) in self.song.tracks.iter().enumerate() {
                 let Some(pattern) = self.track_pattern(&position, index) else {
@@ -1716,11 +1741,30 @@ mod tests {
         assert!((play.phase(18000, 48000.0).unwrap() - 0.5).abs() < 1e-9);
         let targets = BTreeMap::from([("tone".into(), "voice".into())]);
         let (events, _) = play.events_until(0, 1, 48000.0, &targets).unwrap();
-        assert_eq!(events[0]["dur"], "0.500000sec");
+        assert_eq!(events.iter().find(|e| e["op"] == "note").unwrap()["dur"], "0.500000sec");
         let mut t = timing(120.0);
         t.tempo = vec![EnvelopePoint { row: 0.0, value: 120.0 }, EnvelopePoint { row: 4.0, value: 60.0 }];
         assert!((t.seconds(0.0, 4.0) - 2.0_f64.ln()).abs() < 1e-9);
         assert!((t.seconds(0.0, 2.5) + t.seconds(2.5, 4.0) - t.seconds(0.0, 4.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_engine_is_told_of_a_tempo_ramp_and_of_a_pattern_with_its_own_tempo() {
+        let mut song = song();
+        let mut ramp = timing(120.0);
+        ramp.beats_per_bar = 4;
+        ramp.beat_unit = 4;
+        ramp.tempo = vec![EnvelopePoint { row: 0.0, value: 120.0 }, EnvelopePoint { row: 2.0, value: 60.0 }];
+        song.patterns[0].timing = Some(ramp);
+        song.patterns[1].timing = Some(Timing { bpm: 90.0, rows_per_beat: 4, beats_per_bar: 3, beat_unit: 4, tempo: vec![] });
+        let mut play = Playback::new(0, song, Mode::Song, "a".into(), 0).unwrap();
+        let targets = BTreeMap::from([("tone".into(), "voice".into())]);
+        let (events, _) = play.events_until(0, 200_000, 48000.0, &targets).unwrap();
+        let tempos: Vec<(f64, f64)> = events.iter().filter(|e| e["op"] == "tempo").map(|e| (e["bpm"].as_f64().unwrap(), e["meter"].as_f64().unwrap())).collect();
+        // the first row's 120 is where it starts. Then: the second row of the ramp is halfway down it, the second
+        // pattern has its own 90 in 3/4, and the first comes round again from 120 and halfway down once more
+        assert_eq!(play.start_tempo(), (120.0, 4.0));
+        assert_eq!(tempos, [(90.0, 4.0), (90.0, 3.0), (120.0, 4.0), (90.0, 4.0)]);
     }
 
     #[test]
@@ -1900,7 +1944,9 @@ mod tests {
             ("alt".into(), "other".into()),
         ]);
         let horizon = play.row_at(rows as u64, 48000.0);
-        play.events_until(0, horizon, 48000.0, &targets).unwrap().0
+        // the notes and lanes: what is said of the tempo has a test of its own
+        let events = play.events_until(0, horizon, 48000.0, &targets).unwrap().0;
+        events.into_iter().filter(|e| e["op"] != "tempo").collect()
     }
     fn column(rows: usize, cells: &[(usize, &str)]) -> NoteColumn {
         let mut column = NoteColumn::blank(rows);

@@ -94,7 +94,7 @@ pub(crate) fn unit_type(id: &Ident) -> Res<(Unit, bool)> {
         "st" => (Unit::Semitones, false),
         other => {
             let mut d = Diagnostic::new(format!("unknown type `{other}`"), id.span).with_help(
-                "use a unit (`hz`, `db`, `sec`, `deg`, `st`, `num`, `int`), a range such as `0..1`, a choice such as `(low | high)`, or a list such as `[num]`",
+                "use a unit (`hz`, `db`, `sec`, `deg`, `st`, `num`, `int`), `division`, a range such as `0..1`, a choice such as `(low | high)`, or a list such as `[num]`",
             );
             if let Some(c) = closest(other, ["num", "int", "hz", "db", "sec", "deg", "st"]) {
                 d = d.with_help(format!("did you mean `{c}`?"));
@@ -123,6 +123,11 @@ pub(crate) fn kind_of(ty: &TypeSpec, tempo: Tempo) -> Res<Kind> {
     Ok(match ty {
         TypeSpec::Unit(id) if id.name == "fn" => Kind::Function,
         TypeSpec::Unit(id) if id.name == "buffer" => Kind::Buffer,
+        // a length in beats, from a 32nd note to four beats; the body gets it snapped to a musical division
+        TypeSpec::Unit(id) if id.name == "division" => {
+            let beat = 60.0 / tempo.bpm;
+            Kind::Range { unit: Unit::Time, lo: beat / 8.0, hi: beat * 4.0 }
+        }
         TypeSpec::Unit(id) => {
             let (unit, whole) = unit_type(id)?;
             Kind::Unit { unit, whole }

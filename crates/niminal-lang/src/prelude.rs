@@ -81,6 +81,18 @@ control fn synced_lfo(beats: num = 1, shape: (sine | tri | saw | square) = sine,
   else if shape == saw { fract(at + 0.5) * 2 - 1 }
   else { (at < 0.5) * 2 - 1 }
 }
+control fn snap_division(length: sec) {
+  beats = max(length / clock.beat_length, 0.01)
+  here = log(beats) / log(2)
+  straight = pow(2, floor(here + 0.5))
+  triplet = pow(2, floor(here + 0.58496 + 0.5)) * 2 / 3
+  dotted = pow(2, floor(here - 0.58496 + 0.5)) * 1.5
+  from_straight = abs(log(beats / straight))
+  from_triplet = abs(log(beats / triplet))
+  from_dotted = abs(log(beats / dotted))
+  nearest = if from_straight <= from_triplet and from_straight <= from_dotted { straight } else if from_triplet <= from_dotted { triplet } else { dotted }
+  nearest * clock.beat_length
+}
 ";
 
 /// What each prelude function is for, for completion and the opcode reference.
@@ -157,12 +169,12 @@ fn defined_name(item: &Item) -> Option<&str> {
 
 /// Whether `source` calls a prelude function that reads the clock, which needs the tempo controls declared.
 pub fn reads_clock(source: &str) -> bool {
-    source.contains("synced_lfo")
+    source.contains("synced_lfo") || source.contains(": division") || source.contains(":division")
 }
 
 /// The prelude functions that read the clock which `source` calls and doesn't define.
 pub(crate) fn clock_functions(source: &str) -> String {
-    if reads_clock(source) && !source.contains("fn synced_lfo") {
+    if reads_clock(source) && !source.contains("fn snap_division") {
         CLOCK_SOURCE.to_string()
     } else {
         String::new()

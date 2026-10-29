@@ -195,6 +195,7 @@ button.apply.dirty { background: var(--accent); border-color: #7a4a1a; color: #1
 .parameter-row { display: grid; grid-template-columns: 62px minmax(40px, 1fr) 70px 18px 18px; gap: 3px; align-items: center; height: 20px; }
 .parameter-row > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .parameter-row > input[type=range] { width: 100%; min-width: 0; }
+.parameter-row > .division-pick { grid-column: span 2; height: 18px; min-width: 0; font-size: var(--fs-2); }
 .parameter-row button { height: 16px; width: 18px; padding: 0; font-size: var(--fs-2); }
 .parameter-numeric { display: flex; align-items: center; gap: 2px; }
 .parameter-numeric .parameter-value { width: 48px; min-width: 0; height: 16px; text-align: right; padding: 0 2px; }

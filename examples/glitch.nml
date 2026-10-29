@@ -24,8 +24,8 @@ instr break_voice(sample) {
 // zero switches its glitch on. `apply` runs any function on the sound the same way: here a crush, but a
 // filter sweep or a reverb throw would go in the chain just like it.
 fx break_glitch(
-  stutter: 0..1 = 0, stutter_length: 1ms..1sec = 1/4beat, stutter_pitch: -24..24 = 0, stutter_shrink: 0.5..1 = 1,
-  rewind: 0..1 = 0, rewind_length: 1ms..1sec = 1/4beat,
+  stutter: 0..1 = 0, stutter_length: division = 1/4beat, stutter_pitch: -24..24 = 0, stutter_shrink: 0.5..1 = 1,
+  rewind: 0..1 = 0, rewind_length: division = 1/4beat,
   slow: 0..1 = 0, slow_time: 10ms..1sec = 400ms,
   scatter: 0..1 = 0, scatter_slices: 2..32 = 8, scatter_seed: 0..999 = 0, scatter_reverse: 0..1 = 0,
   scatter_repeat: 0..1 = 0, scatter_drop: 0..1 = 0, scatter_detune: 0..12 = 0,

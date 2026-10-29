@@ -15,6 +15,9 @@ pub struct Parameter {
     /// For a length that starts at a number of `beats` or `bars` (such as `1/4beat`): which, and how many. The
     /// engine keeps the parameter to the song's tempo while it is left at that, and holds it in seconds once it is set.
     pub musical: Option<(f64, String)>,
+    /// A length picked from the musical divisions (1/8, 1/8t, 1/8d...): its values are in `beats`, and the sound
+    /// snaps it to the nearest division at the tempo.
+    pub division: bool,
 }
 
 impl Parameter {
