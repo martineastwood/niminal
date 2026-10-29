@@ -62,7 +62,7 @@ input {
 
 kbd { font: inherit; color: inherit; opacity: 0.6; margin-left: calc(3px * var(--z)); }
 
-#app { display: grid; grid-template-rows: calc(30px * var(--z)) minmax(0, 1fr) auto calc(22px * var(--z)); }
+#app { display: grid; grid-template-rows: calc(30px * var(--z)) minmax(0, 1fr) calc(22px * var(--z)); }
 
 /* ---- top bar --------------------------------------------------------------------------------- */
 
@@ -326,7 +326,7 @@ body.no-rail #divider, body.no-rail #stage { display: none; }
 
 /* ---- performance mode: the code, the transport, and the way to stop ---------------------------- */
 
-body.perform #app { grid-template-rows: calc(46px * var(--z)) minmax(0, 1fr) auto 0; }
+body.perform #app { grid-template-rows: calc(46px * var(--z)) minmax(0, 1fr) 0; }
 body.perform footer, body.perform .setup, body.perform .file-actions, body.perform .pane-title,
 body.perform #editor-status { display: none; }
 body.perform .position strong { font-size: calc(26px * var(--z)); }
@@ -525,24 +525,3 @@ body.perform .cm-content { line-height: 1.55; }
 .files-divider { position: absolute; top: 0; right: 0; bottom: 0; width: 5px; cursor: col-resize; touch-action: none; }
 .files-divider:hover, .files-divider.dragging, .files-divider:focus-visible { background: var(--accent); outline: none; }
 
-/* ---- controls dock: sliders and pads under both panes, resized by its top edge ----------------- */
-
-#dock { display: flex; flex-direction: column; min-height: 0; background: var(--bg-panel); border-top: 1px solid var(--line); }
-#dock-handle { height: calc(5px * var(--z)); margin-top: calc(-3px * var(--z)); cursor: row-resize; background: transparent; touch-action: none; position: relative; z-index: 2; transition: background 0.1s; }
-#dock-handle:hover, #dock-handle.dragging, #dock-handle:focus-visible { background: var(--accent); outline: none; }
-body.resizing-rows, body.resizing-rows * { user-select: none; cursor: row-resize !important; }
-.dock-head { display: flex; align-items: center; gap: calc(8px * var(--z)); min-height: calc(22px * var(--z)); padding: 0 calc(8px * var(--z)); }
-.dock-head button { margin-left: auto; height: calc(16px * var(--z)); }
-.dock-count { color: var(--faint); }
-.dock-body { height: var(--dock-h, calc(96px * var(--z))); overflow: auto; padding: calc(4px * var(--z)) calc(8px * var(--z)) calc(8px * var(--z)); display: flex; flex-direction: column; gap: calc(6px * var(--z)); }
-#dock.closed .dock-body { display: none; }
-.dock-group > summary { color: var(--dim); cursor: pointer; margin-bottom: calc(4px * var(--z)); }
-.dock-row, .dock-pads { display: flex; flex-wrap: wrap; gap: calc(6px * var(--z)) calc(14px * var(--z)); align-items: center; }
-.dock-slider { display: grid; grid-template-columns: auto calc(120px * var(--z)) auto auto; align-items: center; gap: calc(6px * var(--z)); }
-.dock-name { color: var(--text); min-width: calc(48px * var(--z)); }
-.dock-value { color: var(--hi); font-family: var(--mono); min-width: calc(52px * var(--z)); text-align: right; }
-.dock-source { color: var(--faint); font-size: calc(9px * var(--z)); letter-spacing: 0.5px; }
-.dock-slider input[type=range] { height: calc(14px * var(--z)); padding: 0; accent-color: var(--accent); background: transparent; border: 0; }
-.dock-pad { min-width: calc(56px * var(--z)); height: calc(28px * var(--z)); }
-.dock-pad.hold.down, .dock-pad:active { background: var(--accent); color: #1a1006; }
-.dock-empty { color: var(--faint); padding: calc(4px * var(--z)) 0; }

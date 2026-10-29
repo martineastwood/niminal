@@ -387,7 +387,7 @@ clip roll_hard = roll.set(break_stutter.accent: 0.9, break_stutter.damp: 0.5)
 
 ```nml
 macro tension {
-  input:  midi.cc(1)                 // or osc_in("/tension"); leave it out to move it from the stage's dock
+  input:  midi.cc(1)                 // or osc_in("/tension")
   smooth: 20ms                       // optional, as `.smooth` on a ctl
   cutoff: 200hz..4khz                // a ctl
   break_stutter {                    // the parameters of an effect, as in a clip
@@ -398,7 +398,7 @@ macro tension {
 }
 ```
 
-With the macro at 0 every control is at the start of its range, and at 1 at the end. A range written backwards (`1..0`) runs the other way, and a frequency or a level in dB sweeps evenly by ear. The macro is a control like any other: the stage's dock shows it as a slider, a controller, OSC or the dock moves it, and the code can read it by name (`tension`). It can move `ctl`s and the parameters of effects, in any file of the project. A macro can't move another macro, and lists a control once. Two macros may share a control: the one moved last wins. Only a move from a controller, OSC or the dock moves the targets; a clip lane or an envelope that drives the macro's own control does not.
+With the macro at 0 every control is at the start of its range, and at 1 at the end. A range written backwards (`1..0`) runs the other way, and a frequency or a level in dB sweeps evenly by ear. The macro is a control like any other: a controller or OSC moves it, and the code can read it by name (`tension`). It can move `ctl`s and the parameters of effects, in any file of the project. A macro can't move another macro, and lists a control once. Two macros may share a control: the one moved last wins. Only a move from a controller or OSC moves the targets; a clip lane or an envelope that drives the macro's own control does not.
 
 **Launching a scene or clip from a pad:** the usual case has a shorter form. Say which key launches it where it is defined, and `launch:` is the same as an `on` line that starts it:
 

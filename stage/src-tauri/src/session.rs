@@ -21,8 +21,6 @@ pub struct Shared {
     revision: AtomicU64,
     /// The engine's last health reading and when it was taken: asking is a full status request.
     health: Mutex<Option<(Instant, Option<Health>)>>,
-    /// The controls as the engine last reported them, with their ranges and sources, and when.
-    controls: Mutex<Option<(Instant, Vec<serde_json::Value>)>>,
     /// The MIDI inputs that are open, and the last message that came in on them.
     midi: Mutex<Midi>,
     /// MIDI clock sent to an output, and followed from an input.
@@ -50,7 +48,6 @@ impl Shared {
             session: Mutex::new(None),
             revision: AtomicU64::new(0),
             health: Mutex::new(None),
-            controls: Mutex::new(None),
             midi: Mutex::new(Midi::default()),
             clock: Mutex::new(Clock::default()),
         }
@@ -275,8 +272,6 @@ pub fn render_take(shared: &Shared, from: u64, to: u64, out: &Path) -> Result<St
 
 /// How often to ask the engine how it is doing.
 const HEALTH_EVERY: Duration = Duration::from_millis(1000);
-/// How often the controls are read from the engine, which is how fast a widget follows a knob.
-const CONTROLS_EVERY: Duration = Duration::from_millis(200);
 
 /// A `ctl` that was bound with `midi.learn` and what the line should now say.
 #[derive(Debug, Clone, Serialize)]
@@ -320,19 +315,6 @@ fn health_from(status: &serde_json::Value) -> Option<Health> {
     })
 }
 
-/// Move a control to `value`, in its own unit. A widget does this as it is dragged.
-pub fn set_control(shared: &Shared, name: &str, value: f64) -> Result<(), String> {
-    let mut guard = lock(&shared.session);
-    let session = guard.as_mut().ok_or("not connected")?;
-    session
-        .live_mut()
-        .set_control(name, value, None, None)
-        .map_err(|problems| problems.first().map_or_else(|| "can't set the control".into(), |p| p.message.clone()))?;
-    // the widget should see its own move at once, not after the next reading
-    *lock(&shared.controls) = None;
-    Ok(())
-}
-
 pub fn snapshot(shared: &Shared) -> Snapshot {
     let mut guard = lock(&shared.session);
     let Some(session) = guard.as_mut() else {
@@ -351,13 +333,6 @@ pub fn snapshot(shared: &Shared) -> Snapshot {
         }
         last.as_ref().and_then(|(_, health)| health.clone())
     };
-    let controls = {
-        let mut last = lock(&shared.controls);
-        if last.as_ref().is_none_or(|(at, _)| at.elapsed() >= CONTROLS_EVERY) {
-            *last = Some((Instant::now(), live.engine_controls()));
-        }
-        last.as_ref().map(|(_, controls)| controls.clone()).unwrap_or_default()
-    };
     Snapshot {
         connected: true,
         revision: shared.revision.load(Ordering::Relaxed),
@@ -374,7 +349,6 @@ pub fn snapshot(shared: &Shared) -> Snapshot {
         master: live.take_peaks(),
         levels: live.take_levels(),
         health,
-        controls,
         learned: live
             .take_learned()
             .into_iter()
@@ -512,7 +486,6 @@ pub struct Snapshot {
     /// How the engine is coping, if it plays in real time.
     pub health: Option<Health>,
     /// Every control: `name`, `value`, `unit`, `range`, `log`, `source` and `kind`, as the engine reports them.
-    pub controls: Vec<serde_json::Value>,
     /// Controls that took a MIDI control change since the last snapshot, to be written into the code.
     pub learned: Vec<Learned>,
     pub midi: MidiStatus,

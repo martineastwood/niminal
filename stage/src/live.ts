@@ -1,5 +1,4 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import type { ControlInfo } from './controls';
 
 export type LaneEvent = {
   start: number;
@@ -85,7 +84,6 @@ export type Snapshot = {
     max_render_micros: number;
   } | null;
   /** Every control, with its range and what drives it. */
-  controls?: ControlInfo[];
   /** Controls that took a MIDI control change since the last snapshot. */
   learned: { control: string; source: string }[];
   midi: { inputs: string[]; last: string | null };
@@ -174,10 +172,6 @@ export const stage = {
       change: action.change ?? null,
       quantize: quantize || null,
     });
-  },
-  /** Move a control to a value in its own unit, as a dragged slider does. */
-  setControl(name: string, value: number) {
-    return invoke<void>('set_control', { name, value });
   },
   cancel(id: number | null) {
     return invoke<number>('cancel', { id });

@@ -284,12 +284,6 @@ fn status_describes_the_controls_and_control_set_moves_one() {
     assert_eq!(cutoff["range"], json!([200.0, 4000.0]));
     let drive = find(&status, "drive");
     assert_eq!((drive["source"].is_null(), drive["range"].is_null()), (true, true));
-    // the light request a window uses many times a second says the same, without the rest of the status
-    let light = d.live_mut().engine_controls();
-    let cutoff_light = light.iter().find(|c| c["name"] == "cutoff").expect("cutoff is listed");
-    assert_eq!(cutoff_light["source"], "midi.cc(21)");
-    assert_eq!(cutoff_light["range"], json!([200.0, 4000.0]));
-    assert_eq!(light.len(), status["result"]["controls"].as_array().unwrap().len());
     // moving one sets it, and a name that isn't a control is refused
     let reply = call(&mut d, c, 4, "control.set", json!({"name": "drive", "value": 0.8, "smooth_ms": 0}));
     assert_eq!(reply["result"], json!({}), "{reply}");

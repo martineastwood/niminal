@@ -946,18 +946,6 @@ impl Live {
         }
     }
 
-    /// Just the controls, as `engine_status` lists them. Much cheaper than a whole status, so a window can
-    /// ask many times a second without holding the engine up.
-    pub fn engine_controls(&mut self) -> Vec<serde_json::Value> {
-        match self.link.request(EngineRequest::Controls {}) {
-            Ok(EngineReply::Status(mut v)) => {
-                self.tidy_controls(&mut v);
-                v["controls"].as_array().cloned().unwrap_or_default()
-            }
-            _ => Vec::new(),
-        }
-    }
-
     /// Keep this client's controls under the names the code gives them, with what a widget needs about each.
     fn tidy_controls(&self, v: &mut serde_json::Value) {
         let client = v["client_id"].as_u64().unwrap_or(0);

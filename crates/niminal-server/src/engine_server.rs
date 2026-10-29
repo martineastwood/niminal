@@ -168,9 +168,6 @@ pub enum EngineRequest {
     Panic {},
     #[serde(rename = "status")]
     Status {},
-    /// Just the controls and their values: what a window that follows knobs asks for many times a second.
-    #[serde(rename = "controls")]
-    Controls {},
     #[serde(rename = "clock")]
     Clock {},
 }
@@ -331,7 +328,7 @@ impl EngineReply {
             | EngineRequest::BuffersSave { .. }
             | EngineRequest::BuffersFree { .. }
             | EngineRequest::BuffersBudget { .. } => EngineReply::Buffers(result.clone()),
-            EngineRequest::Status {} | EngineRequest::Controls {} => EngineReply::Status(result.clone()),
+            EngineRequest::Status {} => EngineReply::Status(result.clone()),
             EngineRequest::AudioDevices {}
             | EngineRequest::AudioStatus {}
             | EngineRequest::AudioConfigure { .. }
@@ -733,10 +730,6 @@ impl EngineServer {
                 status["transactions"] = self.session.transaction_status(client);
                 Ok(EngineReply::Status(status))
             }
-            EngineRequest::Controls {} => Ok(EngineReply::Status(json!({
-                "client_id": client,
-                "controls": crate::status::controls_json(&self.session),
-            }))),
             EngineRequest::AudioDevices {} => Ok(EngineReply::Status(self.audio.devices())),
             EngineRequest::AudioStatus {} => Ok(EngineReply::Status(self.audio.status())),
             EngineRequest::AudioConfigure { settings, restart } => self
