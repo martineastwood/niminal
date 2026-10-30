@@ -1,0 +1,26 @@
+// A rounded bowed note becomes a bright, breathing reed; then their properties move independently.
+// Evaluate the whole file in VS Code. Each + time is relative to this submission.
+// niminal-live render examples/spectral_morph.nml --out /tmp/spectral_morph.wav
+config { channels: stereo }
+tempo 100bpm
+
+instr morphing() {
+  // Related pitches keep energy in overlapping bins, where bin-based morphing is clearest.
+  // The donor's slow vibrato makes the frequency blend audible without an abrupt pitch jump.
+  a = (osc(tri, a3) * 0.7 + osc(saw, a3) * 0.3).lpf(cutoff: 1100hz) * 0.32
+  vibrato = osc(sine, 4hz) * 3hz
+  breath = lfo((1 / (2beats).num).hz).unipolar.range(0.35..1)
+  reed = osc(tri, a3 + vibrato) * 0.25 + osc(saw, a3 + vibrato) * 0.75
+  b = reed.hpf(cutoff: 120hz).lpf(cutoff: 4khz) * breath * 0.5
+
+  // 0..2 beats: source A. 2..6: morph to B. 6..8: source B.
+  // 8..12: move magnitudes back to A while retaining B's moving frequencies.
+  // 12..14: bring the frequencies home too.
+  magnitude = env[0 2beats 0 4beats 1 2beats 1 4beats 0]
+  frequency = env[0 2beats 0 4beats 1 6beats 1 2beats 0]
+  changed = spectral_morph(a, b, magnitude: magnitude, frequency: frequency,
+    size: 2048, overlap: 8)
+  out = (changed + changed.reverb(room: 0.35, damp: 0.7) * 0.12).pan(azimuth: 0deg) * env[0 70ms 1 | 350ms 0]
+}
+
+morphing() for 14beats

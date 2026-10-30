@@ -1,0 +1,23 @@
+// Hear a warm harmonic source, dissolve it into a few strong bins, then play inside its spectrum.
+// spectral_thin counts FFT bins, not harmonics. spectral_arp focuses a moving group of bins.
+// niminal-live render examples/spectral_select.nml --out /tmp/spectral_select.wav
+config { channels: stereo }
+tempo 100bpm
+
+instr selected() {
+  source = (osc(tri, a3) * 0.55 + osc(saw, a3) * 0.45).lpf(cutoff: 4500hz) * 0.38
+  // First two beats keep every bin: the unaltered source. Then progressively thin its colour.
+  count = env[1025 2beats 1025 2beats 24 2beats 6 2beats 3]
+  sparse = spectral_thin(source, count: count, size: 2048, overlap: 8)
+  // A repeating four-step focus follows A3's first, third, fifth and second harmonics.
+  step = phasor((1 / (4beats).num).hz)
+  harmonic = 1 + (step >= 0.25) * 2 + (step >= 0.5) * 2 - (step >= 0.75) * 3
+  position = harmonic * a3 / (sample_rate / 2)
+  arp = spectral_arp(source, position: position, depth: 0.94, gain: 2.8,
+    width: 2.5, size: 2048, overlap: 8)
+  reveal = env[0 8beats 0 1beat 1]
+  voice = sparse * (1 - reveal) + arp * reveal
+  out = (voice + voice.reverb(room: 0.4, damp: 0.65) * 0.16).pan(azimuth: 0deg) * env[0 50ms 1 | 350ms 0]
+}
+
+selected() for 16beats

@@ -68,6 +68,28 @@ impl SpectralFrames {
     pub fn active(&self) -> bool {
         self.quiet < self.size * 2
     }
+    /// Advance an analysis-only reader on the same clock as a synthesis reader.
+    pub fn analyse_sample(&mut self, x: f32) -> bool {
+        self.input[self.pos] = x as f64;
+        self.pos = (self.pos + 1) % self.size;
+        if !self.pos.is_multiple_of(self.hop) {
+            return false;
+        }
+        for k in 0..self.size {
+            self.time[k] = self.input[(self.pos + k) % self.size] * self.window[k];
+        }
+        self.forward
+            .process_with_scratch(
+                &mut self.time,
+                &mut self.spectrum,
+                &mut self.scratch_forward,
+            )
+            .expect("spectral analysis");
+        true
+    }
+    pub fn spectrum(&self) -> &[Complex<f64>] {
+        &self.spectrum
+    }
     pub fn run(
         &mut self,
         input: &[f32],
@@ -81,21 +103,9 @@ impl SpectralFrames {
             } else {
                 0
             };
-            self.input[self.pos] = x as f64;
-            self.pos = (self.pos + 1) % self.size;
-            if !self.pos.is_multiple_of(self.hop) {
+            if !self.analyse_sample(x) {
                 continue;
             }
-            for k in 0..self.size {
-                self.time[k] = self.input[(self.pos + k) % self.size] * self.window[k];
-            }
-            self.forward
-                .process_with_scratch(
-                    &mut self.time,
-                    &mut self.spectrum,
-                    &mut self.scratch_forward,
-                )
-                .expect("spectral analysis");
             transform(&mut self.spectrum, i);
             self.spectrum[0].im = 0.0;
             self.spectrum[self.size / 2].im = 0.0;

@@ -1,5 +1,6 @@
 // Glitching a break, the way a glitch plugin does it. The one-bar loop in break.wav is chopped into 16
-// slices and played for two bars through an effect that is a chain: a stutter, a rewind, a tape-stop, a
+// slices and played for seven bars: two of the plain beat, then three clips that ramp the glitching up to a
+// peak, then two plain bars again, all through an effect that is a chain: a stutter, a rewind, a tape-stop, a
 // scatter, a freeze and a crush, one after another. Each has a control that switches it on, and the sound
 // passes through untouched while they are all off. The clip draws when each is on, one row per control: `.`
 // is off and `x` is on, and neighbouring `x`s are one long glitch. Change a row and render again.
@@ -7,7 +8,7 @@
 // language. `scatter` shuffles slices of the last bar (the same seed shuffles the same way) and `freeze`
 // holds the last moment as a cloud of grains. The `glitch` effect in `std/fx` is the same chain, ready to
 // put on a tracker track. The `gate` row is a trance gate and the one control that starts open.
-// Render with:  niminal-live render examples/glitch.nml --out glitch.wav --bars 4
+// Render with:  niminal-live render examples/glitch.nml --out glitch.wav --bars 7
 config { channels: stereo }
 tempo 130bpm
 
@@ -44,43 +45,84 @@ fx break_glitch(
   out = chain * gate.follow(attack: 2ms, release: gate_release)
 }
 
-// bar 1 as recorded, bar 2 re-cut
-cuts = [s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12 s13 s14 s15  s0 s0 s2 s3 s4 s4 s6 s7 s8 s9 s2 s11 s12 s5 s14 s15]
+// One clip per stage of the build, each a single bar (or two). A row of steps spreads over its clip, and each
+// step is a sixteenth, so a bar is four groups of four. The rows are the effect's own controls; where they
+// overlap they work together. A control that a clip leaves out stays off.
 
-clip glitched {
+// the plain beat: all 16 slices in the order they were recorded, with every glitch off
+clip plain {
   instrument: break_voice
-  length: 2bars
-  notes: cuts
+  length: 1bar
+  times: 2
+  notes: [s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12 s13 s14 s15]
+}
 
-  // The rows are the effect's own controls. A row of steps spreads over the clip, and each step is a sixteenth.
-  // Where rows overlap they work together: bar 2 ends with a stutter into a rewind, and a crush over its middle.
+// light: a stutter on the last step, a few slices swapped
+clip light {
+  instrument: break_voice
+  length: 1bar
+  times: 1
+  notes: [s0 s1 s2 s3 s4 s4 s6 s7 s8 s9 s2 s11 s12 s5 s14 s15]
   break_glitch {
-    stutter: .... .... .... .... .... .... .... xxx.
-    rewind:  .... .... xx.. .... .... .... .... .xx.
-    slow:    ...x xxx. .... .... .... .... .... ....
-    scatter: .... .... .... .... xxxx xxxx .... ....
-    freeze:  .... .... .... .... .... .... .... .xx.
-    crush:   .... .... .... .... .... xxxx xxxx ....
-    // a trance gate is the one row that starts open: `x` lets the break through and `.` cuts it
-    gate:    xxx. xx.x x.xx .x.x xxxx xxxx xxxx xxxx
+    stutter: .... .... .... x...
+    rewind:  .... .... .... ..x.
+  }
+}
 
-    // anything else is an ordinary lane: this stutter rolls faster the longer it is held, and the crush gets
-    // harsher in the second half
+// building: more slices swapped, a scatter, a rewind and a crush
+clip building {
+  instrument: break_voice
+  length: 1bar
+  times: 1
+  notes: [s0 s0 s2 s3 s4 s4 s6 s6 s8 s9 s2 s2 s12 s5 s14 s15]
+  break_glitch {
+    stutter: .... xx.. .... xxx.
+    rewind:  .... .... xx.. ....
+    scatter: .... xxxx .... ....
+    crush:   .... .... xxxx ....
+
+    scatter_seed: 7
+  }
+}
+
+// peak: everything at once. It stutters into a rewind while the crush is on, and the trance gate
+// (the one row that starts open: `x` lets the break through, `.` cuts it) chops it all up.
+clip peak {
+  instrument: break_voice
+  length: 1bar
+  times: 1
+  notes: [s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12 s5 s14 s15]
+  break_glitch {
+    stutter: .... xx.. .... xxxx
+    rewind:  xx.. .... .... .xx.
+    slow:    ...x xxx. .... ....
+    scatter: xxxx xxxx .... ....
+    freeze:  .... .... xx.. .xx.
+    crush:   .... xxxx xxxx ....
+    gate:    xxx. xx.x x.xx .x.x
+
+    // anything else is an ordinary lane: this stutter rolls faster the longer it is held
     stutter_shrink: 0.7
     scatter_seed: 7
     scatter_reverse: 0.3
     scatter_drop: 0.15
     scatter_detune: 5
-    crush_bits: [8@16 4@16]
+    crush_bits: 4
   }
 }
 
-glitched.start
+// `at +2bars` counts from the moment this is evaluated: the plain beat for two bars, a bar of each stage
+// as the glitching ramps up, then the plain beat again.
+plain.start
+at +2bars light.start
+at +3bars building.start
+at +4bars peak.start
+at +5bars plain.start
 
 // The same controls with chance in them. A row of steps takes the usual mini-notation: `<x .>` takes a turn each
 // bar (a clip with no `length:` runs a bar at a time), `x?` happens half the time (the same way every time) and
 // `x(3,16)` spreads three hits over sixteen steps. A step that is off, or dropped by `?`, is off.
-// Evaluate it live (or swap `glitched.start` for `chancy.start`) and glitch the break differently each bar.
+// Evaluate it live (with `chancy.start`) and glitch the break differently each bar.
 clip chancy {
   instrument: break_voice
   notes: [s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12 s13 s14 s15]

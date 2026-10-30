@@ -1,11 +1,34 @@
-// One break: fragments, clouds, reverse debris, synchronized masks and trainlets. Render:
+// Hear one original break play for two bars, melt into grains, explore fragments, clouds, reverse
+// debris, masks and trainlets, then re-form into the original break for two final bars.
+// Evaluate the whole file; + times restart the sequence wherever the live clock has reached.
+// Render:
 // niminal-live render examples/granular.nml --out /tmp/granular.wav
 config { channels: stereo }
 tempo 100bpm
 
-brk = sample("break.wav")
+// break.wav is one bar at 100bpm: the opening plays at its recorded speed and pitch.
+brk = sample("break.wav").loop(forward)
 const body = harmonics([1, 0.3, 0, 0.15], size: 256)
 const soft_window = window(blackman, size: 257)
+
+// First eight beats: only the original break, two full loops. Over the next four, the same recording
+// gradually slows, smears and spreads into a cloud. It stays fully granular for two more beats.
+// Grain duration, spray and pitch scatter grow together; the playhead settles on a small detail.
+instr melt() {
+  dissolve = env[0 8beats 0 4beats 1]
+  pointer = phasor((1 / (4beats).num).hz)
+  duration = 45ms + dissolve * 195ms
+  particles = granular(brk.data, density: 70hz, duration: duration,
+    position: pointer * (1 - dissolve) + (0.37 + phasor(0.025hz) * 0.12) * dissolve,
+    rate: 1 - dissolve * 0.5, spray: dissolve * 100ms,
+    pitch_scatter: dissolve * 9, jitter: dissolve * 0.75,
+    window: soft_window, spread: dissolve * 0.9,
+    gain: 2 / sqrt(max(1, 70 * duration.num)), seed: 7)
+  dry = brk()
+  wet = particles.hpf(cutoff: 70hz)
+  mix = dry * cos(dissolve * pi / 2) + wet * sin(dissolve * pi / 2)
+  out = mix * env[0 5ms 1 | 450ms 0] * 0.55
+}
 
 // Clocked fragments with missing grains and captured accents; the clock stays steady.
 instr fragments() {
@@ -15,7 +38,7 @@ instr fragments() {
     rate: 1, pitch_scatter: 2, shape: 0.08,
     probability: 0.7, gain: 0.35 + 0.85 * (phasor(1.5hz) < 0.25),
     pan: osc(sine, 0.3hz) * 0.7, spread: 0.25, seed: 11)
-  particles * env[0 5ms 1 | 80ms 0] * 0.35
+  particles * env[0 5ms 1 | 80ms 0] * 0.75
 }
 
 // Scan the break and the pitched body independently; the second reader is tuned a fifth up.
@@ -27,7 +50,7 @@ instr cloud() {
     position2: phasor(0.09hz), pitch2: 7,
     spread: 1, fm: osc(sine, 93hz), fm_depth: 0.15, seed: 21)
   dry = particles.hpf(120hz)
-  (dry + dry.reverb(room: 0.7) * 0.25) * env[0 800ms 1 | 900ms 0] * 0.18
+  (dry + dry.reverb(room: 0.7) * 0.25) * env[0 800ms 1 | 900ms 0] * 0.32
 }
 
 // Reverse debris blends a moving playhead with a different frozen region an octave lower.
@@ -38,12 +61,13 @@ instr debris() {
     shape: 0.06, sweep: -24, spread: 0.9,
     source2: brk.data, mix: 0.35, position2: 0.61, pitch2: -12, rate2: -1,
     fm: osc(sine, 317hz), fm_depth: 0.4, seed: 31)
-  particles * env[0 10ms 1 | 300ms 0] * 0.18
+  particles * env[0 10ms 1 | 300ms 0] * 0.36
 }
 
-fragments() for 8beats
-at +8beats cloud() for 8beats
-at +16beats debris() for 8beats
+melt() for 14beats                         // Two bars of break -> continuous granular dissolve.
+at +14beats fragments() for 4beats          // The source is still recognizable as clocked fragments.
+at +18beats cloud() for 4beats              // A denser cloud adds an independently scanned pitched body.
+at +22beats debris() for 4beats             // Reverse and downward-sweeping pieces.
 
 // Masks and displacement share a steady clock. The second cloud follows its sync
 // and gain cursor, even while the lead's audible grains are displaced in time.
@@ -64,7 +88,7 @@ instr orbit() {
     gain_mask: accents, gain_index: leader.gain_index - 1,
     rate: 0.5, pitch: -12, spread: 0.8, sweep: 12, sweep_shape: 0.2,
     fm: leader.phase - 0.5, fm_depth: 0.15, seed: 52)
-  (leader.audio + answer * 0.1) * env[0 20ms 1 | 200ms 0] * 0.22
+  (leader.audio + answer * 0.1) * env[0 20ms 1 | 200ms 0] * 0.4
 }
 
 // Trainlets are normalized pulse trains inside grains. FM fades from a metallic
@@ -78,8 +102,29 @@ instr trainlets(freq: hz = 110hz) {
     window: soft_window, window_amount: 0.8,
     fm: osc(sine, 71hz), fm_depth: 0.45, fm_window: [1, 0.4, 0],
     spread: 1, seed: 61)
-  particles * env[0 150ms 1 | 600ms 0] * 0.18
+  particles * env[0 150ms 1 | 600ms 0] * 0.32
 }
 
-at +24beats orbit() for 8beats
-at +32beats trainlets(freq: a2) for 8beats
+at +26beats orbit() for 4beats              // Shared clock, masks and displaced grains.
+at +30beats trainlets(freq: a2) for 4beats    // Synthetic pulse-train grains.
+
+// The melt run backwards: fully granular, the grains converge on the playhead and the break
+// re-forms, then plays two clean loops. The playhead keeps the break's bar phase throughout,
+// so the dry break lands exactly in time when the grains disappear.
+instr reform() {
+  dissolve = env[1 2beats 1 4beats 0]
+  pointer = phasor((1 / (4beats).num).hz)
+  duration = 45ms + dissolve * 195ms
+  particles = granular(brk.data, density: 70hz, duration: duration,
+    position: pointer * (1 - dissolve) + (0.37 + phasor(0.025hz) * 0.12) * dissolve,
+    rate: 1 - dissolve * 0.5, spray: dissolve * 100ms,
+    pitch_scatter: dissolve * 9, jitter: dissolve * 0.75,
+    window: soft_window, spread: dissolve * 0.9,
+    gain: 2 / sqrt(max(1, 70 * duration.num)), seed: 7)
+  dry = brk()
+  wet = particles.hpf(cutoff: 70hz)
+  mix = dry * cos(dissolve * pi / 2) + wet * sin(dissolve * pi / 2)
+  mix * env[0 5ms 1 | 450ms 0] * 0.55
+}
+
+at +34beats reform() for 14beats            // Grains converge back into the original break.

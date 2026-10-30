@@ -1,0 +1,20 @@
+// A plucked minor chord becomes inharmonic; a cutoff then protects the bass underneath it.
+// shift adds Hz rather than transposing in semitones: the original harmonic ratios change.
+// niminal-live render examples/spectral_shift.nml --out /tmp/spectral_shift.wav
+config { channels: stereo }
+tempo 100bpm
+
+instr shifted(shift: hz = 0hz, lowest: hz = 0hz) {
+  upper = (osc(tri, [a3, c4, e4]) + osc(saw, [a3, c4, e4]) * 0.25).sum * 0.12
+  bass = osc(tri, a2) * 0.2
+  pluck = env[0 30ms 1 400ms 0.4 | 300ms 0]
+  source = (upper + bass).lpf(cutoff: 3500hz) * pluck
+  changed = spectral_shift(source, shift: shift, lowest: lowest, size: 2048, overlap: 8)
+  out = (changed + changed.reverb(room: 0.35, damp: 0.7) * 0.15).pan(azimuth: 0deg)
+}
+
+shifted() for 2beats                         // Original chord and bass.
+at +3beats shifted(shift: 83hz) for 2beats    // Every peak moves: bell-like, inharmonic colour.
+at +6beats shifted(shift: 83hz, lowest: 180hz) for 2beats // The bass fundamental keeps its pitch.
+at +9beats shifted(shift: -41hz, lowest: 180hz) for 2beats // Downward shift, with bass protected.
+at +12beats shifted() for 3beats             // Return to the original harmony.

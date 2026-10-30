@@ -229,3 +229,31 @@ fn spectral_memory_capture_scan_and_envelope_controls_allocate_before_audio_only
     assert!(output[0].iter().all(|v| v.is_finite()));
     assert!(output[0].iter().any(|v| v.abs() > 0.001));
 }
+
+#[test]
+fn spectral_edits_morphing_and_partial_tracking_do_not_allocate_on_audio_thread() {
+    for expression in [
+        "spectral_thin(x,count: 8,size: 512)",
+        "spectral_arp(x,position: phasor(2hz),size: 512)",
+        "spectral_hold(x,magnitude: phasor(10hz)>0.5,frequency: phasor(7hz)>0.5,size: 512)",
+        "spectral_shift(x,shift: 73hz,size: 512)",
+        "spectral_morph(x,osc(saw,330hz),size: 512)",
+        "spectral_partials(x,count: 8,freeze: phasor(8hz)>0.5,size: 512)",
+    ] {
+        let program = niminal_lang::compile(&format!(
+            "instr a() {{ x=osc(saw,220hz)*0.1\n {expression} }}"
+        ))
+        .unwrap();
+        let mut voice = Voice::new(program.instruments[0].graph.clone(), 48000.0);
+        let mut buses = Buses::new(&[]);
+        let mut output = vec![vec![0.0; block_size()]; 1];
+        ALLOCATIONS.with(|count| count.set(0));
+        NODE.with(|node| node.set(true));
+        for _ in 0..256 {
+            voice.process_blocks(&mut output, block_size(), &mut buses);
+        }
+        NODE.with(|node| node.set(false));
+        assert_eq!(ALLOCATIONS.with(Cell::get), 0, "{expression}");
+        assert!(output[0].iter().all(|v| v.is_finite()));
+    }
+}

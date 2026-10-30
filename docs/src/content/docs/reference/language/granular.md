@@ -5,6 +5,8 @@ description: Four source readers, trainlets, grain masks, envelopes, routing and
 
 `granular(source, ...)` makes overlapping particles from sample data or numeric tables.
 
+`examples/granular.nml` starts with one bar of the original `break.wav`, then continuously melts that same recording into a slow, scattered cloud. It goes on to clocked fragments, reverse debris, synchronized masks and trainlets. Evaluate the whole file to hear the source before its transformations.
+
 Sources and shaping tables are immutable resources chosen when compiling. Runtime signals control grain creation and select source/FM-window bank entries. Static resource edits rebuild the instance; signal edits can retain its running state.
 
 ## Grain lifetime and defaults

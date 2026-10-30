@@ -10,7 +10,7 @@ functions.nml: 2x293633
 fx.nml: 2x583652
 gestures.nml: 2x353001
 glitch.nml: 2x353001
-granular.nml: 2x1180758
+granular.nml: 2x1403992
 groove.nml: 2x570512
 instrument_scopes.nml: 1x100807
 library.nml: 1x327199
@@ -28,8 +28,13 @@ song.nml: 2x583731
 spectral.nml: 2x432523
 spectral_delay.nml: 2x472833
 spectral_formants.nml: 2x446047
+spectral_hold.nml: 2x474825
 spectral_memory.nml: 2x452893
+spectral_morph.nml: 2x422032
+spectral_partials.nml: 2x396908
 spectral_pitch.nml: 2x440965
+spectral_select.nml: 2x479636
+spectral_shift.nml: 2x487586
 spectral_transients.nml: 2x393401
 stereo.nml: 2x280705
 stutter.nml: 2x351522

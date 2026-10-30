@@ -1,6 +1,6 @@
 ---
 title: Spectral processing
-description: Peak-locked pitch shifting, attack handling, independent formants and spectral memory.
+description: Spectral morphing, peak-locked pitch shifting, independent freezing, partial tracking and spectral memory.
 ---
 
 **Compiled by niminal.** These processors use overlapping Hann-windowed FFT frames. They work in instruments or persistent effects, with latency declared to the graph so parallel paths align. All working storage is allocated before audio processing.
@@ -58,3 +58,64 @@ Memory also accepts `shift`, `formant`, `preserve`, `transients` and `detail` as
 `frames` is a compile-time integer from 1 to 65536. History uses `frames * (size / 2 + 1) * 12` bytes; configurations above **64 MiB of history per instance** are rejected. FFT and tracking buffers are additional. At 48 kHz, size 2048 / overlap 4, 256 frames occupy about 3 MiB and successive frame times span about 2.72 seconds. Duration scales with sample rate; the stored frame count stays fixed. Once full, recording overwrites the oldest frame. Reset clears the capture. State-carrying redefinitions preserve it when `size`, `overlap`, `frames` and `detail` match. Prefer a persistent effect for a shared live capture rather than allocating a separate bank per note.
 
 `examples/spectral_memory.nml` records one bowed gesture and reuses that capture throughout: a held detail, forward and reverse scans, then a small looping region harmonized into a minor chord.
+
+## Morph between two sounds
+
+`spectral_morph(x, other, magnitude: 0.5, frequency: 0.5)` analyzes two aligned inputs and interpolates their magnitudes and instantaneous frequencies independently. Each blend ranges from 0 (first source) to 1 (second). Both controls at 0 reproduce the first source; both at 1 reproduce the second, with the declared latency. For example:
+
+```nml
+instr changing() {
+  a = osc(saw, a3).lpf(cutoff: 1800hz) * 0.12
+  b = osc(saw, a3 + osc(sine, 4hz) * 3hz).lpf(cutoff: 4khz) * 0.2
+  movement = env[0 1beat 0 4beats 1]
+  out = spectral_morph(a, b, magnitude: movement, frequency: movement,
+    size: 2048, overlap: 8) * env[0 80ms 1 | 300ms 0]
+}
+```
+
+This is interpolation between corresponding FFT bins, not matching one sound's harmonics to another's. It is most predictable with overlapping frequency content; unrelated sounds can give deliberately diffuse results. Intermediate frequencies integrate continuously, while frequency endpoints use their source's analysis phases. It is a different transformation from `envelope_transfer`, which transfers the broad spectral shape and retains the carrier's fine structure.
+
+## Select and arpeggiate spectral components
+
+| Opcode | Controls | Result |
+| --- | --- | --- |
+| `spectral_thin(x, count: 16)` | `count`: number of bins, rounded down and clamped to 0…`size / 2 + 1` | Keeps the loudest bins in each frame. Zero is silence; keeping every bin reproduces the input. Ties favour lower bin indices. |
+| `spectral_arp(x, position: 0.1, depth: 1, gain: 1, width: 1)` | `position`: 0…1 of Nyquist; `depth`: 0…1; `gain`: nonnegative linear gain; `width`: triangular focus radius in bins, at least 1 | Emphasizes a moving area of the spectrum. Depth 1 silences material outside the focus; depth 0 / gain 1 is neutral. |
+
+Animate `count` to dissolve a recording into its strongest components, or step `position` in time with a sequence. A component usually occupies several neighboring FFT bins, so keeping 8 bins does **not** mean keeping 8 harmonics. Thinning is frame-local and can flicker as bins exchange rank. A wider arpeggiator focus gives gentler movement; larger gain requires output headroom.
+
+## Freeze magnitude and frequency independently
+
+`spectral_hold(x, magnitude: 0, frequency: 0)` captures either component when its control rises above 0.5, retaining it until that control falls again. The two captures are independent:
+
+- Hold magnitude to keep the spectral shape while analysis phases follow the live input.
+- Hold frequency to keep each bin's measured frequency while live magnitudes continue changing.
+- Hold both to sustain the captured spectrum, including off-bin tuning.
+
+Start the freeze after a sound has developed: freezing an empty frame holds silence. Frequency-only holding retains frequencies **by bin**, not by harmonic identity; large pitch movements can move energy into bins whose captured frequencies were unreliable. This opcode complements the existing `spectral_freeze` and the chronological capture in `spectral_memory`.
+
+## Shift frequencies in Hz
+
+`spectral_shift(x, shift: 100hz, lowest: 500hz)` adds a fixed Hz offset to spectral peak regions whose measured peak frequency is at least `lowest`. The default shift and cutoff are both 0 Hz. Negative shifts move regions downward. Whole peak regions move together, with phase locking and attack resets as in `spectral_warp`; bins outside the output spectrum are discarded. Frequencies below the cutoff retain their tuning.
+
+Adding Hz changes harmonic spacing relative to the fundamental, producing inharmonic and bell-like textures. This differs from `spectral_pitch`, which multiplies frequencies to transpose in semitones. Moving regions across the cutoff can change their shift abruptly; use a steady cutoff for predictable results.
+
+## Track and resynthesize partials
+
+`spectral_partials(x, count: 32, threshold: 0.01)` detects local spectral peaks, follows them across frames, and resynthesizes them with sine oscillators. Amplitude and frequency interpolate over each hop. This extracts a tonal approximation; it does not reconstruct the noisy residual or guarantee a transparent bypass.
+
+| Control | Default | Meaning |
+| --- | --- | --- |
+| `count` | `32` | Maximum strongest peak candidates considered each frame, clamped to `max_tracks`. Zero lets existing tracks fade away. |
+| `threshold` | `0.01` | Minimum peak magnitude relative to the current frame's largest bin, 0…1. |
+| `shift` | `0` | Transpose tracked oscillators in semitones, −48…+48. Out-of-band oscillators are muted. |
+| `freeze` | `0` | Above 0.5, retain the tracked amplitudes and frequencies while oscillators continue. |
+| `track` | `0` | 0 plays every track; a positive integer selects a 1-based persistent slot. An empty or out-of-range slot is silent. |
+| `lowest`, `highest` | `20hz`, `20000hz` | Accepted measured peak frequencies. |
+| `max_tracks` | `64` | Compile-time slot capacity, a whole number from 1 to 256. |
+
+Track slots keep their identity when loudness ordering changes. Matching uses nearest frequency within the greater of three FFT bins or 4% of the previous frequency, with at most one candidate per slot. Missing tracks fade over one hop and can reconnect for three frames before their slots are released. Slots are reused after tracks die; these are bounded live identities, not permanent IDs for an entire recording. Crossing or unresolved partials can still exchange identities. Freeze a capture before selecting slots when you want a stable component to audition.
+
+All six new opcodes accept compile-time `size: 2048` and `overlap: 4`, with the same ranges as `spectral_warp`. Controls are sampled at frame boundaries, except partial oscillator transposition and slot selection, which are sampled per audio sample. The first five add `size` samples of latency. Partial resynthesis declares `size / 2 + size / overlap` samples for its window-centre analysis and one-hop interpolation; its extracted attacks are approximate. Stereo channels are processed independently. Working buffers and track storage are allocated before processing, and compatible live redefinitions carry their state.
+
+Examples: `spectral_morph.nml`, `spectral_select.nml`, `spectral_hold.nml`, `spectral_shift.nml` and `spectral_partials.nml` each start with an audible source before introducing their transformation.

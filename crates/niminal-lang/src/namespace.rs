@@ -108,6 +108,12 @@ fn body(
     globals: &HashMap<String, String>,
 ) {
     let mut locals = HashSet::new();
+    // the options of a choice are names of their own, so a global of the same name must not replace them
+    for p in params.iter() {
+        if let Some(TypeSpec::Choice(options)) = &p.ty {
+            locals.extend(options.iter().map(|o| o.name.clone()));
+        }
+    }
     for p in params {
         if let Some(e) = &mut p.default {
             expr(e, &locals, globals);

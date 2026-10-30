@@ -1,0 +1,29 @@
+// A bowed, slightly breathy tone becomes a sine-bank instrument, then freezes into a harmony.
+// Tracks follow measured peaks across frames. Their slots stay stable as loudness order changes.
+// niminal-live render examples/spectral_partials.nml --out /tmp/spectral_partials.wav
+config { channels: stereo }
+tempo 100bpm
+
+instr tracked() {
+  bow = env[0 100ms 1 3beats 0.7 1beat 0.9]
+  tone = (osc(tri, a3) * 0.55 + osc(saw, a3) * 0.45).lpf(cutoff: 3200hz) * bow * 0.35
+  air = noise(seed: 73).hpf(cutoff: 2500hz).lpf(cutoff: 7khz) * bow * 0.012
+  source = tone + air
+  // Two beats dry, two beats fading into tracked resynthesis, then fewer partials.
+  reveal = env[0 2beats 0 2beats 1]
+  count = env[24 4beats 24 2beats 5]
+  // Freeze at beat 7; the source fades away at beat 8, leaving only the captured oscillators.
+  freeze = env[0 7beats 0 1ms 1]
+  sounding = env[1 7beats 1 1beat 0]
+  partials = spectral_partials(source * sounding, count: count, threshold: 0.025,
+    freeze: freeze, size: 2048, overlap: 8, max_tracks: 48)
+  // The same held analysis is harmonized by spectral pitch shifters; no source replay is needed.
+  chord = env[0 9beats 0 1beat 1]
+  third = spectral_warp(partials, shift: 3, size: 2048, overlap: 8)
+  fifth = spectral_warp(partials, shift: 7, size: 2048, overlap: 8)
+  voice = source * (1 - reveal) + partials * reveal * 0.8
+  out = (voice.pan(azimuth: 0deg) + third.pan(azimuth: -30deg) * chord * 0.3
+    + fifth.pan(azimuth: 30deg) * chord * 0.3) * env[0 50ms 1 | 400ms 0] * 1.6
+}
+
+tracked() for 13beats

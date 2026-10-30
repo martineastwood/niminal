@@ -160,6 +160,16 @@ impl PeakWarp {
         }
     }
     pub fn process(&mut self, s: &Spectrum, controls: WarpControls, out: &mut [Complex<f64>]) {
+        self.process_shift(s, controls, 0.0, 0.0, out);
+    }
+    pub(super) fn process_shift(
+        &mut self,
+        s: &Spectrum,
+        controls: WarpControls,
+        offset: f64,
+        lowest: f64,
+        out: &mut [Complex<f64>],
+    ) {
         let bins = s.magnitude.len();
         let ratio = 2.0_f64.powf(controls.shift / 12.0);
         let envelope_ratio =
@@ -210,11 +220,17 @@ impl PeakWarp {
                 .get(old_cursor)
                 .copied()
                 .filter(|&old| old.abs_diff(peak) <= 4);
+            let offset = if s.frequency[peak] >= lowest {
+                offset
+            } else {
+                0.0
+            };
             let mut phase = if self.started {
                 matched.map_or(s.phase[peak], |old| {
                     self.previous_synthesis[old]
                         + wrap(self.previous_phase[peak] - self.previous_phase[old])
                         + TAU * s.frequency[peak] * ratio * self.hop as f64
+                        + TAU * offset * self.hop as f64
                 })
             } else {
                 s.phase[peak]
@@ -232,8 +248,9 @@ impl PeakWarp {
             }
             phase = wrap(phase);
             self.synthesis[peak] = phase;
-            let displacement =
-                (s.frequency[peak] * self.size as f64 * (ratio - 1.0)).round() as isize;
+            let displacement = (s.frequency[peak] * self.size as f64 * (ratio - 1.0)
+                + offset * self.size as f64)
+                .round() as isize;
             // Translate complete peak regions; add collisions rather than overwriting partials.
             for k in from..to {
                 let destination = k as isize + displacement;

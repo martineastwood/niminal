@@ -376,7 +376,7 @@ pub(super) fn prepare_pending(
 
     let mut project = base.clone();
     project.apply(&delta);
-    project.drop_broken(&from_snippet, |full| {
+    project.drop_broken(&from_snippet, |_, full| {
         compile_with(full, &options(cfg.layout, &cfg.samples)).map(|_| ())
     });
     let check = |project: &Project, extra: &[Piece]| -> Result<Composition, Vec<Problem>> {

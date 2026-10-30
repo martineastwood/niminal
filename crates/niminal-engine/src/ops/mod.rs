@@ -129,3 +129,8 @@ pub use transients::{detect_transients, detect_transients_at};
 
 pub use phase_vocoder::SpectralWarp;
 pub use spectral_memory::SpectralMemory;
+
+mod spectral_edit;
+mod spectral_partials;
+pub use spectral_edit::{SpectralEdit, SpectralEditKind, SpectralMorph};
+pub use spectral_partials::SpectralPartials;

@@ -4,7 +4,7 @@ config { channels: stereo }
 tempo 100bpm
 
 const organ = harmonics([1, 0, 1/3, 0, 1/5, 0.15, 1/7], size: 2048)
-const soft = cheby([1, 0.2, 0.05], size: 1024)
+const warm = cheby([1, 0.2, 0.05], size: 1024)
 const bright = harmonics([1, 1/2, 1/3, 1/4, 1/5], size: 2048)
 const dark = harmonics([1, 0, 0, 0, 1/5], size: 2048)
 const morph = bank([dark, organ, bright])
@@ -14,7 +14,7 @@ buffer scratch = zeros(2048)
 
 instr keys(freq: hz) {
   level = adsr(8ms, 200ms, 0.5, 400ms)
-  osc(organ, freq).waveshape(soft) * level
+  osc(organ, freq).waveshape(warm) * level
 }
 
 instr pad(freq: hz, position: 0..1 = 0.5) {

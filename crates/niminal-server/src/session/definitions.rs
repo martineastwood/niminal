@@ -361,6 +361,12 @@ impl Session {
                     .cloned()
                     .collect();
             }
+            // what the new definitions replaced may have been used by earlier ones: those go too
+            project.drop_broken(&from_snippet, |project, full| {
+                let mut options = compile_options.clone();
+                options.namespaces = project_namespaces(project);
+                compile_with(full, &options).map(|_| ())
+            });
             let (full, map) = project.source(&from_snippet, &[]);
             compile_options.namespaces = project_namespaces(&project);
             let program = compile_with(&full, &compile_options).map_err(|diags| {

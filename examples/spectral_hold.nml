@@ -1,0 +1,23 @@
+// One breathing, gently bending source: live, magnitude held, frequency held, then both held.
+// Unlike spectral_memory, this captures magnitude and frequency independently at each rising gate.
+// niminal-live render examples/spectral_hold.nml --out /tmp/spectral_hold.wav
+config { channels: stereo }
+tempo 100bpm
+
+instr held(mode: 0..3 = 0) {
+  bend = osc(sine, (1 / (3beats).num).hz) * 8hz
+  breathing = lfo((1 / (1beat).num).hz).unipolar.range(0.2..1)
+  source = (osc(tri, a3 + bend) * 0.7 + osc(saw, a3 + bend) * 0.3).lpf(cutoff: 2200hz) * breathing * 0.4
+  // Capture after the first beat so the analysis has a full, developed sound.
+  capture = env[0 1beat 0 1ms 1]
+  magnitude = capture * ((mode == 1) + (mode == 3))
+  frequency = capture * ((mode == 2) + (mode == 3))
+  changed = spectral_hold(source, magnitude: magnitude, frequency: frequency,
+    size: 2048, overlap: 8)
+  out = changed.pan(azimuth: 0deg) * env[0 40ms 1 | 250ms 0]
+}
+
+held(mode: 0) for 4beats                    // Live: level breathes and pitch gently bends.
+at +4beats held(mode: 1) for 4beats         // Hold the spectral shape; live phase movement continues.
+at +8beats held(mode: 2) for 4beats         // Hold bin frequencies; the level keeps breathing.
+at +12beats held(mode: 3) for 4beats        // Hold both: a steady sustained detail.

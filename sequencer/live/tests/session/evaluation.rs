@@ -486,8 +486,8 @@ fn quantize_defaults_can_be_changed() {
 }
 
 #[test]
-fn envelope_transfer_example_plays_all_five_sounds_after_the_clock_has_advanced() {
-    let mut s = session();
+fn envelope_transfer_example_plays_all_five_sections_after_the_clock_has_advanced() {
+    let mut s = Offline::new(SR, Layout::Stereo).without_limiter();
     run(&mut s, 8 * BAR);
     let source = niminal_lang::expand(
         include_str!("../../../../examples/envelope_transfer.nml"),
@@ -504,4 +504,22 @@ fn envelope_transfer_example_plays_all_five_sounds_after_the_clock_has_advanced(
             "the sound at +{at} beats did not play"
         );
     }
+}
+
+#[test]
+fn an_instrument_replaces_a_clip_node_of_its_name_from_another_file() {
+    let mut s = Offline::new(SR, Layout::Stereo).without_limiter();
+    s.eval(include_str!("../../../../examples/room.nml"), Some("now"))
+        .unwrap();
+    s.eval(include_str!("../../../../examples/lsp_tour.nml"), Some("now"))
+        .unwrap();
+}
+
+#[test]
+fn a_clip_node_replaces_an_instrument_of_its_name_from_another_file() {
+    let mut s = Offline::new(SR, Layout::Stereo).without_limiter();
+    s.eval(include_str!("../../../../examples/lsp_tour.nml"), Some("now"))
+        .unwrap();
+    s.eval(include_str!("../../../../examples/room.nml"), Some("now"))
+        .unwrap();
 }

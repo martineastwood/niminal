@@ -12,8 +12,9 @@ use niminal_engine::ops::{
     Delay, Distortion, Eq, EqMode, Fdn, FilterMode, FinishWhen, Fn1, Fold, Follow, Formant, Freeze,
     Func, GLITCH_MAX_SECONDS, Gain, Gate, Granular, Impulse, IrSpectrum, Ladder, Lag, Limiter,
     Modal, Noise, NoiseColor, Osc, Phaser, Phasor, PitchShift, RepeatLast, Resonator, Reverb,
-    RewindLast, SampleHold, Scatter, SlowDown, SpectralDelay, SpectralFreeze, SpectralMemory,
-    SpectralWarp, Svf, Waveshape, Wavetable,
+    RewindLast, SampleHold, Scatter, SlowDown, SpectralDelay, SpectralEdit, SpectralEditKind,
+    SpectralFreeze, SpectralMemory, SpectralMorph, SpectralPartials, SpectralWarp, Svf, Waveshape,
+    Wavetable,
 };
 
 use crate::unit::Unit;
@@ -192,6 +193,11 @@ fn fft_size(a: &BuildArgs) -> Result<usize, String> {
 }
 
 /// Settings shared by the peak vocoder and its fixed-capacity spectral memory.
+fn spectral_edit(a: &BuildArgs, kind: SpectralEditKind) -> Result<Box<dyn Opcode>, String> {
+    let (size, overlap, _) = vocoder_settings(a)?;
+    Ok(Box::new(SpectralEdit::new(kind, size, overlap)))
+}
+
 fn vocoder_settings(a: &BuildArgs) -> Result<(usize, usize, usize), String> {
     let size = a.consts.get("size").copied().unwrap_or(2048.0);
     if size.fract() != 0.0 || !(4.0..=65536.0).contains(&size) || !(size as usize).is_power_of_two()
@@ -896,6 +902,51 @@ impl Registry {
                 }),
             ),
             OpSpec::new(
+                "spectral_morph",
+                "Interpolate two aligned spectra, with independent magnitude and instantaneous-frequency blends in 0..1. Endpoints reproduce their sources; intermediate values are bin-based morphs, not tracked-partial matching. Size defaults to 2048, overlap to 4. Latency is size samples.",
+                vec![
+                    req("x", SIGNAL),
+                    req("other", SIGNAL),
+                    opt("magnitude", SIGNAL),
+                    opt("frequency", SIGNAL),
+                    setting("size", SIGNAL),
+                    setting("overlap", SIGNAL),
+                ],
+                Build::Builtin(|a| {
+                    let (size, overlap, _) = vocoder_settings(a)?;
+                    Ok(Box::new(SpectralMorph::new(size, overlap)))
+                }),
+            ),
+            OpSpec::new(
+                "spectral_partials",
+                "Track spectral peaks in stable slots and resynthesize with interpolated sine oscillators. Count keeps the strongest candidates (default 32); threshold is relative to the frame maximum (0.01). Shift is semitones, freeze holds tracks, track selects a 1-based slot (0 all), lowest/highest are Hz. Max_tracks is compile-time 1..256 (default 64). Slots can be reused after tracks die. Latency is size/2 + hop samples.",
+                vec![
+                    req("x", SIGNAL),
+                    opt("count", SIGNAL),
+                    opt("threshold", SIGNAL),
+                    opt("shift", SIGNAL),
+                    opt("freeze", SIGNAL),
+                    opt("track", SIGNAL),
+                    opt("lowest", Kind::Signal(Unit::Hz)),
+                    opt("highest", Kind::Signal(Unit::Hz)),
+                    setting("max_tracks", SIGNAL),
+                    setting("size", SIGNAL),
+                    setting("overlap", SIGNAL),
+                ],
+                Build::Builtin(|a| {
+                    let (size, overlap, _) = vocoder_settings(a)?;
+                    let count = a.consts.get("max_tracks").copied().unwrap_or(64.0);
+                    if count.fract() != 0.0 || !(1.0..=256.0).contains(&count) {
+                        return Err("max_tracks must be a whole number from 1 to 256".into());
+                    }
+                    Ok(Box::new(SpectralPartials::new(
+                        size,
+                        overlap,
+                        count as usize,
+                    )))
+                }),
+            ),
+            OpSpec::new(
                 "spectral_memory",
                 "Capture a ring of spectral frames with record above 0.5; below it, scan the capture with position (0 oldest, 1 newest), independently of pitch. Shift, formant, preserve and transients are as for spectral_warp; transient reset defaults off. Frames defaults to 256. Storage is fixed at compile time, at most 64 MiB per instance. Latency is size samples.",
                 vec![
@@ -970,6 +1021,56 @@ impl Registry {
                 }),
             ),
         ];
+        let mut ops = ops;
+        for (name, doc, kind, controls) in [
+            (
+                "spectral_thin",
+                "Keep the count loudest FFT bins (default 16). Count 0 is silence; size/2+1 keeps all. Bin selection is frame-local, not partial tracking.",
+                SpectralEditKind::Thin,
+                vec![opt("count", SIGNAL)],
+            ),
+            (
+                "spectral_arp",
+                "Focus the spectrum around position (0..1 of Nyquist), with depth (0..1), gain (linear) and width (FFT bins, at least 1). Animate position to arpeggiate spectral components.",
+                SpectralEditKind::Arp,
+                vec![
+                    opt("position", SIGNAL),
+                    opt("depth", SIGNAL),
+                    opt("gain", SIGNAL),
+                    opt("width", SIGNAL),
+                ],
+            ),
+            (
+                "spectral_hold",
+                "Freeze magnitude and frequency independently when their controls exceed 0.5. Unheld components keep following the input. Frequencies use measured instantaneous phase advance.",
+                SpectralEditKind::Hold,
+                vec![opt("magnitude", SIGNAL), opt("frequency", SIGNAL)],
+            ),
+            (
+                "spectral_shift",
+                "Add shift Hz to peak regions at or above lowest Hz. Unlike semitone shifting, this makes harmonic sounds inharmonic. Out-of-band bins are discarded.",
+                SpectralEditKind::Shift,
+                vec![
+                    opt("shift", Kind::Signal(Unit::Hz)),
+                    opt("lowest", Kind::Signal(Unit::Hz)),
+                ],
+            ),
+        ] {
+            let mut params = vec![req("x", SIGNAL)];
+            params.extend(controls);
+            params.extend([setting("size", SIGNAL), setting("overlap", SIGNAL)]);
+            ops.push(OpSpec::new(
+                name,
+                doc,
+                params,
+                Build::Builtin(match kind {
+                    SpectralEditKind::Thin => |a| spectral_edit(a, SpectralEditKind::Thin),
+                    SpectralEditKind::Arp => |a| spectral_edit(a, SpectralEditKind::Arp),
+                    SpectralEditKind::Hold => |a| spectral_edit(a, SpectralEditKind::Hold),
+                    SpectralEditKind::Shift => |a| spectral_edit(a, SpectralEditKind::Shift),
+                }),
+            ));
+        }
         Registry { ops }
     }
 

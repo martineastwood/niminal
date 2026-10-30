@@ -1,5 +1,5 @@
 // An acid bassline. A mono saw through a squelchy resonant low-pass, with slides and accents.
-// Render with:  niminal-live render examples/acid.nml --out acid.wav --bars 4
+// Render with:  niminal-live render examples/acid.nml --out acid.wav --bars 14
 // Live, try:  line.set(cutoff: 300hz)   then   line.set(envmod: 4khz)   then   line.set(res: 0.95)
 //             then   line.transpose(+5st)   then   line.undo
 config { channels: stereo }
@@ -24,36 +24,82 @@ mono acid(freq: hz, cutoff: hz = 400hz, envmod: hz = 2khz, res: 0..1 = 0.9, acce
   echo += out.gain(-6db)
 }
 
-// Two bars of sixteenths: every lane spans the clip's `length`. A `dur` longer than a step overlaps
-// the next note and slides into it.
+// The riff: two bars of sixteenths, one value per step. A `dur` longer than a step overlaps the next
+// note and slides into it. Every clip below plays this same riff and changes only how the filter treats it.
+// A line per beat, four sixteenths each: the first four lines are bar 1, the last four bar 2.
+riff = [a1        a1        a2        a1
+        ~         a1        c2        a1
+        a1        a1        e2        ~
+        g1        a1        a2        ~
+        a1        a1        a2        a1
+        ~         a1        c2        a1
+        f1        f1        c2        ~
+        g1        ~         a1        c2]
+riff_dur = [0.25beat  0.15beat  0.15beat  0.5beat
+            0.15beat  0.15beat  0.3beat   0.15beat
+            0.15beat  0.15beat  0.3beat   0.75beat
+            0.3beat   0.1beat   0.15beat  0.15beat
+            0.25beat  0.15beat  0.15beat  0.5beat
+            0.15beat  0.15beat  0.3beat   0.15beat
+            0.15beat  0.15beat  0.3beat   0.15beat
+            0.3beat   0.15beat  0.3beat   0.15beat]
+riff_accent = [1         0         1         0
+               0         0         1         0
+               0         0         1         0
+               0         1         0         0
+               1         0         1         0
+               0         0         1         0
+               0         0         1         0
+               0         1         0         1]
+
+// the way in: just the root note on the beat, with the filter nearly shut
+clip intro {
+  instrument: acid
+  length: 2bars
+  times: 1
+  notes: [a1 ~ ~ ~  a1 ~ ~ ~  a1 ~ ~ ~  a1 ~ ~ ~  a1 ~ ~ ~  a1 ~ ~ ~  a1 ~ ~ ~  a1 ~ a1 ~]
+  cutoff: 200hz
+  accent: 0
+}
+
+// the riff with the filter at its usual setting
 clip line {
   instrument: acid
   length: 2bars
-  // a line per beat, four sixteenths each: the first four lines are bar 1, the last four bar 2
-  notes: [a1        a1        a2        a1
-          ~         a1        c2        a1
-          a1        a1        e2        ~
-          g1        a1        a2        ~
-          a1        a1        a2        a1
-          ~         a1        c2        a1
-          f1        f1        c2        ~
-          g1        ~         a1        c2]
-  dur: [0.25beat  0.15beat  0.15beat  0.5beat
-        0.15beat  0.15beat  0.3beat   0.15beat
-        0.15beat  0.15beat  0.3beat   0.75beat
-        0.3beat   0.1beat   0.15beat  0.15beat
-        0.25beat  0.15beat  0.15beat  0.5beat
-        0.15beat  0.15beat  0.3beat   0.15beat
-        0.15beat  0.15beat  0.3beat   0.15beat
-        0.3beat   0.15beat  0.3beat   0.15beat]
-  accent: [1         0         1         0
-           0         0         1         0
-           0         0         1         0
-           0         1         0         0
-           1         0         1         0
-           0         0         1         0
-           0         0         1         0
-           0         1         0         1]
+  times: 2
+  notes: riff
+  dur: riff_dur
+  accent: riff_accent
 }
 
-line.start
+// the same riff while the filter opens a little more on every step, from 250hz up to 3khz (a sawtooth sampled once per step)
+clip rise {
+  instrument: acid
+  length: 2bars
+  times: 1
+  notes: riff
+  dur: riff_dur
+  accent: riff_accent
+  cutoff: saw.range(250hz, 3khz).to_steps(32)
+}
+
+// the same riff with the filter held open and more squelch
+clip peak {
+  instrument: acid
+  length: 2bars
+  times: 2
+  notes: riff
+  dur: riff_dur
+  accent: riff_accent
+  cutoff: 1500hz
+  envmod: 4khz
+  res: 0.95
+}
+
+// `at +2bars` counts from the moment this is evaluated: the intro, two rounds of the riff, the filter
+// opening, two rounds with it wide open, and back to the root note to finish.
+intro.start
+at +2bars line.start
+at +6bars rise.start
+at +8bars peak.start
+at +12bars intro.start

@@ -38,12 +38,27 @@ const SHARED: [&str; 12] = [
 /// replaces the old binding with the same name.
 const PERFORMANCE: [&str; 3] = ["bind", "clip", "scene"];
 
-/// A node may play the instrument of its own name, so the two may share it.
-fn is_instrument_and_node(a: &str, b: &str) -> bool {
-    matches!(
-        (a, b),
-        ("instr" | "sample" | "kit", "node") | ("node", "instr" | "sample" | "kit")
-    )
+/// A node may play the instrument of its own name, so the two may share it. A node that plays another
+/// instrument does not: the instrument replaces it, or it replaces the instrument.
+fn share_a_name(old: &Entry, old_kind: &str, new: &Entry, new_kind: &str, name: &str) -> bool {
+    let node = match (old_kind, new_kind) {
+        ("instr" | "sample" | "kit", "node") => new,
+        ("node", "instr" | "sample" | "kit") => old,
+        _ => return false,
+    };
+    let Some((_, after)) = node.text.split_once("instrument =") else {
+        return false;
+    };
+    leading_name(after) == name
+}
+
+/// The name a piece of text starts with, after any spaces.
+fn leading_name(text: &str) -> &str {
+    let text = text.trim_start();
+    let end = text
+        .find(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | ':')))
+        .unwrap_or(text.len());
+    &text[..end]
 }
 
 impl Project {
@@ -54,12 +69,12 @@ impl Project {
     pub fn drop_broken(
         &mut self,
         from_snippet: &std::collections::HashMap<String, usize>,
-        compile: impl Fn(&str) -> Result<(), Vec<Diagnostic>>,
+        compile: impl Fn(&Project, &str) -> Result<(), Vec<Diagnostic>>,
     ) -> Vec<String> {
         let mut dropped = Vec::new();
         for _ in 0..8 {
             let (full, map) = self.source(from_snippet, &[]);
-            let Err(diagnostics) = compile(&full) else {
+            let Err(diagnostics) = compile(self, &full) else {
                 break;
             };
             let mut stale = Vec::new();
@@ -90,7 +105,7 @@ impl Project {
                         n != name
                             || k == kind
                             || !SHARED.contains(&k)
-                            || is_instrument_and_node(k, kind)
+                            || share_a_name(x, k, e, kind, name)
                     })
                 };
                 self.entries.retain(keeps);
@@ -105,6 +120,21 @@ impl Project {
                     x.key
                         .split_once(':')
                         .is_none_or(|(k, n)| n != name || !PERFORMANCE.contains(&k) || k == kind)
+                };
+                self.entries.retain(keeps);
+                waiting.retain(keeps);
+            }
+            // a clip takes the name from an instrument it doesn't play
+            if let Some(name) = e.key.strip_prefix("clip:") {
+                let plays = e
+                    .text
+                    .split_once("instrument:")
+                    .is_some_and(|(_, after)| leading_name(after) == name);
+                let keeps = |x: &Entry| {
+                    plays
+                        || x.key.split_once(':').is_none_or(|(k, n)| {
+                            n != name || !matches!(k, "instr" | "sample" | "kit")
+                        })
                 };
                 self.entries.retain(keeps);
                 waiting.retain(keeps);
@@ -362,11 +392,20 @@ mod tests {
             text: key.into(),
             origin: None,
         };
+        let node = |name: &str, plays: &str| Entry {
+            key: format!("node:{name}"),
+            text: format!("node {name} {{ instrument = {plays} }}"),
+            origin: None,
+        };
         let mut project = Project::default();
         project.apply(&[
-            entry("node:drums"),
+            node("drums", "drums"),
             entry("instr:drums"),
-            entry("clip:drums"),
+            Entry {
+                key: "clip:drums".into(),
+                text: "clip drums { instrument: drums }".into(),
+                origin: None,
+            },
         ]);
         assert_eq!(
             project.entries.len(),
@@ -376,5 +415,22 @@ mod tests {
         project.apply(&[entry("kit:drums")]);
         let keys: Vec<_> = project.entries.iter().map(|e| e.key.as_str()).collect();
         assert_eq!(keys, ["node:drums", "clip:drums", "kit:drums"]);
+    }
+
+    #[test]
+    fn an_instrument_replaces_a_node_of_its_name_that_plays_another() {
+        let mut project = Project::default();
+        project.apply(&[Entry {
+            key: "node:lead".into(),
+            text: "node lead { instrument = lead_voice }".into(),
+            origin: None,
+        }]);
+        project.apply(&[Entry {
+            key: "instr:lead".into(),
+            text: "instr lead() { 0 }".into(),
+            origin: None,
+        }]);
+        let keys: Vec<_> = project.entries.iter().map(|e| e.key.as_str()).collect();
+        assert_eq!(keys, ["instr:lead"]);
     }
 }
