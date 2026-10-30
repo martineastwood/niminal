@@ -86,11 +86,13 @@ fn links(tracks: &[Track], returns: &[Track]) -> BTreeMap<String, Link> {
     for (label, strip, open) in strips {
         let gate = |on: bool| if open && on { 1.0 } else { 0.0 };
         let tap = format!("tap_{label}");
-        links.insert(format!("out_{label}"), Link { from: tap.clone(), to: format!("in_{MASTER}"), gain: gate(strip.output == Output::Master) });
+        // a post-fader send that mutes its source leaves the strip's own output closed: only the sends carry the sound on
+        let alone = strip.active().any(|d| d.target.is_some() && !d.pre && d.mute_source);
+        links.insert(format!("out_{label}"), Link { from: tap.clone(), to: format!("in_{MASTER}"), gain: gate(!alone && strip.output == Output::Master) });
         if let Output::Return { index } = strip.output
             && index < returns.len()
         {
-            links.insert(format!("outr_{label}_{index}"), Link { from: tap, to: format!("in_r{index}"), gain: gate(true) });
+            links.insert(format!("outr_{label}_{index}"), Link { from: tap, to: format!("in_r{index}"), gain: gate(!alone) });
         }
         for device in strip.active() {
             if let Some(target) = device.target.filter(|t| *t < returns.len()) {

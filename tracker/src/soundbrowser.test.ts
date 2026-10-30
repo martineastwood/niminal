@@ -70,7 +70,6 @@ it('searches across folders, and switches between instruments and effects', () =
   key('ArrowDown'); vi.advanceTimersByTime(200); expect(actions.audition).toHaveBeenCalledWith('instr', instruments[2]);
   browser.show('fx', false);
   expect([...root.querySelectorAll('.sb-folder')].map(f => f.textContent)).toEqual(['▸ time']);
-  expect(root.querySelector('[aria-selected=true]')!.textContent).toBe('Effects');
 });
 
 it('collapses a folder so the arrow keys skip what it holds', () => {
@@ -106,14 +105,12 @@ it('lists what the project gives it again when asked, keeping the selection, and
   expect(root.querySelector('.sb-item[aria-selected=true]')).toBeNull();
 });
 
-it('has footer buttons that belong to the tab: none for instruments, import for samples, new for effects', () => {
+it('has footer buttons that belong to the tab: none for instruments, import for samples', () => {
   const { root, actions, browser } = setup();
   const tools = root.querySelector<HTMLElement>('.sb-tools')!, labels = () => [...tools.querySelectorAll('button')].map(b => b.textContent);
   expect(tools.hidden).toBe(true);
   browser.show('sample', false); expect(tools.hidden).toBe(false); expect(labels()).toEqual(['Import files…', 'Import as kit…']);
   tools.querySelectorAll('button')[1].click(); expect(actions.manage).toHaveBeenLastCalledWith('kit', 'sample');
-  browser.show('fx', false); expect(labels()).toEqual(['+ New effect']);
-  tools.querySelector('button')!.click(); expect(actions.manage).toHaveBeenLastCalledWith('new', 'fx');
 });
 
 it('lists the samples of the project in their folders, and tells a project with none how to add them', () => {

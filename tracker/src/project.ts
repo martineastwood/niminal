@@ -6,8 +6,8 @@ export interface Lfo { enabled: boolean; shape: 'sine' | 'triangle' | 'saw' | 's
 /**
  * One effect in a track's chain. Its `id` is stable across reordering; lanes refer to it. A device with a
  * `target` is a send: its output feeds that return and the chain carries on past it. A return's must be a later return; the master has none.
- * Sends tap the strip after its fader unless `pre`, which taps them at their place in the chain; a `pre` send with
- * `mute_source` silences the chain after it.
+ * Sends tap the strip after its fader unless `pre`, which taps them at their place in the chain; a send with
+ * `mute_source` silences what the strip would otherwise play: the chain after a `pre` send, or the whole strip for a post-fader one.
  */
 export interface Device { id: string; definition: string; bypass: boolean; values: Record<string, number>; modulations: Record<string, Lfo>; target?: number; pre?: boolean; mute_source?: boolean }
 export const maxDevices = 8;

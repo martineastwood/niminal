@@ -22,7 +22,7 @@ import { Arrangement } from './arrangement';
 import { PatternGrid } from './grid';
 import { EnvelopeEditor } from './envelope-editor';
 import { renderMixer, renderInstrument } from './mixer';
-import { addDevice, removeDevice, moveDevice, commandsFor, newEffect, duplicateEffect, effectUsers, removeEffect, stripOf, columnToStrip, stripToColumn } from './effects';
+import { addDevice, effectChoices, removeDevice, moveDevice, commandsFor, newEffect, duplicateEffect, effectUsers, removeEffect, stripOf, columnToStrip, stripToColumn } from './effects';
 import { MixPanel } from './mix';
 import { drawScope } from './scope';
 import { renameDefinition, freeCodeName, slug } from './naming';
@@ -45,6 +45,7 @@ app.innerHTML = `
   </div>
   <div id="scopebar"><canvas id="master-scope" aria-label="Master scope"></canvas></div>
   <main>
+    <div class="stage"><div class="top">
     <aside id="sequencer">
       <div class="side-heading"><span class="section-title">SEQUENCE</span><span class="side-tools"><button id="new-pattern" data-structure title="New blank pattern" aria-label="New blank pattern">+</button><button id="variation" data-structure title="Duplicate as variation" aria-label="Duplicate as variation">⧉</button><button id="reuse" data-structure title="Reuse pattern" aria-label="Reuse pattern">↳</button><button id="move-up" data-structure title="Move sequence step up" aria-label="Move sequence step up">↑</button><button id="move-down" data-structure title="Move sequence step down" aria-label="Move sequence step down">↓</button><button id="remove-step" data-structure title="Remove sequence step" aria-label="Remove sequence step">−</button><button id="section" title="Start a section at the selected step, or remove the one that starts there" aria-label="Start or remove a section" aria-pressed="false">§</button><button id="loop" title="Loop the selected step; shift-click another step to loop a range. Works while playing." aria-label="Loop sequence step" aria-pressed="false">⟲</button><button id="sequence-names" aria-label="Toggle pattern names" title="Show / hide pattern names" aria-expanded="true">◂</button></span></div>
       <div id="sequence"></div>
@@ -56,13 +57,17 @@ app.innerHTML = `
       <section class="main-view" id="instrument-view" hidden><div class="code-bar">${codeTools('instr')}</div><div class="code-workspace"><div id="instr-controls" aria-label="Instrument controls"></div><div id="instr-code"></div></div></section>
       <section class="main-view" id="sample-panel" hidden><div id="sample"></div></section>
       <section class="main-view" id="mix-panel" hidden><div id="mix"></div></section>
+    </section>
+    </div>
       <div id="bottom-dock" hidden>
         <div class="dock-resize" id="dock-resize"></div>
-        <div class="dock-bar"><span id="dock-track" class="dock-track" title="The selected track: its effects and automation"></span><button class="tab" data-tab="fx" title="The selected track's effect chain">FX</button><button class="tab" data-tab="automation" title="Automation for the selected track">Automation</button>${codeTools('fx')}<span class="spacer"></span><button id="expand" title="Expand editor" aria-label="Expand editor">⤢</button><button id="close-dock" title="Close" aria-label="Close panel">×</button></div>
+        <div class="dock-row"><section id="fx-browser" aria-label="Effect browser"></section><div class="dock-main">
+        <div class="dock-bar"><span id="dock-track" class="dock-track" title="The selected track: its effects and automation"></span><button class="tab" data-tab="fx" title="The selected track's effect chain">FX</button><button class="tab" data-tab="automation" title="Automation for the selected track">Automation</button><button id="fx-code-toggle" class="tab" aria-pressed="false" title="Show the code of the selected effect beside the chain">Code</button>${codeTools('fx')}<span class="spacer"></span><button id="expand" title="Expand editor" aria-label="Expand editor">⤢</button><button id="close-dock" title="Close" aria-label="Close panel">×</button></div>
         <section id="automation-panel" hidden><div id="automation"></div></section>
         <section id="code-panel" hidden><div class="code-workspace"><div id="mixer" aria-label="Track FX controls" hidden></div><div id="code"></div></div></section>
+        </div></div>
       </div>
-    </section>
+    </div>
     <div class="col-resize" id="right-resize" tabindex="0" role="separator" aria-orientation="vertical" aria-label="Resize the right bar"></div>
     <div id="right-bar"><section id="project-panel" aria-label="Project instruments"></section><section id="sound-browser" aria-label="Sound browser"></section></div>
   </main>
@@ -239,8 +244,10 @@ function currentDevice(): Device | undefined {
 }
 /** The effect definition the code editor is showing, or null when the track has no effects. */
 function shownEffect() { return element('code').hidden ? null : shown.fx?.id ?? null; }
+let fxCodeShown = false;
 function mixerView() {
-  refreshMix(); browserTarget(); soundBrowser.refresh(); projectPanel.refresh();
+  element('bottom-dock').classList.toggle('show-code', fxCodeShown || libraryFx !== null);
+  refreshMix(); browserTarget(); soundBrowser.refresh(); fxBrowser.refresh(); projectPanel.refresh();
   element('dock-track').textContent = stripOf(project, deviceTrack).name; markTabs();
   if (shown.instr) renderInstrument(element('instr-controls'), shown.instr, allParameters(), editedPattern, (target, value) => grid.writeParameter(stripToColumn(project, deviceTrack), target, value), deviceTrack, changeSelectedSource);
   if (libraryFx !== null) { element('mixer').hidden = true; return; }
@@ -491,7 +498,7 @@ function browserItems(kind: SoundKind): BrowserItem[] {
     const parts = file.replace(/^samples\//, '').split('/'), name = parts.pop()!.replace(/\.[^.]+$/, '');
     return { value: `sample:${file}`, name, folder: parts.join('/'), description: file };
   });
-  return (kind === 'instr' ? instrumentPresets : effectPresets).map(presetItem);
+  return kind === 'instr' ? instrumentPresets.map(presetItem) : effectChoices(project, deviceTrack);
 }
 const sampleOf = (item: { value: string }) => item.value.slice('sample:'.length);
 /** Makes a sampler for a sample of the project. */
@@ -511,7 +518,8 @@ const browserActions: SoundBrowserActions = {
   audition: (kind, item) => {
     if (!audioStatus.connected) return;
     if (kind === 'sample') { void action(() => previewSource(samplerSource('browser_preview', sampleOf(item)), 'C-4', 2000)); return; }
-    const preset = (kind === 'instr' ? instrumentPresets : effectPresets).find(p => p.id === item.value)!;
+    const preset = (kind === 'instr' ? instrumentPresets : effectPresets).find(p => p.id === item.value);
+    if (!preset) return; // a project effect, a blank one or a send has nothing to preview
     if (kind === 'instr') void action(() => previewPreset(preset)); else void action(() => previewEffectPreset(preset));
   },
   pick: (kind, item, replace) => {
@@ -532,11 +540,15 @@ const browserActions: SoundBrowserActions = {
     openMenu(anchor, kind === 'fx' ? [{ text: 'Add to the selected track', run: use(false) }]
       : [{ text: kind === 'sample' ? 'New sampler' : 'Add as a new instrument', run: use(false) }, { text: `Put in "${replacing}"`, run: use(true) }]);
   },
-  manage: op => { if (op === 'new') newLibraryEffect(); else if (op === 'kit') void importKit(); else void importSamples(); },
+  manage: op => { if (op === 'kit') void importKit(); else void importSamples(); },
   peaks: item => item.value.startsWith('sample:') ? samplePeaks(sampleOf(item)) : Promise.resolve(null),
   leave: () => { void action(endPreview); },
 };
 const soundBrowser = new SoundBrowser(element('sound-browser'), browserItems, browserActions, () => element('grid').focus());
+/** The effects list at the bottom left of the dock, under the sequence bar, which adds to the selected track's chain. */
+const fxBrowser = new SoundBrowser(element('fx-browser'), browserItems, browserActions, () => element('grid').focus(), 'fx');
+/** The browser is as wide as the sequence bar above it, whatever that bar's width works out to (its minimum depends on the track count and on hidden names). */
+new ResizeObserver(() => { const width = element('sequencer').offsetWidth; if (width) element('fx-browser').style.flexBasis = `${width}px`; }).observe(element('sequencer'));
 const projectInstruments = () => project.definitions.filter(d => d.kind === 'instr');
 /** Makes an instrument the current one and shows its code. */
 function chooseInstrument(definition: Definition) {
@@ -1002,6 +1014,7 @@ for (const button of document.querySelectorAll<HTMLElement>('[data-view]')) {
   button.onclick = () => { showView(button.dataset.view as View); if (button.dataset.view === 'pattern') element('grid').focus(); };
 }
 element('open-mix').onclick = () => showView(mainView === 'mix' ? 'pattern' : 'mix');
+element('fx-code-toggle').onclick = () => { fxCodeShown = !fxCodeShown; element('fx-code-toggle').setAttribute('aria-pressed', String(fxCodeShown)); mixerView(); };
 element('toggle-dock').onclick = () => { if (element('bottom-dock').hidden) { showPanel('code', true); showFx(); } else showPanel('code', false); };
 element('close-dock').onclick = () => { showPanel('code', false); element('grid').focus(); };
 element('dock-resize').onpointerdown = event => {

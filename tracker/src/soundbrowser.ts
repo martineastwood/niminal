@@ -4,7 +4,7 @@ import { draggable } from './drag';
 export type SoundKind = 'instr' | 'sample' | 'fx';
 
 /** What the buttons under the list do. */
-export type ManageOp = 'new' | 'import' | 'kit';
+export type ManageOp = 'import' | 'kit';
 
 /** The waveform of a sample for drawing (two numbers, lowest and highest, for each stretch), and how long it plays. */
 export interface SamplePeaks { peaks: number[]; seconds: number }
@@ -33,7 +33,7 @@ const labels: [SoundKind, string][] = [['instr', 'Instruments'], ['sample', 'Sam
 const buttons: Record<SoundKind, [ManageOp, string, string][]> = {
   instr: [],
   sample: [['import', 'Import files…', 'Add audio files to the project, one sampler each'], ['kit', 'Import as kit…', 'Add audio files as one instrument with a sample on each key']],
-  fx: [['new', '+ New effect', 'A blank effect for this project']],
+  fx: [],
 };
 
 /**
@@ -58,9 +58,11 @@ export class SoundBrowser {
   private readonly favourites = new Set<string>();
 
   /** `items` gives what each tab lists, asked again on `refresh` so it follows the project. */
-  constructor(private readonly root: HTMLElement, private readonly items: (kind: SoundKind) => BrowserItem[], private readonly actions: SoundBrowserActions, focusGrid: () => void) {
+  constructor(private readonly root: HTMLElement, private readonly items: (kind: SoundKind) => BrowserItem[], private readonly actions: SoundBrowserActions, focusGrid: () => void, only?: SoundKind) {
+    if (only) this.kind = only;
     const bar = document.createElement('div'); bar.className = 'sb-tabs';
     for (const [kind, label] of labels) {
+      if (only || kind === 'fx') continue; // effects are added from the dock's own list
       const tab = document.createElement('button'); tab.textContent = label; tab.onclick = () => this.show(kind); this.tabs.set(kind, tab); bar.append(tab);
     }
     this.search.type = 'search'; this.search.placeholder = 'Search'; this.search.setAttribute('aria-label', 'Search sounds');
@@ -69,7 +71,7 @@ export class SoundBrowser {
     this.hint.className = 'sb-hint'; this.target.className = 'sb-target';
     this.tools.className = 'sb-tools';
     try { for (const key of JSON.parse(localStorage.getItem(favouritesKey) ?? '[]') as string[]) this.favourites.add(key); } catch { /* no favourites kept */ }
-    root.append(bar, this.search, this.list, this.tools, this.hint, this.target);
+    root.append(...only ? [] : [bar], this.search, this.list, this.tools, ...only ? [] : [this.hint, this.target]); // the effects list has neither: a row's tooltip says what it is, and the chain says where it goes
     root.addEventListener('keydown', event => this.keydown(event, focusGrid));
     root.addEventListener('focusout', event => { if (!root.contains(event.relatedTarget as Node | null)) { clearTimeout(this.timer); actions.leave(); } });
     this.render();
@@ -124,6 +126,7 @@ export class SoundBrowser {
   private toggleStar(item: BrowserItem) {
     const key = this.starKey(item);
     if (!key) return;
+    try { this.favourites.clear(); for (const kept of JSON.parse(localStorage.getItem(favouritesKey) ?? '[]') as string[]) this.favourites.add(kept); } catch { /* keep what is here */ } // another browser may have starred something
     if (!this.favourites.delete(key)) this.favourites.add(key);
     try { localStorage.setItem(favouritesKey, JSON.stringify([...this.favourites])); } catch { /* not kept */ }
     this.render();

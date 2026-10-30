@@ -127,11 +127,15 @@ it('gives the keyboard back to the grid after Enter in a box, a tick box, a slid
   await tick(); expect(active()).toBe(search);
 });
 
+/** Adds an effect the way the dock's list does: its row, double-clicked. */
+function addFromList(name: string) {
+  const search = document.querySelector<HTMLInputElement>('#fx-browser input')!; search.value = name; search.dispatchEvent(new Event('input'));
+  document.querySelector<HTMLElement>('#fx-browser .sb-item')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+}
+
 it('applies an effect as soon as it is added to a track, so its controls appear without pressing Apply', async () => {
   backend.commands.length = 0;
-  (document.querySelector('[aria-label="Add effect"]') as HTMLButtonElement).click();
-  const item = [...document.querySelectorAll<HTMLElement>('button, [role=option], li')].find(e => e.textContent?.trim().startsWith('Echo'))!;
-  item.click();
+  addFromList('Echo');
   await vi.waitFor(() => expect(backend.commands.some(c => c.op === 'apply' && c.kind === 'fx')).toBe(true));
   await vi.waitFor(() => expect(document.getElementById('mixer')!.textContent).toContain('mix'));
   expect(document.getElementById('mixer')!.textContent).not.toContain('Parameters appear once the engine has applied this');
@@ -143,8 +147,7 @@ it('applies an effect as soon as it is added to a track, so its controls appear 
 it('applies an effect added while the engine was not connected as soon as it connects', async () => {
   backend.status.connected = false; backend.status.effects = {}; backend.status.effect_parameters = {}; backend.commands.length = 0;
   await vi.waitFor(() => expect(backend.commands.some(c => c.op === 'connect')).toBe(true), { timeout: 5000 });
-  (document.querySelector('[aria-label="Add effect"]') as HTMLButtonElement).click();
-  [...document.querySelectorAll<HTMLElement>('button, [role=option], li')].find(e => e.textContent?.trim().startsWith('Lowpass'))!.click();
+  addFromList('Lowpass');
   expect(backend.commands.some(c => c.op === 'apply' && c.kind === 'fx')).toBe(false);
   backend.connect!();
   await vi.waitFor(() => expect(backend.commands.filter(c => c.op === 'apply' && c.kind === 'fx').length).toBeGreaterThan(0));

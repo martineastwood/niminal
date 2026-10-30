@@ -793,6 +793,12 @@ fn outputs_route_tracks_into_returns_and_sends_tap_the_chain_where_they_sit() {
     };
     song.tracks[0].fx = vec![mute(device("s1", "pass", Some(0)))];
     assert!((ratio(&mut worker, &song, 0) - 1.0).abs() < 0.001, "only the send");
+    let mut after_fader = device("s1", "pass", Some(0));
+    after_fader.mute_source = true;
+    song.tracks[0].fx = vec![after_fader];
+    assert!((ratio(&mut worker, &song, 0) - 0.1).abs() < 0.001, "post-fader: only the send, at the fader's level");
+    song.tracks[0].fx[0].mute_source = false;
+    assert!((ratio(&mut worker, &song, 0) - 0.2).abs() < 0.001, "unticked, the dry sound is back");
     song.tracks[0].fx = vec![device("e1", "half", None), mute(device("s1", "pass", Some(0)))];
     assert!((ratio(&mut worker, &song, 0) - 0.5).abs() < 0.001, "only the send, after the effect");
     song.tracks[0].fx = vec![mute(device("s1", "pass", Some(0))), device("e1", "half", None), pre(device("s2", "pass", Some(0)))];

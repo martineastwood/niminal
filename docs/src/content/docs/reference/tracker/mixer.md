@@ -21,7 +21,7 @@ Point several tracks at one return to make a group: kick, snare and hats into a 
 
 To send some of a track in parallel instead of routing all of it, add a **Send** device from the track's FX view (**+ Add effect → Send**) and choose its return on the device.
 
-By default a send is post-fader: it takes the track's finished signal after its effects, level and pan, so it follows the fader, and a muted track sends nothing. Tick **Pre-fader** on the device to take the signal at the device's own place in the chain instead: the fader no longer affects it, effects before it shape what is sent, and effects after it do not. A pre-fader send can also **Mute source**, which silences everything after it in the chain so the track is heard only through its sends.
+By default a send is post-fader: it takes the track's finished signal after its effects, level and pan, so it follows the fader, and a muted track sends nothing. Tick **Pre-fader** on the device to take the signal at the device's own place in the chain instead: the fader no longer affects it, effects before it shape what is sent, and effects after it do not. Either kind of send can **Mute source** so the track is heard only through its sends: on a pre-fader send it silences everything after it in the chain, and on a post-fader send it silences the track's own output while the send still follows the fader.
 
 A send's amount is an ordinary parameter, so it has lanes, envelopes and an LFO like any other. Put the effect on the return, with its mix fully wet. A track with output *None* and a send is also heard only through the send.
 

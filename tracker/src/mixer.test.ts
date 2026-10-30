@@ -2,7 +2,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { renderMixer, renderInstrument, type FxActions } from './mixer';
 import { newProject, readProject } from './project';
-import { addDevice, addMacro, commandsFor, linkParameter, removeMacro, duplicateEffect, effectUsers, moveDevice, newEffect, removeDevice, removeEffect } from './effects';
+import { addDevice, addMacro, effectChoices, commandsFor, linkParameter, removeMacro, duplicateEffect, effectUsers, moveDevice, newEffect, removeDevice, removeEffect } from './effects';
 
 vi.stubGlobal('Option', function (text: string, value: string) {
   const option = document.createElement('option'); option.textContent = text; option.value = value; return option;
@@ -11,14 +11,6 @@ afterEach(() => document.body.replaceChildren());
 
 function actions(overrides: Partial<FxActions> = {}): FxActions {
   return { selected: null, select: vi.fn(), add: vi.fn(), remove: vi.fn(), move: vi.fn(), changed: vi.fn(), lanesRemoved: vi.fn(), ...overrides };
-}
-
-/** The names of the presets the Add effect browser lists (not the project's own effects), which it then closes. */
-function browsable(parent: HTMLElement) {
-  parent.querySelector<HTMLButtonElement>('[aria-label="Add effect"]')!.click();
-  const names = [...document.querySelectorAll('.browser-item')].filter(item => !item.closest('details')?.querySelector('summary')?.textContent?.startsWith('Project effects')).map(item => item.textContent);
-  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-  return names;
 }
 
 it('builds a chain from presets, each device with its own copy of the code', () => {
@@ -41,6 +33,18 @@ it('builds a chain from presets, each device with its own copy of the code', () 
   expect(project.tracks[2].fx).toHaveLength(8);
 });
 
+it('moves an effect to the place it is dragged to', async () => {
+  const project = newProject(), parent = document.createElement('div'); document.body.append(parent);
+  const a = addDevice(project, 0, 'echo')!, b = addDevice(project, 0, 'lowpass')!, c = addDevice(project, 0, 'band_cut')!;
+  const fx = actions({ selected: a.device.id }); renderMixer(parent, project, 0, vi.fn(), {}, vi.fn(), fx);
+  const cards = [...parent.querySelectorAll<HTMLElement>('.device')];
+  cards.forEach((card, i) => card.getBoundingClientRect = () => ({ left: i * 100, right: i * 100 + 100 }) as DOMRect);
+  const fire = (type: string, target: EventTarget, x: number) => target.dispatchEvent(Object.assign(new Event(type, { bubbles: true }), { button: 0, clientX: x, clientY: 0 }));
+  fire('pointerdown', cards[0].querySelector('.device-name')!, 10); fire('pointermove', document, 250); fire('pointerup', document, 250);
+  expect(fx.move).toHaveBeenCalledWith(a.device.id, 2); expect(b.device.id).not.toBe(c.device.id);
+  await new Promise(resolve => setTimeout(resolve)); // the click that follows a drag is swallowed until the next tick
+});
+
 it('adds sends to tracks only, targeting the first return, and picks the return on the device', () => {
   const project = newProject(); project.returns.push({ name: 'Verb', fx: [], pan: 0, muted: false, volume_db: 0 }, { name: 'Echo', fx: [], pan: 0, muted: false, volume_db: 0 });
   const { device, definition } = addDevice(project, 0, 'send')!;
@@ -50,19 +54,18 @@ it('adds sends to tracks only, targeting the first return, and picks the return 
   expect([...parent.querySelectorAll<HTMLOptionElement>('[aria-label="Send destination"] option')].map(o => o.text)).toEqual(['→ Verb', '→ Echo']);
   const to = parent.querySelector<HTMLSelectElement>('[aria-label="Send destination"]')!; to.value = '1'; to.dispatchEvent(new Event('change'));
   expect(device.target).toBe(1); expect(fx.changed).toHaveBeenCalled();
-  const [pre, mute] = [...parent.querySelectorAll<HTMLInputElement>('.send-options input')]; expect(pre.checked).toBe(false); expect(mute.disabled).toBe(true);
+  const [pre, mute] = [...parent.querySelectorAll<HTMLInputElement>('.send-options input')]; expect(pre.checked).toBe(false); expect(mute.disabled).toBe(false);
   pre.checked = true; pre.dispatchEvent(new Event('change')); expect(device.pre).toBe(true);
   renderMixer(parent, project, 0, vi.fn(), {}, vi.fn(), fx);
   const unlocked = parent.querySelectorAll<HTMLInputElement>('.send-options input')[1]; expect(unlocked.disabled).toBe(false);
   unlocked.checked = true; unlocked.dispatchEvent(new Event('change')); expect(device.mute_source).toBe(true);
   // A return's send starts on the next return and may only pick later ones; the last return and the master cannot send.
-  const presets = (strip: number) => { renderMixer(parent, project, strip, vi.fn(), {}, vi.fn(), fx); return browsable(parent); };
+  const presets = (strip: number) => effectChoices(project, strip).map(item => item.name);
   expect(presets(-2)).toContain('Send'); expect(presets(-3)).not.toContain('Send');
   const onReturn = addDevice(project, -2, 'send')!.device; expect(onReturn.target).toBe(1);
   renderMixer(parent, project, -2, vi.fn(), {}, vi.fn(), actions({ selected: onReturn.id }));
   expect([...parent.querySelectorAll<HTMLOptionElement>('.send-target option')].map(o => o.text)).toEqual(['→ Echo']);
-  renderMixer(parent, project, -1, vi.fn(), {}, vi.fn(), fx);
-  expect(browsable(parent)).not.toContain('Send');
+  expect(presets(-1)).not.toContain('Send');
 });
 
 it('keeps lanes that hold values when their effect is removed', () => {
@@ -83,21 +86,22 @@ it('uses the same editable controls and command recording for custom and built-i
   value.value = '3'; value.dispatchEvent(new Event('change')); expect(device.values.mix).toBe(1);
 });
 
-it('shows each device as a card whose buttons act on the chain, with only the selected one expanded', () => {
+it('shows each device as a card whose buttons act on the chain, with every one expanded', () => {
   const project = newProject(), parent = document.createElement('div'); document.body.append(parent);
   const a = addDevice(project, 0, 'echo')!, b = addDevice(project, 0, 'lowpass')!;
   const fx = actions({ selected: b.device.id });
   renderMixer(parent, project, 0, vi.fn(), { [a.definition.id]: [{ name: 'mix', min: 0, max: 1, default: 0.3, unit: null }], [b.definition.id]: [{ name: 'cutoff', min: 20, max: 20000, default: 2400, unit: 'hz' }] }, vi.fn(), fx);
   expect(parent.querySelectorAll('.device')).toHaveLength(2);
-  expect(parent.querySelector('[aria-label="mix value"]')).toBeNull(); expect(parent.querySelector('[aria-label="cutoff value"]')).not.toBeNull();
+  expect(parent.querySelector('[aria-label="mix value"]')).not.toBeNull(); expect(parent.querySelector('[aria-label="cutoff value"]')).not.toBeNull();
   parent.querySelector<HTMLButtonElement>('[aria-label="Edit Echo"]')!.click(); expect(fx.select).toHaveBeenCalledWith(a.device.id);
   parent.querySelector<HTMLButtonElement>('[aria-label="Bypass Echo"]')!.click(); expect(a.device.bypass).toBe(true); expect(fx.changed).toHaveBeenCalled();
   parent.querySelector<HTMLButtonElement>('[aria-label="Move effect later"]')!.click(); expect(fx.move).toHaveBeenCalledWith(a.device.id, 1);
   parent.querySelector<HTMLButtonElement>('[aria-label="Remove Lowpass"]')!.click(); expect(fx.remove).toHaveBeenCalledWith(b.device.id);
   expect(parent.querySelector<HTMLButtonElement>('[aria-label="Move effect earlier"]')!.disabled).toBe(true);
-  parent.querySelector<HTMLButtonElement>('[aria-label="Add effect"]')!.click();
-  [...document.querySelectorAll<HTMLButtonElement>('.browser-item')].find(b => b.textContent === 'Band cut')!.click(); expect(fx.add).toHaveBeenCalledWith('band_cut');
-  expect(document.querySelector('.browser')).toBeNull();
+  expect(effectChoices(project, 0).find(item => item.name === 'Band cut')!.value).toBe('band_cut');
+  const card = parent.querySelectorAll<HTMLElement>('.device')[0], select = vi.mocked(fx.select); select.mockClear();
+  card.click(); expect(select).toHaveBeenCalledWith(a.device.id); select.mockClear();
+  card.querySelector<HTMLButtonElement>('[aria-label="Bypass Echo"]')!.click(); card.querySelector<HTMLInputElement>('input')?.click(); expect(select).not.toHaveBeenCalled();
 });
 
 it('shows an instrument\'s parameters as sliders that set its values, and records them to a lane on a track', () => {

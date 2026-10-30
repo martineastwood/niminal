@@ -2,6 +2,7 @@ import type { Definition, Device, Macro, Project, Track } from './project';
 import { columnLanes, emptyFxLane, maxDevices, maxMacros } from './project';
 import send from './presets/send.nml?raw';
 import { effectPresets } from './library';
+import type { BrowserItem } from './browser';
 import { codeNameOf, freeCodeName, renameInSource, slug, uniqueName } from './naming';
 
 /** The effects that come with niminal (`std/fx`), each copied into a project as it is added. */
@@ -9,6 +10,16 @@ export const builtInEffects = effectPresets;
 
 /** The preset that makes a send device; offered on tracks only. */
 export const sendPreset = { id: 'send', name: 'Send', source: send };
+
+/** What can be added to a strip's chain: a blank effect, a send where it can go (not on the master or the last return), and the built-ins. The values are what `addDevice` takes. */
+export function effectChoices(project: Project, activeTrack: number): BrowserItem[] {
+  const sendAllowed = activeTrack !== -1 && !(activeTrack < -1 && returnIndex(activeTrack) >= project.returns.length - 1);
+  return [
+    { value: 'blank', name: 'Blank', folder: '', description: 'A new effect that passes the sound through, to write yourself' },
+    ...(sendAllowed ? [{ value: sendPreset.id, name: sendPreset.name, folder: 'routing', description: 'Sends some of this track to a return' }] : []),
+    ...builtInEffects.map(p => ({ value: p.id, name: p.name, folder: p.folder, description: p.description })),
+  ];
+}
 
 const blank = { name: 'Blank', source: 'fx blank() { out = in }\n' };
 

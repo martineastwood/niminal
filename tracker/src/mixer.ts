@@ -1,8 +1,8 @@
-import { addMacro, builtInEffects, linkParameter, removeMacro, returnIndex, sendPreset, stripOf } from './effects';
+import { addMacro, linkParameter, removeMacro, returnIndex, stripOf } from './effects';
 import type { EffectParameters, Definition, Device, Lfo, MacroLink, Parameter, Project, FxTarget } from './project';
-import { maxDevices, maxMacros } from './project';
+import { maxMacros } from './project';
 import { trackColour, masterColour } from './grid';
-import { openBrowser } from './browser';
+import { dropTarget } from './drag';
 import { divisions, nearestDivision } from './divisions';
 import { readLfos, setLfo, lfoShapes, modulatable, type SourceLfo } from './modulation';
 /** An instrument's parameters as sliders. Notes start with these values; lanes change them from a row on. */
@@ -75,31 +75,19 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
   pan.querySelector('input')!.setAttribute('aria-label', `${track.name} pan`); output.append(pan);
   const channel = document.createElement('div'); channel.className = 'mixer-channel';
   channel.append(output, macrosCard(project, activeTrack, edited, write, refresh, fx.lanesRemoved)); parent.append(channel);
-  const effects = document.createElement('section'); effects.className = 'device-card effect-device';
-  const title = document.createElement('div'); title.className = 'device-heading';
-  const label = document.createElement('span'); label.className = 'section-title'; label.textContent = 'FX';
-  const add = document.createElement('button'); add.textContent = '+ Add effect…'; add.setAttribute('aria-label', 'Add effect');
-  add.disabled = track.fx.length >= maxDevices;
-  add.onclick = () => {
-    const sendAllowed = activeTrack !== -1 && !(isReturn && returnIndex(activeTrack) >= project.returns.length - 1);
-    openBrowser(add, [
-      ...project.definitions.filter(d => d.kind === 'fx').map(d => ({ value: `fx:${d.id}`, name: d.name, folder: 'Project effects', description: 'An effect already in this project: edits to its code reach every device using it' })),
-      { value: 'blank', name: 'Blank', folder: '', description: 'A new effect that passes the sound through, to write yourself' },
-      ...(sendAllowed ? [{ value: sendPreset.id, name: sendPreset.name, folder: 'routing', description: 'Sends some of this track to a return' }] : []),
-      ...builtInEffects.map(p => ({ value: p.id, name: p.name, folder: p.folder, description: p.description })),
-    ], item => fx.add(item.value));
-  };
-  title.append(label, add); effects.append(title);
-  const note = (text: string) => { const hint = document.createElement('p'); hint.className = 'device-note'; hint.textContent = text; effects.append(hint); };
-  if (!track.fx.length) note('No effects');
+  const before = parent.querySelector<HTMLElement>('.effect-device'), scrolled = before?.scrollLeft ?? 0, selectedBefore = before?.dataset.selected;
+  const effects = document.createElement('section'); effects.className = 'effect-device'; effects.setAttribute('aria-label', 'Effect chain'); effects.dataset.selected = fx.selected ?? '';
+  effects.addEventListener('wheel', event => wheelAlong(effects, event), { passive: false });
+  dropTarget(effects, item => item.kind === 'fx', item => fx.add(item.value));
+  if (!track.fx.length) { const hint = document.createElement('p'); hint.className = 'device-note'; hint.textContent = 'No effects yet: double-click one in the list, or drag it here'; effects.append(hint); }
   track.fx.forEach((device, position) => {
     const definition = project.definitions.find(d => d.id === device.definition);
     const card = document.createElement('div'); card.className = 'device'; card.classList.toggle('selected', device.id === fx.selected); card.classList.toggle('bypassed', device.bypass);
     const head = document.createElement('div'); head.className = 'device-head';
     const pick = button(definition?.name ?? 'Effect', `Edit ${definition?.name ?? 'effect'}`, () => fx.select(device.id)); pick.className = 'device-name';
     const bypass = button('⏻', `Bypass ${definition?.name ?? 'effect'}`, () => { device.bypass = !device.bypass; fx.changed(); }); bypass.setAttribute('aria-pressed', String(device.bypass));
-    const up = button('↑', 'Move effect earlier', () => fx.move(device.id, -1)); up.disabled = position === 0;
-    const down = button('↓', 'Move effect later', () => fx.move(device.id, 1)); down.disabled = position === track.fx.length - 1;
+    const up = button('←', 'Move effect earlier', () => fx.move(device.id, -1)); up.disabled = position === 0;
+    const down = button('→', 'Move effect later', () => fx.move(device.id, 1)); down.disabled = position === track.fx.length - 1;
     const remove = button('×', `Remove ${definition?.name ?? 'effect'}`, () => fx.remove(device.id));
     head.append(pick);
     if (device.target !== undefined) {
@@ -117,10 +105,10 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
         const label = document.createElement('label'); label.title = title; const box = document.createElement('input'); box.type = 'checkbox'; box.checked = !!device[key]; box.disabled = disabled; box.setAttribute('aria-label', title);
         box.onchange = () => { device[key] = box.checked; fx.changed(); }; label.append(box, text); return label;
       };
-      options.append(flag('Pre-fader', 'Send before the fader, at this place in the chain', 'pre'), flag('Mute source', 'Silence the chain after this send, so only sends carry the sound on', 'mute_source', !device.pre));
+      options.append(flag('Pre-fader', 'Send before the fader, at this place in the chain', 'pre'), flag('Mute source', device.pre ? 'Silence the chain after this send, so only sends carry the sound on' : 'Silence this track itself, so only its sends are heard (they still follow the fader)', 'mute_source'));
       card.append(options);
     }
-    if (device.id === fx.selected) {
+    {
       const params = parameters[device.definition];
       const hint = (text: string) => { const p = document.createElement('p'); p.className = 'device-note'; p.textContent = text; card.append(p); };
       if (!params) hint('Parameters appear once the engine has applied this');
@@ -153,9 +141,46 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
         } else if (lfo) card.append(lfoControls(device, parameter, lfo, edited));
       });
     }
+    reorderable(pick, card, effects, () => position, to => fx.move(device.id, to - position));
+    // a click on the card's own space (not a control) picks it
+    card.addEventListener('click', event => { if (device.id !== fx.selected && !(event.target as Element).closest('input, select, button, label')) fx.select(device.id); });
     effects.append(card);
   });
   parent.append(effects);
+  effects.scrollLeft = scrolled;
+  if (fx.selected && fx.selected !== selectedBefore) effects.querySelector<HTMLElement>('.device.selected')?.scrollIntoView?.({ inline: 'nearest', block: 'nearest' });
+}
+
+/** The chain scrolls sideways under a plain wheel, unless the effect under the pointer has more to show in the direction it was turned. */
+function wheelAlong(chain: HTMLElement, event: WheelEvent) {
+  if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+  const card = (event.target as Element).closest<HTMLElement>('.device');
+  if (card && (event.deltaY < 0 ? card.scrollTop > 0 : card.scrollTop + card.clientHeight < card.scrollHeight - 1)) return;
+  chain.scrollLeft += event.deltaY; event.preventDefault();
+}
+
+/** Dragging an effect's name along the chain: the card under the pointer is marked, and letting go moves the effect to its place. */
+function reorderable(handle: HTMLElement, card: HTMLElement, chain: HTMLElement, position: () => number, move: (to: number) => void) {
+  handle.addEventListener('pointerdown', down => {
+    if (down.button !== 0) return;
+    let moved = false, over: HTMLElement | null = null;
+    const cards = () => [...chain.querySelectorAll<HTMLElement>(':scope > .device')];
+    const track = (event: PointerEvent) => {
+      if (!moved && Math.hypot(event.clientX - down.clientX, event.clientY - down.clientY) < 5) return;
+      if (!moved) { moved = true; card.classList.add('reordering'); document.body.classList.add('dragging'); }
+      const next = cards().find(other => { const box = other.getBoundingClientRect(); return event.clientX >= box.left && event.clientX < box.right; }) ?? null;
+      if (next !== over) { over?.classList.remove('drop-over'); over = next === card ? null : next; over?.classList.add('drop-over'); }
+    };
+    const end = (event: PointerEvent) => {
+      document.removeEventListener('pointermove', track, true); document.removeEventListener('pointerup', end, true); document.removeEventListener('pointercancel', end, true);
+      if (!moved) return;
+      card.classList.remove('reordering'); over?.classList.remove('drop-over'); document.body.classList.remove('dragging');
+      const swallow = (click: Event) => { click.stopPropagation(); click.preventDefault(); };
+      document.addEventListener('click', swallow, true); setTimeout(() => document.removeEventListener('click', swallow, true));
+      if (event.type === 'pointerup' && over) move(cards().indexOf(over));
+    };
+    document.addEventListener('pointermove', track, true); document.addEventListener('pointerup', end, true); document.addEventListener('pointercancel', end, true);
+  });
 }
 
 /** The macro knobs of a strip: a slider each, named, that the effect parameters below can follow. */
