@@ -5,6 +5,7 @@ composition.nml: 1x105973
 control_rate.nml: 1x115440
 drum_voice.nml: 2x381627
 drums.nml: 2x488426
+envelope_transfer.nml: 1x411421
 functions.nml: 2x293633
 fx.nml: 2x583652
 gestures.nml: 2x353001
@@ -26,6 +27,7 @@ score_prog.nml: 1x384240
 song.nml: 2x583731
 spectral.nml: 2x478367
 spectral_delay.nml: 2x824064
+spectral_pitch.nml: 1x408000
 stereo.nml: 2x280705
 stutter.nml: 2x351522
 synced_lfo.nml: 2x384240

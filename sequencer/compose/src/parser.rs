@@ -316,7 +316,8 @@ impl Parser {
             kind: ExprKind::Num { value, unit: None },
             span,
         };
-        let (mut lo, mut hi, mut smooth, mut quantize) = (number(0.0, start), number(1.0, start), None, None);
+        let (mut lo, mut hi, mut smooth, mut quantize) =
+            (number(0.0, start), number(1.0, start), None, None);
         while self.eat(&Tok::Dot) {
             let method = self.ident("`range`, `smooth` or `quantize`")?;
             self.expect(&Tok::LParen)?;
@@ -341,7 +342,9 @@ impl Parser {
                 "quantize" => quantize = Some(self.expr()?),
                 other => {
                     return Err(Diagnostic::new(
-                        format!("a control input has no `.{other}`; use `.range`, `.smooth` or `.quantize`"),
+                        format!(
+                            "a control input has no `.{other}`; use `.range`, `.smooth` or `.quantize`"
+                        ),
                         method.span,
                     ));
                 }
@@ -379,7 +382,11 @@ impl Parser {
         Ok(Item::Control {
             name,
             value,
-            input: Some(ControlInput { source, hi, quantize }),
+            input: Some(ControlInput {
+                source,
+                hi,
+                quantize,
+            }),
         })
     }
 
@@ -2466,7 +2473,7 @@ fn take_entry_options(entries: &mut Vec<(Ident, Expr)>) -> Vec<Arg> {
     options
 }
 
-/// Whether `value` is a chain that starts with `sample(...)`, `kit(...)` or `name.slices(n)`.
+/// Whether `value` is a chain that starts with `sample(...)`, `kit(...)`, `sfz(...)` or `name.slices(n)`.
 fn is_sample_chain(value: &Expr) -> bool {
     let mut cur = value;
     while let ExprKind::Call { name, args } = &cur.kind {
@@ -2477,7 +2484,7 @@ fn is_sample_chain(value: &Expr) -> bool {
                 }
                 cur = &first.value;
             }
-            _ => return matches!(name.name.as_str(), "sample" | "kit"),
+            _ => return matches!(name.name.as_str(), "sample" | "kit" | "sfz"),
         }
     }
     false
@@ -2505,11 +2512,23 @@ fn sample_decl(name: Ident, value: Expr) -> Res<Item> {
         };
         if !args.first().is_some_and(|a| a.receiver) {
             let is_kit = match call.name.as_str() {
-                "sample" => false,
+                "sample" | "sfz" => false,
                 "kit" => true,
                 _ => return Err(not_a_sample(call.span)),
             };
+            let is_sfz = call.name == "sfz";
             let source = match args.as_slice() {
+                [
+                    Arg {
+                        name: None,
+                        value:
+                            Expr {
+                                kind: ExprKind::Str(path),
+                                ..
+                            },
+                        ..
+                    },
+                ] if is_sfz => SampleSource::Sfz(path.clone()),
                 [
                     Arg {
                         name: None,
@@ -2525,7 +2544,7 @@ fn sample_decl(name: Ident, value: Expr) -> Res<Item> {
                     Arg {
                         name: None, value, ..
                     },
-                ] if !is_kit => SampleSource::Table(value.clone()),
+                ] if !is_kit && !is_sfz => SampleSource::Table(value.clone()),
                 _ => {
                     return Err(Diagnostic::new(
                         format!(
@@ -2533,6 +2552,8 @@ fn sample_decl(name: Ident, value: Expr) -> Res<Item> {
                             call.name,
                             if is_kit {
                                 "a folder in quotes"
+                            } else if is_sfz {
+                                "the path of an .sfz file in quotes"
                             } else {
                                 "a file path in quotes, or a table"
                             }

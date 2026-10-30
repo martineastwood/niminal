@@ -30,6 +30,7 @@ mod lanes;
 mod limiter;
 mod math;
 mod modal;
+mod multisample;
 mod noise;
 mod osc;
 mod pan;
@@ -81,6 +82,7 @@ pub use math::{
     Waveshape,
 };
 pub use modal::Modal;
+pub use multisample::{AmpEnv, MultiSampler, Region, RoundRobin};
 pub use noise::{Noise, NoiseColor};
 pub use osc::{Osc, Wave, Wavetable};
 pub use pan::{PanChannel, pan_gains};

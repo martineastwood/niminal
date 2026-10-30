@@ -86,10 +86,18 @@ fn clock_tells_beat_bar_and_tempo() {
     let bar = raw("instr a() { tail = 10ms\n clock.bar * 0.5 * env[1 | 10ms 1] }\na() for 4beats");
     assert!((bar[at(1.0)] - 0.25).abs() < 1e-3, "{}", bar[at(1.0)]);
     // a function, and a control scope, read the clock for themselves
-    let in_fn = raw("fn count() { clock.beat }\ninstr a() { tail = 10ms\n count() * 0.1 * env[1 | 10ms 1] }\na() for 4beats");
+    let in_fn = raw(
+        "fn count() { clock.beat }\ninstr a() { tail = 10ms\n count() * 0.1 * env[1 | 10ms 1] }\na() for 4beats",
+    );
     assert!((in_fn[at(1.0)] - 0.2).abs() < 1e-3, "{}", in_fn[at(1.0)]);
-    let in_control = raw("instr a() { tail = 10ms\n control { clock.beat } * 0.1 * env[1 | 10ms 1] }\na() for 4beats");
-    assert!((in_control[at(1.0)] - 0.2).abs() < 1e-2, "{}", in_control[at(1.0)]);
+    let in_control = raw(
+        "instr a() { tail = 10ms\n control { clock.beat } * 0.1 * env[1 | 10ms 1] }\na() for 4beats",
+    );
+    assert!(
+        (in_control[at(1.0)] - 0.2).abs() < 1e-2,
+        "{}",
+        in_control[at(1.0)]
+    );
     assert!(error("instr a() { clock.beet }").contains("has no `beet`"));
 }
 

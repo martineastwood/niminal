@@ -315,6 +315,7 @@ op_enum! {
         StreamOut(ops::StreamOut),
         Sampler(ops::Sampler),
         KitSampler(ops::KitSampler),
+        MultiSampler(ops::MultiSampler),
         BufferRead(ops::BufferRead),
         BufferWrite(ops::BufferWrite),
         BufferRecord(ops::BufferRecord),

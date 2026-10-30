@@ -42,3 +42,67 @@ fn denoise(x, threshold: init 0..1 = 0.01, size: const int = 1024) {
     ifft(s[0] * open, s[1] * open)
   })
 }
+
+/// Smooth a real FFT's log magnitude with a triangular cepstral lifter. Larger detail keeps finer
+/// spectral features; 32 is a useful starting point for broad resonances at size 1024 / 48khz.
+/// Returns a positive magnitude envelope, floored at -120dB relative to the frame size.
+fn spectral_envelope(re: [num], im: [num], detail: const int = 32) {
+  size = (re.len - 1) * 2
+  lifter = (0..<size).map(max(0, 1 - min(it, size - it) / max(1, detail)))
+  magnitude = sqrt(re * re + im * im)
+  cepstrum = ifft(log(max(magnitude, size * 0.000001)), re * 0)
+  smooth = fft(cepstrum * lifter)
+  exp(smooth[0])
+}
+
+/// Give the carrier the donor's broad spectral shape, retaining the carrier's phase and fine detail.
+/// Amount 0 is the delayed carrier; 1 transfers the envelope. Gain is limited to 32x per bin.
+fn envelope_transfer(carrier, donor, amount: 0..1 = 1, detail: const int = 32, size: const int = 1024) {
+  carrier.frames(size, fn(a, b) {
+    c = fft(a)
+    d = fft(b)
+    carrier_envelope = spectral_envelope(c[0], c[1], detail: detail)
+    donor_envelope = spectral_envelope(d[0], d[1], detail: detail)
+    active = (d[0] * d[0] + d[1] * d[1]).sum > 0
+    ratio = min(32, donor_envelope / carrier_envelope) * active
+    gain = 1 + (ratio - 1) * amount
+    ifft(c[0] * gain, c[1] * gain)
+  }, other: donor)
+}
+
+/// Instantaneous frequency in cycles/sample from successive real-FFT phases (radians).
+/// Call once per frame with the actual hop in samples. Each call site has its own phase history.
+fn phase_frequency(phase: [num], size: const int = 2048, hop: const 1..65536 = 512) {
+  state previous = zeros(size / 2 + 1)
+  centre = (0..<size / 2 + 1).map(it / size)
+  difference = phase - previous - 2 * pi * centre * hop
+  residual = atan2(sin(difference), cos(difference))
+  previous = phase
+  centre + residual / (2 * pi * hop)
+}
+
+/// Integrate cycles/sample into wrapped radians, once per frame. Use the analysis hop.
+/// Paired with phase_frequency at unchanged frequencies, reconstructs the original phases.
+fn phase_accumulate(frequency: [num], size: const int = 2048, hop: const 1..65536 = 512) {
+  state phase = zeros(size / 2 + 1)
+  next = phase + frequency * (2 * pi * hop)
+  phase = atan2(sin(next), cos(next))
+  phase
+}
+
+/// Phase-vocoder pitch shift in semitones. Keeps duration, moves the spectral envelope with pitch.
+/// Higher overlap smooths resynthesis at a CPU cost; transients can smear and stereo is independent.
+fn spectral_pitch(x, shift: -48..48 = 0, size: const int = 2048, overlap: const int = 4) {
+  x.frames(size, fn(w) {
+    s = fft(w)
+    magnitude = sqrt(s[0] * s[0] + s[1] * s[1])
+    frequency = phase_frequency(atan2(s[1], s[0]), size: size, hop: size / overlap)
+    ratio = pow(2, shift / 12)
+    positions = (0..<size / 2 + 1).map(it / ratio)
+    // Clamp before interpolation so the real spectrum never wraps from Nyquist back to DC.
+    moved_magnitude = positions.map(magnitude.at(min(it, size / 2)) * (it <= size / 2))
+    moved_frequency = positions.map(frequency.at(min(it, size / 2))) * ratio
+    phase = phase_accumulate(moved_frequency, size: size, hop: size / overlap)
+    ifft(moved_magnitude * cos(phase), moved_magnitude * sin(phase))
+  }, overlap: overlap)
+}

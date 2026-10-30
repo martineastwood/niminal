@@ -90,7 +90,10 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
     let macros: Vec<&str> = src
         .lines()
         .filter_map(|line| line.trim_start().strip_prefix("macro "))
-        .filter_map(|rest| rest.split(|c: char| !(c.is_alphanumeric() || c == '_')).find(|n| !n.is_empty()))
+        .filter_map(|rest| {
+            rest.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .find(|n| !n.is_empty())
+        })
         .collect();
     let mut i = 0;
 
@@ -115,7 +118,9 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 }
                 continue;
             }
-            b'.' | b'x' | b'X' | b'o' | b'<' if takes_steps(&tokens, scopes.last(), &macros) && steps_end(src, i).is_some() => {
+            b'.' | b'x' | b'X' | b'o' | b'<'
+                if takes_steps(&tokens, scopes.last(), &macros) && steps_end(src, i).is_some() =>
+            {
                 let end = steps_end(src, i).unwrap_or(i);
                 let text = src[i..end].to_string();
                 i = end;
@@ -204,7 +209,11 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 // the keyword is part of the token
                 start = tokens.pop().map_or(start, |t| t.span.start);
                 i += len + 1;
-                if events { Tok::Events(text) } else { Tok::Rows(text) }
+                if events {
+                    Tok::Events(text)
+                } else {
+                    Tok::Rows(text)
+                }
             }
             b'"' => {
                 let Some(len) = src[i + 1..]
@@ -256,8 +265,17 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                             scopes.push(if statement_keyword.as_deref() == Some("clip") {
                                 Scope::Clip
                             } else if scopes.last() == Some(&Scope::Clip)
-                                && matches!(tokens.last(), Some(Token { tok: Tok::Ident(_), .. }))
-                                && matches!(after, None | Some(Tok::Newline | Tok::LBrace | Tok::Comma))
+                                && matches!(
+                                    tokens.last(),
+                                    Some(Token {
+                                        tok: Tok::Ident(_),
+                                        ..
+                                    })
+                                )
+                                && matches!(
+                                    after,
+                                    None | Some(Tok::Newline | Tok::LBrace | Tok::Comma)
+                                )
                             {
                                 Scope::FxLanes
                             } else {
@@ -404,7 +422,14 @@ fn matching_bracket(bytes: &[u8], open: usize) -> Option<usize> {
 /// Whether a row of steps can start here: after the colon of an effect's lane in a clip, either inside the
 /// effect's block or written `fx_name.param:`, or after the name of a macro.
 fn takes_steps(tokens: &[Token], scope: Option<&Scope>, macros: &[&str]) -> bool {
-    let [.., before, Token { tok: Tok::Colon, .. }] = tokens else {
+    let [
+        ..,
+        before,
+        Token {
+            tok: Tok::Colon, ..
+        },
+    ] = tokens
+    else {
         return false;
     };
     match scope {
@@ -412,10 +437,13 @@ fn takes_steps(tokens: &[Token], scope: Option<&Scope>, macros: &[&str]) -> bool
         Some(Scope::Clip) => {
             matches!(&before.tok, Tok::Ident(name) if macros.contains(&name.as_str()))
                 || matches!(before.tok, Tok::Ident(_))
-                && matches!(
-                    tokens.len().checked_sub(4).map(|n| (&tokens[n].tok, &tokens[n + 1].tok)),
-                    Some((Tok::Ident(_), Tok::Dot))
-                )
+                    && matches!(
+                        tokens
+                            .len()
+                            .checked_sub(4)
+                            .map(|n| (&tokens[n].tok, &tokens[n + 1].tok)),
+                        Some((Tok::Ident(_), Tok::Dot))
+                    )
         }
         _ => false,
     }
@@ -428,7 +456,30 @@ fn steps_end(src: &str, from: usize) -> Option<usize> {
     let line = line.split("//").next().unwrap_or("").trim_end();
     (!line.is_empty()
         && line.chars().all(|c| {
-            c.is_ascii_digit() || matches!(c, '.' | 'x' | 'X' | 'o' | ' ' | '\t' | '<' | '>' | '[' | ']' | '(' | ')' | '*' | '/' | '!' | '?' | '@' | ',' | '~' | '%' | '|')
+            c.is_ascii_digit()
+                || matches!(
+                    c,
+                    '.' | 'x'
+                        | 'X'
+                        | 'o'
+                        | ' '
+                        | '\t'
+                        | '<'
+                        | '>'
+                        | '['
+                        | ']'
+                        | '('
+                        | ')'
+                        | '*'
+                        | '/'
+                        | '!'
+                        | '?'
+                        | '@'
+                        | ','
+                        | '~'
+                        | '%'
+                        | '|'
+                )
         }))
     .then_some(from + line.len())
 }

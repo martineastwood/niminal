@@ -797,37 +797,87 @@ mod tests {
         let completion = request(&mut server, 1, "textDocument/completion", at(0, 25));
         let items = completion["items"].as_array().unwrap();
         let labels: Vec<_> = items.iter().map(|i| i["label"].as_str().unwrap()).collect();
-        assert!(labels.contains(&"snare_tri") && !labels.contains(&"kick_808"), "{labels:?}");
+        assert!(
+            labels.contains(&"snare_tri") && !labels.contains(&"kick_808"),
+            "{labels:?}"
+        );
         assert!(!labels.contains(&"echo"), "only this shelf");
     }
 
     #[test]
     fn a_preset_name_typed_anywhere_offers_to_use_it_or_copy_it() {
         let mut server = Server::new();
-        open(&mut server, "use std/drums.{kick_808}\nclip a { instrument: snare_t");
+        open(
+            &mut server,
+            "use std/drums.{kick_808}\nclip a { instrument: snare_t",
+        );
         let completion = request(&mut server, 1, "textDocument/completion", at(1, 27));
         let items = completion["items"].as_array().unwrap();
-        let by_name = items.iter().find(|i| i["label"] == "snare_tri").expect("by name");
+        let by_name = items
+            .iter()
+            .find(|i| i["label"] == "snare_tri")
+            .expect("by name");
         // the file already takes from std/drums, so the name joins that list
         let edit = &by_name["additionalTextEdits"][0];
         assert_eq!(edit["newText"], ", snare_tri");
-        assert_eq!(edit["range"]["start"], json!({ "line": 0, "character": 23 }));
-        let copy = items.iter().find(|i| i["label"] == "snare_tri (copy source)").expect("copy");
-        assert!(copy["insertText"].as_str().unwrap().contains("instr snare_tri("));
-        assert!(copy["insertText"].as_str().unwrap().contains("fn drum("), "the copy stands alone");
+        assert_eq!(
+            edit["range"]["start"],
+            json!({ "line": 0, "character": 23 })
+        );
+        let copy = items
+            .iter()
+            .find(|i| i["label"] == "snare_tri (copy source)")
+            .expect("copy");
+        assert!(
+            copy["insertText"]
+                .as_str()
+                .unwrap()
+                .contains("instr snare_tri(")
+        );
+        assert!(
+            copy["insertText"].as_str().unwrap().contains("fn drum("),
+            "the copy stands alone"
+        );
         // one the file has already is not offered again
-        open(&mut server, "use std/drums.{kick_808}\nclip a { instrument: kick_8");
+        open(
+            &mut server,
+            "use std/drums.{kick_808}\nclip a { instrument: kick_8",
+        );
         let again = request(&mut server, 2, "textDocument/completion", at(1, 27));
-        assert!(!again["items"].as_array().unwrap().iter().any(|i| i.get("additionalTextEdits").is_some()));
+        assert!(
+            !again["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i.get("additionalTextEdits").is_some())
+        );
         // a file that takes from no shelf gets a new `use` line, and a copy brings the voice it needs
         open(&mut server, "clip a { instrument: echo");
         let completion = request(&mut server, 3, "textDocument/completion", at(0, 25));
-        let echo = completion["items"].as_array().unwrap().iter().find(|i| i["label"] == "echo").unwrap().clone();
-        assert_eq!(echo["additionalTextEdits"][0]["newText"], "use std/fx.{echo}\n");
+        let echo = completion["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["label"] == "echo")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            echo["additionalTextEdits"][0]["newText"],
+            "use std/fx.{echo}\n"
+        );
         open(&mut server, "clip a { instrument: snare_t");
         let completion = request(&mut server, 4, "textDocument/completion", at(0, 28));
-        let copy = completion["items"].as_array().unwrap().iter().find(|i| i["label"] == "snare_tri (copy source)").unwrap().clone();
-        assert!(copy["insertText"].as_str().unwrap().contains("fn drum("), "the voice comes along");
+        let copy = completion["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["label"] == "snare_tri (copy source)")
+            .unwrap()
+            .clone();
+        assert!(
+            copy["insertText"].as_str().unwrap().contains("fn drum("),
+            "the voice comes along"
+        );
     }
 
     const SONG: &str = "instr tone(freq: hz, bright: 0..1 = 0.5) { osc(saw, freq).lpf(cutoff: 800) }\nclip lead { instrument: tone }\nlead.mute\nlead.start\n";
@@ -950,12 +1000,18 @@ mod tests {
             found.push((word, features::TOKEN_TYPES[t[3] as usize]));
         }
         assert!(found.contains(&("verse", "enum")), "{found:?}");
-        assert!(found.iter().filter(|f| f.0 == "lead").all(|f| f.1 == "namespace"));
+        assert!(
+            found
+                .iter()
+                .filter(|f| f.0 == "lead")
+                .all(|f| f.1 == "namespace")
+        );
     }
 
     #[test]
     fn controls_and_macros_are_readonly_names_and_midi_is_a_namespace() {
-        let text = "ctl held = midi.note(39)\nmacro tension {\n  input: midi.cc(1)\n  held: 0..1\n}\n";
+        let text =
+            "ctl held = midi.note(39)\nmacro tension {\n  input: midi.cc(1)\n  held: 0..1\n}\n";
         let mut server = Server::new();
         open(&mut server, text);
         let reply = request(
@@ -964,16 +1020,36 @@ mod tests {
             "textDocument/semanticTokens/full",
             json!({ "textDocument": { "uri": URI } }),
         );
-        let data: Vec<u32> = reply["data"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u32).collect();
+        let data: Vec<u32> = reply["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap() as u32)
+            .collect();
         let (mut line, mut column) = (0, 0);
         let mut found: Vec<(String, &str, u32)> = Vec::new();
         for token in data.chunks(5) {
             line += token[0];
-            column = if token[0] == 0 { column + token[1] } else { token[1] };
-            let word = &text.lines().nth(line as usize).unwrap()[column as usize..(column + token[2]) as usize];
-            found.push((word.to_string(), features::TOKEN_TYPES[token[3] as usize], token[4]));
+            column = if token[0] == 0 {
+                column + token[1]
+            } else {
+                token[1]
+            };
+            let word = &text.lines().nth(line as usize).unwrap()
+                [column as usize..(column + token[2]) as usize];
+            found.push((
+                word.to_string(),
+                features::TOKEN_TYPES[token[3] as usize],
+                token[4],
+            ));
         }
-        let of = |word: &str, nth: usize| found.iter().filter(|f| f.0 == word).nth(nth).map(|f| (f.1, f.2));
+        let of = |word: &str, nth: usize| {
+            found
+                .iter()
+                .filter(|f| f.0 == word)
+                .nth(nth)
+                .map(|f| (f.1, f.2))
+        };
         // a control and a macro are variables flagged read-only
         assert_eq!(of("held", 0), Some(("variable", 1)), "{found:?}");
         assert_eq!(of("tension", 0), Some(("variable", 1)), "{found:?}");
@@ -994,21 +1070,48 @@ mod tests {
             "textDocument/semanticTokens/full",
             json!({ "textDocument": { "uri": URI } }),
         );
-        let data: Vec<u32> = reply["data"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u32).collect();
+        let data: Vec<u32> = reply["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap() as u32)
+            .collect();
         let (mut line, mut column) = (0, 0);
         let mut found: Vec<(u32, u32, String, &str)> = Vec::new();
         for token in data.chunks(5) {
             line += token[0];
-            column = if token[0] == 0 { column + token[1] } else { token[1] };
-            let word = &text.lines().nth(line as usize).unwrap()[column as usize..(column + token[2]) as usize];
-            found.push((line, column, word.to_string(), features::TOKEN_TYPES[token[3] as usize]));
+            column = if token[0] == 0 {
+                column + token[1]
+            } else {
+                token[1]
+            };
+            let word = &text.lines().nth(line as usize).unwrap()
+                [column as usize..(column + token[2]) as usize];
+            found.push((
+                line,
+                column,
+                word.to_string(),
+                features::TOKEN_TYPES[token[3] as usize],
+            ));
         }
         // the slices in the list of notes are members, a note name and a rest are left to the grammar
-        let notes: Vec<&str> = found.iter().filter(|f| f.0 == 7 && f.3 == "enumMember").map(|f| f.2.as_str()).collect();
+        let notes: Vec<&str> = found
+            .iter()
+            .filter(|f| f.0 == 7 && f.3 == "enumMember")
+            .map(|f| f.2.as_str())
+            .collect();
         assert_eq!(notes, ["s0", "s1", "s3", "kick"], "{found:?}");
         // in a drawn row every step that hits is marked, and the rests are not
-        let hits: Vec<(u32, &str)> = found.iter().filter(|f| f.0 == 9 && f.3 == "enumMember").map(|f| (f.1, f.2.as_str())).collect();
-        assert_eq!(hits.iter().map(|h| h.1).collect::<Vec<_>>(), ["x", "X", "o", "x", "x"], "{found:?}");
+        let hits: Vec<(u32, &str)> = found
+            .iter()
+            .filter(|f| f.0 == 9 && f.3 == "enumMember")
+            .map(|f| (f.1, f.2.as_str()))
+            .collect();
+        assert_eq!(
+            hits.iter().map(|h| h.1).collect::<Vec<_>>(),
+            ["x", "X", "o", "x", "x"],
+            "{found:?}"
+        );
     }
 
     #[test]

@@ -26,7 +26,11 @@ impl Kernel {
                 Instr::Neg { a, .. } | Instr::Copy { src: a, .. } | Instr::Call { a, .. } => {
                     vec![a]
                 }
-                Instr::Frame { input, .. } => vec![input],
+                Instr::Frame { input, input2, .. } => {
+                    let mut inputs = vec![input];
+                    inputs.extend(input2);
+                    inputs
+                }
                 Instr::Native { index, .. } => self.natives[index]
                     .inputs
                     .iter()
@@ -131,8 +135,16 @@ impl Kernel {
                     }
                     (Some(*dst), 1, 0)
                 }
-                Instr::Frame { dst, input, scope } => {
+                Instr::Frame {
+                    dst,
+                    input,
+                    input2,
+                    scope,
+                } => {
                     remap(input);
+                    if let Some(r) = input2 {
+                        remap(r);
+                    }
                     (Some(*dst), 1, self.frames[*scope].size)
                 }
                 Instr::Input { dst, .. } | Instr::LoadState { dst, .. } => (Some(*dst), 1, 0),

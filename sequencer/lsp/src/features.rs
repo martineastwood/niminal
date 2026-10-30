@@ -707,7 +707,10 @@ pub fn semantic_tokens(doc: &Document) -> Vec<u32> {
             _ => None,
         };
         if let Some(raw) = raw {
-            let inside = doc.text.get(t.span.start..t.span.end).and_then(|text| text.find(raw.as_str()));
+            let inside = doc
+                .text
+                .get(t.span.start..t.span.end)
+                .and_then(|text| text.find(raw.as_str()));
             let base = t.span.start + inside.unwrap_or(0);
             let steps = matches!(t.tok, Tok::Steps(_));
             let rows = matches!(t.tok, Tok::Rows(_));
@@ -807,7 +810,13 @@ pub fn semantic_tokens(doc: &Document) -> Vec<u32> {
                 character
             },
         );
-        data.extend([delta_line as u32, delta_char as u32, length as u32, kind, modifiers]);
+        data.extend([
+            delta_line as u32,
+            delta_char as u32,
+            length as u32,
+            kind,
+            modifiers,
+        ]);
         (last_line, last_char) = (line, character);
     }
     data

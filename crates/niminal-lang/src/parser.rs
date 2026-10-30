@@ -1527,11 +1527,23 @@ fn sample_decl(name: Ident, value: Expr) -> Res<SampleDecl> {
         };
         if !args.first().is_some_and(|a| a.receiver) {
             let is_kit = match call.name.as_str() {
-                "sample" => false,
+                "sample" | "sfz" => false,
                 "kit" => true,
                 _ => return Err(not_a_sample(call.span)),
             };
+            let is_sfz = call.name == "sfz";
             let source = match args.as_slice() {
+                [
+                    Arg {
+                        name: None,
+                        value:
+                            Expr {
+                                kind: ExprKind::Str(path),
+                                ..
+                            },
+                        ..
+                    },
+                ] if is_sfz => SampleSource::Sfz(path.clone()),
                 [
                     Arg {
                         name: None,
@@ -1547,7 +1559,7 @@ fn sample_decl(name: Ident, value: Expr) -> Res<SampleDecl> {
                     Arg {
                         name: None, value, ..
                     },
-                ] if !is_kit => SampleSource::Table(value.clone()),
+                ] if !is_kit && !is_sfz => SampleSource::Table(value.clone()),
                 _ => {
                     return Err(Diagnostic::new(
                         format!(
@@ -1555,6 +1567,8 @@ fn sample_decl(name: Ident, value: Expr) -> Res<SampleDecl> {
                             call.name,
                             if is_kit {
                                 "a folder in quotes"
+                            } else if is_sfz {
+                                "the path of an .sfz file in quotes"
                             } else {
                                 "a file path in quotes, or a table"
                             }

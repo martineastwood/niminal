@@ -115,9 +115,17 @@ pub fn beat_controls(source: &str) -> Vec<BeatControl> {
         return Vec::new();
     };
     let musical = |expr: &Expr| match &expr.kind {
-        ExprKind::Num { value, unit: Some(unit) } if matches!(unit.as_str(), "beat" | "beats" | "bar" | "bars") => {
-            Some((*value, if unit.starts_with("bar") { "bars" } else { "beats" }))
-        }
+        ExprKind::Num {
+            value,
+            unit: Some(unit),
+        } if matches!(unit.as_str(), "beat" | "beats" | "bar" | "bars") => Some((
+            *value,
+            if unit.starts_with("bar") {
+                "bars"
+            } else {
+                "beats"
+            },
+        )),
         _ => None,
     };
     let mut found = Vec::new();
@@ -126,13 +134,27 @@ pub fn beat_controls(source: &str) -> Vec<BeatControl> {
             Item::Fx(fx) => {
                 for param in &fx.params {
                     if let Some((value, unit)) = param.default.as_ref().and_then(musical) {
-                        found.push(BeatControl { effect: Some(fx.name.name.clone()), name: param.name.name.clone(), value, unit });
+                        found.push(BeatControl {
+                            effect: Some(fx.name.name.clone()),
+                            name: param.name.name.clone(),
+                            value,
+                            unit,
+                        });
                     }
                 }
             }
-            Item::Control { name, value, input: None } => {
+            Item::Control {
+                name,
+                value,
+                input: None,
+            } => {
                 if let Some((value, unit)) = musical(value) {
-                    found.push(BeatControl { effect: None, name: name.name.clone(), value, unit });
+                    found.push(BeatControl {
+                        effect: None,
+                        name: name.name.clone(),
+                        value,
+                        unit,
+                    });
                 }
             }
             _ => {}
@@ -150,7 +172,8 @@ pub fn division_controls(source: &str) -> Vec<(String, String)> {
     for (item, _) in &items {
         if let Item::Fx(fx) = item {
             for param in &fx.params {
-                if matches!(&param.ty, Some(crate::ast::TypeSpec::Unit(t)) if t.name == "division") {
+                if matches!(&param.ty, Some(crate::ast::TypeSpec::Unit(t)) if t.name == "division")
+                {
                     found.push((fx.name.name.clone(), param.name.name.clone()));
                 }
             }
@@ -169,7 +192,11 @@ pub fn dsp_source(source: &str, tempo: Tempo) -> Result<String, Diagnostic> {
 /// `text` with its lengths in beats and bars written out in seconds, and nothing else changed: a beat is a
 /// quarter note at `bpm`, and a bar is `beats_per_bar` of them (3 in 6/8, 3.5 in 7/8). For a client that sends
 /// the audio server a definition on its own, with no composition around it.
-pub fn resolve_musical_time(text: &str, bpm: f64, beats_per_bar: f64) -> Result<String, Diagnostic> {
+pub fn resolve_musical_time(
+    text: &str,
+    bpm: f64,
+    beats_per_bar: f64,
+) -> Result<String, Diagnostic> {
     let tempo = Tempo {
         beats_per_bar,
         ..Tempo::new(bpm)
@@ -177,7 +204,9 @@ pub fn resolve_musical_time(text: &str, bpm: f64, beats_per_bar: f64) -> Result<
     let mut edits = token_edits(text, tempo)?;
     edits.retain(|(span, _)| {
         let written = &text[span.start..span.end];
-        ["beat", "beats", "bar", "bars"].iter().any(|unit| written.ends_with(unit))
+        ["beat", "beats", "bar", "bars"]
+            .iter()
+            .any(|unit| written.ends_with(unit))
     });
     edits.sort_by_key(|(span, _)| span.start);
     let mut out = String::with_capacity(text.len());
@@ -234,10 +263,14 @@ pub fn project(
                     // a clip that only moves an effect's controls plays this, which makes no sound
                     if !std::mem::replace(&mut silent_defined, true) {
                         pieces.push(derived(
-                            "instr __gesture(freq: hz = 440hz) { out = osc(sine, freq) * 0 }".into(),
+                            "instr __gesture(freq: hz = 440hz) { out = osc(sine, freq) * 0 }"
+                                .into(),
                         ));
                     }
-                    pieces.push(derived(format!("node {} {{ instrument = __gesture }}", c.name.name)));
+                    pieces.push(derived(format!(
+                        "node {} {{ instrument = __gesture }}",
+                        c.name.name
+                    )));
                 }
             }
             // a macro is a control from 0 to 1 here; the composition keeps what it moves
@@ -426,16 +459,18 @@ pub fn warnings(source: &str) -> Vec<Diagnostic> {
     items
         .iter()
         .filter_map(|(item, _)| match item {
-            Item::Clip(c) if instrument_of(c, &items, 0).is_none() && !is_gesture(c, &items, 0) => Some(
-                Diagnostic::new(
-                    format!(
-                        "clip `{}` has no instrument, so it plays nothing",
-                        c.name.name
-                    ),
-                    c.name.span,
+            Item::Clip(c) if instrument_of(c, &items, 0).is_none() && !is_gesture(c, &items, 0) => {
+                Some(
+                    Diagnostic::new(
+                        format!(
+                            "clip `{}` has no instrument, so it plays nothing",
+                            c.name.name
+                        ),
+                        c.name.span,
+                    )
+                    .with_help(format!("add `instrument: ...` to `{}`", c.name.name)),
                 )
-                .with_help(format!("add `instrument: ...` to `{}`", c.name.name)),
-            ),
+            }
             _ => None,
         })
         .collect()

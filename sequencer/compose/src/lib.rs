@@ -26,9 +26,12 @@ pub use analysis::{
 };
 pub use ast::{ControlInput, InputSource};
 pub use compile::{
-    Composition, ControlBinding, MacroDef, MacroTarget, QuantizeConfig, Trigger, compile, compile_with, interpolate,
+    Composition, ControlBinding, MacroDef, MacroTarget, QuantizeConfig, Trigger, compile,
+    compile_with, interpolate,
 };
-pub use dsp::{BeatControl, beat_controls, division_controls, dsp_source, resolve_musical_time, warnings};
+pub use dsp::{
+    BeatControl, beat_controls, division_controls, dsp_source, resolve_musical_time, warnings,
+};
 pub use ide::{RESERVED_WORDS, Symbol, SymbolKind, SymbolParam, pattern_ops, symbols};
 pub use lexer::{Tok, Token, lex};
 pub use modules::expand;

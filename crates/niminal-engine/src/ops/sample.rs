@@ -3,7 +3,7 @@ use std::sync::{Arc, LazyLock};
 use crate::opcode::{Opcode, Port, ProcessCtx};
 use crate::table::Table;
 
-const PORTS: &[Port] = &[
+pub(super) const PORTS: &[Port] = &[
     Port::optional("freq", 0.0),
     Port::optional("pitch", 0.0),
     Port::optional("rate", 1.0),
@@ -18,6 +18,8 @@ const PORTS: &[Port] = &[
     Port::optional("loop_crossfade", 0.0),
     // Target duration of the whole source, in seconds; zero means unfitted playback.
     Port::optional("duration", 0.0),
+    // How hard the note is played, 0 to 1, which a multisample uses to choose its layers.
+    Port::optional("vel", 1.0),
 ];
 
 /// Frames over which a slice fades in and out.
@@ -87,6 +89,8 @@ pub struct Sampler {
     repitch: bool,
     loop_mode: LoopMode,
     loop_range: (usize, usize),
+    /// Loop points in frames, for a loop the file fixes rather than the `loop_start` and `loop_end` ports.
+    fixed_loop: Option<(usize, usize)>,
     looped: bool,
     interp: SampleInterp,
     /// Playback direction: +1 forward, -1 reverse (bidirectional loops).
@@ -113,6 +117,7 @@ impl Sampler {
             repitch: false,
             loop_mode: LoopMode::None,
             loop_range: range,
+            fixed_loop: None,
             looped: false,
             interp: SampleInterp::Cubic,
             direction: 1.0,
@@ -180,6 +185,18 @@ impl Sampler {
 
     pub fn with_loop(mut self, mode: LoopMode) -> Self {
         self.loop_mode = mode;
+        self
+    }
+
+    /// The pitch at which the sample plays as recorded.
+    pub fn root_hz(&self) -> f32 {
+        self.root_hz
+    }
+
+    /// Loop frames `start..end` of the sample, whatever the loop ports say.
+    pub fn with_loop_frames(mut self, mode: LoopMode, start: usize, end: usize) -> Self {
+        self.loop_mode = mode;
+        self.fixed_loop = (start < end && end <= self.data.len()).then_some((start, end));
         self
     }
 
@@ -400,6 +417,9 @@ impl Sampler {
     }
 
     fn requested_loop(&self, inputs: &[&[f32]], n: usize) -> (usize, usize) {
+        if let Some(fixed) = self.fixed_loop {
+            return fixed;
+        }
         let frames = self.range.1.saturating_sub(self.range.0);
         let point = |port: usize, default: f32| {
             let value = inputs.get(port).map_or(default, |input| input[n]);

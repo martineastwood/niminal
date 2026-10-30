@@ -79,11 +79,7 @@ fn connect(name: &str) -> Result<MidiOutputConnection, String> {
     }
 }
 
-fn run(
-    mut connection: MidiOutputConnection,
-    rx: &Receiver<(u64, Realtime)>,
-    stop: &AtomicBool,
-) {
+fn run(mut connection: MidiOutputConnection, rx: &Receiver<(u64, Realtime)>, stop: &AtomicBool) {
     let mut waiting: VecDeque<(u64, Realtime)> = VecDeque::new();
     while !stop.load(Ordering::Relaxed) {
         loop {

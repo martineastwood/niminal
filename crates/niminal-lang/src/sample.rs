@@ -7,6 +7,14 @@ use std::time::SystemTime;
 
 use niminal_engine::Table;
 
+/// A region of an SFZ file with the audio it plays.
+pub struct SfzSample {
+    pub region: crate::sfz::SfzRegion,
+    pub channels: Vec<Arc<Table>>,
+    /// What the audio file says about its root note and loop.
+    pub info: niminal_engine::WavInfo,
+}
+
 /// A kit: each sample's name with its channels as tables.
 pub type Kit = Vec<(String, Vec<Arc<Table>>)>;
 
@@ -74,15 +82,17 @@ impl Samples {
             return;
         };
         for item in items {
-            if let crate::ast::Item::Sample(decl) = item
-                && let crate::ast::SampleSource::Path(path) = &decl.source
-            {
-                let _ = if decl.is_kit {
+            let crate::ast::Item::Sample(decl) = item else {
+                continue;
+            };
+            let _ = match &decl.source {
+                crate::ast::SampleSource::Path(path) if decl.is_kit => {
                     self.load_kit(path).map(drop)
-                } else {
-                    self.load(path).map(drop)
-                };
-            }
+                }
+                crate::ast::SampleSource::Path(path) => self.load(path).map(drop),
+                crate::ast::SampleSource::Sfz(path) => self.load_sfz(path).map(drop),
+                _ => continue,
+            };
         }
     }
 
@@ -133,6 +143,33 @@ impl Samples {
         let data = tables.into_iter().map(Arc::new).collect::<Vec<_>>();
         cache.insert(path.to_path_buf(), (modified, data.clone()));
         Ok(data)
+    }
+
+    /// An SFZ file's regions, each with its audio loaded. Sample paths are relative to the file.
+    pub fn load_sfz(&self, path: &str) -> Result<Vec<SfzSample>, String> {
+        let file = self.resolve(path);
+        let dir = file.parent().map(Path::to_path_buf).unwrap_or_default();
+        let text = std::fs::read_to_string(&file)
+            .map_err(|e| format!("can't read {}: {e}", file.display()))?;
+        let sfz = crate::sfz::parse(&text, &mut |name| {
+            let included = dir.join(name.replace('\\', "/"));
+            std::fs::read_to_string(&included)
+                .map_err(|e| format!("can't read {}: {e}", included.display()))
+        })
+        .map_err(|e| format!("{}: {e}", file.display()))?;
+        sfz.regions
+            .into_iter()
+            .map(|region| {
+                let audio = dir.join(&region.sample);
+                let channels = self.load_file(&audio)?;
+                let info = niminal_engine::read_wav_info(&audio).unwrap_or_default();
+                Ok(SfzSample {
+                    region,
+                    channels,
+                    info,
+                })
+            })
+            .collect()
     }
 
     /// Every audio file in a folder, by name without the extension, in name order.

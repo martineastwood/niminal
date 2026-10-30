@@ -187,3 +187,24 @@ fn wsola_sample_alignment_does_not_allocate_while_processing() {
     assert!(output[0].iter().all(|value| value.is_finite()));
     assert!(audible);
 }
+
+#[test]
+fn phase_vocoder_with_dense_overlap_does_not_allocate_while_processing() {
+    let source = niminal_lang::expand(
+        "use std/spectral\ninstr a() { spectral_pitch(osc(saw, 220hz), shift: 7, size: 512, overlap: 8) }",
+        std::path::Path::new("."),
+    ).unwrap();
+    let program = niminal_lang::compile(&source.text).unwrap();
+    let instrument = program.instruments.iter().find(|i| i.name == "a").unwrap();
+    let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
+    let mut buses = Buses::new(&[]);
+    let mut output = vec![vec![0.0; block_size()]; 1];
+    ALLOCATIONS.with(|count| count.set(0));
+    NODE.with(|node| node.set(true));
+    for _ in 0..256 {
+        voice.process_blocks(&mut output, block_size(), &mut buses);
+    }
+    NODE.with(|node| node.set(false));
+    assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+    assert!(output[0].iter().all(|value| value.is_finite()));
+}

@@ -11,8 +11,8 @@ use crate::diag::{Diagnostic, Span, closest};
 use crate::env_shortcut;
 use crate::layout::Layout;
 use crate::lower::{
-    Datum, Member, Mixer, Names, SamplerDef, check_fn, compile_chain, compile_const, compile_instr,
-    compile_sampler, layout_from_expr, unknown_unit,
+    Datum, Member, Mixer, Names, SamplerDef, SamplerSource, check_fn, compile_chain, compile_const,
+    compile_instr, compile_sampler, layout_from_expr, unknown_unit,
 };
 use crate::opcodes::Registry;
 use crate::parser;
@@ -1491,6 +1491,9 @@ fn compile_sample(
     names: &mut Names,
     state: &mut SampleState,
 ) -> Res<Instrument> {
+    if let SampleSource::Sfz(path) = &decl.source {
+        return compile_sfz(decl, path, samples, tempo, registry, names);
+    }
     let mut root = DEFAULT_ROOT_HZ;
     let mut chokes: Vec<&Arg> = Vec::new();
     let mut duration: Option<Expr> = None;
@@ -1643,6 +1646,7 @@ fn compile_sample(
         (SampleSource::Instruments(_), _) => {
             unreachable!("instrument kits compile after instruments")
         }
+        (SampleSource::Sfz(_), _) => unreachable!("an SFZ file compiles on its own"),
         (SampleSource::Table(_), true) => {
             return Err(Diagnostic::new(
                 "a kit is a folder of files or `.slices`, not a table",
@@ -1650,22 +1654,9 @@ fn compile_sample(
             ));
         }
     };
-    for arg in &decl.options {
-        if arg.name.as_ref().is_some_and(|n| n.name == "interp") {
-            let interp = match &arg.value.kind {
-                ExprKind::Name(n) if n == "linear" => niminal_engine::ops::SampleInterp::Linear,
-                ExprKind::Name(n) if n == "cubic" => niminal_engine::ops::SampleInterp::Cubic,
-                ExprKind::Name(n) if n == "sinc" => niminal_engine::ops::SampleInterp::Sinc,
-                _ => {
-                    return Err(Diagnostic::new(
-                        "`interp` is `linear`, `cubic` or `sinc`",
-                        arg.value.span,
-                    ));
-                }
-            };
-            for member in &mut members {
-                member.interp = interp;
-            }
+    if let Some(interp) = interp_of(&decl.options)? {
+        for member in &mut members {
+            member.interp = interp;
         }
     }
     if decl.is_kit {
@@ -1684,9 +1675,11 @@ fn compile_sample(
     }
     let mut instrument = compile_sampler(
         &decl.name,
-        &members,
-        decl.is_kit,
-        root,
+        SamplerSource::Members {
+            members: &members,
+            is_kit: decl.is_kit,
+            root_hz: root,
+        },
         tempo,
         registry,
         names,
@@ -1746,6 +1739,162 @@ fn compile_sample(
         SamplerDef {
             members,
             root_hz: root,
+            bank: None,
+            instrument: instrument.clone(),
+        },
+    );
+    Ok(instrument)
+}
+
+/// `.interp(sinc)` among a sample's options.
+fn interp_of(options: &[Arg]) -> Res<Option<niminal_engine::ops::SampleInterp>> {
+    let Some(arg) = options
+        .iter()
+        .find(|a| a.name.as_ref().is_some_and(|n| n.name == "interp"))
+    else {
+        return Ok(None);
+    };
+    match &arg.value.kind {
+        ExprKind::Name(n) if n == "linear" => Ok(Some(niminal_engine::ops::SampleInterp::Linear)),
+        ExprKind::Name(n) if n == "cubic" => Ok(Some(niminal_engine::ops::SampleInterp::Cubic)),
+        ExprKind::Name(n) if n == "sinc" => Ok(Some(niminal_engine::ops::SampleInterp::Sinc)),
+        _ => Err(Diagnostic::new(
+            "`interp` is `linear`, `cubic` or `sinc`",
+            arg.value.span,
+        )),
+    }
+}
+
+/// An `sfz("file.sfz")` declaration as an instrument that plays the file's regions by key and velocity.
+fn compile_sfz(
+    decl: &SampleDecl,
+    path: &str,
+    samples: &Samples,
+    tempo: Tempo,
+    registry: &Registry,
+    names: &mut Names,
+) -> Res<Instrument> {
+    use niminal_engine::ops::{Region, RoundRobin};
+    for arg in &decl.options {
+        match arg.name.as_ref().map(|n| n.name.as_str()) {
+            Some("interp") => {}
+            Some(other) => {
+                return Err(Diagnostic::new(
+                    format!("`{other}` isn't an option of an SFZ file"),
+                    arg.name.as_ref().map_or(arg.value.span, |n| n.span),
+                )
+                .with_help("the SFZ file sets everything but `interp`"));
+            }
+            None => {
+                return Err(Diagnostic::new(
+                    "options are written `name: value`",
+                    arg.value.span,
+                ));
+            }
+        }
+    }
+    let interp = interp_of(&decl.options)?.unwrap_or_default();
+    let loaded = samples
+        .load_sfz(path)
+        .map_err(|e| Diagnostic::new(e, decl.source_span))?;
+    // regions that cover the same keys and velocities take turns from one shared count
+    let mut counters: HashMap<(u8, u8, u8, u8, u32), Arc<RoundRobin>> = HashMap::new();
+    let mut regions = Vec::with_capacity(loaded.len());
+    // each choke group the file names gets a counter that all the instrument's voices share
+    let mut group_index: HashMap<i64, usize> = HashMap::new();
+    for sample in &loaded {
+        for group in [sample.region.group, sample.region.off_by]
+            .into_iter()
+            .flatten()
+        {
+            let next = group_index.len();
+            group_index.entry(group).or_insert(next);
+        }
+    }
+    for sample in loaded {
+        let (r, info) = (&sample.region, sample.info);
+        let frames = sample.channels.first().map_or(0, |c| c.len());
+        let end = r.end.map_or(frames, |e| (e + 1).min(frames));
+        if r.offset >= end {
+            continue;
+        }
+        let range = (r.offset > 0 || end < frames).then_some((r.offset, end));
+        let file_loop = info.loop_frames.map(|(from, to)| (from, to + 1));
+        let kind = r.loop_kind.unwrap_or(if file_loop.is_some() {
+            crate::sfz::LoopKind::Continuous
+        } else {
+            crate::sfz::LoopKind::NoLoop
+        });
+        let loop_frames = (kind == crate::sfz::LoopKind::Continuous).then(|| {
+            let from = r.loop_start.or(file_loop.map(|l| l.0)).unwrap_or(r.offset);
+            let to = r
+                .loop_end
+                .map(|e| e + 1)
+                .or(file_loop.map(|l| l.1))
+                .unwrap_or(end);
+            (from, to.min(end))
+        });
+        let key = r.keycenter.or(info.root_key).unwrap_or(60);
+        let root_hz = (440.0 * ((f64::from(key) - 69.0) / 12.0).exp2()) as f32;
+        let seq = r.seq.map(|(length, position)| {
+            let counter = counters
+                .entry((r.keys.0, r.keys.1, r.vels.0, r.vels.1, length))
+                .or_default()
+                .clone();
+            (length, position, counter)
+        });
+        regions.push(crate::lower::SfzRegionDef {
+            region: Region {
+                keys: r.keys,
+                vels: r.vels,
+                rand: r.rand,
+                seq,
+                tune: r.tune,
+                keytrack: r.keytrack,
+                gain: 10.0_f32.powf(r.volume_db / 20.0),
+                env: r.env,
+                one_shot: kind == crate::sfz::LoopKind::OneShot,
+                group: r.group.map(|g| group_index[&g]),
+                off_by: r.off_by.map(|g| group_index[&g]),
+                // the player for each channel is made where the instrument is built
+                sampler: niminal_engine::ops::Sampler::new(
+                    sample.channels[0].clone(),
+                    root_hz,
+                    None,
+                ),
+            },
+            channels: sample.channels,
+            root_hz,
+            range,
+            loop_frames: loop_frames.filter(|(from, to)| from < to),
+            interp,
+        });
+    }
+    if regions.is_empty() {
+        return Err(Diagnostic::new(
+            format!("{path} has no region with audio to play"),
+            decl.source_span,
+        ));
+    }
+    let bank = Arc::new(crate::lower::SfzBank {
+        regions,
+        groups: (0..group_index.len())
+            .map(|_| RoundRobin::default())
+            .collect(),
+    });
+    let instrument = compile_sampler(
+        &decl.name,
+        SamplerSource::Regions(&bank),
+        tempo,
+        registry,
+        names,
+    )?;
+    names.samplers.insert(
+        decl.name.name.clone(),
+        SamplerDef {
+            members: Vec::new(),
+            root_hz: DEFAULT_ROOT_HZ,
+            bank: Some(bank),
             instrument: instrument.clone(),
         },
     );
@@ -1753,7 +1902,7 @@ fn compile_sample(
 }
 
 /// The pitch (c4) at which a sample plays as recorded unless it says otherwise.
-const DEFAULT_ROOT_HZ: f32 = 261.625_56;
+pub(crate) const DEFAULT_ROOT_HZ: f32 = 261.625_56;
 
 fn loop_mode_of(options: &[Arg]) -> Res<niminal_engine::ops::LoopMode> {
     for arg in options {

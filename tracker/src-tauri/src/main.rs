@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
+mod browse;
 mod commands;
 mod files;
 mod midi;
@@ -116,13 +117,52 @@ async fn import_dropped(app: tauri::AppHandle, id: String, paths: Vec<PathBuf>) 
         .map_err(|e| e.to_string())?
 }
 
-/// Every audio file of the project's `samples` folder, relative to the project folder.
+/// Deletes the samples of the project that no instrument plays, after asking. `code` is everything in the project that
+/// may name a sample. Returns how many were deleted.
 #[tauri::command]
-async fn list_samples(app: tauri::AppHandle, id: String) -> Result<Vec<String>, String> {
+async fn clean_samples(app: tauri::AppHandle, id: String, code: String) -> Result<usize, String> {
     let dir = files::project_dir(&app_data(&app)?, &id)?;
-    tauri::async_runtime::spawn_blocking(move || files::list_samples(&dir))
+    let unused = { let dir = dir.clone(); tauri::async_runtime::spawn_blocking(move || files::unused_samples(&dir, &code)).await.map_err(|e| e.to_string())? };
+    if unused.is_empty() {
+        return Ok(0);
+    }
+    let shown = unused.iter().take(12).map(|f| f.trim_start_matches("samples/")).collect::<Vec<_>>().join("\n");
+    let more = if unused.len() > 12 { format!("\n…and {} more", unused.len() - 12) } else { String::new() };
+    let answer = rfd::AsyncMessageDialog::new()
+        .set_title("Remove unused samples")
+        .set_description(format!("Delete {} sample{} that no instrument plays? This cannot be undone.\n\n{shown}{more}", unused.len(), if unused.len() == 1 { "" } else { "s" }))
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        .await;
+    if answer != rfd::MessageDialogResult::Yes {
+        return Ok(0);
+    }
+    let count = unused.len();
+    tauri::async_runtime::spawn_blocking(move || files::delete_samples(&dir, &unused)).await.map_err(|e| e.to_string())??;
+    Ok(count)
+}
+
+/// The audio files under a folder of the sample library.
+#[tauri::command]
+async fn list_library(dir: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || browse::list(std::path::Path::new(&dir)))
         .await
         .map_err(|e| e.to_string())
+}
+
+/// A sample of the library as WAV bytes, for the window to audition.
+#[tauri::command]
+async fn read_sample(path: String) -> Result<tauri::ipc::Response, String> {
+    let bytes = tauri::async_runtime::spawn_blocking(move || browse::read(std::path::Path::new(&path)))
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Asks for the folder the sample library shows.
+#[tauri::command]
+async fn pick_library() -> Option<String> {
+    rfd::AsyncFileDialog::new().set_title("Choose a folder of samples").pick_folder().await.map(|f| f.path().to_string_lossy().into_owned())
 }
 
 /// A folder of samples copied into the project to play as a kit.
@@ -263,6 +303,7 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .separator()
         .item(&item("import-samples", "Import Samples…", None)?)
         .item(&item("import-kit", "Import Samples as a Kit…", None)?)
+        .item(&item("clean-samples", "Remove Unused Samples…", None)?)
         .separator()
         .item(&item("export-wav", "Export WAV…", None)?)
         .item(&item("export-stems", "Export WAV and Track Stems…", None)?)
@@ -348,7 +389,10 @@ fn main() {
             project_dir,
             import_samples,
             import_dropped,
-            list_samples,
+            list_library,
+            clean_samples,
+            read_sample,
+            pick_library,
             import_kit,
             import_dropped_kit,
             sample_peaks,

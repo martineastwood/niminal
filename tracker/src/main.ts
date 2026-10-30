@@ -14,7 +14,7 @@ import { shortcutSections } from './shortcuts';
 import { loadView, saveView, applyView, stepScale, clampFont, dragWidth, defaultView, type ViewPrefs } from './view';
 import { SamplePanel } from './waveform';
 import { pieceKey } from './slices';
-import { SoundBrowser, type SoundKind, type SoundBrowserActions, type SamplePeaks } from './soundbrowser';
+import { SoundBrowser, type SoundKind, type SoundBrowserActions } from './soundbrowser';
 import type { Dragged } from './drag';
 import { instrumentPresets, effectPresets, type Preset } from './library';
 import { emptyProject, columnCount, emptyFxLane, blankColumn, type Device, readProject, dropUnusedPatterns, storageKey, maxReturns, resizePattern, removeTrack, restoreTrack, moveTrack, duplicateTrack, trackSource, type Definition, type Song, type DeletedTrack } from './project';
@@ -464,16 +464,63 @@ function addEffectToStrip(choice: string) {
   chosenDevice.set(deviceTrack, added.device.id); showFx(); editedPattern(); grid.render();
   if (audioStatus.connected) void action(() => ensureSound(added.definition.id));
 }
-/** The project's samples (paths relative to its folder), as the Samples tab lists them. */
-let samples: string[] = [];
+/** The folder the Samples tab browses, chosen on disk, and the audio files under it (full paths). */
+const libraryKey = 'niminal-tracker:library';
+let libraryFolder: string | null = null;
+try { libraryFolder = localStorage.getItem(libraryKey); } catch { /* no folder kept */ }
+let library: string[] = [];
 async function refreshSamples() {
-  if (!isTauri()) return;
-  try { samples = await invoke<string[]>('list_samples', { id: project.id }); } catch { samples = []; }
+  if (!isTauri() || !libraryFolder) return;
+  try { library = await invoke<string[]>('list_library', { dir: libraryFolder }); } catch { library = []; }
   soundBrowser.refresh();
 }
+async function chooseLibrary() {
+  if (!isTauri()) { status('Browsing a folder needs the desktop app'); return; }
+  const folder = await invoke<string | null>('pick_library');
+  if (!folder) return;
+  libraryFolder = folder; library = [];
+  try { localStorage.setItem(libraryKey, folder); } catch { /* not kept */ }
+  await refreshSamples();
+  status(`${folder}: ${library.length} sample${library.length === 1 ? '' : 's'}${library.length >= 5000 ? ' (the first 5000)' : ''}`);
+}
+/** The library sample being heard. The window plays it, not the engine, so it can be cut off at any time. */
+let previewContext: AudioContext | null = null;
+let heard: { path: string; source: AudioBufferSourceNode } | null = null;
+let previewRequest = 0;
+function stopSample() { previewRequest++; heard?.source.stop(); heard = null; }
+/** Plays a library sample; asking for the one already playing stops it instead. */
+async function toggleSample(path: string) {
+  const playing = heard?.path === path;
+  stopSample();
+  if (playing) return;
+  const request = previewRequest;
+  const context = previewContext ??= new AudioContext();
+  const buffer = await context.decodeAudioData(await invoke<ArrayBuffer>('read_sample', { path }));
+  if (request !== previewRequest) return;
+  const source = context.createBufferSource();
+  source.buffer = buffer; source.connect(context.destination);
+  source.onended = () => { if (heard?.source === source) heard = null; };
+  source.start();
+  heard = { path, source };
+}
+/** Copies library samples into the project, each as its own sampler. */
+async function importLibrarySamplers(paths: string[]) {
+  try { addImported(await invoke<{ file: string; seconds: number }[]>('import_dropped', { id: project.id, paths })); }
+  catch (error) { status(`Could not import the samples: ${error}`); }
+}
+/** Copies library samples into one kit folder of the project, a sample on each key from C-4. */
+async function importLibraryKit(paths: string[]) {
+  try { addImportedKit(await invoke<{ folder: string; members: string[] } | null>('import_dropped_kit', { id: project.id, paths })); }
+  catch (error) { status(`Could not import the kit: ${error}`); }
+}
+/** Copies a library sample into the project, as the samplers need it there. */
+async function importLibrarySample(item: { value: string }) {
+  const [imported] = await invoke<{ file: string; seconds: number }[]>('import_dropped', { id: project.id, paths: [sampleOf(item)] });
+  return imported;
+}
 /** What each sample looks like and how long it plays, read once. */
-const looks = new Map<string, Promise<SamplePeaks | null>>();
-function samplePeaks(file: string): Promise<SamplePeaks | null> {
+const looks = new Map<string, Promise<{ seconds: number } | null>>();
+function samplePeaks(file: string) {
   const key = `${project.id}/${file}`;
   if (!looks.has(key)) {
     looks.set(key, !isTauri() ? Promise.resolve(null) : invoke<{ frames: number; rate: number; peaks: number[] }>('sample_peaks', { id: project.id, file, buckets: 160 })
@@ -481,18 +528,21 @@ function samplePeaks(file: string): Promise<SamplePeaks | null> {
   }
   return looks.get(key)!;
 }
-/** What the browser lists: the library only. The project's own instruments have their panel above, and its effects are on the tracks. The samples are the project's own, since that is the pool to choose them from: loose ones at the top, kits as folders. */
+/** What the browser lists: the library only. The project's own instruments have their panel above, and its effects are on the tracks. The samples are the audio files under the chosen folder: loose ones at the top, subfolders as folders. */
 function browserItems(kind: SoundKind): BrowserItem[] {
-  if (kind === 'sample') return samples.map(file => {
-    const parts = file.replace(/^samples\//, '').split('/'), name = parts.pop()!.replace(/\.[^.]+$/, '');
-    return { value: `sample:${file}`, name, folder: parts.join('/'), description: file };
+  if (kind === 'sample') return library.map(path => {
+    const parts = path.slice(libraryFolder?.length ?? 0).split(/[\\/]/).filter(Boolean), name = parts.pop()!.replace(/\.[^.]+$/, '');
+    return { value: `sample:${path}`, name, folder: parts.join('/'), description: path };
   });
   return kind === 'instr' ? instrumentPresets.map(presetItem) : effectChoices(project, deviceTrack);
 }
 const sampleOf = (item: { value: string }) => item.value.slice('sample:'.length);
-/** Makes a sampler for a sample of the project. */
-async function newSampler(file: string) {
-  newInstrument(file, (await samplePeaks(file))?.seconds ?? 0);
+/** Copies a library sample into the project and makes a sampler of it, or puts it in `slot`. */
+async function bringIn(item: { value: string }, slot?: Definition) {
+  try {
+    const { file, seconds } = await importLibrarySample(item);
+    if (slot) await loadSampleIntoSlot(slot, file); else newInstrument(file, seconds);
+  } catch (error) { status(`Could not import the sample: ${error}`); }
 }
 /** Puts a sample in a slot: a sampler plays it instead of its old one, any other instrument becomes a sampler of it. */
 async function loadSampleIntoSlot(definition: Definition, file: string) {
@@ -505,8 +555,8 @@ async function loadSampleIntoSlot(definition: Definition, file: string) {
 }
 const browserActions: SoundBrowserActions = {
   audition: (kind, item) => {
+    if (kind === 'sample') { if (isTauri()) void action(() => toggleSample(sampleOf(item))); return; }
     if (!audioStatus.connected) return;
-    if (kind === 'sample') { void action(() => previewSource(samplerSource('browser_preview', sampleOf(item)), 'C-4', 2000)); return; }
     if (kind === 'fx') return; // effects are not previewed
     const preset = instrumentPresets.find(p => p.id === item.value);
     if (preset) void action(() => previewPreset(preset)); // a project instrument or a blank one has nothing to preview
@@ -515,7 +565,7 @@ const browserActions: SoundBrowserActions = {
     if (kind === 'fx') { addEffectToStrip(item.value); return; }
     // an instrument becomes the current one, and the cursor goes back to the grid to enter notes with it
     const slot = project.definitions.find(d => d.id === currentInstrument);
-    if (kind === 'sample') { if (replace && slot) void loadSampleIntoSlot(slot, sampleOf(item)); else void newSampler(sampleOf(item)); element('grid').focus(); return; }
+    if (kind === 'sample') { void bringIn(item, replace ? slot : undefined); element('grid').focus(); return; }
     const preset = instrumentPresets.find(p => p.id === item.value)!;
     if (replace && slot) loadPresetIntoSlot(slot, preset);
     else useInstrumentPreset(preset);
@@ -527,9 +577,15 @@ const browserActions: SoundBrowserActions = {
     openMenu(anchor, kind === 'fx' ? [{ text: 'Add to the selected track', run: use(false) }]
       : [{ text: kind === 'sample' ? 'New sampler' : 'Add as a new instrument', run: use(false) }, { text: `Put in "${replacing}"`, run: use(true) }]);
   },
-  manage: op => { if (op === 'kit') void importKit(); else void importSamples(); },
-  peaks: item => item.value.startsWith('sample:') ? samplePeaks(sampleOf(item)) : Promise.resolve(null),
-  leave: () => {},
+  group: (items, anchor) => {
+    const paths = items.map(sampleOf), plural = `${paths.length} samples`;
+    openMenu(anchor, [
+      { text: `${plural} as one kit`, run: () => void importLibraryKit(paths) },
+      { text: `${plural} as a sampler each`, run: () => void importLibrarySamplers(paths) },
+    ]);
+  },
+  manage: op => { if (op === 'folder') void chooseLibrary(); else if (op === 'kit') void importKit(); else void importSamples(); },
+  leave: () => { stopSample(); if (audioStatus.connected) void action(() => audioCommand({ op: 'audition_stop' })); },
 };
 const soundBrowser = new SoundBrowser(element('sound-browser'), browserItems, browserActions, () => element('grid').focus());
 /** The effects list at the bottom left of the dock, under the sequence bar, which adds to the selected track's chain. */
@@ -573,7 +629,7 @@ const projectPanel = new ProjectPanel(element('project-panel'),
 /** A row of the browser dropped on an instrument of the project (which it replaces) or on the empty space of the list (which adds it). */
 function dropOnSlot(item: Dragged, id: string | null) {
   const slot = id ? project.definitions.find(d => d.id === id) : undefined;
-  if (item.kind === 'sample') { const file = sampleOf(item); if (slot) { selectDefinition(slot, false); void loadSampleIntoSlot(slot, file); } else void newSampler(file); return; }
+  if (item.kind === 'sample') { if (slot) selectDefinition(slot, false); void bringIn(item, slot); return; }
   const preset = instrumentPresets.find(p => p.id === item.value);
   if (!preset) return;
   if (slot) { selectDefinition(slot, false); loadPresetIntoSlot(slot, preset); } else useInstrumentPreset(preset);
@@ -873,6 +929,16 @@ async function importSamples() {
   if (!isTauri()) { status('Importing samples needs the desktop app'); return; }
   try { addImported(await invoke<{ file: string; seconds: number }[]>('import_samples', { id: project.id })); }
   catch (error) { status(`Could not import samples: ${error}`); }
+}
+/** Every string in the project: the code that may name a sample. */
+const strings = (value: unknown): string[] => typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.values(value).flatMap(strings) : [];
+/** Deletes the samples of the project that no instrument plays, once the user agrees. */
+async function cleanSamples() {
+  if (!isTauri()) { status('Cleaning samples needs the desktop app'); return; }
+  try {
+    const count = await invoke<number>('clean_samples', { id: project.id, code: strings(project).join('\n') });
+    status(count ? `Removed ${count} unused sample${count === 1 ? '' : 's'}` : 'No unused samples removed');
+  } catch (error) { status(`Could not clean samples: ${error}`); }
 }
 /** Several audio files as one instrument with a sample on each key from C-4. */
 async function importKit() {
@@ -1183,6 +1249,7 @@ const menuActions: Record<string, () => void> = {
   save: () => element('export').click(),
   'import-samples': () => void importSamples(),
   'import-kit': () => void importKit(),
+  'clean-samples': () => void cleanSamples(),
   'export-wav': () => void exportAudio(false),
   'export-stems': () => void exportAudio(true),
   undo: () => undoProject(),
@@ -1235,7 +1302,7 @@ const commands: Command[] = ([
   ['Code font larger', 'code-font-larger'], ['Code font smaller', 'code-font-smaller'], ['Code font actual size', 'code-font-reset'],
   ['High contrast on or off', 'contrast'],
   ['New project', 'new'], ['Open project', 'open', 'Cmd/Ctrl+O'], ['Save project', 'save', 'Cmd/Ctrl+S'],
-  ['Import samples', 'import-samples'], ['Import samples as a kit', 'import-kit'], ['Export WAV', 'export-wav'], ['Export WAV and track stems', 'export-stems'],
+  ['Import samples', 'import-samples'], ['Import samples as a kit', 'import-kit'], ['Remove unused samples', 'clean-samples'], ['Export WAV', 'export-wav'], ['Export WAV and track stems', 'export-stems'],
   ['Restart engine connection', 'reconnect'], ['Keyboard shortcuts', 'shortcuts', 'Cmd/Ctrl+/'],
 ] as [string, string, string?][]).map(([label, id, keys]) => ({ label, keys, run: () => menuActions[id]() }));
 // Keys that work wherever focus is. Zoom is the menu's in the app, where the menu takes the keys first.

@@ -87,6 +87,8 @@ pub enum Command {
         commands: Vec<String>,
     },
     Stop,
+    /// Cuts off auditioned notes (the sound browser's preview) without touching playback.
+    AuditionStop,
     /// The tracker is closing: stop the sound and the engine it started.
     Quit,
     /// Whether the mixer view needs every strip's scope; the master's is always on.
@@ -670,12 +672,17 @@ impl Worker {
                 let events = (0..hits)
                     .map(|hit| {
                         let at = if hits > 1 { json!(start + (f64::from(hit) * f64::from(ms) / f64::from(hits) / 1000.0 * self.status.sample_rate) as u64) } else { json!("now") };
-                        json!({"op":"note", "at":at, "target":target, "to":format!("in_{track}"), "dur":format!("{}ms", ms / hits), "args":retrigger.map_or_else(|| args.clone(), |r| hit_args(&args, r.gain(hit), self.status.instrument_parameters.get(&instrument).map_or(&[], Vec::as_slice)))})
+                        json!({"op":"note", "at":at, "tag":"tracker-audition", "target":target, "to":format!("in_{track}"), "dur":format!("{}ms", ms / hits), "args":retrigger.map_or_else(|| args.clone(), |r| hit_args(&args, r.gain(hit), self.status.instrument_parameters.get(&instrument).map_or(&[], Vec::as_slice)))})
                     })
                     .collect();
                 self.send_events(events)?;
             }
             Command::Stop => self.stop()?,
+            Command::AuditionStop => {
+                if self.client.is_some() {
+                    self.call("events.cancel", json!({"tag":"tracker-audition", "from":"now", "release":true}))?;
+                }
+            }
             Command::Quit => {
                 let result = self.stop();
                 self.client = None;

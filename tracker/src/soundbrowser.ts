@@ -4,10 +4,8 @@ import { draggable } from './drag';
 export type SoundKind = 'instr' | 'sample' | 'fx';
 
 /** What the buttons under the list do. */
-export type ManageOp = 'import' | 'kit';
+export type ManageOp = 'folder' | 'import' | 'kit';
 
-/** The waveform of a sample for drawing (two numbers, lowest and highest, for each stretch), and how long it plays. */
-export interface SamplePeaks { peaks: number[]; seconds: number }
 
 export interface SoundBrowserActions {
   /** Hears an item: called as the selection moves, after a short pause so scrolling past does not play everything. */
@@ -16,11 +14,11 @@ export interface SoundBrowserActions {
   pick(kind: SoundKind, item: BrowserItem, replace: boolean): void;
   /** The "⋯" button of a row, or a right-click on it: opens a menu of what can be done to the item, under `anchor`. */
   menu(kind: SoundKind, item: BrowserItem, anchor: HTMLElement): void;
+  /** Several samples at once (Cmd/Ctrl-clicked rows, or the samples directly in a folder): opens a menu of what can be done with them, under `anchor`. */
+  group(items: BrowserItem[], anchor: HTMLElement): void;
   /** One of the buttons under the list. */
   manage(op: ManageOp, kind: SoundKind): void;
-  /** What a sample looks like, for the thumbnail beside its name (asked again at every redraw, so keep what was read). */
-  peaks(item: BrowserItem): Promise<SamplePeaks | null>;
-  /** The browser lost focus or was dismissed: stop any preview. */
+  /** Stop any preview: the browser lost focus, was dismissed, or the playing sample was clicked again. */
   leave(): void;
 }
 
@@ -32,7 +30,7 @@ const favouritesKey = 'niminal-tracker-favourites';
 const labels: [SoundKind, string][] = [['instr', 'Instruments'], ['sample', 'Samples'], ['fx', 'Effects']];
 const buttons: Record<SoundKind, [ManageOp, string, string][]> = {
   instr: [],
-  sample: [['import', 'Import files…', 'Add audio files to the project, one sampler each'], ['kit', 'Import as kit…', 'Add audio files as one instrument with a sample on each key']],
+  sample: [['folder', 'Choose folder…', 'Browse the audio files in a folder on disk'], ['import', 'Import files…', 'Add audio files to the project, one sampler each'], ['kit', 'Import as kit…', 'Add audio files as one instrument with a sample on each key']],
   fx: [],
 };
 
@@ -48,6 +46,8 @@ export class SoundBrowser {
   /** The folder the cursor is on, when it is on one rather than on an item. */
   private folderCursor: string | null = null;
   private selected: BrowserItem | null = null;
+  /** Samples picked together with Cmd/Ctrl-click or Shift-click, to be used as a group. */
+  private readonly marked = new Set<string>();
   private timer: number | undefined;
   private readonly list = document.createElement('div');
   private readonly search = document.createElement('input');
@@ -82,7 +82,7 @@ export class SoundBrowser {
 
   /** Switches tab and puts the cursor in the search box, ready to type or move down. */
   show(kind: SoundKind, focus = true) {
-    this.kind = kind; this.selected = null; this.folderCursor = null; this.hint.textContent = ''; this.query = ''; this.search.value = '';
+    this.kind = kind; this.selected = null; this.marked.clear(); this.folderCursor = null; this.hint.textContent = ''; this.query = ''; this.search.value = '';
     this.render();
     if (focus) this.search.focus();
   }
@@ -132,29 +132,6 @@ export class SoundBrowser {
     this.render();
   }
 
-  /** Draws a sample's waveform into a thumbnail, once it has been read. */
-  private thumbnail(item: BrowserItem, canvas: HTMLCanvasElement, label: HTMLElement) {
-    const draw = (look: SamplePeaks | null) => {
-      if (!look) return;
-      label.textContent = look.seconds < 10 ? `${look.seconds.toFixed(1)}s` : `${Math.round(look.seconds)}s`;
-      // the bitmap is as big as the thumbnail is shown, so it is drawn sharp rather than stretched
-      const ratio = (typeof devicePixelRatio === 'number' ? devicePixelRatio : 1) || 1, box = canvas.getBoundingClientRect();
-      if (box.width > 0) { canvas.width = Math.round(box.width * ratio); canvas.height = Math.round(box.height * ratio); }
-      const context = canvas.getContext?.('2d');
-      if (!context) return;
-      context.fillStyle = getComputedStyle(canvas).color || '#9aa';
-      const buckets = look.peaks.length / 2, mid = canvas.height / 2, loudest = Math.max(0.05, ...look.peaks.map(Math.abs));
-      for (let x = 0; x < canvas.width; x++) {
-        const from = Math.floor(x * buckets / canvas.width), to = Math.max(from + 1, Math.floor((x + 1) * buckets / canvas.width));
-        let low = 0, high = 0;
-        for (let b = from; b < Math.min(to, buckets); b++) { low = Math.min(low, look.peaks[b * 2]); high = Math.max(high, look.peaks[b * 2 + 1]); }
-        const top = mid - (high / loudest) * mid * 0.95, bottom = mid - (low / loudest) * mid * 0.95;
-        context.fillRect(x, top, 1, Math.max(1, bottom - top));
-      }
-    };
-    void this.actions.peaks(item).then(look => { if (canvas.isConnected) draw(look); }, () => {});
-  }
-
   private render() {
     for (const [kind, tab] of this.tabs) tab.setAttribute('aria-selected', String(kind === this.kind));
     this.tools.replaceChildren();
@@ -165,27 +142,26 @@ export class SoundBrowser {
     const top = this.list.scrollTop;
     this.list.replaceChildren();
     const rows = this.rows();
-    if (!rows.length) { const none = document.createElement('div'); none.className = 'sb-none'; none.textContent = this.kind === 'sample' && !this.query.trim() ? 'No samples yet: drop audio files here, or import them below' : 'Nothing matches'; this.list.append(none); }
+    if (!rows.length) { const none = document.createElement('div'); none.className = 'sb-none'; none.textContent = this.kind === 'sample' && !this.query.trim() ? 'Choose a folder of samples below, or drop audio files here' : 'Nothing matches'; this.list.append(none); }
     for (const row of rows) {
       if ('folder' in row) {
         const open = this.isOpen(row.folder);
         const head = document.createElement('button'); head.className = 'sb-folder'; head.tabIndex = -1; head.textContent = `${open ? '▾' : '▸'} ${row.name}`;
         head.setAttribute('aria-selected', String(row.folder === this.folderCursor)); head.style.paddingLeft = `${6 + row.depth * 12}px`;
+        head.oncontextmenu = event => {
+          const inside = this.items(this.kind).filter(item => `/${item.folder}` === row.folder);
+          if (this.kind === 'sample' && inside.length) { event.preventDefault(); this.actions.group(inside, head); }
+        };
         head.onclick = () => { this.folderCursor = row.folder; this.selected = null; this.hint.textContent = ''; this.toggle(row.folder); this.search.focus(); };
         this.list.append(head);
         continue;
       }
       const { item } = row;
-      const button = document.createElement('div'); button.className = this.kind === 'sample' ? 'sb-item sb-sample' : 'sb-item'; button.tabIndex = -1; button.setAttribute('role', 'option');
-      button.setAttribute('aria-selected', String(item.value === this.selected?.value)); button.title = item.description ?? '';
+      const button = document.createElement('div'); button.className = 'sb-item'; button.tabIndex = -1; button.setAttribute('role', 'option');
+      button.setAttribute('aria-selected', String(this.marked.size ? this.marked.has(item.value) : item.value === this.selected?.value)); button.title = item.description ?? '';
       button.style.paddingLeft = `${6 + row.depth * 12}px`;
       const name = document.createElement('span'); name.className = 'sb-name'; name.textContent = item.name; button.append(name);
       if ((row.path || item.note) && this.kind !== 'sample') { const where = document.createElement('span'); where.className = 'browser-path'; where.textContent = row.path || item.note!; button.append(where); }
-      if (this.kind === 'sample') {
-        const canvas = document.createElement('canvas'); canvas.className = 'sb-thumb'; canvas.width = 160; canvas.height = 36;
-        const seconds = document.createElement('span'); seconds.className = 'browser-path sb-seconds';
-        button.append(canvas, seconds); this.thumbnail(item, canvas, seconds);
-      }
       const key = this.starKey(item);
       if (key) {
         const star = document.createElement('button'); star.className = 'sb-star'; star.tabIndex = -1; star.dataset.noDrag = ''; star.setAttribute('aria-label', 'Favourite'); star.setAttribute('aria-pressed', String(this.favourites.has(key)));
@@ -194,11 +170,11 @@ export class SoundBrowser {
       }
       const more = document.createElement('button'); more.className = 'sb-more'; more.tabIndex = -1; more.dataset.noDrag = ''; more.setAttribute('aria-label', 'More actions');
       // the menu opens before the row is selected: selecting draws the list again, which would take the anchor out of the page
-      more.onclick = event => { event.stopPropagation(); this.actions.menu(this.kind, item, more); this.select(item, true); };
+      more.onclick = event => { event.stopPropagation(); this.menuFor(item, more); };
       button.append(more);
-      button.onclick = () => { this.select(item, true); this.search.focus(); };
+      button.onclick = event => { this.click(item, event); this.search.focus(); };
       button.ondblclick = event => this.actions.pick(this.kind, item, event.shiftKey);
-      button.oncontextmenu = event => { event.preventDefault(); this.actions.menu(this.kind, item, button); this.select(item, true); };
+      button.oncontextmenu = event => { event.preventDefault(); this.menuFor(item, button); };
       if (this.kind !== 'fx') draggable(button, () => ({ kind: this.kind as 'instr' | 'sample', value: item.value, name: item.name }));
       this.list.append(button);
     }
@@ -206,10 +182,37 @@ export class SoundBrowser {
     this.list.querySelector('[aria-selected=true]')?.scrollIntoView?.({ block: 'nearest' });
   }
 
+  /** The marked samples, in the order they are listed. */
+  private markedItems() { return this.items(this.kind).filter(item => this.marked.has(item.value)); }
+
+  /** A click on a sample row: Cmd/Ctrl adds or removes it from the group, Shift marks the rows from the selected one to it, a plain click selects (and plays) just it. */
+  private click(item: BrowserItem, event: MouseEvent) {
+    if (this.kind !== 'sample' || !(event.metaKey || event.ctrlKey || event.shiftKey)) { this.select(item, true); return; }
+    clearTimeout(this.timer);
+    if (event.shiftKey && this.selected) {
+      const shown = this.rows().flatMap(row => 'item' in row ? [row.item.value] : []);
+      const [from, to] = [shown.indexOf(this.selected.value), shown.indexOf(item.value)].sort((a, b) => a - b);
+      if (from >= 0) { this.marked.clear(); for (const value of shown.slice(from, to + 1)) this.marked.add(value); this.render(); return; }
+    }
+    if (!this.marked.size && this.selected) this.marked.add(this.selected.value);
+    if (!this.marked.delete(item.value)) this.marked.add(item.value);
+    this.selected = item; this.folderCursor = null; this.hint.textContent = item.description ?? '';
+    this.render();
+  }
+
+  /** The "⋯" button or right-click of a row: the group's menu when the row is one of several marked, else the row's own. */
+  private menuFor(item: BrowserItem, anchor: HTMLElement) {
+    if (this.marked.size > 1 && this.marked.has(item.value)) { this.actions.group(this.markedItems(), anchor); return; }
+    this.actions.menu(this.kind, item, anchor); this.select(item, true);
+  }
+
   private select(item: BrowserItem, immediately = false) {
+    this.marked.clear();
     this.selected = item; this.folderCursor = null; this.hint.textContent = item.description ?? '';
     this.render();
     clearTimeout(this.timer);
+    // samples can be long loops, so moving over them stays silent: click or Space plays (and stops it again), Esc stops
+    if (this.kind === 'sample' && !immediately) return;
     this.timer = window.setTimeout(() => this.actions.audition(this.kind, item), immediately ? 0 : pause);
   }
 
@@ -232,11 +235,12 @@ export class SoundBrowser {
     else if (event.key === 'Enter') {
       event.preventDefault();
       if (this.folderCursor) this.toggle(this.folderCursor);
+      else if (this.marked.size > 1) this.actions.group(this.markedItems(), this.list);
       else if (this.selected) this.actions.pick(this.kind, this.selected, event.shiftKey);
       else this.move(1);
     }
     else if ((event.key === 'ArrowRight' || event.key === 'ArrowLeft') && this.folderCursor && !this.query.trim()) { event.preventDefault(); this.toggle(this.folderCursor, event.key === 'ArrowRight'); }
     else if (event.key === ' ' && this.selected && (event.target as HTMLElement).tagName !== 'INPUT') { event.preventDefault(); this.select(this.selected, true); }
-    else if (event.key === 'Escape') { event.preventDefault(); clearTimeout(this.timer); this.actions.leave(); focusGrid(); }
+    else if (event.key === 'Escape') { event.preventDefault(); this.marked.clear(); clearTimeout(this.timer); this.actions.leave(); focusGrid(); }
   }
 }

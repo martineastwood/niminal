@@ -190,7 +190,7 @@
     },
     {
       "name": "keyword.control.niminal",
-      "match": "\\b(instr|mono|fn|def|const|bus|buffer|ctl|node|fx|config|clip|scene|arrangement|kit|events|macro|midi_out|over|meter|tempo|state|use|unsolo|hush|panic|reset|reset_on|after|new|at|next|now|on|if|else|match|for|in|and|or|not|init|control|as|capture|last|spawn|oversample|sample|env|cycle)\\b"
+      "match": "\\b(instr|mono|fn|def|const|bus|buffer|ctl|node|fx|config|clip|scene|arrangement|kit|events|macro|midi_out|over|meter|tempo|state|use|unsolo|hush|panic|reset|reset_on|after|new|at|next|now|on|if|else|match|for|in|and|or|not|init|control|as|capture|last|spawn|oversample|sample|sfz|env|cycle)\\b"
     },
     {
       "name": "keyword.control.command.niminal",

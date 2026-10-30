@@ -1,6 +1,6 @@
 ---
 title: Samples
-description: WAV samples, kits, slices, and playing them from patterns.
+description: WAV samples, kits, slices, SFZ multisamples, and playing them from patterns.
 ---
 
 **Compiled by niminal.** Samples and kits are loaded and played by the server.
@@ -12,6 +12,7 @@ description: WAV samples, kits, slices, and playing them from patterns.
 | `sample(...)` | A playable WAV file, or a table |
 | `kit(...)` | A folder of WAVs by name |
 | `kit { name: instrument, ... }` | Named sample or synth instruments in one kit |
+| `sfz(...)` | An SFZ multisample: many recordings spread across the keys and velocities |
 | `.slices(n)` | The slices of a sample, as a kit: `n` equal pieces, or `.slices([0, 0.18, 0.43])` for pieces that start at those shares of its length (0 up to 1, each later than the one before) and run to the next |
 
 ```nml
@@ -269,6 +270,46 @@ For clocked fragments, set `density: 0hz` and feed pulses to `trigger`. For cont
 
 See `examples/granular.nml` for accented fragments, independent readers, synchronized masks and trainlets. The [full granular reference](/reference/language/granular/) covers all four sources, timing distributions, layered envelopes, routing, mask cursors and clock outputs.
 
+### SFZ multisamples
+
+An SFZ file maps recordings onto keys and velocities, so a piano, a string section or a kit of round-robin drums plays like the instrument it was sampled from:
+
+```nml
+piano = sfz("piano/grand.sfz")
+
+clip melody {
+  instrument: piano
+  notes: [c3 e3 g3 c4]
+}
+melody.start
+```
+
+The path is relative to the file that declares it, and the audio paths inside the SFZ file are relative to the `.sfz` file (`default_path` and `#include` work). An SFZ instrument is a sampler like any other: a clip can play it, and an `instr` can call it with `piano(freq: freq)`. Its only option is `.interp(sinc)`; everything else comes from the file.
+
+A note picks every region whose key and velocity ranges it falls in, and plays them together. The key is the note rounded to a semitone. The velocity is the instrument's `vel` parameter, from 0 to 1 (1 is the hardest, velocity 127). It is separate from `gain`, which only sets how loud the result is, so a quiet note can still use the loud layers. Set it in a clip with a note control, or from an `instr` that calls the sampler:
+
+```nml
+instr soft_piano(freq: hz) { piano(freq: freq, vel: 0.3) }
+```
+
+| Opcode | Support |
+| --- | --- |
+| `sample`, `default_path`, `#define`, `#include`, `<control>`, `<global>`, `<master>`, `<group>`, `<region>` | Yes. Headers pass their opcodes down to the regions below them, and a sample path may contain spaces |
+| `key`, `lokey`, `hikey`, `pitch_keycenter` | Yes, as numbers or note names (`c4` is 60). `pitch_keycenter=sample` uses the root key stored in a WAV file |
+| `lovel`, `hivel` | Yes |
+| `lorand`, `hirand` | Yes. Each note draws one random number, shared by all its regions |
+| `seq_length`, `seq_position` | Yes. Regions on the same keys and velocities take turns, a count for each set of keys |
+| `tune`, `transpose`, `pitch_keytrack` | Yes (`pitch_keytrack=0` plays every key at the recorded pitch, for drums) |
+| `volume`, `amplitude` | Yes |
+| `offset`, `end` | Yes, in frames |
+| `loop_mode`, `loop_start`, `loop_end` | `no_loop`, `one_shot` and `loop_continuous` (`loop_sustain` loops the same way). A region with no `loop_mode` loops if its WAV file stores a loop |
+| `ampeg_delay`, `_attack`, `_hold`, `_decay`, `_sustain`, `_release` | Yes. A note that ends fades over `ampeg_release`, at least 3ms, and a `one_shot` region ignores the end of the note |
+| `group`, `off_by` | Yes. A note in a group fades out the regions whose `off_by` names it, over 6ms, so closed hats cut open hats. A group can name itself |
+| `trigger=release`, `sw_last` | Left out. Release-triggered regions are skipped, and keyswitched regions play only when `sw_default` names their switch |
+| `polyphony`, filters, `pan`, `amp_veltrack`, crossfades, curves, effects | Ignored |
+
+A note plays at most 16 regions at once. Samples are decoded and held in memory when the piece loads, so a large library takes a moment to load the first time and then comes from the cache.
+
 ## Built-in DSP
 
-For filters, delay, reverb, compression, chorus, pan and math on any signal (including sample output), see [Built-in opcodes](/reference/opcodes/). Convolution (`convolve`), real-time pitch shifting (`pitch_shift`), spectral freeze (`spectral_freeze`) and spectral delay (`spectral_delay`) are also available. SFZ multisamples are not in the language yet.
+For filters, delay, reverb, compression, chorus, pan and math on any signal (including sample output), see [Built-in opcodes](/reference/opcodes/). Convolution (`convolve`), real-time pitch shifting (`pitch_shift`), spectral freeze (`spectral_freeze`) and spectral delay (`spectral_delay`) are also available.

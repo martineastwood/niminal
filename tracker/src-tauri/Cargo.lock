@@ -2175,6 +2175,7 @@ dependencies = [
 name = "niminal-tracker"
 version = "0.0.1"
 dependencies = [
+ "hound",
  "midir",
  "niminal-compose",
  "niminal-lang",

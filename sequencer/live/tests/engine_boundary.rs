@@ -90,6 +90,13 @@ fn metering_reports_how_loud_each_node_is_by_name() {
         live.advance();
     }
     let levels = live.take_levels();
-    assert!(levels.nodes.get("beat").is_some_and(|l| *l > 0.1), "{levels:?}");
-    assert_eq!(live.take_levels().nodes["beat"], 0.0, "reading resets them but keeps the name");
+    assert!(
+        levels.nodes.get("beat").is_some_and(|l| *l > 0.1),
+        "{levels:?}"
+    );
+    assert_eq!(
+        live.take_levels().nodes["beat"],
+        0.0,
+        "reading resets them but keeps the name"
+    );
 }

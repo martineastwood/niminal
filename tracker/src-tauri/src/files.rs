@@ -45,6 +45,15 @@ pub fn import_sample(dir: &Path, source: &Path) -> Result<String, String> {
         .collect();
     let samples = dir.join("samples");
     fs::create_dir_all(&samples).map_err(|e| e.to_string())?;
+    // a file already imported, byte for byte, is reused instead of copied again
+    let size = fs::metadata(source).map_err(|e| e.to_string())?.len();
+    let bytes = fs::read(source).map_err(|e| e.to_string())?;
+    for entry in fs::read_dir(&samples).map_err(|e| e.to_string())?.flatten() {
+        let path = entry.path();
+        if path.is_file() && entry.metadata().is_ok_and(|m| m.len() == size) && fs::read(&path).is_ok_and(|existing| existing == bytes) {
+            return Ok(format!("samples/{}", entry.file_name().to_string_lossy()));
+        }
+    }
     let mut name = format!("{stem}.{extension}");
     for n in 2.. {
         if !samples.join(&name).exists() {
@@ -54,6 +63,49 @@ pub fn import_sample(dir: &Path, source: &Path) -> Result<String, String> {
     }
     fs::copy(source, samples.join(&name)).map_err(|e| e.to_string())?;
     Ok(format!("samples/{name}"))
+}
+
+/// The audio files under the project's `samples` folder (relative to the project) that nothing in `code` plays: a file
+/// is used when its path appears there, or, for a kit, when its folder does.
+pub fn unused_samples(dir: &Path, code: &str) -> Vec<String> {
+    fn walk(base: &Path, folder: &Path, found: &mut Vec<String>) {
+        let Ok(entries) = fs::read_dir(folder) else { return };
+        for path in entries.flatten().map(|e| e.path()) {
+            if path.is_dir() {
+                walk(base, &path, found);
+            } else if let (true, Ok(relative)) = (niminal_lang::is_audio(&path), path.strip_prefix(base)) {
+                found.push(relative.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    let mut all = Vec::new();
+    walk(dir, &dir.join("samples"), &mut all);
+    all.sort();
+    all.retain(|file| {
+        let folder = file.rsplit_once('/').map_or("", |(folder, _)| folder);
+        !code.contains(file.as_str()) && !(folder != "samples" && code.contains(&format!("\"{folder}\"")))
+    });
+    all
+}
+
+/// Deletes `files` (relative to the project, under `samples`) and any folder that is left empty.
+pub fn delete_samples(dir: &Path, files: &[String]) -> Result<(), String> {
+    let samples = dir.join("samples");
+    for file in files {
+        let path = dir.join(file);
+        if !path.starts_with(&samples) || file.contains("..") {
+            return Err(format!("{file} is not a sample of the project"));
+        }
+        fs::remove_file(&path).map_err(|e| e.to_string())?;
+        let mut folder = path.parent();
+        while let Some(parent) = folder.filter(|f| *f != samples && f.starts_with(&samples)) {
+            if fs::remove_dir(parent).is_err() {
+                break;
+            }
+            folder = parent.parent();
+        }
+    }
+    Ok(())
 }
 
 /// A name made of letters, digits and underscores, as a sample in a kit needs to be named in a pattern.
@@ -100,24 +152,6 @@ pub fn import_kit(dir: &Path, sources: &[PathBuf], name: &str) -> Result<(String
     }
     filenames.sort_by(|a, b| a.0.cmp(&b.0));
     Ok((format!("samples/{folder}"), filenames.into_iter().map(|(_, member)| member).collect()))
-}
-
-/// Every audio file under the project's `samples` folder, as paths relative to the project folder, in name order.
-pub fn list_samples(dir: &Path) -> Vec<String> {
-    fn walk(base: &Path, folder: &Path, found: &mut Vec<String>) {
-        let Ok(entries) = fs::read_dir(folder) else { return };
-        for path in entries.flatten().map(|e| e.path()) {
-            if path.is_dir() {
-                walk(base, &path, found);
-            } else if let (true, Ok(relative)) = (niminal_lang::is_audio(&path), path.strip_prefix(base)) {
-                found.push(relative.to_string_lossy().replace('\\', "/"));
-            }
-        }
-    }
-    let mut found = Vec::new();
-    walk(dir, &dir.join("samples"), &mut found);
-    found.sort();
-    found
 }
 
 /// Copies every file in `from` into `to`, replacing files of the same name.
@@ -167,6 +201,25 @@ mod tests {
     }
 
     #[test]
+    fn unused_samples_are_found_and_removed_with_their_empty_folders() {
+        let base = scratch("clean");
+        let dir = project_dir(&base, "clean").unwrap();
+        for file in ["kick.wav", "snare.wav", "kit/a.wav", "kit/b.wav", "old/c.wav"] {
+            fs::create_dir_all(dir.join("samples").join(file).parent().unwrap()).unwrap();
+            fs::write(dir.join("samples").join(file), b"RIFF").unwrap();
+        }
+        fs::write(dir.join("samples/notes.txt"), b"x").unwrap();
+        let code = r#"k = sample("samples/kick.wav") d = kit("samples/kit")"#;
+        let unused = unused_samples(&dir, code);
+        assert_eq!(unused, ["samples/old/c.wav", "samples/snare.wav"]);
+        assert!(delete_samples(&dir, &["../x".into()]).is_err());
+        delete_samples(&dir, &unused).unwrap();
+        assert!(!dir.join("samples/old").exists() && !dir.join("samples/snare.wav").exists());
+        assert!(dir.join("samples/kit/a.wav").exists() && dir.join("samples/notes.txt").exists() && dir.join("samples").exists());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
     fn samples_are_copied_in_with_safe_unique_names() {
         let base = scratch("files");
         let dir = project_dir(&base, "abc-123").unwrap();
@@ -176,10 +229,12 @@ mod tests {
             import_sample(&dir, &original).unwrap(),
             "samples/Kick_Drum_.wav"
         );
-        assert_eq!(
-            import_sample(&dir, &original).unwrap(),
-            "samples/Kick_Drum_-2.wav"
-        );
+        // the same bytes again reuse the file; a different file of the same name gets a new one
+        assert_eq!(import_sample(&dir, &original).unwrap(), "samples/Kick_Drum_.wav");
+        let other = base.join("other");
+        fs::create_dir_all(&other).unwrap();
+        fs::write(other.join("Kick Drum!.WAV"), b"RIFF2").unwrap();
+        assert_eq!(import_sample(&dir, &other.join("Kick Drum!.WAV")).unwrap(), "samples/Kick_Drum_-2.wav");
         assert!(dir.join("samples/Kick_Drum_.wav").exists());
         assert!(import_sample(&dir, &base.join("notes.txt")).is_err());
         assert!(project_dir(&base, "../escape").is_err());
@@ -192,7 +247,6 @@ mod tests {
         assert_eq!(import_kit(&dir, std::slice::from_ref(&original), "My kit!").unwrap().0, "samples/My_kit__2");
         assert!(import_kit(&dir, &[base.join("notes.txt")], "x").is_err() && import_kit(&dir, &[], "x").is_err());
         assert_eq!(member_name("808 kick"), "s808_kick");
-        assert_eq!(list_samples(&dir), ["samples/Kick_Drum_-2.wav", "samples/Kick_Drum_.wav", "samples/My_kit_/Kick_Drum_.wav", "samples/My_kit_/Kick_Drum__2.wav", "samples/My_kit_/snare.wav", "samples/My_kit__2/Kick_Drum_.wav"]);
 
         let package = base.join("package");
         copy_samples(&dir.join("samples"), &package.join("samples")).unwrap();

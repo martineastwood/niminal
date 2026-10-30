@@ -1,0 +1,29 @@
+// Listen to the carrier, the donor, then the carrier with the donor's broad resonances.
+// Evaluate the whole file in VS Code; + times restart the sequence whenever you submit it.
+// No external samples needed. Replace either source with a recording to explore found sounds.
+// niminal-live render examples/envelope_transfer.nml --out /tmp/envelope_transfer.wav
+use std/spectral
+
+tempo 100bpm
+
+// mode chooses what you hear:
+//   0: carrier alone — two slightly detuned saws, providing pitch and harmonic detail.
+//   1: donor alone — a noise scrape with resonances around 700hz and 2400hz.
+//   2: hybrid — the carrier shaped by the donor's broad spectral envelope.
+//      The carrier keeps its phase and fine harmonic detail; the donor supplies colour and level.
+// In mode 2, amount: 1 applies the full transfer, 0 returns the carrier, and 0.5 blends halfway.
+// detail: 40 controls envelope smoothing: larger values retain narrower spectral features.
+// mode is fixed when each note starts; amount can change while it sounds.
+instr hybrid(freq: hz = a2, mode: init 0..2 = 2, amount: 0..1 = 1) {
+  carrier = (osc(saw, freq) + osc(saw, freq * 1.003)) * 0.08
+  scrape = noise(seed: 42) * env[0 30ms 1 600ms 0.15 | 150ms 0]
+  donor = scrape.bpf(cutoff: 700hz, res: 0.8) + scrape.bpf(cutoff: 2400hz, res: 0.75) * 0.5
+  transformed = envelope_transfer(carrier, donor, amount: amount, detail: 40)
+  out = (carrier * (mode == 0) + donor * (mode == 1) + transformed * (mode == 2)) * env[0 10ms 1 | 150ms 0]
+}
+
+hybrid(mode: 0) for 2beats                                  // Original carrier at A2.
+at +3beats hybrid(mode: 1) for 2beats                        // Donor scrape on its own.
+at +6beats hybrid(mode: 2) for 2beats                        // Full transfer onto the A2 carrier.
+at +9beats hybrid(freq: d3, mode: 2) for 2beats               // Same donor colour, carrier pitched to D3.
+at +12beats hybrid(freq: a3, mode: 2, amount: 0.5) for 2beats  // A3 carrier with a gentler, halfway transfer.

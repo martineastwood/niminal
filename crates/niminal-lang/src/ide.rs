@@ -45,6 +45,7 @@ pub const RESERVED_WORDS: &[&str] = &[
     "oversample",
     "reset_on",
     "sample",
+    "sfz",
     "spawn",
     "state",
     "node",

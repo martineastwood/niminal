@@ -28,9 +28,9 @@ use niminal_server::{
 use crate::keyboard::Keyboard;
 use crate::link::EngineLink;
 use crate::log::{Expression, LiveInput, LiveLogEntry};
+use crate::quantize::{Grid, QuantizeDefaults};
 use crate::sync::{ClockIn, ClockOut, Follow};
 pub use crate::sync::{ClockMessage, Realtime};
-use crate::quantize::{Grid, QuantizeDefaults};
 
 mod eval;
 mod input;
@@ -976,7 +976,13 @@ impl Live {
         let def = self.program.controls.iter().find(|c| c.name == name);
         let binding = self.program.input(name);
         let db = control["unit"] == "db";
-        let shown = |v: f64| if db { 20.0 * v.max(f64::MIN_POSITIVE).log10() } else { v };
+        let shown = |v: f64| {
+            if db {
+                20.0 * v.max(f64::MIN_POSITIVE).log10()
+            } else {
+                v
+            }
+        };
         let range = binding
             .map(|b| (f64::from(b.lo), f64::from(b.hi)))
             .or_else(|| def.and_then(|d| d.range));
@@ -1367,7 +1373,8 @@ impl Live {
                 Ok(_) => self.asked.push(Asked { id, lands_at }),
                 Err(e) => {
                     // the engine would not take it, so it must not land here either
-                    let message = format!("change {id} was refused by the engine: {}", describe(&e));
+                    let message =
+                        format!("change {id} was refused by the engine: {}", describe(&e));
                     self.notify(message.clone());
                     self.refused.push((id, message));
                     self.pending.remove(index);
@@ -1478,7 +1485,11 @@ impl Live {
                             id: routing_id(effect),
                             args: [(
                                 control.name.clone(),
-                                if control.unit == "bars" { Value::Bars(control.value) } else { Value::Beats(control.value) },
+                                if control.unit == "bars" {
+                                    Value::Bars(control.value)
+                                } else {
+                                    Value::Beats(control.value)
+                                },
                             )]
                             .into(),
                             glide: 0.0,
@@ -1882,7 +1893,10 @@ mod level_tests {
 
     #[test]
     fn routing_ids_name_their_nodes_again() {
-        assert_eq!(routing_name(&routing_id("bass line")), Some("bass line".into()));
+        assert_eq!(
+            routing_name(&routing_id("bass line")),
+            Some("bass line".into())
+        );
         assert_eq!(routing_name("sum"), None);
     }
 
@@ -1891,7 +1905,10 @@ mod level_tests {
         let mut levels = BTreeMap::new();
         let report = serde_json::json!([{ "id": routing_id("kick"), "peaks": [0.25, 0.5] }]);
         note_peaks(&mut levels, &report);
-        note_peaks(&mut levels, &serde_json::json!([{ "id": routing_id("kick"), "peaks": [0.1, 0.2] }]));
+        note_peaks(
+            &mut levels,
+            &serde_json::json!([{ "id": routing_id("kick"), "peaks": [0.1, 0.2] }]),
+        );
         assert_eq!(levels["kick"], 0.5);
     }
 }

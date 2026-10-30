@@ -271,6 +271,8 @@ pub enum SampleSource {
     },
     /// A const table (or expression that yields one): `pad = sample(organ)`.
     Table(Expr),
+    /// An SFZ multisample: `piano = sfz("piano/piano.sfz")`.
+    Sfz(String),
 }
 
 /// `bus space` or `bus space: stereo`

@@ -484,3 +484,24 @@ fn quantize_defaults_can_be_changed() {
     let accepted = s.eval("lead.__update([c4])", None).unwrap();
     assert_eq!(accepted.lands_at, 0);
 }
+
+#[test]
+fn envelope_transfer_example_plays_all_five_sounds_after_the_clock_has_advanced() {
+    let mut s = session();
+    run(&mut s, 8 * BAR);
+    let source = niminal_lang::expand(
+        include_str!("../../../../examples/envelope_transfer.nml"),
+        std::path::Path::new("."),
+    )
+    .unwrap();
+    s.eval(&source.text, Some("now")).unwrap();
+    let beat = 28_800; // 100 bpm at 48 kHz
+    let out = run(&mut s, 15 * beat);
+    for at in [0, 3, 6, 9, 12] {
+        let start = at * beat + 4096;
+        assert!(
+            rms(&out[start..start + 8192]) > 0.005,
+            "the sound at +{at} beats did not play"
+        );
+    }
+}

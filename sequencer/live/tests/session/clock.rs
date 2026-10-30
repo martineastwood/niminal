@@ -15,7 +15,10 @@ fn clock_out_starts_on_the_next_bar_and_ticks_24_to_the_beat() {
         .map(|m| m.at)
         .collect();
     assert!(ticks.len() >= 90, "{} ticks in about a bar", ticks.len());
-    assert!(ticks.windows(2).all(|w| w[1] - w[0] == 1_000), "120bpm is a tick every 1000 samples");
+    assert!(
+        ticks.windows(2).all(|w| w[1] - w[0] == 1_000),
+        "120bpm is a tick every 1000 samples"
+    );
 }
 
 #[test]
@@ -28,8 +31,15 @@ fn clock_out_follows_a_tempo_change() {
     run(&mut s, BAR);
     let sent = s.sequencer().take_clock_out();
     let gaps: Vec<u64> = sent.windows(2).map(|w| w[1].at - w[0].at).collect();
-    assert!(gaps.iter().all(|&g| g == 1_000 || g == 2_000 || (1_900..=2_100).contains(&g)));
-    assert_eq!(*gaps.last().unwrap(), 2_000, "60bpm is a tick every 2000 samples: {gaps:?}");
+    assert!(
+        gaps.iter()
+            .all(|&g| g == 1_000 || g == 2_000 || (1_900..=2_100).contains(&g))
+    );
+    assert_eq!(
+        *gaps.last().unwrap(),
+        2_000,
+        "60bpm is a tick every 2000 samples: {gaps:?}"
+    );
 }
 
 #[test]

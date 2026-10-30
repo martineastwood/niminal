@@ -159,6 +159,53 @@ fn read_compressed(path: &Path) -> Result<Vec<Table>, String> {
         .collect())
 }
 
+/// What a WAV file says about how to play it, from its `smpl` chunk.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WavInfo {
+    /// The MIDI note at which the recording sounds as it was made.
+    pub root_key: Option<u8>,
+    /// The first loop, as frames from the first to the last one played.
+    pub loop_frames: Option<(usize, usize)>,
+}
+
+/// The playing notes a WAV file carries, or `None` if it isn't a WAV file or says nothing.
+pub fn read_wav_info(path: &Path) -> Option<WavInfo> {
+    use std::io::{Read, Seek, SeekFrom};
+    if !path.extension()?.eq_ignore_ascii_case("wav") {
+        return None;
+    }
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut head = [0_u8; 12];
+    file.read_exact(&mut head).ok()?;
+    if &head[..4] != b"RIFF" || &head[8..] != b"WAVE" {
+        return None;
+    }
+    loop {
+        let mut chunk = [0_u8; 8];
+        file.read_exact(&mut chunk).ok()?;
+        let size = u64::from(u32::from_le_bytes(chunk[4..].try_into().ok()?));
+        if &chunk[..4] != b"smpl" {
+            file.seek(SeekFrom::Current((size + (size & 1)) as i64))
+                .ok()?;
+            continue;
+        }
+        let mut body = vec![0_u8; size.min(4096) as usize];
+        file.read_exact(&mut body).ok()?;
+        let word = |at: usize| -> Option<u32> {
+            Some(u32::from_le_bytes(body.get(at..at + 4)?.try_into().ok()?))
+        };
+        let root = word(12)?;
+        let loops = word(28)?;
+        let first = (loops > 0).then(|| Some((word(44)?, word(48)?))).flatten();
+        return Some(WavInfo {
+            root_key: u8::try_from(root).ok().filter(|&k| k < 128),
+            loop_frames: first
+                .filter(|(from, to)| from < to)
+                .map(|(from, to)| (from as usize, to as usize)),
+        });
+    }
+}
+
 fn read_wav(path: &Path) -> Result<Vec<Table>, String> {
     let fail = |e: &dyn std::fmt::Display| format!("can't read {}: {e}", path.display());
     let mut reader = hound::WavReader::open(path).map_err(|e| fail(&e))?;
@@ -197,6 +244,33 @@ fn read_wav(path: &Path) -> Result<Vec<Table>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wav_says_its_root_note_and_loop() {
+        let dir = std::env::temp_dir().join(format!("niminal-smpl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut smpl = Vec::new();
+        for word in [0u32, 0, 0, 62, 0, 0, 0, 1, 0, 0, 0, 100, 900, 0, 0] {
+            smpl.extend(word.to_le_bytes());
+        }
+        let mut file = b"RIFF".to_vec();
+        let body_len = 4 + 8 + 4 + 8 + smpl.len();
+        file.extend((body_len as u32).to_le_bytes());
+        file.extend(b"WAVEdata");
+        file.extend(4_u32.to_le_bytes());
+        file.extend([0, 0, 0, 0]);
+        file.extend(b"smpl");
+        file.extend((smpl.len() as u32).to_le_bytes());
+        file.extend(smpl);
+        std::fs::write(dir.join("a.wav"), &file).unwrap();
+        let info = read_wav_info(&dir.join("a.wav")).unwrap();
+        assert_eq!(
+            (info.root_key, info.loop_frames),
+            (Some(62), Some((100, 900)))
+        );
+        assert_eq!(read_wav_info(&dir.join("b.wav")), None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn flac_preserves_channels_samples_and_rate() {

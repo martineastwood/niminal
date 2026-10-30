@@ -649,7 +649,10 @@ impl Schedule {
                             }),
                             Err(e) => {
                                 problem.get_or_insert_with(|| {
-                                    ScheduleError(format!("fx lane `{}`: {e}", crate::compile::written(name)))
+                                    ScheduleError(format!(
+                                        "fx lane `{}`: {e}",
+                                        crate::compile::written(name)
+                                    ))
                                 });
                             }
                         }
@@ -854,7 +857,11 @@ impl Schedule {
             .clip
             .plays
             .filter(|_| !segment.clip.endless)
-            .map(|n| segment.clock.seconds_at(segment.clip.length.to_f64() * f64::from(n)));
+            .map(|n| {
+                segment
+                    .clock
+                    .seconds_at(segment.clip.length.to_f64() * f64::from(n))
+            });
         match (segment.end, finish) {
             (Some(end), Some(finish)) => Some(end.min(finish)),
             (end, finish) => end.or(finish),
@@ -864,7 +871,10 @@ impl Schedule {
     /// An effect keeps the last level a clip gave its parameters, so when `segment` ends in `from..to` seconds they
     /// go back to where the effect starts, unless a clip that carries on drives the same parameter.
     fn release_controls(&self, segment: &Segment, from: f64, to: f64, out: &mut Vec<ControlSet>) {
-        let Some(end) = self.ends_at(segment).filter(|end| *end >= from && *end < to) else {
+        let Some(end) = self
+            .ends_at(segment)
+            .filter(|end| *end >= from && *end < to)
+        else {
             return;
         };
         for (name, _, glide, initial) in &segment.clip.fx_params {
@@ -894,7 +904,12 @@ impl Schedule {
             }
             for (name, _, glide, initial) in &segment.clip.fx_params {
                 if !out.iter().any(|c| &c.name == name) {
-                    out.push(ControlSet { at, name: name.clone(), target: *initial, glide: *glide });
+                    out.push(ControlSet {
+                        at,
+                        name: name.clone(),
+                        target: *initial,
+                        glide: *glide,
+                    });
                 }
             }
         }

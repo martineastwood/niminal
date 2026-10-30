@@ -65,7 +65,9 @@ pub fn transcript(entries: &[LiveLogEntry], from: u64, to: u64, sample_rate: f32
                 out.push_str(&format!("\n{}\n\n", source.trim_end()));
             }
             LiveInput::Panic => out.push_str(&format!("// {when} · panic\n\n")),
-            LiveInput::Cancel { .. } => out.push_str(&format!("// {when} · cancelled a change\n\n")),
+            LiveInput::Cancel { .. } => {
+                out.push_str(&format!("// {when} · cancelled a change\n\n"))
+            }
             LiveInput::Key { .. } | LiveInput::Expression { .. } => {}
         }
     }
@@ -91,8 +93,18 @@ mod tests {
         let log = vec![
             eval(0, "before.start", None),
             eval(100, "bass.start\n", Some("next bar")),
-            LiveLogEntry { sample: 100 + 75 * 10, input: LiveInput::Panic },
-            LiveLogEntry { sample: 150, input: LiveInput::Key { channel: 0, note: 60, velocity: 90 } },
+            LiveLogEntry {
+                sample: 100 + 75 * 10,
+                input: LiveInput::Panic,
+            },
+            LiveLogEntry {
+                sample: 150,
+                input: LiveInput::Key {
+                    channel: 0,
+                    note: 60,
+                    velocity: 90,
+                },
+            },
             eval(1000, "after.start", None),
         ];
         assert_eq!(

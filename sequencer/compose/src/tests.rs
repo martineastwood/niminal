@@ -72,7 +72,11 @@ fn controls_can_be_driven_from_midi_and_osc() {
 
 #[test]
 fn a_control_input_with_no_range_spans_zero_to_one() {
-    for source in ["ctl a = midi.cc(21)", "ctl a = midi.note(36)", "ctl a = osc_in(\"/a\")"] {
+    for source in [
+        "ctl a = midi.cc(21)",
+        "ctl a = midi.note(36)",
+        "ctl a = osc_in(\"/a\")",
+    ] {
         let p = ok(&stage(source));
         assert_eq!(p.inputs.len(), 1, "{source}");
         let binding = &p.inputs[0].1;
@@ -2761,10 +2765,12 @@ const GATED_FX: &str = "\nbus src\ninstr pluck(freq: hz) {\n  out = osc(sine, fr
 
 fn lane_values(p: &Composition, clip: &str, lane: &str) -> Vec<(f64, Value)> {
     let lanes = p.clips[clip].lane_preview(0.0);
-    let lane = lanes
-        .iter()
-        .find(|l| l.name == lane)
-        .unwrap_or_else(|| panic!("no lane `{lane}` in {:?}", lanes.iter().map(|l| &l.name).collect::<Vec<_>>()));
+    let lane = lanes.iter().find(|l| l.name == lane).unwrap_or_else(|| {
+        panic!(
+            "no lane `{lane}` in {:?}",
+            lanes.iter().map(|l| &l.name).collect::<Vec<_>>()
+        )
+    });
     lane.events.iter().map(|e| (e.start, e.value)).collect()
 }
 
@@ -2778,7 +2784,12 @@ fn an_fx_block_draws_its_rows_as_that_effects_lanes() {
     let num = Value::Num;
     assert_eq!(
         lane_values(&p, "c", "g::open"),
-        [(0.0, num(0.0)), (0.25, num(1.0)), (0.5, num(accent)), (0.75, num(ghost))]
+        [
+            (0.0, num(0.0)),
+            (0.25, num(1.0)),
+            (0.5, num(accent)),
+            (0.75, num(ghost))
+        ]
     );
     // a row that is not drawn is an ordinary lane
     assert_eq!(
@@ -2795,7 +2806,12 @@ fn steps_can_be_spaced_for_reading_and_stretch_over_the_clip() {
     let num = Value::Num;
     assert_eq!(
         lane_values(&p, "c", "g::open"),
-        [(0.0, num(1.0)), (0.5, num(0.0)), (1.0, num(0.0)), (1.5, num(1.0))]
+        [
+            (0.0, num(1.0)),
+            (0.5, num(0.0)),
+            (1.0, num(0.0)),
+            (1.5, num(1.0))
+        ]
     );
 }
 
@@ -2807,12 +2823,17 @@ fn a_qualified_lane_can_be_drawn_too() {
     let dotted = ok(&format!(
         "{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [c4 c4 c4 c4]\n  g.open: x.x.\n}}\n"
     ));
-    assert_eq!(lane_values(&block, "c", "g::open"), lane_values(&dotted, "c", "g::open"));
+    assert_eq!(
+        lane_values(&block, "c", "g::open"),
+        lane_values(&dotted, "c", "g::open")
+    );
 }
 
 #[test]
 fn an_fx_block_reports_what_is_wrong() {
-    let wrap = |body: &str| format!("{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [c4]\n  {body}\n}}\nc.start\n");
+    let wrap = |body: &str| {
+        format!("{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [c4]\n  {body}\n}}\nc.start\n")
+    };
     // a lane is given by the block and again beside it
     let twice = first_error(&wrap("g {\n    open: x...\n  }\n  g.open: ..x."));
     assert!(twice.message.contains("given twice"), "{}", twice.message);
@@ -2825,16 +2846,23 @@ fn an_fx_block_reports_what_is_wrong() {
 
 #[test]
 fn a_block_of_lanes_is_only_for_a_clip() {
-    let found = compile(&format!("{GATED_FX}scene s {{\n  g {{\n    open: x...\n  }}\n}}\n"));
+    let found = compile(&format!(
+        "{GATED_FX}scene s {{\n  g {{\n    open: x...\n  }}\n}}\n"
+    ));
     assert!(found.is_err());
 }
 
 fn open_lane(row: &str, steps: usize) -> Vec<f64> {
     let notes = vec!["c4"; steps].join(" ");
-    let p = ok(&format!("{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [{notes}]\n  g {{\n    open: {row}\n  }}\n}}\n"));
+    let p = ok(&format!(
+        "{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [{notes}]\n  g {{\n    open: {row}\n  }}\n}}\n"
+    ));
     let mut values = lane_values(&p, "c", "g::open");
     values.sort_by(|a, b| a.0.total_cmp(&b.0));
-    values.iter().map(|(_, v)| if let Value::Num(n) = v { *n } else { f64::NAN }).collect()
+    values
+        .iter()
+        .map(|(_, v)| if let Value::Num(n) = v { *n } else { f64::NAN })
+        .collect()
 }
 
 #[test]
@@ -2857,7 +2885,11 @@ fn a_row_of_steps_takes_mini_notation() {
 fn a_rest_or_a_dropped_step_in_a_row_is_off_not_left_on() {
     // a euclidean row: the gaps between the hits are explicit zeros
     let euclid = open_lane("x(2,8)", 8);
-    assert_eq!(euclid.iter().filter(|v| **v == 1.0).count(), 2, "{euclid:?}");
+    assert_eq!(
+        euclid.iter().filter(|v| **v == 1.0).count(),
+        2,
+        "{euclid:?}"
+    );
     assert!(euclid.contains(&0.0), "{euclid:?}");
     // a step dropped by `?` is off too, and is dropped the same way every time
     let chance = open_lane("[x? x? x? x? x? x? x? x?]", 8);
@@ -2867,8 +2899,13 @@ fn a_rest_or_a_dropped_step_in_a_row_is_off_not_left_on() {
 
 #[test]
 fn a_bad_step_in_a_row_says_what_the_steps_are() {
-    let found = compile(&format!("{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [c4]\n  g {{\n    open: x . 9\n  }}\n}}\n"));
-    let message = found.err().map(|e| e[0].message.clone()).unwrap_or_default();
+    let found = compile(&format!(
+        "{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [c4]\n  g {{\n    open: x . 9\n  }}\n}}\n"
+    ));
+    let message = found
+        .err()
+        .map(|e| e[0].message.clone())
+        .unwrap_or_default();
     assert!(message.contains("isn't a step"), "{message}");
 }
 
@@ -2895,7 +2932,10 @@ fn a_clip_with_only_rows_for_an_effect_is_a_gesture_that_moves_it_once() {
     let open = fx_levels(&p, "g::open", 0.0, 10.0);
     assert!(open.contains(&(3.0, 1.0)), "{open:?}");
     assert_eq!(open.last().map(|o| o.1), Some(0.0), "{open:?}");
-    assert!(open.iter().all(|(at, _)| *at >= 2.0), "nothing before it starts: {open:?}");
+    assert!(
+        open.iter().all(|(at, _)| *at >= 2.0),
+        "nothing before it starts: {open:?}"
+    );
 }
 
 #[test]
@@ -2916,21 +2956,42 @@ fn a_macro_is_a_control_that_moves_others_over_ranges() {
         "{MACRO_SETUP}macro bright {{\n  input: midi.cc(21)\n  smooth: 20ms\n  cutoff: 200hz..4khz\n  drive: 1..0\n  g {{\n    open: 0..0.5\n  }}\n  g.release: 10ms..100ms\n}}"
     ));
     // it is a control of its own, from 0 to 1, that a controller drives
-    let own = p.controls.iter().find(|c| c.name == "bright").expect("the macro is a control");
+    let own = p
+        .controls
+        .iter()
+        .find(|c| c.name == "bright")
+        .expect("the macro is a control");
     assert_eq!(own.initial, 0.0);
-    assert!((own.smooth_seconds - 0.02).abs() < 1e-9, "{}", own.smooth_seconds);
+    assert!(
+        (own.smooth_seconds - 0.02).abs() < 1e-9,
+        "{}",
+        own.smooth_seconds
+    );
     let binding = p.input("bright").expect("it has an input");
-    assert_eq!(binding.source, InputSource::MidiCc { cc: 21, channel: None });
+    assert_eq!(
+        binding.source,
+        InputSource::MidiCc {
+            cc: 21,
+            channel: None
+        }
+    );
     assert_eq!((binding.lo, binding.hi), (0.0, 1.0));
     // and it moves four controls: a ctl, one backwards, and two parameters of an effect (block and dotted forms)
     let m = p.macro_of("bright").expect("it is a macro");
-    let moves: Vec<(&str, f32, f32)> = m.targets.iter().map(|t| (t.control.as_str(), t.lo, t.hi)).collect();
+    let moves: Vec<(&str, f32, f32)> = m
+        .targets
+        .iter()
+        .map(|t| (t.control.as_str(), t.lo, t.hi))
+        .collect();
     assert_eq!(moves[0].0, "cutoff");
     assert_eq!((moves[0].1, moves[0].2), (200.0, 4000.0));
     assert_eq!(moves[1], ("drive", 1.0, 0.0));
     assert_eq!((moves[2].0, moves[2].1, moves[2].2), ("g::open", 0.0, 0.5));
     assert_eq!(moves[3].0, "g::release");
-    assert!((moves[3].1 - 0.01).abs() < 1e-6 && (moves[3].2 - 0.1).abs() < 1e-6, "{moves:?}");
+    assert!(
+        (moves[3].1 - 0.01).abs() < 1e-6 && (moves[3].2 - 0.1).abs() < 1e-6,
+        "{moves:?}"
+    );
     // the sweep is even by ear for a frequency, and straight for a plain number
     let cutoff = p.controls.iter().find(|c| c.name == "cutoff").unwrap();
     assert!((crate::compile::interpolate(cutoff, 200.0, 4000.0, 0.5) - 894.4).abs() < 0.1);
@@ -2944,21 +3005,38 @@ fn a_gesture_can_move_a_macro_and_so_everything_it_moves() {
         "{MACRO_SETUP}macro lift {{\n  g {{\n    open: 0..1\n    release: 10ms..110ms\n  }}\n}}\nclip hit {{\n  length: 1bar\n  times: 1\n  lift: .... .... .... xxxx\n}}\nhit.start\n"
     ));
     let open = fx_levels(&p, "g::open", 0.0, 10.0);
-    assert!(open.contains(&(1.5, 1.0)), "the last beat opens it: {open:?}");
-    assert_eq!(open.last().map(|o| o.1), Some(0.0), "and it is put back: {open:?}");
+    assert!(
+        open.contains(&(1.5, 1.0)),
+        "the last beat opens it: {open:?}"
+    );
+    assert_eq!(
+        open.last().map(|o| o.1),
+        Some(0.0),
+        "and it is put back: {open:?}"
+    );
     // the other control follows along its own range
     let release = fx_levels(&p, "g::release", 0.0, 10.0);
-    assert!(release.iter().any(|(_, v)| (*v - 0.11).abs() < 1e-6), "{release:?}");
+    assert!(
+        release.iter().any(|(_, v)| (*v - 0.11).abs() < 1e-6),
+        "{release:?}"
+    );
 }
 
 #[test]
 fn a_macros_curve_bends_its_run_and_an_envelope_lane_moves_it() {
-    let p = ok(&format!("{MACRO_SETUP}macro m {{\n  cutoff: (0..1).curve(2)\n  drive: 0..1\n}}"));
+    let p = ok(&format!(
+        "{MACRO_SETUP}macro m {{\n  cutoff: (0..1).curve(2)\n  drive: 0..1\n}}"
+    ));
     let m = p.macro_of("m").unwrap();
     assert_eq!(m.targets[0].curve, 2.0);
-    assert!((m.targets[0].value(0.5) - 0.25).abs() < 1e-9, "half way is a quarter along");
+    assert!(
+        (m.targets[0].value(0.5) - 0.25).abs() < 1e-9,
+        "half way is a quarter along"
+    );
     assert!((m.targets[1].value(0.5) - 0.5).abs() < 1e-9);
-    let d = first_error(&format!("{MACRO_SETUP}macro m {{\n  drive: (0..1).curve(0)\n}}"));
+    let d = first_error(&format!(
+        "{MACRO_SETUP}macro m {{\n  drive: (0..1).curve(0)\n}}"
+    ));
     assert!(d.message.contains("above 0"), "{}", d.message);
     // an envelope on the macro in a clip glides every control it moves
     let q = ok(&format!(
@@ -2970,7 +3048,9 @@ fn a_macros_curve_bends_its_run_and_an_envelope_lane_moves_it() {
 
 #[test]
 fn a_macro_without_an_input_is_still_a_control() {
-    let p = ok(&format!("{MACRO_SETUP}macro open {{\n  cutoff: 200hz..4khz\n}}"));
+    let p = ok(&format!(
+        "{MACRO_SETUP}macro open {{\n  cutoff: 200hz..4khz\n}}"
+    ));
     assert!(p.controls.iter().any(|c| c.name == "open"));
     assert!(p.input("open").is_none());
     assert_eq!(p.macro_of("open").unwrap().targets.len(), 1);
@@ -2986,16 +3066,23 @@ fn a_macro_says_what_is_wrong_in_the_words_the_code_uses() {
     let d = first_error(&setup("macro m {\n  g {\n    opne: 0..1\n  }\n}"));
     assert_eq!(d.message, "no control named `g.opne`");
     assert_eq!(d.help.as_deref(), Some("did you mean `g.open`?"));
-    assert_eq!(msg(&setup("macro m {\n  input: midi.cc(1)\n}")), "macro `m` moves nothing");
+    assert_eq!(
+        msg(&setup("macro m {\n  input: midi.cc(1)\n}")),
+        "macro `m` moves nothing"
+    );
     assert!(msg(&setup("macro m {\n  cutoff: 200hz\n}")).contains("needs the range"));
     // a number with a unit of another kind is refused
     assert!(msg(&setup("macro m {\n  cutoff: 1db..2db\n}")).contains("cutoff"));
     assert_eq!(
-        msg(&setup("macro a {\n  cutoff: 200hz..4khz\n}\nmacro b {\n  a: 0..1\n}")),
+        msg(&setup(
+            "macro a {\n  cutoff: 200hz..4khz\n}\nmacro b {\n  a: 0..1\n}"
+        )),
         "`a` is a macro; a macro can't move another macro"
     );
     assert_eq!(
-        msg(&setup("macro m {\n  cutoff: 200hz..4khz\n  cutoff: 300hz..2khz\n}")),
+        msg(&setup(
+            "macro m {\n  cutoff: 200hz..4khz\n  cutoff: 300hz..2khz\n}"
+        )),
         "macro `m` moves `cutoff` twice"
     );
     assert_eq!(
@@ -3029,9 +3116,16 @@ fn stopping_a_clip_puts_the_fx_lanes_it_drove_back() {
     // a bar is two seconds: at the stop the controls go back to where the effect starts
     assert_eq!(fx_levels(&p, "g::open", 2.0, 2.0), [(2.0, 0.0)]);
     let release = fx_levels(&p, "g::release", 2.0, 2.0);
-    assert!(release.len() == 1 && release[0].0 == 2.0 && (release[0].1 - 0.01).abs() < 1e-6, "{release:?}");
+    assert!(
+        release.len() == 1 && release[0].0 == 2.0 && (release[0].1 - 0.01).abs() < 1e-6,
+        "{release:?}"
+    );
     // and while it plays the lane has the clip's own levels
-    assert!(fx_levels(&p, "g::open", 0.0, 1.9).iter().all(|(_, v)| *v == 1.0));
+    assert!(
+        fx_levels(&p, "g::open", 0.0, 1.9)
+            .iter()
+            .all(|(_, v)| *v == 1.0)
+    );
 }
 
 #[test]
@@ -3055,7 +3149,11 @@ fn a_clip_that_carries_on_keeps_the_fx_lane_it_shares() {
     };
     // `a` stops while `b` still drives `g.open`: nothing puts it back
     let p = two("at 1bar a.stop\n");
-    assert!(fx_levels(&p, "g::open", 0.0, 20.0).iter().all(|(_, v)| *v == 1.0));
+    assert!(
+        fx_levels(&p, "g::open", 0.0, 20.0)
+            .iter()
+            .all(|(_, v)| *v == 1.0)
+    );
     // when both are gone it does go back
     let p = two("at 1bar a.stop\nat 2bars b.stop\n");
     assert_eq!(fx_levels(&p, "g::open", 4.0, 4.0), [(4.0, 0.0)]);
@@ -3066,7 +3164,11 @@ fn changing_a_playing_clip_does_not_put_its_lanes_back() {
     let p = ok(&format!(
         "{GATED_FX}clip c {{\n  instrument: pluck\n  notes: [c4 c4 c4 c4]\n  g {{\n    open: xxxx\n  }}\n}}\nc.start\nat 1bar c.set(notes: [d4 d4 d4 d4])\n"
     ));
-    assert!(fx_levels(&p, "g::open", 0.0, 20.0).iter().all(|(_, v)| *v == 1.0));
+    assert!(
+        fx_levels(&p, "g::open", 0.0, 20.0)
+            .iter()
+            .all(|(_, v)| *v == 1.0)
+    );
 }
 
 #[test]

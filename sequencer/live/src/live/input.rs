@@ -62,14 +62,15 @@ impl Live {
         at: Option<u64>,
     ) -> Result<(), Vec<Problem>> {
         let at = at.map_or(At::Now, At::Sample);
-        let control = |name: &str, value: f64, unit: Option<String>, glide: Option<Time>| Op::Control {
-            name: name.into(),
-            at,
-            value,
-            unit,
-            glide,
-            tag: None,
-        };
+        let control =
+            |name: &str, value: f64, unit: Option<String>, glide: Option<Time>| Op::Control {
+                name: name.into(),
+                at,
+                value,
+                unit,
+                glide,
+                tag: None,
+            };
         let mut events = vec![control(
             name,
             value,
@@ -260,9 +261,7 @@ impl Live {
                     _ => return None,
                 };
                 // a bound control that is quantized moves on the next boundary, so a hold begins and ends on the beat
-                let at = binding
-                    .quantize
-                    .map(|q| self.grid().landing(q, self.clock));
+                let at = binding.quantize.map(|q| self.grid().landing(q, self.clock));
                 Some((
                     def.name.clone(),
                     binding.map_input(def, t),
@@ -273,7 +272,9 @@ impl Live {
             .collect();
         keys + targets
             .iter()
-            .filter(|(name, value, unit, at)| self.set_control_at(name, *value, *unit, None, *at).is_ok())
+            .filter(|(name, value, unit, at)| {
+                self.set_control_at(name, *value, *unit, None, *at).is_ok()
+            })
             .count()
     }
 

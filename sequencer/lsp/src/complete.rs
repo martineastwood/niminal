@@ -272,11 +272,7 @@ pub fn preset_items(line_before: &str) -> Option<Vec<Value>> {
 /// Presets whose names start with `prefix`, for a name typed anywhere in a file. Choosing one adds it
 /// to the file's `use` lines (or starts one), and a second entry pastes its source to edit instead.
 /// `defined` says what the file already has by that name.
-pub fn preset_suggestions(
-    prefix: &str,
-    text: &str,
-    defined: &dyn Fn(&str) -> bool,
-) -> Vec<Value> {
+pub fn preset_suggestions(prefix: &str, text: &str, defined: &dyn Fn(&str) -> bool) -> Vec<Value> {
     use crate::text::position;
     let mut out = Vec::new();
     for p in niminal_lang::presets::all()

@@ -5,7 +5,7 @@ import { tags } from '@lezer/highlight';
 // The VS Code grammar (editors/vscode/syntaxes) lists the same words; language.test.ts keeps them
 // from drifting apart.
 
-export const keywords = new Set('instr mono fn def const bus buffer ctl macro node fx config clip scene arrangement kit grid events midi_out over meter tempo state use unsolo hush panic reset reset_on after new at next now on if else match for in and or not init control as capture last spawn oversample env cycle out sample'.split(' '));
+export const keywords = new Set('instr mono fn def const bus buffer ctl macro node fx config clip scene arrangement kit grid events midi_out over meter tempo state use unsolo hush panic reset reset_on after new at next now on if else match for in and or not init control as capture last spawn oversample env cycle out sample sfz'.split(' '));
 export const types = new Set('hz khz db sec ms samples beat beats bar bars deg st ct bpm int num division'.split(' '));
 /** Words after a dot that act on a clip or scene: `beat.start`, `bass.reverse`. */
 export const commands = new Set('start stop play mute unmute solo unsolo undo clear set reverse drop'.split(' '));

@@ -4016,7 +4016,7 @@ impl Kb<'_> {
         Ok(Some(KVal::Lane { id: dst, unit, len }))
     }
 
-    /// `x.frames(size, fn(w) { ... })`: the body runs every `size / 2` samples on the last `size` samples
+    /// `x.frames(size, fn(w) { ... })`: the body runs every `size / overlap` samples on the last `size` samples
     /// of `x` (windowed, as an array `w`) and returns `size` samples, which are overlapped into the output.
     /// The output is `size` samples late.
     fn frames_scope(&mut self, name: &Ident, args: &[Arg], span: Span) -> Res<KVal> {
@@ -4027,7 +4027,13 @@ impl Kb<'_> {
                 name.span,
             ));
         }
-        let bound = funcs::bind("frames", name.span, &["x", "size", "body"], 3, args)?;
+        let bound = funcs::bind(
+            "frames",
+            name.span,
+            &["x", "size", "body", "other", "overlap"],
+            3,
+            args,
+        )?;
         let need = |i: usize, what: &str| {
             bound[i].ok_or_else(|| Diagnostic::new(format!("`frames` needs {what}"), name.span))
         };
@@ -4037,6 +4043,10 @@ impl Kb<'_> {
                 "`frames` takes a plain signal",
                 need(0, "a signal")?.value.span,
             ));
+        }
+        let other = bound[3].map(|arg| self.num(&arg.value)).transpose()?;
+        if other.as_ref().is_some_and(|v| v.unit != Unit::Num) {
+            return Err(Diagnostic::new("`frames` takes a plain signal", span));
         }
         let size_arg = need(1, "a size")?;
         let size = self.num(&size_arg.value)?;
@@ -4055,10 +4065,30 @@ impl Kb<'_> {
                 ));
             }
         };
+        let overlap = if let Some(arg) = bound[4] {
+            let value = self.num(&arg.value)?;
+            match self.konst(&value) {
+                Some(n)
+                    if value.unit == Unit::Num
+                        && [2.0, 4.0, 8.0, 16.0].contains(&n)
+                        && n <= size as f64 =>
+                {
+                    n as usize
+                }
+                _ => {
+                    return Err(Diagnostic::new(
+                        "frame overlap is 2, 4, 8 or 16, no larger than size, known while compiling",
+                        arg.value.span,
+                    ));
+                }
+            }
+        } else {
+            2
+        };
         let body_arg = need(2, "a function")?;
         let KVal::Function { def, captures } = self.value(&body_arg.value)? else {
             return Err(Diagnostic::new(
-                "the last argument of `frames` is a function, as in `fn(w) { ... }`",
+                "the `body` argument of `frames` is a function, as in `fn(w) { ... }`",
                 body_arg.value.span,
             ));
         };
@@ -4079,14 +4109,36 @@ impl Kb<'_> {
                 span: body_arg.value.span,
             },
         };
+        let mut given = vec![given];
+        let window2 = other.as_ref().map(|_| {
+            let lane = self.new_lane(size, Rate::Audio);
+            self.frame.scope.insert(
+                "<frame window 2>".into(),
+                KVal::Lane {
+                    id: lane,
+                    unit: Unit::Num,
+                    len: size,
+                },
+            );
+            given.push(Arg {
+                name: None,
+                receiver: false,
+                value: Expr {
+                    kind: ExprKind::Name("<frame window 2>".into()),
+                    span,
+                },
+            });
+            lane
+        });
         // the body's code is kept apart, to run when a frame is ready
         let outer = std::mem::take(&mut self.code);
         self.in_frame = true;
-        let called = self.call_captured(&def, name, &[given], captures);
+        let called = self.call_captured(&def, name, &given, captures);
         let result = called.and_then(|result| self.lane_of(result, span));
         self.in_frame = false;
         let code = std::mem::replace(&mut self.code, outer);
         self.frame.scope.remove(WINDOW);
+        self.frame.scope.remove("<frame window 2>");
         let result = result?;
         if result.len != Some(size) || result.unit != Unit::Num {
             return Err(Diagnostic::new(
@@ -4097,13 +4149,16 @@ impl Kb<'_> {
         let scope = self.frames.len();
         self.frames.push(niminal_engine::ops::FrameScope {
             size,
+            hop: size / overlap,
             window,
+            window2,
             result: result.src,
             code,
         });
         let reg = self.emit(Rate::Audio, |dst| Instr::Frame {
             scope,
             input: x.reg,
+            input2: other.map(|v| v.reg),
             dst,
         });
         Ok(KVal::Num(Value {

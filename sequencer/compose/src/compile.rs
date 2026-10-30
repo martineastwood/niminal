@@ -59,11 +59,8 @@ pub fn interpolate(control: &ControlDef, lo: f32, hi: f32, t: f64) -> f64 {
 fn interpolate_range(unit: niminal_lang::Unit, lo: f32, hi: f32, t: f64) -> f64 {
     let t = t.clamp(0.0, 1.0);
     let (lo, hi) = (f64::from(lo), f64::from(hi));
-    let geometric = matches!(
-        unit,
-        niminal_lang::Unit::Hz | niminal_lang::Unit::Db
-    ) && lo > 0.0
-        && hi > 0.0;
+    let geometric =
+        matches!(unit, niminal_lang::Unit::Hz | niminal_lang::Unit::Db) && lo > 0.0 && hi > 0.0;
     let engine = if geometric {
         lo * (hi / lo).powf(t)
     } else {
@@ -91,7 +88,12 @@ pub struct MacroTarget {
 impl MacroTarget {
     /// The target value in its declared unit, with the same scaling as control inputs.
     pub fn value(&self, value: f64) -> f64 {
-        interpolate_range(self.unit, self.lo, self.hi, value.clamp(0.0, 1.0).powf(self.curve))
+        interpolate_range(
+            self.unit,
+            self.lo,
+            self.hi,
+            value.clamp(0.0, 1.0).powf(self.curve),
+        )
     }
 }
 
@@ -105,7 +107,9 @@ pub struct MacroDef {
 impl MacroDef {
     /// Expand one knob value into the parameter values it drives.
     pub fn values(&self, value: f64) -> impl Iterator<Item = (&str, f64, niminal_lang::Unit)> {
-        self.targets.iter().map(move |target| (target.control.as_str(), target.value(value), target.unit))
+        self.targets
+            .iter()
+            .map(move |target| (target.control.as_str(), target.value(value), target.unit))
     }
 }
 
@@ -380,7 +384,9 @@ fn launch_source(e: &Expr, word: &str) -> Res<InputSource> {
             format!("`{word}` takes a key, a controller or an OSC address"),
             e.span,
         )
-        .with_help(format!("for example `{word}: midi.cc(21)` or `{word}: osc_in(\"/verse\")`"))
+        .with_help(format!(
+            "for example `{word}: midi.cc(21)` or `{word}: osc_in(\"/verse\")`"
+        ))
     };
     let ExprKind::Call { name, args } = &e.kind else {
         return Err(bad());
@@ -536,7 +542,9 @@ fn control_inputs(
         .map(|(name, input)| {
             let def = program.controls.iter().find(|c| c.name == name.name)?;
             match (&input.hi.kind, def.unit) {
-                (ExprKind::Num { value, unit: None }, niminal_lang::Unit::Num) => Some(*value as f32),
+                (ExprKind::Num { value, unit: None }, niminal_lang::Unit::Num) => {
+                    Some(*value as f32)
+                }
                 _ => None,
             }
         })
@@ -602,7 +610,11 @@ ctl __input_hi_{n} = {}",
                 source: input.source.clone(),
                 lo: def.initial,
                 hi: hi_initial,
-                quantize: input.quantize.as_ref().map(crate::perform::quantum_of).transpose()?,
+                quantize: input
+                    .quantize
+                    .as_ref()
+                    .map(crate::perform::quantum_of)
+                    .transpose()?,
             },
         ));
     }
@@ -626,7 +638,11 @@ fn endpoint(e: &Expr) -> Option<(f64, Option<&str>)> {
 /// The macros: what each moves, over what range. A macro's own entries are `input:` and `smooth:`; every other
 /// entry is a control to move and the range to move it over, written `cutoff: 200hz..4khz`, in a block for an
 /// effect (`break_stutter { damp: 0..0.6 }`) or with a dot (`break_stutter.damp: 0..0.6`).
-fn compile_macros(items: &[Item], program: &Program, tempo: Tempo) -> Result<Vec<MacroDef>, Vec<Diagnostic>> {
+fn compile_macros(
+    items: &[Item],
+    program: &Program,
+    tempo: Tempo,
+) -> Result<Vec<MacroDef>, Vec<Diagnostic>> {
     let mut errors = Vec::new();
     let mut out: Vec<MacroDef> = Vec::new();
     let macro_names: Vec<&str> = items
@@ -707,7 +723,9 @@ fn compile_macros(items: &[Item], program: &Program, tempo: Tempo) -> Result<Vec
                     if name.name == "curve" && args.len() == 2 && args[0].receiver =>
                 {
                     match &args[1].value.kind {
-                        ExprKind::Num { value, unit: None } if *value > 0.0 => (&args[0].value, *value),
+                        ExprKind::Num { value, unit: None } if *value > 0.0 => {
+                            (&args[0].value, *value)
+                        }
                         _ => {
                             errors.push(Diagnostic::new(
                                 "`curve` takes a number above 0",
@@ -738,8 +756,17 @@ fn compile_macros(items: &[Item], program: &Program, tempo: Tempo) -> Result<Vec
                 );
                 continue;
             };
-            match (def.convert(lo, lo_unit, tempo), def.convert(hi, hi_unit, tempo)) {
-                (Ok(lo), Ok(hi)) => targets.push(MacroTarget { control, unit: def.unit, lo, hi, curve }),
+            match (
+                def.convert(lo, lo_unit, tempo),
+                def.convert(hi, hi_unit, tempo),
+            ) {
+                (Ok(lo), Ok(hi)) => targets.push(MacroTarget {
+                    control,
+                    unit: def.unit,
+                    lo,
+                    hi,
+                    curve,
+                }),
                 (Err(why), _) | (_, Err(why)) => errors.push(Diagnostic::new(why, range.span)),
             }
         }

@@ -1,0 +1,28 @@
+// Phase-vocoder pitch shifting: the same source, played dry and at three shifted pitches.
+// Evaluate the whole file in VS Code; + times start the comparison whenever you submit it.
+// niminal-live render examples/spectral_pitch.nml --out /tmp/spectral_pitch.wav
+use std/spectral
+
+tempo 100bpm
+
+// wet: 0 auditions the original; wet: 1 auditions spectral resynthesis.
+// shift is in semitones: -12 is an octave down, +7 a fifth up, +12 an octave up.
+// Pitch changes without speeding up the source's envelope. Its spectral envelope moves too:
+// this does not preserve formants. Replace source with a recording to try voices or found sounds.
+// size: 2048 adds 2048 samples of latency (about 43ms at 48khz).
+// overlap: 4 analyzes every 512 samples with normalized Hann analysis/synthesis windows.
+// Higher overlaps (8 or 16) use more CPU. Attacks can smear; this has no transient protection
+// or peak phase locking, and stereo channels are processed independently. Large downward shifts
+// with small FFT sizes can lose narrow partials; this is a basic spectral shifter.
+instr spectral_demo(freq: hz = a2, shift: -48..48 = 0, wet: 0..1 = 1) {
+  excitation = (osc(saw, freq) + osc(sine, freq * 2.73) * 0.3).lpf(cutoff: 3khz)
+  source = excitation * env[0 10ms 1 800ms 0.3 | 100ms 0] * 0.15
+  shifted = spectral_pitch(source, shift: shift, size: 2048, overlap: 4)
+  out = source * (1 - wet) + shifted * wet
+}
+
+spectral_demo(wet: 0) for 2beats                 // Original source at A2.
+at +3beats spectral_demo(shift: 0) for 2beats     // Neutral resynthesis: the same sound, delayed.
+at +6beats spectral_demo(shift: -12) for 2beats   // Octave down, same envelope duration.
+at +9beats spectral_demo(shift: 7) for 2beats     // Fifth up.
+at +12beats spectral_demo(shift: 12) for 2beats   // Octave up.

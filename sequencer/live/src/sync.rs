@@ -326,7 +326,11 @@ mod tests {
         };
         out.emit(&slow, 110_000);
         let ticks: Vec<u64> = out.take().iter().map(|m| m.at).collect();
-        assert!(ticks.windows(2).all(|w| w[1] - w[0] >= 1_900 && w[1] - w[0] <= 2_100));
+        assert!(
+            ticks
+                .windows(2)
+                .all(|w| w[1] - w[0] >= 1_900 && w[1] - w[0] <= 2_100)
+        );
     }
 
     #[test]
@@ -340,7 +344,10 @@ mod tests {
         let sent = out.take();
         assert_eq!(sent[0].message, Realtime::Stop);
         assert_eq!(
-            sent.iter().find(|m| m.message == Realtime::Start).unwrap().at,
+            sent.iter()
+                .find(|m| m.message == Realtime::Start)
+                .unwrap()
+                .at,
             96_000
         );
         out.disable(200_000);
@@ -365,9 +372,11 @@ mod tests {
                     Follow::Origin(o) => grid.origin = o.round() as i64,
                     // a tempo change keeps the beat the clock is at
                     Follow::Tempo(bpm) => {
-                        let beats = (at - grid.origin as f64) / (grid.beat_seconds() * grid.sample_rate);
+                        let beats =
+                            (at - grid.origin as f64) / (grid.beat_seconds() * grid.sample_rate);
                         grid.bpm = bpm;
-                        grid.origin = (at - beats * grid.beat_seconds() * grid.sample_rate).round() as i64;
+                        grid.origin =
+                            (at - beats * grid.beat_seconds() * grid.sample_rate).round() as i64;
                     }
                 }
                 asked.push(f);
@@ -438,7 +447,12 @@ mod tests {
 
     #[test]
     fn bytes_round_trip() {
-        for m in [Realtime::Tick, Realtime::Start, Realtime::Continue, Realtime::Stop] {
+        for m in [
+            Realtime::Tick,
+            Realtime::Start,
+            Realtime::Continue,
+            Realtime::Stop,
+        ] {
             assert_eq!(Realtime::from_byte(m.byte()), Some(m));
         }
         assert_eq!(Realtime::from_byte(0xFE), None);

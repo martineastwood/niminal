@@ -254,10 +254,14 @@ Whole pieces that use these forms, with audio, are on the [standard library](/re
 
 `x.frames(size, fn(w) { ... })` runs its function every `size / 2` samples on the last `size` samples of `x`, windowed with a Hann window, as an array `w`. The function returns `size` samples, which are overlapped into the output. If it returns `w`, the output is `x` exactly, `size` samples late. `size` is a power of two from 4 to 65536.
 
-- **`fft(w)`** gives `[re, im]`, the spectrum of an array of `n` samples, each with `n / 2 + 1` entries. **`ifft(re, im)`** is its inverse (also `ifft([re, im])`). `atan2(im, re)` gives a phase and `sqrt(re * re + im * im)` a magnitude. `fft` works anywhere in a function with state; in a frame it runs once per half frame.
+- **`fft(w)`** gives `[re, im]`, the spectrum of an array of `n` samples, each with `n / 2 + 1` entries. **`ifft(re, im)`** is its inverse (also `ifft([re, im])`). `atan2(im, re)` gives a phase and `sqrt(re * re + im * im)` a magnitude. `fft` works anywhere in a function with state; in a frame it runs once per hop.
 - **State** declared at the top of the function lasts from frame to frame, so a spectrum can be held, smeared or accumulated.
 - **Latency** is `size` samples, declared to the graph, so a path beside the function is delayed to match.
 - **Size is the user's**, not the engine block's, so the sound doesn't depend on `--block-size` and a log replays exactly.
+- **`overlap:`** is a compile-time choice of 2 (default), 4, 8 or 16, no larger than `size`. The hop is `size / overlap`. Half overlap uses an analysis Hann and unwindowed synthesis as above. Higher overlaps use Hann analysis and a Hann synthesis window normalized by the sum of overlapping window products, preserving unity reconstruction while tapering changed frames. Latency remains `size` samples. Paired inputs share the chosen hop.
+
+For phase-vocoder processing, `std/spectral` supplies `phase_frequency` and `phase_accumulate`. Inside a frame callback, turn phases from `atan2(im, re)` into instantaneous frequencies in **cycles per sample**, reshape those frequencies, then accumulate synthesis phases. Both helpers need the FFT `size` and the actual `hop` (`size / overlap`); each call site owns independent history. Multiplying cycles/sample by `sample_rate` gives Hz. Unchanged frequencies reconstruct the input phases, including the first frame. `spectral_pitch` combines these with magnitude/frequency interpolation for a complete pitch shifter.
+
 
 ```nml
 /// Keep only the lowest 40 bins: a brick-wall low-pass.
@@ -269,6 +273,23 @@ fn low(x) {
   })
 }
 ```
+
+Pass `other:` to window a second signal on exactly the same clock. The callback then takes two arrays. Input paths with different processing latencies are aligned before analysis; the result adds one frame of latency after that alignment. Both inputs are plain mono signals (multichannel user functions are expanded per channel).
+
+```nml
+fn cross_spectrum(carrier, donor) {
+  carrier.frames(1024, fn(a, b) {
+    c = fft(a)
+    d = fft(b)
+    // Keep the carrier's phase, with the donor's magnitudes.
+    magnitude = sqrt(d[0] * d[0] + d[1] * d[1])
+    phase = atan2(c[1], c[0])
+    ifft(magnitude * cos(phase), magnitude * sin(phase))
+  }, other: donor)
+}
+```
+
+Several spectral operations can share the same callback and FFT results, avoiding repeated analysis and frame latency. `std/spectral` also provides `spectral_envelope` for smoothing an FFT's magnitude and `envelope_transfer` for applying one sound's broad spectral shape to another.
 
 `examples/spectral.nml` is a piece built from `frames`, `fft` and `ifft`.
 

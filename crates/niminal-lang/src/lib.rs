@@ -32,6 +32,7 @@ mod program;
 mod project;
 pub use project::{Entry, Located, Origin, Piece, Problem, Project};
 mod sample;
+mod sfz;
 mod tables;
 mod unit;
 

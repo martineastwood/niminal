@@ -291,14 +291,22 @@ fn macro_value(target: &crate::compile::MacroTarget, level: f64) -> Value {
 
 /// A macro's envelope as one for each thing it moves, glides and curves kept, levels turned into where each
 /// control is.
-fn fan_out_env(def: &crate::compile::MacroDef, curve: &EnvLane, curves: &mut Vec<(String, EnvLane)>) {
+fn fan_out_env(
+    def: &crate::compile::MacroDef,
+    curve: &EnvLane,
+    curves: &mut Vec<(String, EnvLane)>,
+) {
     for target in &def.targets {
         let at = |v: &Value| macro_value(target, v.as_number().unwrap_or(0.0));
         curves.push((
             target.control.clone(),
             EnvLane {
                 start: at(&curve.start),
-                segments: curve.segments.iter().map(|(time, shape, level)| (*time, *shape, at(level))).collect(),
+                segments: curve
+                    .segments
+                    .iter()
+                    .map(|(time, shape, level)| (*time, *shape, at(level)))
+                    .collect(),
                 looped: curve.looped,
                 unit: curve.unit,
             },
@@ -2668,7 +2676,14 @@ impl Perform<'_> {
             if let ExprKind::FxLanes(rows) = &value.kind {
                 for (row, row_value) in rows {
                     let name = format!("{}::{}", key.name, row.name);
-                    entries.push((Ident { name, span: row.span }, row_value, true));
+                    entries.push((
+                        Ident {
+                            name,
+                            span: row.span,
+                        },
+                        row_value,
+                        true,
+                    ));
                 }
             } else {
                 entries.push((key.clone(), value, false));
@@ -2720,7 +2735,9 @@ impl Perform<'_> {
             }
             // a lane named for a macro moves everything the macro moves, each along its own range
             if !in_block && let Some(def) = self.cx.macros.iter().find(|m| m.name == key.name) {
-                let found = |name: &str| lanes.iter().any(|(n, _)| n == name) || curves.iter().any(|(n, _)| n == name);
+                let found = |name: &str| {
+                    lanes.iter().any(|(n, _)| n == name) || curves.iter().any(|(n, _)| n == name)
+                };
                 if let Some(target) = def.targets.iter().find(|t| found(&t.control)) {
                     return Err(Diagnostic::new(
                         format!(
@@ -2734,14 +2751,19 @@ impl Perform<'_> {
                 match self.eval(value, None)? {
                     PerfValue::Pattern(p) => self.fan_out(def, &p, &mut lanes),
                     PerfValue::Env(curve) => fan_out_env(def, &curve, &mut curves),
-                    PerfValue::Num(v) => self.fan_out(def, &Pattern::pure(Step::from(v)), &mut lanes),
+                    PerfValue::Num(v) => {
+                        self.fan_out(def, &Pattern::pure(Step::from(v)), &mut lanes)
+                    }
                     PerfValue::List(items) => {
                         let p = self.list_pattern(items, value.span)?;
                         self.fan_out(def, &p, &mut lanes);
                     }
                     other => {
                         return Err(Diagnostic::new(
-                            format!("a macro lane holds levels from 0 to 1, but this is {}", other.describe()),
+                            format!(
+                                "a macro lane holds levels from 0 to 1, but this is {}",
+                                other.describe()
+                            ),
                             value.span,
                         ));
                     }
@@ -2752,7 +2774,10 @@ impl Perform<'_> {
                 || curves.iter().any(|(n, _)| *n == key.name)
             {
                 return Err(Diagnostic::new(
-                    format!("lane `{}` is given twice", crate::compile::written(&key.name)),
+                    format!(
+                        "lane `{}` is given twice",
+                        crate::compile::written(&key.name)
+                    ),
                     key.span,
                 ));
             }
@@ -2800,8 +2825,13 @@ impl Perform<'_> {
         // a clip with rows for an effect and no notes is a gesture: a silent note on every sixteenth gives
         // the rows a step to land on
         let macro_names: Vec<&str> = self.cx.macros.iter().map(|m| m.name.as_str()).collect();
-        let rows_only = crate::dsp::drives_effects(block, &macro_names) && !block.entries.iter().any(|(k, _)| k.name == "instrument");
-        if rows_only && keys.is_none() && scored.is_empty() && !lanes.iter().any(|(n, _)| n == "notes") {
+        let rows_only = crate::dsp::drives_effects(block, &macro_names)
+            && !block.entries.iter().any(|(k, _)| k.name == "instrument");
+        if rows_only
+            && keys.is_none()
+            && scored.is_empty()
+            && !lanes.iter().any(|(n, _)| n == "notes")
+        {
             let steps = 16 * length.map_or(1, |l| l.to_f64().ceil().max(1.0) as usize);
             let step = Pattern::pure(Step::from(niminal_score::Value::Note(60)));
             lanes.push(("notes".into(), Pattern::fastcat(vec![step; steps])));
@@ -2831,7 +2861,12 @@ impl Perform<'_> {
 
     /// A macro's lane as the lanes of everything it moves: each level from 0 to 1 becomes where that control is
     /// at that level.
-    fn fan_out(&self, def: &crate::compile::MacroDef, pattern: &Pattern<Step>, lanes: &mut Vec<(String, Pattern<Step>)>) {
+    fn fan_out(
+        &self,
+        def: &crate::compile::MacroDef,
+        pattern: &Pattern<Step>,
+        lanes: &mut Vec<(String, Pattern<Step>)>,
+    ) {
         for target in &def.targets {
             let target = target.clone();
             lanes.push((
@@ -3447,7 +3482,11 @@ impl Perform<'_> {
         for level in levels {
             niminal_lang::engine_value(def.unit, *level, tempo).map_err(|e| {
                 Diagnostic::new(
-                    format!("envelope lane `{}` moves {}: {e}", crate::compile::written(param), def.name),
+                    format!(
+                        "envelope lane `{}` moves {}: {e}",
+                        crate::compile::written(param),
+                        def.name
+                    ),
                     span,
                 )
             })?;
@@ -3662,7 +3701,10 @@ fn step_level(c: char) -> f64 {
 /// operators shape the steps, and a step that is off or dropped is an explicit 0, so the lane never keeps the last
 /// level.
 fn steps(raw: &str) -> Result<Pattern<Step>, String> {
-    if raw.chars().all(|c| matches!(c, '.' | 'x' | 'X' | 'o' | ' ' | '\t')) {
+    if raw
+        .chars()
+        .all(|c| matches!(c, '.' | 'x' | 'X' | 'o' | ' ' | '\t'))
+    {
         return Ok(Pattern::fastcat(
             raw.chars()
                 .filter(|c| !c.is_whitespace())
@@ -3681,14 +3723,21 @@ fn mini_steps(raw: &str) -> Result<Pattern<Step>, String> {
     let mut spaced = String::new();
     for (i, &c) in chars.iter().enumerate() {
         spaced.push(if c == '.' { '~' } else { c });
-        let ends_a_step = is_step(c) || c.is_ascii_digit() || matches!(c, '>' | ']' | ')' | '?' | '!');
-        if ends_a_step && chars.get(i + 1).is_some_and(|&next| is_step(next) || matches!(next, '<' | '[')) {
+        let ends_a_step =
+            is_step(c) || c.is_ascii_digit() || matches!(c, '>' | ']' | ')' | '?' | '!');
+        if ends_a_step
+            && chars
+                .get(i + 1)
+                .is_some_and(|&next| is_step(next) || matches!(next, '<' | '['))
+        {
             spaced.push(' ');
         }
     }
     let on = parse_with(&spaced, |atom, _| match atom {
         "x" | "X" | "o" => Ok(step_level(atom.chars().next().unwrap_or('x'))),
-        other => Err(format!("`{other}` isn't a step: use `.` or `~` for off, and `x`, `X` or `o` for on")),
+        other => Err(format!(
+            "`{other}` isn't a step: use `.` or `~` for off, and `x`, `X` or `o` for on"
+        )),
     })
     .map_err(|e| e.message)?;
     // a rest or a dropped step makes no event, so the gaps are filled with an explicit off

@@ -891,16 +891,37 @@ pub(crate) struct Member {
     pub interp: niminal_engine::ops::SampleInterp,
 }
 
-/// An instrument that plays recorded audio, selecting a kit member once per note.
+/// What a sampler instrument plays.
+pub(crate) enum SamplerSource<'a> {
+    /// A sample, or the members of a kit.
+    Members {
+        members: &'a [Member],
+        is_kit: bool,
+        root_hz: f32,
+    },
+    /// The regions of an SFZ file.
+    Regions(&'a SfzBank),
+}
+
+/// An instrument that plays recorded audio, selecting a kit member (or the regions of a multisample)
+/// once per note.
 pub(crate) fn compile_sampler(
     name: &Ident,
-    members: &[Member],
-    is_kit: bool,
-    root_hz: f32,
+    source: SamplerSource,
     tempo: Tempo,
     registry: &Registry,
     names: &Names,
 ) -> Res<Instrument> {
+    let (members, is_kit, root_hz, bank) = match source {
+        SamplerSource::Members {
+            members,
+            is_kit,
+            root_hz,
+        } => (members, is_kit, root_hz, None),
+        SamplerSource::Regions(bank) => {
+            (&[][..], false, crate::compile::DEFAULT_ROOT_HZ, Some(bank))
+        }
+    };
     let mut lower = Lower::new(registry, names, tempo);
     lower.mode = Mode::Instrument;
     let mut params: Vec<Param> = Vec::new();
@@ -943,7 +964,15 @@ pub(crate) fn compile_sampler(
         ("begin", begin),
     ];
     wires.extend(pick.map(|p| ("sample", p)));
-    let result = lower.sampler_signal(name, members, root_hz, &wires)?;
+    let result = match bank {
+        None => lower.sampler_signal(name, members, root_hz, &wires)?,
+        Some(bank) => {
+            // the layers a multisample plays are chosen by how hard the note is played
+            let vel = declare(&mut lower, "vel", Unit::Num, 1.0);
+            wires.push(("vel", vel));
+            lower.sfz_signal(name, bank, &wires)?
+        }
+    };
     let result = lower.mul(&result, &Sig::signal(gain, Unit::Num), Unit::Num, name.span)?;
     let mut instrument = Instrument::new(
         name.name.clone(),
@@ -956,10 +985,31 @@ pub(crate) fn compile_sampler(
     Ok(instrument)
 }
 
+/// One region of an SFZ multisample with its audio, ready to play.
+pub(crate) struct SfzRegionDef {
+    /// One table per channel.
+    pub channels: Vec<Arc<Table>>,
+    pub region: niminal_engine::ops::Region,
+    pub root_hz: f32,
+    /// The frames it plays, if not all of them.
+    pub range: Option<(usize, usize)>,
+    /// The frames it loops, if it holds a note by looping.
+    pub loop_frames: Option<(usize, usize)>,
+    pub interp: niminal_engine::ops::SampleInterp,
+}
+
+/// An SFZ file's regions and the choke counters they share.
+pub(crate) struct SfzBank {
+    pub regions: Vec<SfzRegionDef>,
+    pub groups: Arc<[niminal_engine::ops::RoundRobin]>,
+}
+
 /// Loaded sampler data reused when a sampler is called inside an instrument.
 pub(crate) struct SamplerDef {
     pub members: Vec<Member>,
     pub root_hz: f32,
+    /// The regions of an SFZ file, which stand in for the members.
+    pub bank: Option<Arc<SfzBank>>,
     pub instrument: Instrument,
 }
 
@@ -1067,6 +1117,66 @@ impl Lower<'_> {
         Ok(mix.expect("a sample or kit has at least one sample"))
     }
 
+    /// The sound of an SFZ multisample: per channel layout, one player that chooses its regions
+    /// when a note starts.
+    fn sfz_signal(&mut self, name: &Ident, bank: &SfzBank, wires: &[(&str, Src)]) -> Res<Sig> {
+        let mut layouts = std::collections::BTreeMap::<usize, Vec<&SfzRegionDef>>::new();
+        for def in &bank.regions {
+            let channels = def.channels.len();
+            if channels > MAX_SAMPLE_CHANNELS {
+                return Err(Diagnostic::new(
+                    format!(
+                        "a sample with {channels} channels is more than the {MAX_SAMPLE_CHANNELS} niminal supports"
+                    ),
+                    name.span,
+                ));
+            }
+            layouts.entry(channels).or_default().push(def);
+        }
+        let mut mix: Option<Sig> = None;
+        for (channels, defs) in layouts {
+            let mut srcs = Vec::with_capacity(channels);
+            for channel in 0..channels {
+                let players = defs
+                    .iter()
+                    .map(|def| {
+                        let mut sampler =
+                            Sampler::new(def.channels[channel].clone(), def.root_hz, None)
+                                .with_interp(def.interp);
+                        if let Some((start, end)) = def.range {
+                            sampler = sampler.slice(start, end);
+                        }
+                        if let Some((start, end)) = def.loop_frames {
+                            sampler = sampler.with_loop_frames(LoopMode::Forward, start, end);
+                        }
+                        niminal_engine::ops::Region {
+                            sampler,
+                            ..def.region.clone()
+                        }
+                    })
+                    .collect();
+                srcs.push(
+                    self.g
+                        .add(
+                            niminal_engine::ops::MultiSampler::new(players, bank.groups.clone()),
+                            wires,
+                        )
+                        .map_err(|e| Diagnostic::new(e.to_string(), name.span))?,
+                );
+            }
+            let sig = self.convert(
+                &Sig::channels(srcs, Layout::from_count(channels)),
+                self.names.master,
+                name.span,
+            )?;
+            mix = Some(match mix {
+                None => sig,
+                Some(so_far) => self.binary(BinOp::Add, so_far, sig, name.span)?,
+            });
+        }
+        Ok(mix.expect("an SFZ file has at least one region"))
+    }
+
     fn call_sampler(&mut self, sampler: &SamplerDef, name: &Ident, args: &[Arg]) -> Res<Datum> {
         if self.mode != Mode::Instrument || self.in_fn {
             return Err(Diagnostic::new(
@@ -1146,7 +1256,10 @@ impl Lower<'_> {
                 wires.push((param.name.as_str(), value.srcs[0]));
             }
         }
-        let signal = self.sampler_signal(name, &sampler.members, sampler.root_hz, &wires)?;
+        let signal = match &sampler.bank {
+            None => self.sampler_signal(name, &sampler.members, sampler.root_hz, &wires)?,
+            Some(bank) => self.sfz_signal(name, bank, &wires)?,
+        };
         self.mul(&signal, &gain, Unit::Num, name.span)
             .map(Datum::Sig)
     }
@@ -6871,6 +6984,7 @@ fn from_a_guess(d: &Diagnostic) -> bool {
         || m.contains("plain signal")
         || m.contains(" entries")
         || m.contains("an array of ")
+        || m.contains("arrays of the same length")
 }
 
 /// Whether the body reads an untyped parameter inside `span`.

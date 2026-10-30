@@ -329,10 +329,11 @@ pub enum Instr {
         interp: Interp,
     },
     /// Feed the sample in `input` to frame scope `scope` and take the sample of its output that is
-    /// due into `dst`. Every half frame it runs the scope's code on the latest frame.
+    /// due into `dst`. Every hop it runs the scope's code on the latest frame.
     Frame {
         scope: usize,
         input: usize,
+        input2: Option<usize>,
         dst: usize,
     },
     /// The real FFT of an array into lanes `re` and `im`, which have `n / 2 + 1` entries each.
@@ -449,8 +450,11 @@ pub struct ResetScope {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FrameScope {
     pub size: usize,
+    pub hop: usize,
     /// The lane the windowed frame is put in.
     pub window: usize,
+    /// The second input's window lane, when present.
+    pub window2: Option<usize>,
     /// What the code leaves: `size` samples to overlap into the output.
     pub result: LaneSrc,
     pub code: Vec<Instr>,
@@ -495,25 +499,47 @@ pub struct Kernel {
 /// The input and output of one frame scope while it runs.
 struct FrameRun {
     input: Vec<f64>,
+    input2: Vec<f64>,
     output: Vec<f64>,
     pos: usize,
     window: Vec<f64>,
+    synthesis: Vec<f64>,
 }
 
 impl FrameRun {
-    fn new(size: usize) -> Self {
+    fn new(frame: &FrameScope) -> Self {
+        let size = frame.size;
+        let window: Vec<f64> = (0..size)
+            .map(|i| 0.5 * (1.0 - (std::f64::consts::TAU * i as f64 / size as f64).cos()))
+            .collect();
+        // Half overlap uses analysis-only Hann. Denser overlaps use a tapered synthesis window,
+        // normalized against all overlapping analysis windows for unity reconstruction.
+        let synthesis = if frame.hop == size / 2 {
+            vec![1.0; size]
+        } else {
+            (0..size)
+                .map(|i| {
+                    let weight: f64 = (0..size)
+                        .step_by(frame.hop)
+                        .map(|j| window[(i + j) % size].powi(2))
+                        .sum();
+                    window[i] / weight
+                })
+                .collect()
+        };
         FrameRun {
+            input2: vec![0.0; if frame.window2.is_some() { size } else { 0 }],
             input: vec![0.0; size],
             output: vec![0.0; size],
             pos: 0,
-            window: (0..size)
-                .map(|i| 0.5 * (1.0 - (std::f64::consts::TAU * i as f64 / size as f64).cos()))
-                .collect(),
+            window,
+            synthesis,
         }
     }
 
     fn reset(&mut self) {
         self.input.fill(0.0);
+        self.input2.fill(0.0);
         self.output.fill(0.0);
         self.pos = 0;
     }
@@ -598,11 +624,7 @@ impl Custom {
             state: kernel.state_init.clone(),
             buffers: kernel.buffers.clone(),
             lanes: kernel.lanes.iter().map(|&n| vec![0.0; n]).collect(),
-            frame_runs: kernel
-                .frames
-                .iter()
-                .map(|f| FrameRun::new(f.size))
-                .collect(),
+            frame_runs: kernel.frames.iter().map(FrameRun::new).collect(),
             fft_plans: kernel.ffts.iter().map(|&n| FftPlan::new(n)).collect(),
             regs: vec![0.0; kernel.registers],
             natives: kernel.natives.iter().map(|n| n.op.box_clone()).collect(),
@@ -666,10 +688,11 @@ impl Custom {
             if let Instr::Frame {
                 scope,
                 input: x,
+                input2,
                 dst,
             } = *instr
             {
-                self.run_frame(scope, x, dst, ctx, input, i);
+                self.run_frame(scope, (x, input2), dst, ctx, input, i);
                 continue;
             }
             if RESETS
@@ -981,11 +1004,11 @@ impl Custom {
         }
     }
     /// One sample through a frame scope: the input goes in, the output that is due comes out, and each
-    /// half frame the scope's code runs on the latest frame.
+    /// hop the scope's code runs on the latest frame.
     fn run_frame(
         &mut self,
         scope: usize,
-        x: usize,
+        sources: (usize, Option<usize>),
         dst: usize,
         ctx: &ProcessCtx,
         input: &impl Fn(usize, usize) -> f32,
@@ -996,15 +1019,23 @@ impl Custom {
         let run = &mut self.frame_runs[scope];
         let n = run.input.len();
         self.regs[dst] = std::mem::take(&mut run.output[run.pos]);
-        run.input[run.pos] = self.regs[x];
+        run.input[run.pos] = self.regs[sources.0];
+        if let Some(x) = sources.1 {
+            run.input2[run.pos] = self.regs[x];
+        }
         run.pos = (run.pos + 1) % n;
-        if !run.pos.is_multiple_of(n / 2) {
+        if !run.pos.is_multiple_of(frame.hop) {
             return;
         }
         let pos = run.pos;
         let window = &mut self.lanes[frame.window];
         for (k, w) in window.iter_mut().enumerate() {
             *w = run.input[(pos + k) % n] * run.window[k];
+        }
+        if let Some(window2) = frame.window2 {
+            for (k, w) in self.lanes[window2].iter_mut().enumerate() {
+                *w = run.input2[(pos + k) % n] * run.window[k];
+            }
         }
         self.run_code(&frame.code, Section::Sample, ctx, input, i);
         let run = &mut self.frame_runs[scope];
@@ -1018,10 +1049,14 @@ impl Custom {
         match result {
             lane_ops::Operand::Slice(r) => {
                 for (k, &v) in r.iter().enumerate() {
-                    run.output[(pos + k) % n] += v;
+                    run.output[(pos + k) % n] += v * run.synthesis[k];
                 }
             }
-            lane_ops::Operand::Scalar(v) => run.output.iter_mut().for_each(|o| *o += v),
+            lane_ops::Operand::Scalar(v) => {
+                for k in 0..n {
+                    run.output[(pos + k) % n] += v * run.synthesis[k];
+                }
+            }
         }
     }
 
