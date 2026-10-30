@@ -20,6 +20,20 @@ it('draws snapped points, edits exact values, and undoes a whole gesture', () =>
   parent.querySelector<HTMLButtonElement>('[data-redo]')!.click(); expect(lane.envelope?.points[0].row).toBe(16);
 });
 
+it('starts automation on any parameter from the lane list, using an empty lane before making one', () => {
+  const project = newProject(), parent = document.createElement('div'), changed = vi.fn(); document.body.append(parent);
+  project.patterns[0].fx[0][0].target = null;
+  const editor = new EnvelopeEditor(parent, () => project, () => project.patterns[0], () => ({}), changed); editor.render();
+  const lanes = () => project.patterns[0].fx[0], pick = (value: string) => { const select = parent.querySelector<HTMLSelectElement>('[data-lane]')!; select.value = value; select.dispatchEvent(new Event('change')); };
+  const offered = () => [...parent.querySelectorAll<HTMLOptionElement>('[data-lane] optgroup option')].map(o => o.textContent);
+  expect(offered()).toEqual(['Track → Vol', 'Track → Pan']);
+  pick(`add:${JSON.stringify({ kind: 'pan' })}`);
+  expect(lanes()).toHaveLength(1); expect(lanes()[0].target).toEqual({ kind: 'pan' }); // the empty first lane was used
+  expect(offered()).toEqual(['Track → Vol']);
+  pick(`add:${JSON.stringify({ kind: 'volume' })}`);
+  expect(lanes().map(lane => lane.target)).toEqual([{ kind: 'pan' }, { kind: 'volume' }]); expect(changed).toHaveBeenCalledTimes(2);
+});
+
 it('chooses a lane\'s parameter, adds and removes lanes, and refuses what would lose an envelope', () => {
   const project = newProject(), parent = document.createElement('div'), changed = vi.fn(); document.body.append(parent);
   project.definitions.push({ id: 'bell', name: 'Bell', kind: 'instr', source: 'instr bell(freq: hz) { osc(sine, freq) }' });
@@ -46,6 +60,6 @@ it('chooses a lane\'s parameter, adds and removes lanes, and refuses what would 
   delete lanes()[1].envelope; editor.render();
   parent.querySelector<HTMLButtonElement>('[data-remove-lane]')!.click(); expect(lanes()).toHaveLength(1);
   expect(parent.querySelector<HTMLButtonElement>('[data-remove-lane]')!.disabled).toBe(true); // the last one stays
-  for (let i = 0; i < 3; i++) parent.querySelector<HTMLButtonElement>('[data-add-lane]')!.click();
-  expect(lanes()).toHaveLength(4); expect(parent.querySelector<HTMLButtonElement>('[data-add-lane]')!.disabled).toBe(true);
+  for (let i = 0; i < 15; i++) parent.querySelector<HTMLButtonElement>('[data-add-lane]')!.click();
+  expect(lanes()).toHaveLength(16); expect(parent.querySelector<HTMLButtonElement>('[data-add-lane]')!.disabled).toBe(true);
 });

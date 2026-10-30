@@ -1,4 +1,4 @@
-import { columnCount, columnLanes, columnStrip, type EffectParameters, type Envelope, type FxLane, type Pattern, type Project } from './project';
+import { columnCount, maxLanes, columnLanes, columnStrip, type EffectParameters, type Envelope, type FxLane, type Pattern, type Project } from './project';
 import { envelopeValue, formatValue, laneChoices, laneParameter, parseValue, targetKey } from './automation';
 
 const svgNS = 'http://www.w3.org/2000/svg';
@@ -56,6 +56,20 @@ export class EnvelopeEditor {
     find('[data-track-name]').textContent = columnStrip(this.project(), this.track).name;
     const lanes = find<HTMLSelectElement>('[data-lane]'); this.lanes.forEach((lane, i) => lanes.add(new Option(laneParameter(lane.target, this.track, this.project(), this.parameters())?.label ?? 'Choose a parameter', String(i)))); lanes.value = String(this.lane); lanes.onchange = () => this.select(this.track, Number(lanes.value));
     const choices = laneChoices(this.project(), this.pattern(), this.track, this.parameters()), groups = new Map<string, HTMLOptGroupElement>();
+    // anything not yet automated can be started from the lane list itself, so no lane has to be made and then pointed somewhere
+    const fresh = choices.filter(choice => !this.lanes.some(lane => targetKey(lane.target) === targetKey(choice.target)));
+    if (fresh.length) {
+      const group = document.createElement('optgroup'); group.label = 'Automate…';
+      for (const choice of fresh) group.append(new Option(`${choice.owner} → ${choice.name}`, `add:${targetKey(choice.target)}`));
+      lanes.append(group);
+    }
+    lanes.onchange = () => {
+      if (!lanes.value.startsWith('add:')) { this.select(this.track, Number(lanes.value)); return; }
+      const chosen = fresh.find(choice => `add:${targetKey(choice.target)}` === lanes.value)!;
+      let at = this.lanes.findIndex(lane => lane.target === null && !lane.envelope?.points.length);
+      if (at < 0) { if (this.lanes.length >= maxLanes) { this.render(); this.parent.querySelector('[data-help]')!.textContent = `A track has at most ${maxLanes} lanes: remove one first.`; return; } this.lanes.push({ target: null }); at = this.lanes.length - 1; }
+      this.lanes[at].target = { ...chosen.target }; this.lane = at; this.changed(); this.render();
+    };
     const target = find<HTMLSelectElement>('[data-target]'); target.add(new Option('Choose a parameter…', ''));
     for (const choice of choices) {
       if (!groups.has(choice.owner)) { const group = document.createElement('optgroup'); group.label = choice.owner; groups.set(choice.owner, group); target.append(group); }
@@ -70,7 +84,7 @@ export class EnvelopeEditor {
       if (chosen && this.lanes.some(other => other !== this.column && targetKey(other.target) === targetKey(chosen))) { refuse('That parameter already has a lane on this track.'); return; }
       this.column.target = chosen; this.changed(); this.render();
     };
-    const add = find<HTMLButtonElement>('[data-add-lane]'); add.disabled = this.lanes.length >= 4;
+    const add = find<HTMLButtonElement>('[data-add-lane]'); add.disabled = this.lanes.length >= maxLanes;
     add.onclick = () => { this.lanes.push({ target: null }); this.lane = this.lanes.length - 1; this.changed(); this.render(); };
     const remove = find<HTMLButtonElement>('[data-remove-lane]'); remove.disabled = this.lanes.length <= 1;
     remove.onclick = () => {

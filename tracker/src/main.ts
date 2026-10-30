@@ -62,7 +62,7 @@ app.innerHTML = `
       <div id="bottom-dock" hidden>
         <div class="dock-resize" id="dock-resize"></div>
         <div class="dock-row"><section id="fx-browser" aria-label="Effect browser"></section><div class="dock-main">
-        <div class="dock-bar"><span id="dock-track" class="dock-track" title="The selected track: its effects and automation"></span><button class="tab" data-tab="fx" title="The selected track's effect chain">FX</button><button class="tab" data-tab="automation" title="Automation for the selected track">Automation</button><button id="fx-code-toggle" class="tab" aria-pressed="false" title="Show the code of the selected effect beside the chain">Code</button>${codeTools('fx')}<span class="spacer"></span><button id="expand" title="Expand editor" aria-label="Expand editor">⤢</button><button id="close-dock" title="Close" aria-label="Close panel">×</button></div>
+        <div class="dock-bar"><span id="dock-track" class="dock-track" title="The selected track: its effects and automation"></span><button class="tab" data-tab="fx" title="The selected track's effect chain">FX</button><button class="tab" data-tab="automation" title="Automation for the selected track">Automation</button><button id="fx-code-toggle" class="tab" title="The code of the selected effect">Code</button>${codeTools('fx')}<span class="spacer"></span><button id="expand" title="Expand editor" aria-label="Expand editor">⤢</button><button id="close-dock" title="Close" aria-label="Close panel">×</button></div>
         <section id="automation-panel" hidden><div id="automation"></div></section>
         <section id="code-panel" hidden><div class="code-workspace"><div id="mixer" aria-label="Track FX controls" hidden></div><div id="code"></div></div></section>
         </div></div>
@@ -246,7 +246,7 @@ function currentDevice(): Device | undefined {
 function shownEffect() { return element('code').hidden ? null : shown.fx?.id ?? null; }
 let fxCodeShown = false;
 function mixerView() {
-  element('bottom-dock').classList.toggle('show-code', fxCodeShown || libraryFx !== null);
+  element('bottom-dock').classList.toggle('show-code', fxCodeShown && !element('code').hidden || libraryFx !== null);
   refreshMix(); browserTarget(); soundBrowser.refresh(); fxBrowser.refresh(); projectPanel.refresh();
   element('dock-track').textContent = stripOf(project, deviceTrack).name; markTabs();
   if (shown.instr) renderInstrument(element('instr-controls'), shown.instr, allParameters(), editedPattern, (target, value) => grid.writeParameter(stripToColumn(project, deviceTrack), target, value), deviceTrack, changeSelectedSource);
@@ -269,6 +269,14 @@ function mixerView() {
       removeDevice(project, deviceTrack, id);
       if (cleared) status(`Cleared ${cleared} effect command${cleared > 1 ? 's' : ''} written for it`);
       chosenDevice.delete(deviceTrack); showFx(); editedPattern(); grid.render();
+    },
+    rename: (id, name) => {
+      const definition = project.definitions.find(d => d.id === stripOf(project, deviceTrack).fx.find(device => device.id === id)?.definition);
+      if (!definition) return;
+      const before = definition.source;
+      renameDefinition(project, definition, name);
+      if (definition.source !== before) { if (shown.fx === definition) replaceSource(definition, definition.source); else states.delete(definition.id); }
+      renderDefinitions(); grid.render(); mixerView(); save();
     },
     move: (id, delta) => { if (moveDevice(project, deviceTrack, id, delta)) { editedPattern(); grid.render(); mixerView(); } },
     changed: () => { editedPattern(); grid.render(); mixerView(); },
@@ -970,6 +978,9 @@ const panels: Panel[] = ['code', 'automation'];
 const tabPanel = (tab: string): Panel => tab === 'fx' ? 'code' : tab as Panel;
 function markTabs() {
   for (const button of document.querySelectorAll<HTMLElement>('[data-tab]')) button.setAttribute('aria-selected', String(!element(`${tabPanel(button.dataset.tab!)}-panel`).hidden));
+  // the effects tab and the Code tab share the panel: one or the other is showing
+  const code = element('bottom-dock').classList.contains('show-code'), inPanel = !element('code-panel').hidden;
+  document.querySelector('[data-tab=fx]')!.setAttribute('aria-selected', String(inPanel && !code)); element('fx-code-toggle').setAttribute('aria-selected', String(inPanel && code));
 }
 /** The dock: the selected track's effects and automation. */
 function showPanel(panel: Panel, visible: boolean) {
@@ -989,6 +1000,7 @@ function showPanel(panel: Panel, visible: boolean) {
 for (const button of document.querySelectorAll<HTMLElement>('[data-tab]')) {
   const tab = button.dataset.tab!;
   button.onclick = () => {
+    fxCodeShown = false;
     showPanel(tabPanel(tab), true);
     if (tab === 'automation') envelopeEditor?.select(stripToColumn(project, deviceTrack));
     else if (tab === 'fx') showFx();
@@ -1014,7 +1026,7 @@ for (const button of document.querySelectorAll<HTMLElement>('[data-view]')) {
   button.onclick = () => { showView(button.dataset.view as View); if (button.dataset.view === 'pattern') element('grid').focus(); };
 }
 element('open-mix').onclick = () => showView(mainView === 'mix' ? 'pattern' : 'mix');
-element('fx-code-toggle').onclick = () => { fxCodeShown = !fxCodeShown; element('fx-code-toggle').setAttribute('aria-pressed', String(fxCodeShown)); mixerView(); };
+element('fx-code-toggle').onclick = () => { fxCodeShown = true; showPanel('code', true); showFx(); if (!element('code').hidden) editor.focus(); };
 element('toggle-dock').onclick = () => { if (element('bottom-dock').hidden) { showPanel('code', true); showFx(); } else showPanel('code', false); };
 element('close-dock').onclick = () => { showPanel('code', false); element('grid').focus(); };
 element('dock-resize').onpointerdown = event => {

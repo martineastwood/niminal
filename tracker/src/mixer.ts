@@ -56,6 +56,8 @@ export interface FxActions {
   select(id: string): void;
   add(preset: string): void;
   remove(id: string): void;
+  /** Gives the effect a new name, in its code too. */
+  rename(id: string, name: string): void;
   move(id: string, delta: number): void;
   changed(): void;
   /** Lanes were deleted from the pattern grid, so what it remembers of them is out of date. */
@@ -84,7 +86,8 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
     const definition = project.definitions.find(d => d.id === device.definition);
     const card = document.createElement('div'); card.className = 'device'; card.classList.toggle('selected', device.id === fx.selected); card.classList.toggle('bypassed', device.bypass);
     const head = document.createElement('div'); head.className = 'device-head';
-    const pick = button(definition?.name ?? 'Effect', `Edit ${definition?.name ?? 'effect'}`, () => fx.select(device.id)); pick.className = 'device-name';
+    const pick = button(definition?.name ?? 'Effect', `Edit ${definition?.name ?? 'effect'}`, () => { if (device.id !== fx.selected) fx.select(device.id); }); pick.className = 'device-name'; pick.title = 'Click to select, double-click to rename, drag to reorder';
+    if (definition) pick.ondblclick = () => renameInPlace(pick, definition.name, name => fx.rename(device.id, name));
     const bypass = button('⏻', `Bypass ${definition?.name ?? 'effect'}`, () => { device.bypass = !device.bypass; fx.changed(); }); bypass.setAttribute('aria-pressed', String(device.bypass));
     const up = button('←', 'Move effect earlier', () => fx.move(device.id, -1)); up.disabled = position === 0;
     const down = button('→', 'Move effect later', () => fx.move(device.id, 1)); down.disabled = position === track.fx.length - 1;
@@ -151,6 +154,20 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
   if (fx.selected && fx.selected !== selectedBefore) effects.querySelector<HTMLElement>('.device.selected')?.scrollIntoView?.({ inline: 'nearest', block: 'nearest' });
 }
 
+/** Swaps `label` for a text field holding `name` until Enter or a click elsewhere (which keep the change) or Escape (which drops it). */
+function renameInPlace(label: HTMLElement, name: string, commit: (name: string) => void) {
+  const input = document.createElement('input'); input.className = 'device-rename'; input.value = name; input.maxLength = 64; input.setAttribute('aria-label', `Rename ${name}`);
+  let finished = false;
+  const finish = (keep: boolean) => {
+    if (finished) return; finished = true;
+    const value = input.value.trim();
+    if (keep && value && value !== name) commit(value); else input.replaceWith(label);
+  };
+  input.onkeydown = event => { event.stopPropagation(); if (event.key === 'Enter' || event.key === 'Escape') { event.preventDefault(); finish(event.key === 'Enter'); } };
+  input.onblur = () => finish(true);
+  label.replaceWith(input); input.focus(); input.select();
+}
+
 /** The chain scrolls sideways under a plain wheel, unless the effect under the pointer has more to show in the direction it was turned. */
 function wheelAlong(chain: HTMLElement, event: WheelEvent) {
   if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
@@ -194,7 +211,7 @@ function macrosCard(project: Project, activeTrack: number, edited: () => void, w
   if (!macros.length) { const hint = document.createElement('p'); hint.className = 'device-note'; hint.textContent = 'A macro moves several effect parameters at once'; card.append(hint); }
   macros.forEach((knob, index) => {
     const row = slider(knob.name, knob.value, 0, 1, '', value => { knob.value = value; edited(); }, () => write({ kind: 'macro', index }, knob.value),
-      index === macros.length - 1 ? button('×', 'Remove the last macro', () => { if (removeMacro(project, activeTrack)) lanesRemoved(); edited(); refresh(); }) : undefined);
+      button('×', `Remove macro ${index + 1}: later ones move up a number, in lanes and commands too`, () => { if (removeMacro(project, activeTrack, index)) lanesRemoved(); edited(); refresh(); }));
     const name = document.createElement('input'); name.className = 'macro-name'; name.value = knob.name; name.maxLength = 40; name.setAttribute('aria-label', `Macro ${index + 1} name`);
     name.onchange = () => { knob.name = name.value.trim(); edited(); };
     row.firstElementChild!.replaceWith(name);
@@ -225,7 +242,7 @@ function slider(name: string, initial: number, min: number, max: number, unit: s
   input.oninput = () => { display(); change(Number(input.value)); }; input.oncontextmenu = event => { event.preventDefault(); record(); };
   value.onchange = () => { if (!Number.isFinite(value.valueAsNumber)) { display(); return; } input.value = String(Math.min(max, Math.max(min, value.valueAsNumber))); display(); change(Number(input.value)); };
   const numeric = document.createElement('span'); numeric.className = 'parameter-numeric'; const suffix = document.createElement('small'); suffix.textContent = unit; numeric.append(value, suffix);
-  row.append(label, input, numeric, button('↳', `Write ${name} to pattern`, record)); if (extra) row.append(extra); return row;
+  row.append(label, input, numeric, button('↳', `Record ${name} at the cursor row, as automation`, record)); if (extra) row.append(extra); return row;
 }
 /** A length picked from the musical divisions (1/8, 1/8t, 1/8d...), held in beats so it follows the tempo. */
 function divisionRow(name: string, beats: number, change: (value: number) => void, record: () => void, extra?: HTMLElement) {
@@ -234,7 +251,7 @@ function divisionRow(name: string, beats: number, change: (value: number) => voi
   for (const d of divisions) pick.add(new Option(d.name, String(d.beats)));
   pick.value = String(nearestDivision(beats).beats);
   pick.onchange = () => change(Number(pick.value)); pick.oncontextmenu = event => { event.preventDefault(); record(); };
-  row.append(label, pick, button('↳', `Write ${name} to pattern`, record)); if (extra) row.append(extra); return row;
+  row.append(label, pick, button('↳', `Record ${name} at the cursor row, as automation`, record)); if (extra) row.append(extra); return row;
 }
 /** The shape, rate and depth of an LFO that the instrument's code carries; each change rewrites the code. */
 function sourceLfoControls(source: string, parameter: Parameter, lfo: SourceLfo, changeSource: (source: string) => void) {

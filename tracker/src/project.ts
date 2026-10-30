@@ -12,7 +12,8 @@ export interface Lfo { enabled: boolean; shape: 'sine' | 'triangle' | 'saw' | 's
 export interface Device { id: string; definition: string; bypass: boolean; values: Record<string, number>; modulations: Record<string, Lfo>; target?: number; pre?: boolean; mute_source?: boolean }
 export const maxDevices = 8;
 export const maxReturns = 8;
-export const maxMacros = 8;
+export const maxLanes = 16; // automation lanes per strip in a pattern
+export const maxMacros = 15; // a macro is named by one hex digit in a `0yzz` command
 /** A parameter a macro drives: at 0 it sits at `min` of its range, at 1 at `max` (both fractions of the range; `min` above `max` runs it backwards). */
 export interface MacroLink { device: string; parameter: string; min: number; max: number }
 /** A knob (`value` from 0 to 1) that moves several of a strip's effect parameters together. */
@@ -77,7 +78,7 @@ export const glideRetriggers = (commands: (string | null | undefined)[]) => comm
 export const maxTrackCommandColumns = 4;
 /** Why a track command cannot be played, or null if it can: `Lxx` volume, `Pxx` pan, `xyzz` for parameter y of effect x, or `0yzz` for macro y. */
 export function trackCommandProblem(text: string): string | null {
-  return /^(?:[LP][0-9A-F]{2}|[1-9A-F][1-9A-F][0-9A-F]{2}|0[1-8][0-9A-F]{2})$/.test(text) ? null : `${text} is not a track command: Lxx volume, Pxx pan, four hex digits for an effect parameter such as 12FF, or 0yzz for a macro such as 01FF`;
+  return /^(?:[LP][0-9A-F]{2}|[1-9A-F][1-9A-F][0-9A-F]{2}|0[1-9A-F][0-9A-F]{2})$/.test(text) ? null : `${text} is not a track command: Lxx volume, Pxx pan, four hex digits for an effect parameter such as 12FF, or 0yzz for a macro such as 01FF`;
 }
 /** A track command's text in capitals, or null if it is not one. */
 export function trackCommandValue(text: string): string | null {
@@ -337,7 +338,7 @@ export function restoreTrack(project: Project, deleted: DeletedTrack): boolean {
 
 /** One track's, return's or the master's parameter lanes in a pattern of `rows` rows. */
 function validLanes(lanes: FxLane[]) {
-  return Array.isArray(lanes) && lanes.length >= 1 && lanes.length <= 4 && lanes.every(column => column && validEnvelope(column.envelope) && validTarget(column.target) && (column.target !== null || !column.envelope?.points.length));
+  return Array.isArray(lanes) && lanes.length >= 1 && lanes.length <= maxLanes && lanes.every(column => column && validEnvelope(column.envelope) && validTarget(column.target) && (column.target !== null || !column.envelope?.points.length));
 }
 export function validTarget(target: FxTarget | null): boolean {
   return target === null || !!target && (target.kind === 'volume' || target.kind === 'pan' || target.kind === 'macro' && Number.isInteger(target.index) && target.index >= 0 && target.index < maxMacros || target.kind === 'effect' && validDeviceId(target.device) && typeof target.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(target.parameter) || target.kind === 'instrument' && typeof target.instrument === 'string' && typeof target.parameter === 'string' && /^[a-zA-Z_]\w*$/.test(target.parameter));

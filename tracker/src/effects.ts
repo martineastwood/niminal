@@ -86,23 +86,35 @@ export function addMacro(project: Project, track: number): Macro | null {
   return knob;
 }
 
-/** Removes a strip's last macro (the others keep their numbers, which lanes refer to), and the lanes on it. A strip keeps at least one lane, which is left empty. Says whether lanes went. */
-export function removeMacro(project: Project, track: number): boolean {
-  const macros = stripOf(project, track).macros, index = (macros?.length ?? 0) - 1;
-  if (!macros || index < 0) return false;
-  macros.pop();
+/**
+ * Removes a macro of a strip (the last unless `index` says), and the lanes and commands on it. Later macros count one place less, in their
+ * lanes and in `0yzz` commands, and a macro still called by its number follows it. A strip keeps at least one lane, which is left empty.
+ * Says whether pattern data changed.
+ */
+export function removeMacro(project: Project, track: number, index = (stripOf(project, track).macros?.length ?? 0) - 1): boolean {
+  const macros = stripOf(project, track).macros;
+  if (!macros || index < 0 || index >= macros.length) return false;
+  macros.splice(index, 1);
+  macros.forEach((knob, i) => { if (i >= index && knob.name === `Macro ${i + 2}`) knob.name = `Macro ${i + 1}`; });
   const column = stripToColumn(project, track);
-  let removed = false;
+  let changed = false;
   for (const pattern of project.patterns) {
     const lanes = columnLanes(project, pattern, column);
     for (let i = lanes.length - 1; i >= 0; i--) {
       const target = lanes[i].target;
-      if (target?.kind !== 'macro' || target.index !== index) continue;
-      removed = true;
-      if (lanes.length > 1) lanes.splice(i, 1); else lanes[i] = emptyFxLane();
+      if (target?.kind !== 'macro' || target.index < index) continue;
+      changed = true;
+      if (target.index > index) target.index--;
+      else if (lanes.length > 1) lanes.splice(i, 1); else lanes[i] = emptyFxLane();
     }
   }
-  return removed;
+  for (const cell of effectCommands(project, track, /^0[1-9A-F][0-9A-F]{2}$/)) {
+    const number = parseInt(cell.text![1], 16);
+    if (number < index + 1) continue;
+    changed = true;
+    cell.cells[cell.row] = number === index + 1 ? null : `0${(number - 1).toString(16).toUpperCase()}${cell.text!.slice(2)}`;
+  }
+  return changed;
 }
 
 /** Has macro `index` (or none, for null) drive an effect parameter, over its whole range to begin with. A parameter has one driver. */
@@ -113,10 +125,10 @@ export function linkParameter(project: Project, track: number, device: string, p
 }
 
 /** The cells of a strip's effect commands (`xyzz`, which count the chain's effects from 1 by place), across every pattern. */
-function effectCommands(project: Project, track: number) {
+function effectCommands(project: Project, track: number, shape = /^[1-9A-F][1-9A-F][0-9A-F]{2}$/) {
   const column = stripToColumn(project, track);
   const columns = (pattern: Project['patterns'][number]) => column < project.tracks.length ? pattern.notes[column].flatMap(note => note.fx) : pattern.commands[column - project.tracks.length];
-  return project.patterns.flatMap(columns).flatMap(cells => cells.map((text, row) => ({ cells, row, text })).filter(cell => cell.text !== null && /^[1-9A-F][1-9A-F][0-9A-F]{2}$/.test(cell.text)));
+  return project.patterns.flatMap(columns).flatMap(cells => cells.map((text, row) => ({ cells, row, text })).filter(cell => cell.text !== null && shape.test(cell.text)));
 }
 /** How many effect commands of a strip are written for the effect `deviceId`. */
 export function commandsFor(project: Project, track: number, deviceId: string): number {

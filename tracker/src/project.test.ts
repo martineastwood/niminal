@@ -187,7 +187,7 @@ it('keeps parameter lanes for each return and the master, and rejects lanes that
   expect(readProject(JSON.stringify(project))).toEqual(project);
   const bad = (change: (p: typeof project) => void) => { const copy = structuredClone(project); change(copy); expect(() => readProject(JSON.stringify(copy))).toThrow(); };
   bad(p => { p.patterns[0].return_fx.pop(); }); // a lane list for every return
-  bad(p => { p.patterns[0].master_fx = []; }); bad(p => { p.patterns[0].master_fx = Array.from({ length: 5 }, () => emptyFxLane()); });
+  bad(p => { p.patterns[0].master_fx = []; }); bad(p => { p.patterns[0].master_fx = Array.from({ length: 17 }, () => emptyFxLane()); });
   bad(p => { p.patterns[0].master_fx[0].target = { kind: 'instrument', instrument: 'tone', parameter: 'cutoff' }; }); // no notes, no instruments
   bad(p => { p.patterns[0].return_fx[0][0].envelope = { enabled: true, mode: 'hold', points: [{ row: 1, value: 0 }, { row: 1, value: 1 }] }; }); // points run in order
 });
@@ -232,8 +232,8 @@ it('reads commands as a letter and two hex digits, and keeps command columns in 
 
 it('keeps commands in the fx columns of a track and the command columns of each return and the master, and rejects ones that cannot play', () => {
   expect(trackCommandValue(' l80 ')).toBe('L80'); expect(trackCommandValue('PFF')).toBe('PFF'); expect(trackCommandValue('13ff')).toBe('13FF');
-  expect(trackCommandValue('01ff')).toBe('01FF'); expect(trackCommandValue('08FF')).toBe('08FF'); // place 0 is a macro, 1 to 8
-  for (const bad of ['', 'L8', 'L800', 'Q80', 'S80', '0000', '0900', '1000', '12G0', '12F', '12FFF']) expect(trackCommandValue(bad), bad).toBeNull();
+  expect(trackCommandValue('01ff')).toBe('01FF'); expect(trackCommandValue('08FF')).toBe('08FF'); expect(trackCommandValue('0cff')).toBe('0CFF'); // place 0 is a macro, 1 to F
+  for (const bad of ['', 'L8', 'L800', 'Q80', 'S80', '0000', '1000', '12G0', '12F', '12FFF']) expect(trackCommandValue(bad), bad).toBeNull();
   expect(commandValue('13ff')).toBe('13FF'); expect(commandValue('s80')).toBe('S80'); expect(commandValue('l80')).toBe('L80'); // a track's fx column takes both kinds
   const project = newProject(), verb = { name: 'Verb', fx: [], pan: 0, muted: false, volume_db: 0 };
   project.returns.push(verb); for (const p of project.patterns) { p.return_fx.push([emptyFxLane()]); p.commands.splice(project.returns.length - 1, 0, [Array(p.rows).fill(null)]); }

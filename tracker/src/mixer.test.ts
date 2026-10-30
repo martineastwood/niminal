@@ -10,7 +10,7 @@ vi.stubGlobal('Option', function (text: string, value: string) {
 afterEach(() => document.body.replaceChildren());
 
 function actions(overrides: Partial<FxActions> = {}): FxActions {
-  return { selected: null, select: vi.fn(), add: vi.fn(), remove: vi.fn(), move: vi.fn(), changed: vi.fn(), lanesRemoved: vi.fn(), ...overrides };
+  return { selected: null, select: vi.fn(), add: vi.fn(), remove: vi.fn(), rename: vi.fn(), move: vi.fn(), changed: vi.fn(), lanesRemoved: vi.fn(), ...overrides };
 }
 
 it('builds a chain from presets, each device with its own copy of the code', () => {
@@ -31,6 +31,16 @@ it('builds a chain from presets, each device with its own copy of the code', () 
   expect(kept.target).toBeNull();
   for (let i = 0; i < 10; i++) addDevice(project, 2, 'band_cut');
   expect(project.tracks[2].fx).toHaveLength(8);
+});
+
+it('renames an effect on a double-click, and leaves the name alone on Escape', () => {
+  const project = newProject(), parent = document.createElement('div'); document.body.append(parent);
+  const a = addDevice(project, 0, 'echo')!, fx = actions({ selected: a.device.id }); renderMixer(parent, project, 0, vi.fn(), {}, vi.fn(), fx);
+  const open = () => { parent.querySelector<HTMLElement>('.device-name')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); return parent.querySelector<HTMLInputElement>('.device-rename')!; };
+  let input = open(); input.value = 'Slap'; input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  expect(fx.rename).not.toHaveBeenCalled(); expect(parent.querySelector('.device-rename')).toBeNull(); expect(parent.querySelector('.device-name')!.textContent).toBe('Echo');
+  input = open(); input.value = ' Slap '; input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  expect(fx.rename).toHaveBeenCalledWith(a.device.id, 'Slap');
 });
 
 it('moves an effect to the place it is dragged to', async () => {
@@ -82,7 +92,7 @@ it('uses the same editable controls and command recording for custom and built-i
   const value = parent.querySelector<HTMLInputElement>('[aria-label="mix value"]')!;
   value.value = '0.8'; value.dispatchEvent(new Event('change'));
   expect(device.values.mix).toBe(0.8); expect(edited).toHaveBeenCalledOnce();
-  parent.querySelector<HTMLButtonElement>('[aria-label="Write mix to pattern"]')!.click(); expect(write).toHaveBeenCalledWith({ kind: 'effect', device: device.id, parameter: 'mix' }, 0.8);
+  parent.querySelector<HTMLButtonElement>('[aria-label="Record mix at the cursor row, as automation"]')!.click(); expect(write).toHaveBeenCalledWith({ kind: 'effect', device: device.id, parameter: 'mix' }, 0.8);
   value.value = '3'; value.dispatchEvent(new Event('change')); expect(device.values.mix).toBe(1);
 });
 
@@ -104,6 +114,22 @@ it('shows each device as a card whose buttons act on the chain, with every one e
   card.querySelector<HTMLButtonElement>('[aria-label="Bypass Echo"]')!.click(); card.querySelector<HTMLInputElement>('input')?.click(); expect(select).not.toHaveBeenCalled();
 });
 
+it('removes a macro from the middle: later ones move up a number, in names, lanes, links and commands', () => {
+  const project = newProject(), a = addDevice(project, 0, 'echo')!;
+  for (let i = 0; i < 4; i++) addMacro(project, 0);
+  const macros = project.tracks[0].macros!; macros[2].name = 'Open';
+  linkParameter(project, 0, a.device.id, 'mix', 3);
+  const lanes = project.patterns[0].fx[0]; lanes.length = 0;
+  lanes.push({ target: { kind: 'macro', index: 1 } }, { target: { kind: 'macro', index: 2 }, envelope: { enabled: true, mode: 'hold', points: [{ row: 0, value: 0.5 }] } }, { target: { kind: 'macro', index: 3 } });
+  const cells = project.patterns[0].notes[0][0].fx[0]; cells[0] = '0200'; cells[1] = '03FF'; cells[2] = '04AA'; cells[3] = '1240';
+  expect(removeMacro(project, 0, 1)).toBe(true);
+  expect(macros.map(knob => knob.name)).toEqual(['Macro 1', 'Open', 'Macro 3']);
+  expect(macros[2].links.map(link => link.parameter)).toEqual(['mix']); // the linked macro moved with its number
+  expect(lanes.map(lane => lane.target)).toEqual([{ kind: 'macro', index: 1 }, { kind: 'macro', index: 2 }]); // the lane on the removed macro went
+  expect(cells.slice(0, 4)).toEqual([null, '02FF', '03AA', '1240']);
+  expect(removeMacro(project, 0, 9)).toBe(false);
+});
+
 it('shows an instrument\'s parameters as sliders that set its values, and records them to a lane on a track', () => {
   const project = newProject(), parent = document.createElement('div'), edited = vi.fn(), write = vi.fn(); document.body.append(parent);
   const tone = project.definitions[0];
@@ -113,10 +139,10 @@ it('shows an instrument\'s parameters as sliders that set its values, and record
   const value = parent.querySelector<HTMLInputElement>('[aria-label="cutoff value"]')!;
   expect(value.value).toBe('2000'); value.value = '500'; value.dispatchEvent(new Event('change'));
   expect(tone.values).toEqual({ cutoff: 500 }); expect(edited).toHaveBeenCalledOnce();
-  parent.querySelector<HTMLButtonElement>('[aria-label="Write cutoff to pattern"]')!.click();
+  parent.querySelector<HTMLButtonElement>('[aria-label="Record cutoff at the cursor row, as automation"]')!.click();
   expect(write).toHaveBeenCalledWith({ kind: 'instrument', instrument: 'tone', parameter: 'cutoff' }, 500);
   renderInstrument(parent, tone, parameters, edited, write, -1, vi.fn());
-  expect(parent.querySelector<HTMLButtonElement>('[aria-label="Write cutoff to pattern"]')!.disabled).toBe(true);
+  expect(parent.querySelector<HTMLButtonElement>('[aria-label="Record cutoff at the cursor row, as automation"]')!.disabled).toBe(true);
 });
 
 it('hides an instrument slider on request, and brings all of them back', () => {
@@ -219,8 +245,8 @@ it('adds macros, links effect parameters to them, and tidies up when a device or
   expect(project.patterns[0].fx[0].map(lane => lane.target)).toEqual([{ kind: 'volume' }]); // both macro lanes went, with their values
   removeDevice(project, 0, b.device.id);
   expect(project.tracks[0].macros![0].links).toEqual([]);
-  for (let i = 0; i < 10; i++) addMacro(project, 0);
-  expect(project.tracks[0].macros).toHaveLength(8);
+  for (let i = 0; i < 20; i++) addMacro(project, 0);
+  expect(project.tracks[0].macros).toHaveLength(15); // one hex digit names a macro in a command
   project.tracks[0].macros![0].links = [{ device: a.device.id, parameter: 'mix', min: 0, max: 1 }, { device: a.device.id, parameter: 'mix', min: 0, max: 1 }];
   expect(() => readProject(JSON.stringify(project))).toThrow();
 });

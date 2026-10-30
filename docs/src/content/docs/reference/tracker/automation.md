@@ -12,7 +12,7 @@ A track's **Fx** columns, the command columns beside its notes (each track start
 | `Lxx` | Sets the track's volume: `00` is silent, `FF` is +3 dB (about `B4` is 0 dB). |
 | `Pxx` | Sets its pan: `00` is left, `80` centre, `FF` right. |
 | `xyzz` | Sets parameter `y` of the effect in place `x` of the track's chain to `zz`, from its least at `00` to its most at `FF`. Both counts start at 1, in the order of the code pane's FX view and of the effect's sliders, so `12FF` turns the first effect's second parameter right up. The parameter is one hex digit, so a command reaches an effect's first 15 parameters; sliders and automation lanes reach all of them. |
-| `0yzz` | Sets macro `y` of the track (from 1, up to 8) to `zz`, from 0% at `00` to 100% at `FF`. It moves every parameter linked to that macro. |
+| `0yzz` | Sets macro `y` of the track (from 1, up to F, so 15 macros) to `zz`, from 0% at `00` to 100% at `FF`. It moves every parameter linked to that macro. |
 
 Hovering a cell, or typing one, explains it in words (`L80 sets the track volume to -1.1 dB`, `12FF sets parameter 2 of effect 1 (Echo) …`, `0180 sets macro 1 (Open) to 50%`).
 
@@ -22,7 +22,7 @@ Effect commands count effects by place, so the tracker keeps them on the effects
 
 ## Automation lanes
 
-Drawn automation goes in the **Automation** tab of the bottom dock, not in the grid. Each track, return and the master has up to four **lanes** in each pattern. Choose a track (select it in the grid), then the lane and its parameter in the tab's toolbar: **Vol** or **Pan** (under *Track*), or a parameter listed under the effect or instrument it belongs to, such as *Stereo delay* › **feedback**. **+** adds a lane, **−** removes the chosen one. A lane with an envelope must be cleared before it is retargeted or removed, and each parameter can have one lane per track. Connect and Apply effects to expose their parameters. A lane can also target one of the track's macros, listed under **Macros**, so one envelope moves every parameter linked to it. Tracker knobs use the same macro evaluation as the language: frequency sweeps are geometric, decibel sweeps are even in dB, and other values move linearly. Reversing a link reverses its sweep.
+Drawn automation goes in the **Automation** tab of the bottom dock, not in the grid. Each track, return and the master has up to 16 **lanes** in each pattern. Choose a track (select it in the grid), then the lane and its parameter in the tab's toolbar: **Vol** or **Pan** (under *Track*), or a parameter listed under the effect or instrument it belongs to, such as *Stereo delay* › **feedback**. **+** adds a lane, **−** removes the chosen one. A lane with an envelope must be cleared before it is retargeted or removed, and each parameter can have one lane per track. Connect and Apply effects to expose their parameters. A lane can also target one of the track's macros, listed under **Macros**, so one envelope moves every parameter linked to it. Tracker knobs use the same macro evaluation as the language: frequency sweeps are geometric, decibel sweeps are even in dB, and other values move linearly. Reversing a link reverses its sweep.
 
 Values are read and shown with their unit: a level as `-6 dB` (range −60 to +6 dB), pan as `-100%` left to `100%` right, frequency as `2400 Hz` or `2.4 kHz`, time as `250 ms` or `0.25 sec` (a bare number is milliseconds), a parameter declared `0..1` as `35%`. Anything else is its physical value and optional unit, as shown on the slider.
 

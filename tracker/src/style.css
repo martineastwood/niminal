@@ -187,10 +187,12 @@ button.apply.dirty { background: var(--accent); border-color: #7a4a1a; color: #1
 .effect-device > .device { flex: 0 0 300px; margin-bottom: 0; overflow-x: hidden; overflow-y: auto; scroll-snap-align: start; cursor: default; }
 .effect-device > .device.reordering { opacity: .5; }
 .device-head .device-name { cursor: grab; }
+.device-rename { flex: 1; min-width: 0; height: 18px; font-size: var(--fs-2); }
 .effect-device > .device-note { align-self: flex-start; }
 #bottom-dock:not(.show-code) #code, #bottom-dock:not(.show-code) #fx-tools { display: none; }
-#bottom-dock.show-code #code { flex: 0 0 40%; min-width: 280px; }
-#bottom-dock.show-code #mixer[hidden] + #code { flex: 1 1 0; }
+/* the Code tab gives the code the whole dock, as the Automation tab does for its graph */
+#bottom-dock.show-code #mixer { display: none; }
+#bottom-dock.show-code #code { flex: 1 1 0; }
 .device-card { padding: 4px 6px 6px; border-bottom: 1px solid var(--line); }
 .track-output { border-top: 2px solid var(--track-colour); }
 .device-heading { display: flex; align-items: center; gap: 4px; margin-bottom: 3px; }

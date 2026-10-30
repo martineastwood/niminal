@@ -140,7 +140,9 @@ impl Track {
 
 pub const MAX_DEVICES: usize = 8;
 pub const MAX_RETURNS: usize = 8;
-pub const MAX_MACROS: usize = 8;
+/// Automation lanes a strip can have in a pattern.
+pub const MAX_LANES: usize = 16;
+pub const MAX_MACROS: usize = 15; // a macro is named by one hex digit in a `0yzz` command
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Lfo {
@@ -738,9 +740,9 @@ impl Song {
             }
             let groups = || pattern.fx.iter().chain(&pattern.return_fx).chain([&pattern.master_fx]);
             if groups().any(|lanes| {
-                lanes.is_empty() || lanes.len() > 4
+                lanes.is_empty() || lanes.len() > MAX_LANES
             }) {
-                return Err("Patterns need 1–4 parameter lanes per track, return and the master".into());
+                return Err("Patterns need 1–16 parameter lanes per track, return and the master".into());
             }
             if pattern.return_fx.iter().flatten().chain(&pattern.master_fx).any(|lane| matches!(lane.target, Some(crate::commands::FxTarget::Instrument { .. }))) {
                 return Err("Returns and the master have no instruments to automate".into());
@@ -2381,7 +2383,7 @@ mod tests {
         assert_eq!(TrackCommand::parse("PFF"), Some(TrackCommand::Pan(0xFF)));
         assert_eq!(TrackCommand::parse("13FF"), Some(TrackCommand::Device { device: 1, parameter: 3, value: 0xFF }));
         assert_eq!(TrackCommand::parse("02FF"), Some(TrackCommand::Macro { index: 2, value: 0xFF }));
-        for bad in ["", "L8", "L800", "Q80", "l80", "0000", "0900", "1000", "12G0", "12F", "12FFF"] {
+        for bad in ["", "L8", "L800", "Q80", "l80", "0000", "1000", "12G0", "12F", "12FFF"] {
             assert_eq!(TrackCommand::parse(bad), None, "{bad}");
         }
         let strip = Track { fx: vec![Device { id: "d0".into(), definition: "filter".into(), ..Device::default() }], ..Track::default() };
@@ -2402,6 +2404,7 @@ mod tests {
         let aim_macro = |text: &str| TrackCommand::parse(text).and_then(|c| c.target(&knobs, &parameters));
         assert_eq!(aim_macro("0100"), Some((crate::commands::FxTarget::Macro { index: 0 }, 0.0)));
         assert_eq!(aim_macro("01FF").unwrap().1, 1.0);
+        assert_eq!(TrackCommand::parse("0F80"), Some(TrackCommand::Macro { index: 15, value: 0x80 }), "a macro is named by one hex digit, up to F");
         assert!(!aim_macro("0200").unwrap().0.available(&knobs, &parameters), "no second macro: the command is skipped");
         // a track's commands, in the fx columns of its note columns, reach the engine as one routing edit at the start of their row
         let mut with_commands = column(4, &[]);

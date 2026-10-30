@@ -1,4 +1,4 @@
-import { patternTiming, patternSeconds, patternRow, patternSwing } from './project';
+import { maxLanes, patternTiming, patternSeconds, patternRow, patternSwing } from './project';
 import { targetKey } from './automation';
 import { describeAnyCommand } from './describe';
 import { columnCommands, commandProblem, commandValue, glideRetriggers, maxFxColumns, maxTrackCommandColumns, trackCommandProblem, trackCommandValue, keyboardNote, noteAt, noteNumber, transposeNote, blankColumn, subColumns, maxNoteColumns, columnCount, columnStrip, columnLanes, type FxTarget, type Project, type Song, type Pattern, type Track, type SubColumn } from './project';
@@ -659,15 +659,16 @@ export class PatternGrid {
     let lane = lanes.find(other => targetKey(other.target) === targetKey(target));
     if (!lane) {
       lane = lanes.find(other => other.target === null && !other.envelope?.points.length);
-      if (!lane && lanes.length < 4) { lane = { target: null }; lanes.push(lane); }
-      if (!lane) { this.feedback('Remove an automation lane before recording this control (maximum four per track).'); return; }
+      if (!lane && lanes.length < maxLanes) { lane = { target: null }; lanes.push(lane); }
+      if (!lane) { this.feedback('Remove an automation lane before recording this control (maximum 16 per track).'); return; }
       lane.target = { ...target };
     }
     const envelope = lane.envelope ??= { enabled: true, mode: 'hold', points: [] };
     envelope.enabled = true;
-    const point = envelope.points.find(p => p.row === this.row);
-    if (point) point.value = value; else { envelope.points.push({ row: this.row, value }); envelope.points.sort((a, b) => a.row - b.row); }
+    const row = this.row, point = envelope.points.find(p => p.row === row);
+    if (point) point.value = value; else { envelope.points.push({ row, value }); envelope.points.sort((a, b) => a.row - b.row); }
     this.resetHistory(); this.edited(); this.advance(); this.render(); this.parent.focus();
+    this.feedback(`Recorded at row ${row} of this pattern: see the Automation tab`);
   }
   /** MIDI uses absolute pitch and hardware velocity, even when the cursor is on a sub-column or lane. */
   midiNoteOn(number: number, velocity: number) {
