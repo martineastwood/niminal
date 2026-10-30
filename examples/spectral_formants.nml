@@ -1,22 +1,39 @@
-// Independent pitch and spectral-envelope (formant) control.
-// Evaluate the whole file; all times are relative to when you submit it.
+// A held vocal-like harmony changes colour; a rising phrase compares envelope preservation.
+// Evaluate the whole file; + times restart the piece wherever the live clock has reached.
 // niminal-live render examples/spectral_formants.nml --out /tmp/spectral_formants.wav
 use std/spectral
 
+config { channels: stereo }
 tempo 100bpm
 
-// shift moves the notes in semitones. preserve: 1 keeps the original broad spectral envelope.
-// formant moves that envelope independently: negative sounds darker/larger, positive brighter/smaller.
-// This is envelope shaping, not a model of a human vocal tract; leave headroom for boosted bands.
-instr colour(freq: hz = a2, shift: -48..48 = 0, preserve: 0..1 = 0, formant: -48..48 = 0) {
-  excitation = osc(saw, freq) * 0.2
-  voice = excitation.bpf(cutoff: 700hz, res: 0.75) + excitation.bpf(cutoff: 1800hz, res: 0.7) * 0.5
-  source = voice * env[0 10ms 1 | 100ms 0]
-  out = spectral_pitch(source, shift: shift, preserve: preserve, formant: formant, detail: 32)
+// shift moves notes. formant moves broad resonances; preserve: 1 holds those resonances as pitch rises.
+// sweep: 1 moves the envelope gently between -3 and +3 semitones on a held note.
+// The broad source filters give a vocal-like shape without narrow ringing resonances.
+instr colour(freq: hz = a3, shift: -48..48 = 0, preserve: 0..1 = 0,
+             formant: -12..12 = 0, sweep: 0..1 = 0, amp: db = 0db, az: deg = 0deg) {
+  excitation = (osc(tri, freq) * 0.6 + osc(saw, freq) * 0.4) * 0.45
+  voice = excitation.bpf(cutoff: 650hz, res: 0.35) + excitation.bpf(cutoff: 1500hz, res: 0.3) * 0.6
+  movement = env[-3 2beats 3 2beats -3]
+  source = voice * env[0 90ms 1 | 250ms 0]
+  shifted = spectral_pitch(source, shift: shift, preserve: preserve, formant: formant + movement * sweep, detail: 32, overlap: 8)
+  out = shifted.gain(amp).pan(azimuth: az)
 }
 
-colour() for 2beats                             // Original pitch and colour.
-at +3beats colour(shift: 12) for 2beats          // Octave up; resonances move up with the notes.
-at +6beats colour(shift: 12, preserve: 1) for 2beats // Octave up; original broad resonances retained.
-at +9beats colour(formant: -7) for 2beats        // Original notes, darker/lower resonances.
-at +12beats colour(formant: 7) for 2beats        // Original notes, brighter/higher resonances.
+// The notes stay still while the apparent size of the harmony changes.
+colour(freq: a3, sweep: 1, amp: -6db, az: -25deg) for 4beats
+colour(freq: c4, sweep: 1, amp: -6db) for 4beats
+colour(freq: e4, sweep: 1, amp: -6db, az: 25deg) for 4beats
+
+// An octave-up answer, first with the envelope moving up naturally...
+at +5beats colour(freq: a3, shift: 12) for 1beat
+at +6beats colour(freq: c4, shift: 12) for 1beat
+at +7beats colour(freq: e4, shift: 12) for 1beat
+// ...then with the same notes and original broad resonances retained.
+at +9beats colour(freq: a3, shift: 12, preserve: 1) for 1beat
+at +10beats colour(freq: c4, shift: 12, preserve: 1) for 1beat
+at +11beats colour(freq: e4, shift: 12, preserve: 1) for 1beat
+
+// Settle into a darker held chord.
+at +13beats colour(freq: a3, formant: -3, amp: -6db, az: -25deg) for 2beats
+at +13beats colour(freq: c4, formant: -3, amp: -6db) for 2beats
+at +13beats colour(freq: e4, formant: -3, amp: -6db, az: 25deg) for 2beats

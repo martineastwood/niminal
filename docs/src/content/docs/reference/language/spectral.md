@@ -33,9 +33,9 @@ Envelope control uses a smoothed log-magnitude envelope and applies the ratio be
 
 Examples:
 
-- `examples/spectral_pitch.nml`: dry, neutral, octave down, fifth up and octave up.
-- `examples/spectral_formants.nml`: pitch with a moving or preserved envelope, then independent colour changes.
-- `examples/spectral_transients.nml`: repeated attacks through one running processor, with resets off and on.
+- `examples/spectral_pitch.nml`: a warm phrase, its octave-down bass and fifth-up answer, then a stereo A-minor chord built from shifted copies.
+- `examples/spectral_formants.nml`: a held harmony changes apparent size, followed by matched rising phrases with natural and preserved envelopes.
+- `examples/spectral_transients.nml`: the same seeded percussion-and-pluck groove, dry and shifted with attack resets off and on.
 
 ## Spectral memory
 
@@ -57,4 +57,4 @@ Memory also accepts `shift`, `formant`, `preserve`, `transients` and `detail` as
 
 `frames` is a compile-time integer from 1 to 65536. History uses `frames * (size / 2 + 1) * 12` bytes; configurations above **64 MiB of history per instance** are rejected. FFT and tracking buffers are additional. At 48 kHz, size 2048 / overlap 4, 256 frames occupy about 3 MiB and successive frame times span about 2.72 seconds. Duration scales with sample rate; the stored frame count stays fixed. Once full, recording overwrites the oldest frame. Reset clears the capture. State-carrying redefinitions preserve it when `size`, `overlap`, `frames` and `detail` match. Prefer a persistent effect for a shared live capture rather than allocating a separate bank per note.
 
-`examples/spectral_memory.nml` demonstrates holding, forward and reverse scanning, and looping a smaller region with independent pitch.
+`examples/spectral_memory.nml` records one bowed gesture and reuses that capture throughout: a held detail, forward and reverse scans, then a small looping region harmonized into a minor chord.

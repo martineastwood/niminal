@@ -87,7 +87,7 @@ For envelope transfer, `amount: 0` returns the carrier delayed by one frame, and
 
 `detail` is a compile-time integer: larger values retain narrower spectral features, smaller values give a smoother envelope, and values below 1 act as 1. Its audible bandwidth depends on the sample rate; start around 32 at 48 kHz. FFT size also controls frequency resolution and latency. This is frame-based processing, so sharp attacks can smear.
 
-[The envelope-transfer example](https://github.com/martineastwood/niminal/blob/main/examples/envelope_transfer.nml) compares a buzzy carrier, a resonant noise donor and the resulting hybrid, without external samples.
+[The envelope-transfer example](https://github.com/martineastwood/niminal/blob/main/examples/envelope_transfer.nml) introduces a warm carrier and a rhythmic noise breath, then plays their hybrid through an A-minor/F-major progression, without external samples.
 
 ## std/instruments
 
@@ -142,7 +142,7 @@ Each of these is a whole piece: the code is the file that made the sound.
 
 <Example file="multitap.nml" />
 
-**Spectral effects.** A tilt written with `frames`, `fft` and `ifft`, then `blur`, `band_keep`, `robot` and the `fdn` reverb.
+**Spectral effects.** A short harmonic miniature with a custom FFT tilt and moving spectral blur, quiet `band_keep`/`robot` accents, and a captured detail that holds as the piece dissolves.
 
 <Example file="spectral.nml" />
 

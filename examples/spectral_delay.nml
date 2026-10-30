@@ -1,25 +1,28 @@
-// Spectral delay: each frequency bin has its own delay line. At spread: 0 they echo together;
-// raising spread makes the low frequencies arrive before the highs, smearing each pluck in time.
-// Render with: niminal-live render examples/spectral_delay.nml --out spectral_delay.wav
+// Sparse plucks call; their delayed harmonics answer and move across the stereo field.
+// Evaluate the whole file; + times restart the phrase whenever you submit it.
+// niminal-live render examples/spectral_delay.nml --out /tmp/spectral_delay.wav
 config { channels: stereo }
 tempo 100bpm
 
 instr pluck(freq: hz, spread: 0..1 = 0.8) {
-  // Keep the voice alive after the note so the feedback can ring out.
-  tail = 10sec
-  dry = (osc(saw, freq) + osc(sine, freq * 2) * 0.75) * env[1 80ms 0]
-  wet = dry.spectral_delay(time: 800ms, spread: spread, feedback: 0.55, size: 2048)
-  out = dry + wet * 0.8
+  // A bounded tail lets the quieter echoes finish after each short scored note.
+  tail = 4sec
+  tone = osc(tri, freq) * 0.65 + osc(saw, freq) * 0.35
+  dry = tone.lpf(cutoff: 3500hz) * perc(attack: 12ms, decay: 420ms) * 0.9
+  wet = dry.spectral_delay(time: 3/4beat, spread: spread, feedback: 0.38, size: 2048)
+  sway = lfo(0.4hz).unipolar.range(-30deg..30deg)
+  out = dry.pan(azimuth: -8deg) + wet.pan(azimuth: sway) * 0.75
 }
 
-// The same note, first with all bins together, then with the spectrum spread out.
+// With spread: 0, all bins return together. At 0.9, lower harmonics answer before higher ones.
 pluck(freq: a3, spread: 0) for 1/4beat
-at +4beats pluck(freq: a3, spread: 1) for 1/4beat
+at +2beats pluck(freq: a3, spread: 0.9) for 1/4beat
 
-// Leave space between phrases for the delayed harmonics to answer.
-at +8beats pluck(freq: a3) for 1/4beat
-at +9beats pluck(freq: c4) for 1/4beat
-at +10beats pluck(freq: e4) for 1/4beat
-at +12beats pluck(freq: g3) for 1/4beat
-at +13beats pluck(freq: b3) for 1/4beat
-at +14beats pluck(freq: d4) for 1/4beat
+// Leave space for the answers: A minor, then a G-major colour, resolving back to A.
+at +4beats pluck(freq: a3) for 1/4beat
+at +5beats pluck(freq: c4) for 1/4beat
+at +6beats pluck(freq: e4) for 1/4beat
+at +9beats pluck(freq: g3) for 1/4beat
+at +10beats pluck(freq: b3) for 1/4beat
+at +11beats pluck(freq: d4) for 1/4beat
+at +14beats pluck(freq: a3, spread: 0.9) for 1/4beat

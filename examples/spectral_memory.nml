@@ -1,26 +1,36 @@
-// A short sound captured as spectral frames, then held or scanned independently of pitch.
-// Evaluate the whole file in VS Code.
+// One bowed gesture becomes a held note, a forward/reverse scan, then a looping minor chord.
+// Evaluate the whole file: one voice owns one capture for the entire performance.
 // niminal-live render examples/spectral_memory.nml --out /tmp/spectral_memory.wav
+use std/spectral
 
+config { channels: stereo }
 tempo 100bpm
 
-// Each note first records/hears 350ms of a rising, darkening sound. It then stops recording.
-// mode 0 holds one detail, 1 scans forward, 2 scans backward, 3 loops a short region an octave up.
-// position: 0 is the oldest retained frame and 1 the newest. Intermediate positions interpolate.
-// frames: 96 at size 1024 / overlap 4 holds about 512ms at 48khz (96 * 256 / 48000).
-// Capacity is per instance. Prefer one persistent fx instance when recording live audio.
-// Use record: 1 to overwrite the ring with new input, record: 0 to keep and explore the capture.
-instr tape(mode: init 0..3 = 0) {
-  excitation = osc(saw, env[110hz 350ms 440hz]) * 0.12
-  source = excitation.lpf(cutoff: env[4khz 350ms 700hz]) * env[1 340ms 1 10ms 0]
-  recording = env[1 350ms 1 1ms 0]
-  forward = phasor(1.4hz)
-  position = 0.55 * (mode == 0) + forward * (mode == 1) + (1 - forward) * (mode == 2) + (0.25 + forward * 0.4) * (mode == 3)
-  captured = spectral_memory(source, record: recording, position: position, shift: 12 * (mode == 3), frames: 96, size: 1024)
-  out = captured * env[0 10ms 1 | 150ms 0]
+instr remembered() {
+  // The pitch stays at A3 while the filter and amplitude describe a single one-beat gesture.
+  tone = osc(tri, a3) * 0.65 + osc(saw, a3) * 0.35
+  source = tone.lpf(cutoff: env[600hz 100ms 4khz 350ms 900hz]) * env[0 50ms 1 450ms 0.45 100ms 0] * 0.75
+  recording = env[1 1beat 1 1ms 0]
+
+  // 0..3 beats: record, then hold one detail. 3..7: forward. 7..11: backward.
+  // 11..15: loop a smaller region. The capture is never recorded again.
+  forward = after(3beats) { phasor((1 / (4beats).num).hz) }
+  reverse = after(7beats) { phasor((1 / (4beats).num).hz) }
+  loop = after(11beats) { phasor((1 / (1beat).num).hz) }
+  position = (0.72 * (note.time < 3beats)
+    + (0.1 + forward * 0.8) * (note.time >= 3beats) * (note.time < 7beats)
+    + (0.9 - reverse * 0.8) * (note.time >= 7beats) * (note.time < 11beats)
+    + (0.4 + loop * 0.2) * (note.time >= 11beats))
+
+  // At 48khz, 256 frames at size 2048 / overlap 8 hold about 1.37 seconds.
+  // position: 0 is oldest, 1 newest. A held position keeps oscillating at its captured pitch.
+  captured = spectral_memory(source, record: recording, position: position, frames: 256, size: 2048, overlap: 8)
+  bloom = env[0 11beats 0 1beat 1]
+  third = spectral_pitch(captured, shift: 3, overlap: 8)
+  fifth = spectral_pitch(captured, shift: 7, overlap: 8)
+  out = (captured.pan(azimuth: 0deg) * 0.8
+    + third.pan(azimuth: -30deg) * bloom * 0.38
+    + fifth.pan(azimuth: 30deg) * bloom * 0.38) * env[0 30ms 1 | 350ms 0]
 }
 
-tape(mode: 0) for 2beats                 // Capture, then freeze a detail.
-at +3beats tape(mode: 1) for 2beats      // Capture, then scan forward through the change in timbre.
-at +6beats tape(mode: 2) for 2beats      // Capture, then scan backward; oscillation still runs forward.
-at +9beats tape(mode: 3) for 2beats      // Capture, then loop a smaller region with pitch shifted up.
+remembered() for 15beats

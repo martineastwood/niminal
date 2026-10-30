@@ -1,19 +1,33 @@
-// Compare uninterrupted phase locking with attack-sensitive phase resets.
+// The same percussion-and-pluck groove: dry, shifted with resets off, shifted with resets on.
+// Evaluate the whole file. All three passes have identical timing, source levels and noise seeds.
 // niminal-live render examples/spectral_transients.nml --out /tmp/spectral_transients.wav
 use std/spectral
 
+config { channels: stereo }
 tempo 100bpm
 
-// The repeated noisy hits arrive while the same vocoder instance keeps running.
-// transients: 1 detects spectral growth and resets only the growing peak regions.
-// transients: 0 keeps integrating their phases. Intermediate values soften the reset.
-// This can improve attack definition, but FFT windowing still limits time resolution.
-instr attacks(transients: 0..1 = 1) {
-  hits = noise(seed: 31) * (phasor(5hz) < 0.08) * 0.15
-  body = osc(sine, 220hz) * 0.025
-  source = (hits + body) * env[0 5ms 1 | 80ms 0]
-  out = spectral_pitch(source, shift: 7, transients: transients, size: 2048)
+// One running vocoder receives repeated attacks. transients resets only growing peak regions,
+// leaving steady regions integrating. It can improve definition; windowing still limits resolution.
+instr groove(wet: 0..1 = 1, transients: 0..1 = 1) {
+  beat_rate = (1 / (1beat).num).hz
+  running = 1 - note.released
+  kick = reset_on(impulse(beat_rate) * running) {
+    osc(sine, env[100hz 25ms 48hz]) * perc(attack: 2ms, decay: 170ms) * 0.38
+  }
+  snare = reset_on((phasor(beat_rate / 2) >= 0.5) * running) {
+    noise(seed: 17).hpf(cutoff: 500hz).lpf(cutoff: 5khz) * perc(attack: 3ms, decay: 110ms) * 0.2
+  }
+  hat = reset_on(impulse(beat_rate * 2) * running) {
+    noise(seed: 31).hpf(cutoff: 6khz) * perc(attack: 2ms, decay: 45ms) * 0.065
+  }
+  pluck = reset_on(impulse(beat_rate) * running) {
+    (osc(tri, a3) + osc(saw, a3) * 0.2).lpf(cutoff: 2khz) * perc(attack: 5ms, decay: 190ms) * 0.17
+  }
+  source = (kick + snare + hat + pluck) * env[0 5ms 1 | 100ms 0]
+  shifted = spectral_pitch(source, shift: 5, transients: transients, size: 2048, overlap: 8)
+  out = ((source * (1 - wet) + shifted * wet) * 1.8).pan(azimuth: 0deg)
 }
 
-attacks(transients: 0) for 4beats             // Continuous phase integration.
-at +5beats attacks(transients: 1) for 4beats  // Local attack resets enabled.
+groove(wet: 0) for 4beats                       // Learn the original groove and its attack shapes.
+at +5beats groove(transients: 0) for 4beats      // Same groove, a fourth up, continuous phases.
+at +10beats groove(transients: 1) for 4beats     // Same shift, selective attack resets enabled.

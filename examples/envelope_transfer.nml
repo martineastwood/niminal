@@ -1,29 +1,44 @@
-// Listen to the carrier, the donor, then the carrier with the donor's broad resonances.
-// Evaluate the whole file in VS Code; + times restart the sequence whenever you submit it.
-// No external samples needed. Replace either source with a recording to explore found sounds.
+// A warm chord learns to breathe: carrier, rhythmic donor, then the playable hybrid.
+// Evaluate the whole file in VS Code; all + times count from when it lands.
 // niminal-live render examples/envelope_transfer.nml --out /tmp/envelope_transfer.wav
 use std/spectral
 
+config { channels: stereo }
 tempo 100bpm
 
-// mode chooses what you hear:
-//   0: carrier alone — two slightly detuned saws, providing pitch and harmonic detail.
-//   1: donor alone — a noise scrape with resonances around 700hz and 2400hz.
-//   2: hybrid — the carrier shaped by the donor's broad spectral envelope.
-//      The carrier keeps its phase and fine harmonic detail; the donor supplies colour and level.
-// In mode 2, amount: 1 applies the full transfer, 0 returns the carrier, and 0.5 blends halfway.
-// detail: 40 controls envelope smoothing: larger values retain narrower spectral features.
-// mode is fixed when each note starts; amount can change while it sounds.
-instr hybrid(freq: hz = a2, mode: init 0..2 = 2, amount: 0..1 = 1) {
-  carrier = (osc(saw, freq) + osc(saw, freq * 1.003)) * 0.08
-  scrape = noise(seed: 42) * env[0 30ms 1 600ms 0.15 | 150ms 0]
-  donor = scrape.bpf(cutoff: 700hz, res: 0.8) + scrape.bpf(cutoff: 2400hz, res: 0.75) * 0.5
-  transformed = envelope_transfer(carrier, donor, amount: amount, detail: 40)
-  out = (carrier * (mode == 0) + donor * (mode == 1) + transformed * (mode == 2)) * env[0 10ms 1 | 150ms 0]
+// mode 0: warm harmonic carrier. mode 1: the soft noise breath. mode 2: their hybrid.
+// The donor shapes colour and level; the carrier supplies the notes and harmonic detail.
+// amount: 0 returns the carrier, 1 applies full transfer. detail: 24 keeps the shape broad.
+instr hybrid(freq: hz = a3, mode: init 0..2 = 2, amount: 0..1 = 1, amp: db = 0db, az: deg = 0deg) {
+  carrier = (osc(tri, freq) * 0.5 + osc(saw, freq) * 0.5).lpf(cutoff: 4khz) * 0.28
+  breath = reset_on(impulse((1 / (1beat).num).hz) * (1 - note.released)) { perc(attack: 45ms, decay: 300ms) }
+  air = noise(seed: 42).hpf(cutoff: 180hz).lpf(cutoff: 4khz)
+  donor = (air.bpf(cutoff: 700hz, res: 0.25) + air.bpf(cutoff: 1800hz, res: 0.3) * 0.6) * breath * 0.55
+  transformed = envelope_transfer(carrier, donor, detail: 24)
+  // Follow the donor's level gently so changing carrier notes does not make the hybrid jump out.
+  donor_level = donor.follow(attack: 15ms, release: 90ms)
+  hybrid_level = transformed.follow(attack: 15ms, release: 90ms)
+  balance = min(2, donor_level / max(hybrid_level, 0.0005))
+  balanced = carrier * (1 - amount) + transformed * balance * amount
+  voice = carrier * (mode == 0) + donor * (mode == 1) + balanced * (mode == 2)
+  // Match the reference, breath and hybrid listening levels after gentle peak control.
+  listen = 0.8 * (mode == 0) + 1.6 * (mode == 1) + 2.2 * (mode == 2)
+  out = (voice.limiter(ceiling: -14db, release: 45ms) * env[0 35ms 1 | 150ms 0] * 2.6 * listen).gain(amp).pan(azimuth: az)
 }
 
-hybrid(mode: 0) for 2beats                                  // Original carrier at A2.
-at +3beats hybrid(mode: 1) for 2beats                        // Donor scrape on its own.
-at +6beats hybrid(mode: 2) for 2beats                        // Full transfer onto the A2 carrier.
-at +9beats hybrid(freq: d3, mode: 2) for 2beats               // Same donor colour, carrier pitched to D3.
-at +12beats hybrid(freq: a3, mode: 2, amount: 0.5) for 2beats  // A3 carrier with a gentler, halfway transfer.
+// Hear the two ingredients briefly, at comparable listening levels.
+hybrid(freq: a3, mode: 0, amp: -6db, az: -20deg) for 2beats
+hybrid(freq: c4, mode: 0, amp: -6db) for 2beats
+hybrid(freq: e4, mode: 0, amp: -6db, az: 20deg) for 2beats
+at +3beats hybrid(mode: 1) for 2beats
+
+// The same chord now follows the donor's breath, then moves through F major and A minor.
+at +6beats hybrid(freq: a3, amp: -6db, az: -20deg) for 2beats
+at +6beats hybrid(freq: c4, amp: -6db) for 2beats
+at +6beats hybrid(freq: e4, amp: -6db, az: 20deg) for 2beats
+at +9beats hybrid(freq: f3, amp: -6db, az: -20deg) for 2beats
+at +9beats hybrid(freq: a3, amp: -6db) for 2beats
+at +9beats hybrid(freq: c4, amp: -6db, az: 20deg) for 2beats
+at +12beats hybrid(freq: a3, amount: 0.7, amp: -9db, az: -20deg) for 3beats
+at +12beats hybrid(freq: c4, amount: 0.7, amp: -9db) for 3beats
+at +12beats hybrid(freq: e4, amount: 0.7, amp: -9db, az: 20deg) for 3beats

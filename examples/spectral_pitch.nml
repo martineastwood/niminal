@@ -1,30 +1,45 @@
-// Phase-vocoder pitch shifting: the same source, played dry and at three shifted pitches.
-// Evaluate the whole file in VS Code; + times start the comparison whenever you submit it.
+// A warm plucked phrase becomes a bass line, a bright answer, then a wide minor chord.
+// Evaluate the whole file in VS Code; + times restart the showcase whenever you submit it.
 // niminal-live render examples/spectral_pitch.nml --out /tmp/spectral_pitch.wav
 use std/spectral
 
+config { channels: stereo }
 tempo 100bpm
 
-// wet: 0 auditions the original; wet: 1 auditions spectral resynthesis.
-// shift is in semitones: -12 is an octave down, +7 a fifth up, +12 an octave up.
-// Pitch changes without speeding up the source's envelope. Its spectral envelope moves too:
-// this does not preserve formants. Replace source with a recording to try voices or found sounds.
-// size: 2048 adds 2048 samples of latency (about 43ms at 48khz).
-// overlap: 4 analyzes every 512 samples with normalized Hann analysis/synthesis windows.
-// Higher overlaps (8 or 16) use more CPU. Peak regions move together with phase locking,
-// and transient handling is enabled by default. FFT windows can still smear attacks.
-// preserve: 1 keeps the original envelope; formant shifts its colour independently.
-// See spectral_formants.nml, spectral_transients.nml and spectral_memory.nml for those controls.
-// Stereo channels are processed independently; leave headroom for overlapping peak regions.
-instr spectral_demo(freq: hz = a2, shift: -48..48 = 0, wet: 0..1 = 1) {
-  excitation = (osc(saw, freq) + osc(sine, freq * 2.73) * 0.3).lpf(cutoff: 3khz)
-  source = excitation * env[0 10ms 1 800ms 0.3 | 100ms 0] * 0.15
-  shifted = spectral_pitch(source, shift: shift, size: 2048, overlap: 4)
-  out = source * (1 - wet) + shifted * wet
+// Every section uses this same harmonic source: a rounded triangle with a little saw brightness.
+// The filter opens with the pluck, then settles. The soft attack suits spectral processing.
+// wet: 0 auditions the source; wet: 1 auditions the pitch shifter.
+// shift is in semitones: -12 is an octave down, +3 a minor third, +7 a fifth.
+// size: 2048 adds about 43ms at 48khz. overlap: 8 gives a smoother, denser reconstruction.
+// The source's envelope keeps its timing as pitch changes. The final chord is made by layering
+// independently shifted copies of the same A3 source, with each voice lower in level.
+// See spectral_formants.nml, spectral_transients.nml and spectral_memory.nml for more controls.
+instr spectral_demo(freq: hz = a3, shift: -48..48 = 0, wet: 0..1 = 1,
+                    amp: db = 0db, az: deg = 0deg) {
+  tone = osc(tri, freq) * 0.75 + osc(saw, freq) * 0.25
+  colour = env[700hz 70ms 3200hz 450ms 900hz]
+  source = tone.lpf(cutoff: colour) * env[0 35ms 1 400ms 0.45 | 130ms 0] * 0.6
+  shifted = spectral_pitch(source, shift: shift, size: 2048, overlap: 8)
+  out = (source * (1 - wet) + shifted * wet).gain(amp).pan(azimuth: az)
 }
 
-spectral_demo(wet: 0) for 2beats                 // Original source at A2.
-at +3beats spectral_demo(shift: 0) for 2beats     // Neutral resynthesis: the same sound, delayed.
-at +6beats spectral_demo(shift: -12) for 2beats   // Octave down, same envelope duration.
-at +9beats spectral_demo(shift: 7) for 2beats     // Fifth up.
-at +12beats spectral_demo(shift: 12) for 2beats   // Octave up.
+// 1. The original A-minor phrase: learn the source's tone and articulation.
+spectral_demo(freq: a3, wet: 0) for 1beat
+at +1beat spectral_demo(freq: c4, wet: 0) for 1beat
+at +2beats spectral_demo(freq: e4, wet: 0) for 1beat
+
+// 2. Exactly the same phrase, shifted down an octave into a rounded bass register.
+at +4beats spectral_demo(freq: a3, shift: -12) for 1beat
+at +5beats spectral_demo(freq: c4, shift: -12) for 1beat
+at +6beats spectral_demo(freq: e4, shift: -12) for 1beat
+
+// 3. The same source phrase again, shifted up a fifth into a brighter register.
+at +8beats spectral_demo(freq: a3, shift: 7) for 1beat
+at +9beats spectral_demo(freq: c4, shift: 7) for 1beat
+at +10beats spectral_demo(freq: e4, shift: 7) for 1beat
+
+// 4. One A3 source becomes A2 + A3 + C4 + E4: a sustained, spread-out A-minor chord.
+at +12beats spectral_demo(shift: -12, amp: -6db, az: -20deg) for 3beats
+at +12beats spectral_demo(shift: 0, amp: -6db) for 3beats
+at +12beats spectral_demo(shift: 3, amp: -6db, az: -35deg) for 3beats
+at +12beats spectral_demo(shift: 7, amp: -6db, az: 35deg) for 3beats

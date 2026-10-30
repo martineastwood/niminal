@@ -1,19 +1,15 @@
-// Spectral effects with `frames`: the function runs on a window of 1024 samples every half window,
-// with `fft` to get at the spectrum and `ifft` to come back. One is written here (a tilt that darkens
-// the sound); the others come from the standard library. Each is 1024 samples late, which the
-// compiler makes up for wherever a signal is mixed with its own dry copy.
-// Render with:  niminal-live render examples/spectral.nml --out spectral.wav
+// A short spectral miniature: clear harmony blooms into a wash, airy pulses enter, a detail freezes.
+// Evaluate the whole file; all + times are relative to when you submit it.
+// niminal-live render examples/spectral.nml --out /tmp/spectral.wav
 use std/spectral
 
 config { channels: stereo }
-tempo 90bpm
+tempo 100bpm
 
 bus space: stereo
-fx space_return {
-  out = space.reverb(room: 0.5, damp: 0.6)
-}
+fx space_return { out = space.reverb(room: 0.3, damp: 0.75) }
 
-/// Fade the spectrum from full at the bottom to nothing at the top, which is a gentle low-pass.
+// A custom FFT tilt: full at DC, fading to zero at Nyquist. Latency is declared automatically.
 const tilt = (0..<513).map(1 - it / 513)
 fn darken(x) {
   x.frames(1024, fn(w) {
@@ -22,27 +18,43 @@ fn darken(x) {
   })
 }
 
-instr pad(freq: hz, bright: 0..1 = 0.5) {
-  level = env[0 300ms 1 | 900ms 0]
-  chord = osc(saw, [freq, freq * 1.5, freq * 2.01]).sum * 0.2
-  out = chord.darken().blur(amount: bright) * level
-  space += out.gain(-6db)
+// Here amount can move while the chord sounds: each frame blends into the preceding magnitudes.
+fn bloom(x, amount: 0..1) {
+  x.frames(1024, fn(w) {
+    state held = zeros(513)
+    s = fft(w)
+    magnitude = sqrt(s[0] * s[0] + s[1] * s[1])
+    phase = atan2(s[1], s[0])
+    held = held * amount + magnitude * (1 - amount)
+    ifft(held * cos(phase), held * sin(phase))
+  })
 }
 
-instr hiss(amount: 0..1 = 0.4) {
-  level = env[0 100ms 1 | 600ms 0]
-  out = (noise() * 0.5).band_keep(lo: 0.05, hi: 0.2).robot() * level * amount
-  space += out.gain(-6db)
+instr pad(freq: hz = a3, third: 1..2 = 1.189207, wash: 0..1 = 0.85) {
+  tone = osc(tri, [freq, freq * third, freq * 1.498307]).sum * 0.12
+  voice = tone.lpf(cutoff: env[4khz 4beats 700hz]).darken().bloom(amount: env[0 3beats wash])
+  out = voice * env[0 100ms 1 | 450ms 0]
+  space += out.gain(-24db)
 }
 
-instr hall(freq: hz) {
-  level = env[1 | 2sec 0]
-  src = osc(sine, freq) * env[1 30ms 0]
-  out = src.fdn_reverb(time: 3.5sec, damp: 4khz) * level
-  space += out.gain(8db)
+// Robotization is a quiet rhythmic accent here: zeroing phases gives the short noise pulse a grain.
+instr shimmer() {
+  texture = noise(seed: 53).band_keep(lo: 0.08, hi: 0.3).robot()
+  out = texture * perc(attack: 10ms, decay: 90ms) * 0.025
 }
 
-pad(freq: a2) for 4beats
-at +4beats pad(freq: f2, bright: 0.9) for 4beats
-at +8beats hiss() for 2beats
-at +10beats hall(freq: a3) for 1beat
+instr held() {
+  tone = osc(tri, [a3, c4, e4]).sum * 0.12
+  source = tone.lpf(cutoff: env[700hz 200ms 3khz 300ms 900hz]) * env[0 45ms 1 450ms 0.5 100ms 0]
+  captured = spectral_memory(source, record: env[1 1beat 1 1ms 0], position: 0.65, size: 2048, overlap: 8)
+  out = captured * env[0 40ms 1 | 700ms 0]
+  space += out.gain(-24db)
+}
+
+pad() for 4beats                                     // A minor opens clearly and softens into a wash.
+at +4beats pad(freq: f3, third: 1.259921, wash: 0.93) for 4beats // F major answers more diffusely.
+at +5beats shimmer() for 1/4beat
+at +6beats shimmer() for 1/4beat
+at +7beats shimmer() for 1/4beat
+at +8beats shimmer() for 1/4beat
+at +9beats held() for 4beats                          // Capture once, then let the held detail dissolve.
