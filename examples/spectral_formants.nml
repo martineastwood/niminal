@@ -1,0 +1,22 @@
+// Independent pitch and spectral-envelope (formant) control.
+// Evaluate the whole file; all times are relative to when you submit it.
+// niminal-live render examples/spectral_formants.nml --out /tmp/spectral_formants.wav
+use std/spectral
+
+tempo 100bpm
+
+// shift moves the notes in semitones. preserve: 1 keeps the original broad spectral envelope.
+// formant moves that envelope independently: negative sounds darker/larger, positive brighter/smaller.
+// This is envelope shaping, not a model of a human vocal tract; leave headroom for boosted bands.
+instr colour(freq: hz = a2, shift: -48..48 = 0, preserve: 0..1 = 0, formant: -48..48 = 0) {
+  excitation = osc(saw, freq) * 0.2
+  voice = excitation.bpf(cutoff: 700hz, res: 0.75) + excitation.bpf(cutoff: 1800hz, res: 0.7) * 0.5
+  source = voice * env[0 10ms 1 | 100ms 0]
+  out = spectral_pitch(source, shift: shift, preserve: preserve, formant: formant, detail: 32)
+}
+
+colour() for 2beats                             // Original pitch and colour.
+at +3beats colour(shift: 12) for 2beats          // Octave up; resonances move up with the notes.
+at +6beats colour(shift: 12, preserve: 1) for 2beats // Octave up; original broad resonances retained.
+at +9beats colour(formant: -7) for 2beats        // Original notes, darker/lower resonances.
+at +12beats colour(formant: 7) for 2beats        // Original notes, brighter/higher resonances.

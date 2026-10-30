@@ -43,6 +43,6 @@ instr hall(freq: hz) {
 }
 
 pad(freq: a2) for 4beats
-at 4beats pad(freq: f2, bright: 0.9) for 4beats
-at 8beats hiss() for 2beats
-at 10beats hall(freq: a3) for 1beat
+at +4beats pad(freq: f2, bright: 0.9) for 4beats
+at +8beats hiss() for 2beats
+at +10beats hall(freq: a3) for 1beat

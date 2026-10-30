@@ -11,9 +11,11 @@ tempo 100bpm
 // this does not preserve formants. Replace source with a recording to try voices or found sounds.
 // size: 2048 adds 2048 samples of latency (about 43ms at 48khz).
 // overlap: 4 analyzes every 512 samples with normalized Hann analysis/synthesis windows.
-// Higher overlaps (8 or 16) use more CPU. Attacks can smear; this has no transient protection
-// or peak phase locking, and stereo channels are processed independently. Large downward shifts
-// with small FFT sizes can lose narrow partials; this is a basic spectral shifter.
+// Higher overlaps (8 or 16) use more CPU. Peak regions move together with phase locking,
+// and transient handling is enabled by default. FFT windows can still smear attacks.
+// preserve: 1 keeps the original envelope; formant shifts its colour independently.
+// See spectral_formants.nml, spectral_transients.nml and spectral_memory.nml for those controls.
+// Stereo channels are processed independently; leave headroom for overlapping peak regions.
 instr spectral_demo(freq: hz = a2, shift: -48..48 = 0, wet: 0..1 = 1) {
   excitation = (osc(saw, freq) + osc(sine, freq * 2.73) * 0.3).lpf(cutoff: 3khz)
   source = excitation * env[0 10ms 1 800ms 0.3 | 100ms 0] * 0.15

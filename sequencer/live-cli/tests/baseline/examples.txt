@@ -27,7 +27,10 @@ score_prog.nml: 1x384240
 song.nml: 2x583731
 spectral.nml: 2x478367
 spectral_delay.nml: 2x824064
-spectral_pitch.nml: 1x408000
+spectral_formants.nml: 1x410044
+spectral_memory.nml: 1x325015
+spectral_pitch.nml: 1x410782
+spectral_transients.nml: 1x265664
 stereo.nml: 2x280705
 stutter.nml: 2x351522
 synced_lfo.nml: 2x384240

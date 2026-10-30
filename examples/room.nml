@@ -28,7 +28,7 @@ instr pluck(freq: hz, amp: db = -6db, bright: 0..1 = 0.5) {
 }
 
 lead(freq: c4) for 1/2beat
-at 1/2beat lead(freq: eb4) for 1/2beat
-at 1beat lead(freq: g4) for 1/2beat
-at 3/2beat lead(freq: c5) for 2beats
-at 0beat pluck(freq: c2, amp: -3db) for 4beats
+at +1/2beat lead(freq: eb4) for 1/2beat
+at +1beat lead(freq: g4) for 1/2beat
+at +3/2beat lead(freq: c5) for 2beats
+at +0beat pluck(freq: c2, amp: -3db) for 4beats

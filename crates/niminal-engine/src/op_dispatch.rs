@@ -342,6 +342,8 @@ op_enum! {
         Resonator(ops::Resonator),
         Convolve(ops::Convolve),
         SpectralFreeze(ops::SpectralFreeze),
+        SpectralWarp(ops::SpectralWarp),
+        SpectralMemory(ops::SpectralMemory),
         SpectralDelay(ops::SpectralDelay),
     }
 }

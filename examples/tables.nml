@@ -29,7 +29,7 @@ instr tone(freq: hz) {
 }
 
 keys(freq: e3) for 1beat
-at 1/2beat keys(freq: b3) for 1beat
-at 1beat pad(freq: e2, position: 0.2) for 2beats
-at 3beats pad(freq: g2, position: 0.8) for 2beats
-at 5beats tone(freq: e4) for 1beat
+at +1/2beat keys(freq: b3) for 1beat
+at +1beat pad(freq: e2, position: 0.2) for 2beats
+at +3beats pad(freq: g2, position: 0.8) for 2beats
+at +5beats tone(freq: e4) for 1beat

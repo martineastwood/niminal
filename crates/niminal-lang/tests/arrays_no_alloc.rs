@@ -208,3 +208,24 @@ fn phase_vocoder_with_dense_overlap_does_not_allocate_while_processing() {
     assert_eq!(ALLOCATIONS.with(Cell::get), 0);
     assert!(output[0].iter().all(|value| value.is_finite()));
 }
+
+#[test]
+fn spectral_memory_capture_scan_and_envelope_controls_allocate_before_audio_only() {
+    let program=niminal_lang::compile("instr a() {
+  source=osc(saw, 220hz) * 0.1
+  spectral_memory(source, record: env[1 80ms 1 1ms 0], position: phasor(2hz), shift: 7, formant: -3, preserve: 1, size: 512, frames: 64)
+}").unwrap();
+    let instrument = program.instruments.iter().find(|i| i.name == "a").unwrap();
+    let mut voice = Voice::new(instrument.graph.clone(), 48000.0);
+    let mut buses = Buses::new(&[]);
+    let mut output = vec![vec![0.0; block_size()]; 1];
+    ALLOCATIONS.with(|count| count.set(0));
+    NODE.with(|node| node.set(true));
+    for _ in 0..256 {
+        voice.process_blocks(&mut output, block_size(), &mut buses);
+    }
+    NODE.with(|node| node.set(false));
+    assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+    assert!(output[0].iter().all(|v| v.is_finite()));
+    assert!(output[0].iter().any(|v| v.abs() > 0.001));
+}

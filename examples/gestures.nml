@@ -122,6 +122,6 @@ clip wind_up {
 }
 
 chop.start
-at 1bar gun.start
-at 2bars roll.start
-at 3bars rewind.start
+at +1bar gun.start
+at +2bars roll.start
+at +3bars rewind.start

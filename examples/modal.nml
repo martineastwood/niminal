@@ -54,15 +54,15 @@ instr tinkle(freq: init hz) {
 }
 
 tom(freq: 90hz) for 1beat
-at 1beat tom(freq: 120hz) for 1beat
-at 2beats tom(freq: 150hz) for 1beat
-at 3beats tom(freq: 90hz) for 1beat
+at +1beat tom(freq: 120hz) for 1beat
+at +2beats tom(freq: 150hz) for 1beat
+at +3beats tom(freq: 90hz) for 1beat
 
-at 4beats marimba(freq: c4) for 1beat
-at 5beats marimba(freq: e4) for 1beat
-at 6beats marimba(freq: g4) for 1beat
-at 7beats marimba(freq: c5) for 1beat
+at +4beats marimba(freq: c4) for 1beat
+at +5beats marimba(freq: e4) for 1beat
+at +6beats marimba(freq: g4) for 1beat
+at +7beats marimba(freq: c5) for 1beat
 
-at 8beats bell_hit(freq: g3) for 1beat
-at 10beats tinkle(freq: d5) for 1beat
-at 11beats tinkle(freq: a5) for 1beat
+at +8beats bell_hit(freq: g3) for 1beat
+at +10beats tinkle(freq: d5) for 1beat
+at +11beats tinkle(freq: a5) for 1beat

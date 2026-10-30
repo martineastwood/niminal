@@ -59,11 +59,11 @@ instr clicks(freq: hz) {
 }
 
 pluck(freq: e3) for 1beat
-at 1beat pluck(freq: b3) for 1beat
-at 2beats pluck(freq: g4, decay: 0.994) for 1beat
-at 3beats pluck(freq: e4) for 1beat
-at 4beats clicks(freq: 800hz) for 1/8beat
-at 5beats clicks(freq: 1200hz) for 1/8beat
-at 6beats clicks(freq: 500hz) for 1/8beat
-at 7beats drift(freq: d4) for 1beat
-at 8beats drift(freq: a3, decay: 0.994) for 1beat
+at +1beat pluck(freq: b3) for 1beat
+at +2beats pluck(freq: g4, decay: 0.994) for 1beat
+at +3beats pluck(freq: e4) for 1beat
+at +4beats clicks(freq: 800hz) for 1/8beat
+at +5beats clicks(freq: 1200hz) for 1/8beat
+at +6beats clicks(freq: 500hz) for 1/8beat
+at +7beats drift(freq: d4) for 1beat
+at +8beats drift(freq: a3, decay: 0.994) for 1beat

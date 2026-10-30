@@ -25,5 +25,5 @@ instr driven(freq: hz) {
 }
 
 bright(freq: c4) for 1beat
-at 1beat cloud(freq: e4, weights: [0.8, 0.2]) for 2beats
-at 3beats driven(freq: c3) for 1beat
+at +1beat cloud(freq: e4, weights: [0.8, 0.2]) for 2beats
+at +3beats driven(freq: c3) for 1beat

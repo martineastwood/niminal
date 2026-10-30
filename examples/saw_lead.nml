@@ -9,6 +9,6 @@ instr saw_lead(freq: hz, amp: db = -6db) {
 }
 
 saw_lead(freq: a3) for 1beat
-at 1beat saw_lead(freq: c4) for 1beat
-at 2beats saw_lead(freq: e4, amp: -9db) for 1beat
-at 3beats saw_lead(freq: a4) for 2beats
+at +1beat saw_lead(freq: c4) for 1beat
+at +2beats saw_lead(freq: e4, amp: -9db) for 1beat
+at +3beats saw_lead(freq: a4) for 2beats

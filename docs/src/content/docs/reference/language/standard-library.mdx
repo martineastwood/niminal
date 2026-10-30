@@ -64,7 +64,7 @@ For echoes at times of your own, add `delay`s: `x + x.delay(120ms) * 0.6 + x.del
 
 ## std/spectral
 
-The audio effects use [`frames`](/reference/language/functions/#frames-and-the-fft), so each is `size` samples late (1024 unless you give `size`); the compiler delays the path beside it to match.
+These effects analyze overlapping spectral frames. Each is `size` samples late (1024 unless listed otherwise); the compiler delays parallel dry paths to match. The frame helpers remain available for writing custom processing.
 
 | Function | What it is |
 | --- | --- |
@@ -76,9 +76,11 @@ The audio effects use [`frames`](/reference/language/functions/#frames-and-the-f
 | `envelope_transfer(carrier, donor, amount: 1, detail: 32, size: 1024)` | Applies the donor's broad spectral shape to the carrier, retaining the carrier's phase and fine structure. |
 | `phase_frequency(phase, size: 2048, hop: 512)` | Stateful phase unwrapping: real-FFT phases in radians to instantaneous frequencies in cycles/sample. Call once per frame with the matching FFT size and hop. |
 | `phase_accumulate(frequency, size: 2048, hop: 512)` | Stateful integration of cycles/sample into wrapped synthesis phases in radians. Call once per frame with the matching size and hop. |
-| `spectral_pitch(x, shift: 0, size: 2048, overlap: 4)` | Phase-vocoder pitch shifting in semitones (−48 to +48), preserving duration. Zero shift reconstructs the source, delayed by `size` samples. |
+| `spectral_pitch(x, shift: 0, size: 2048, overlap: 4, formant: 0, preserve: 0, transients: 1, detail: 32)` | Peak-locked pitch shifting with independent spectral-envelope control and local attack resets. Shift and formant are semitones (−48 to +48). |
 
-`spectral_pitch` remaps magnitudes and instantaneous frequencies, then integrates new phases. The real spectrum is bounded rather than wrapped during interpolation; bins mapped beyond the source Nyquist are discarded. It moves the spectral envelope with pitch, so it does not preserve formants. Higher overlap (4, 8 or 16) smooths frame transitions at a CPU cost; 2 uses analysis-only Hann windows. Attacks can smear, and large downward shifts with small FFT sizes can lose narrow partials during interpolation. The algorithm has no peak phase locking or transient protection. Stereo channels have independent phase histories. See `examples/spectral_pitch.nml` for a dry/neutral/down/fifth/up comparison that can be re-evaluated live.
+`spectral_pitch` delegates to the native `spectral_warp` opcode. It moves complete peak regions, sums overlapping regions and preserves relative phases around each peak. `transients` controls local phase resets on spectral growth (0 off, 1 full); FFT windowing can still smear attacks. `preserve: 1` retains the original broad spectral envelope as pitch changes, while `formant` shifts that envelope independently. Envelope correction is limited to 32× gain per bin, so leave headroom. Stereo channels are independent. Neutral settings reconstruct the source with the declared latency.
+
+The built-in `spectral_memory` captures a fixed ring of spectral frames, then holds or scans them when recording stops. It shares pitch, formant and preservation controls with `spectral_warp`. See [Spectral processing](/reference/language/spectral/) for controls, storage limits and examples.
 
 
 For envelope transfer, `amount: 0` returns the carrier delayed by one frame, and `1` applies the full transfer. The donor's level affects the result; a silent donor silences full transfer. Per-bin gain is capped at 32× (about 30 dB), and log magnitudes are floored at `size * 0.000001` to keep quiet bins stable. Leave output headroom. This shapes existing carrier energy; it cannot supply partials absent from the carrier or separate pitch from formants perfectly.

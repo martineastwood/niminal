@@ -1,0 +1,26 @@
+// A short sound captured as spectral frames, then held or scanned independently of pitch.
+// Evaluate the whole file in VS Code.
+// niminal-live render examples/spectral_memory.nml --out /tmp/spectral_memory.wav
+
+tempo 100bpm
+
+// Each note first records/hears 350ms of a rising, darkening sound. It then stops recording.
+// mode 0 holds one detail, 1 scans forward, 2 scans backward, 3 loops a short region an octave up.
+// position: 0 is the oldest retained frame and 1 the newest. Intermediate positions interpolate.
+// frames: 96 at size 1024 / overlap 4 holds about 512ms at 48khz (96 * 256 / 48000).
+// Capacity is per instance. Prefer one persistent fx instance when recording live audio.
+// Use record: 1 to overwrite the ring with new input, record: 0 to keep and explore the capture.
+instr tape(mode: init 0..3 = 0) {
+  excitation = osc(saw, env[110hz 350ms 440hz]) * 0.12
+  source = excitation.lpf(cutoff: env[4khz 350ms 700hz]) * env[1 340ms 1 10ms 0]
+  recording = env[1 350ms 1 1ms 0]
+  forward = phasor(1.4hz)
+  position = 0.55 * (mode == 0) + forward * (mode == 1) + (1 - forward) * (mode == 2) + (0.25 + forward * 0.4) * (mode == 3)
+  captured = spectral_memory(source, record: recording, position: position, shift: 12 * (mode == 3), frames: 96, size: 1024)
+  out = captured * env[0 10ms 1 | 150ms 0]
+}
+
+tape(mode: 0) for 2beats                 // Capture, then freeze a detail.
+at +3beats tape(mode: 1) for 2beats      // Capture, then scan forward through the change in timbre.
+at +6beats tape(mode: 2) for 2beats      // Capture, then scan backward; oscillation still runs forward.
+at +9beats tape(mode: 3) for 2beats      // Capture, then loop a smaller region with pitch shifted up.

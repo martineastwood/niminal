@@ -1,0 +1,19 @@
+// Compare uninterrupted phase locking with attack-sensitive phase resets.
+// niminal-live render examples/spectral_transients.nml --out /tmp/spectral_transients.wav
+use std/spectral
+
+tempo 100bpm
+
+// The repeated noisy hits arrive while the same vocoder instance keeps running.
+// transients: 1 detects spectral growth and resets only the growing peak regions.
+// transients: 0 keeps integrating their phases. Intermediate values soften the reset.
+// This can improve attack definition, but FFT windowing still limits time resolution.
+instr attacks(transients: 0..1 = 1) {
+  hits = noise(seed: 31) * (phasor(5hz) < 0.08) * 0.15
+  body = osc(sine, 220hz) * 0.025
+  source = (hits + body) * env[0 5ms 1 | 80ms 0]
+  out = spectral_pitch(source, shift: 7, transients: transients, size: 2048)
+}
+
+attacks(transients: 0) for 4beats             // Continuous phase integration.
+at +5beats attacks(transients: 1) for 4beats  // Local attack resets enabled.

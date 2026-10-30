@@ -56,8 +56,8 @@ instr supersaw(freq: hz, detune: 0..1 = 0.4) {
 }
 
 pluck(freq: e3) for 1beat
-at 1/2beat pluck(freq: b3) for 1beat
-at 1beat pluck(freq: g4, decay: 0.99) for 1beat
-at 2beats keys(freq: e4) for 2beats
-at 2beats keys(freq: g4, attack: 200ms) for 2beats
-at 4beats supersaw(freq: e2) for 2beats
+at +1/2beat pluck(freq: b3) for 1beat
+at +1beat pluck(freq: g4, decay: 0.99) for 1beat
+at +2beats keys(freq: e4) for 2beats
+at +2beats keys(freq: g4, attack: 200ms) for 2beats
+at +4beats supersaw(freq: e2) for 2beats

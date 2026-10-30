@@ -34,6 +34,7 @@ mod multisample;
 mod noise;
 mod osc;
 mod pan;
+mod phase_vocoder;
 mod phaser;
 mod phasor;
 mod pitch_shift;
@@ -42,6 +43,8 @@ mod reverb;
 mod sample;
 mod sample_hold;
 mod spectral;
+mod spectral_frames;
+mod spectral_memory;
 mod tap;
 
 pub use allpass::Allpass;
@@ -123,3 +126,6 @@ pub use stream::{STREAM_PAGE, StreamCache, StreamOut};
 
 mod transients;
 pub use transients::{detect_transients, detect_transients_at};
+
+pub use phase_vocoder::SpectralWarp;
+pub use spectral_memory::SpectralMemory;

@@ -28,14 +28,14 @@ instr bass(freq: hz) {
 }
 
 acid_ish(freq: a2) for 1/2beat
-at 1/2beat acid_ish(freq: a2) for 1/2beat
-at 1beat acid_ish(freq: c3, res: 0.85) for 1/2beat
-at 3/2beats acid_ish(freq: e3) for 1/2beat
-at 2beats acid_ish(freq: a2, res: 0.9) for 1beat
+at +1/2beat acid_ish(freq: a2) for 1/2beat
+at +1beat acid_ish(freq: c3, res: 0.85) for 1/2beat
+at +3/2beats acid_ish(freq: e3) for 1/2beat
+at +2beats acid_ish(freq: a2, res: 0.9) for 1beat
 
-at 4beats vowel(freq: a3, ah: 0.2) for 2beats
-at 6beats vowel(freq: c4, ah: 0.8) for 2beats
+at +4beats vowel(freq: a3, ah: 0.2) for 2beats
+at +6beats vowel(freq: c4, ah: 0.8) for 2beats
 
-at 8beats bass(freq: a1) for 1beat
-at 9beats bass(freq: c2) for 1beat
-at 10beats bass(freq: e2) for 2beats
+at +8beats bass(freq: a1) for 1beat
+at +9beats bass(freq: c2) for 1beat
+at +10beats bass(freq: e2) for 2beats

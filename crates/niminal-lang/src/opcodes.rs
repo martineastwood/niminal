@@ -12,8 +12,8 @@ use niminal_engine::ops::{
     Delay, Distortion, Eq, EqMode, Fdn, FilterMode, FinishWhen, Fn1, Fold, Follow, Formant, Freeze,
     Func, GLITCH_MAX_SECONDS, Gain, Gate, Granular, Impulse, IrSpectrum, Ladder, Lag, Limiter,
     Modal, Noise, NoiseColor, Osc, Phaser, Phasor, PitchShift, RepeatLast, Resonator, Reverb,
-    RewindLast, SampleHold, Scatter, SlowDown, SpectralDelay, SpectralFreeze, Svf, Waveshape,
-    Wavetable,
+    RewindLast, SampleHold, Scatter, SlowDown, SpectralDelay, SpectralFreeze, SpectralMemory,
+    SpectralWarp, Svf, Waveshape, Wavetable,
 };
 
 use crate::unit::Unit;
@@ -189,6 +189,24 @@ fn fft_size(a: &BuildArgs) -> Result<usize, String> {
             niminal_engine::block_size() * 2
         ))
     }
+}
+
+/// Settings shared by the peak vocoder and its fixed-capacity spectral memory.
+fn vocoder_settings(a: &BuildArgs) -> Result<(usize, usize, usize), String> {
+    let size = a.consts.get("size").copied().unwrap_or(2048.0);
+    if size.fract() != 0.0 || !(4.0..=65536.0).contains(&size) || !(size as usize).is_power_of_two()
+    {
+        return Err("spectral size must be a power of two from 4 to 65536".into());
+    }
+    let overlap = a.consts.get("overlap").copied().unwrap_or(4.0);
+    if ![2.0, 4.0, 8.0, 16.0].contains(&overlap) || overlap > size {
+        return Err("spectral overlap must be 2, 4, 8 or 16 and no larger than size".into());
+    }
+    let detail = a.consts.get("detail").copied().unwrap_or(32.0);
+    if detail.fract() != 0.0 || !(1.0..=65536.0).contains(&detail) {
+        return Err("spectral detail must be a whole number from 1 to 65536".into());
+    }
+    Ok((size as usize, overlap as usize, detail as usize))
 }
 
 /// The longest delay line a program may ask for.
@@ -857,6 +875,59 @@ impl Registry {
                 Build::Builtin(|a| {
                     let ir = a.table.as_ref().expect("convolve has an impulse response");
                     Ok(Box::new(Convolve::new(cached_ir(ir))))
+                }),
+            ),
+            OpSpec::new(
+                "spectral_warp",
+                "Peak-region spectral pitch and formant shifting. `shift` and `formant` are semitones; `preserve` holds the original spectral envelope as pitch changes. `transients` reinitializes growing peak regions on attacks. Size defaults to 2048, overlap to 4, detail to 32. Latency is size samples.",
+                vec![
+                    req("x", SIGNAL),
+                    opt("shift", SIGNAL),
+                    opt("formant", SIGNAL),
+                    opt("preserve", SIGNAL),
+                    opt("transients", SIGNAL),
+                    setting("size", SIGNAL),
+                    setting("overlap", SIGNAL),
+                    setting("detail", SIGNAL),
+                ],
+                Build::Builtin(|a| {
+                    let (size, overlap, detail) = vocoder_settings(a)?;
+                    Ok(Box::new(SpectralWarp::new(size, overlap, detail)))
+                }),
+            ),
+            OpSpec::new(
+                "spectral_memory",
+                "Capture a ring of spectral frames with record above 0.5; below it, scan the capture with position (0 oldest, 1 newest), independently of pitch. Shift, formant, preserve and transients are as for spectral_warp; transient reset defaults off. Frames defaults to 256. Storage is fixed at compile time, at most 64 MiB per instance. Latency is size samples.",
+                vec![
+                    req("x", SIGNAL),
+                    opt("record", SIGNAL),
+                    opt("position", SIGNAL),
+                    opt("shift", SIGNAL),
+                    opt("formant", SIGNAL),
+                    opt("preserve", SIGNAL),
+                    opt("transients", SIGNAL),
+                    setting("frames", SIGNAL),
+                    setting("size", SIGNAL),
+                    setting("overlap", SIGNAL),
+                    setting("detail", SIGNAL),
+                ],
+                Build::Builtin(|a| {
+                    let (size, overlap, detail) = vocoder_settings(a)?;
+                    let frames = a.consts.get("frames").copied().unwrap_or(256.0);
+                    if frames.fract() != 0.0 || !(1.0..=65536.0).contains(&frames) {
+                        return Err(
+                            "spectral memory frames must be a whole number from 1 to 65536".into(),
+                        );
+                    }
+                    let frames = frames as usize;
+                    if frames
+                        .saturating_mul(size / 2 + 1)
+                        .saturating_mul(3 * std::mem::size_of::<f32>())
+                        > 64 * 1024 * 1024
+                    {
+                        return Err("spectral memory exceeds 64 MiB; reduce frames or size".into());
+                    }
+                    Ok(Box::new(SpectralMemory::new(size, overlap, frames, detail)))
                 }),
             ),
             OpSpec::new(

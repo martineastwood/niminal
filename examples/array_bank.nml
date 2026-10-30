@@ -16,5 +16,5 @@ instr cloud(freq: hz) {
 }
 
 cloud(freq: a3) for 2beats
-at 2beats cloud(freq: c4) for 2beats
-at 4beats cloud(freq: e4) for 2beats
+at +2beats cloud(freq: c4) for 2beats
+at +4beats cloud(freq: e4) for 2beats

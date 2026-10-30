@@ -330,3 +330,177 @@ fn spectral_pitch_follows_a_shift_envelope_without_restarting() {
     assert!((frequency(&out[16000..24000]) - 1994.0).abs() < 8.0);
     assert!(out.iter().all(|v| v.is_finite() && v.abs() < 1.0));
 }
+
+#[test]
+fn peak_remapping_retains_narrow_partials_on_large_downward_shifts() {
+    for shift in [-24, -36, -48] {
+        let out = render_chunk(
+            &format!(
+                "use std/spectral\ninstr a() {{ spectral_pitch(osc(sine, 997hz) * 0.2, shift: {shift}, size: 512, transients: 0) }}"
+            ),
+            48_000,
+            block_size(),
+        );
+        let tail = &out[8192..];
+        assert!(rms(tail) > 0.04, "shift {shift}: {}", rms(tail));
+        let cycles = tail
+            .windows(2)
+            .filter(|s| s[0] < 0.0 && s[1] >= 0.0)
+            .count();
+        let actual = cycles as f64 * 48000.0 / tail.len() as f64;
+        let expected = 997.0 * 2.0_f64.powf(shift as f64 / 12.0);
+        assert!(
+            (actual - expected).abs() < 5.0,
+            "shift {shift}: {actual}, expected {expected}"
+        );
+    }
+}
+
+#[test]
+fn spectral_memory_freezes_chronological_frames_and_transposes_them() {
+    for (position, shift, expected) in [(0.15, 0, 750.0), (0.9, 0, 1500.0), (0.15, 12, 1500.0)] {
+        let source=format!("instr a() {{
+  tone = osc(sine, env[750hz 100ms 750hz 1ms 1500hz]) * 0.2 * env[1 180ms 1 20ms 0]
+  spectral_memory(tone, record: env[1 150ms 1 1ms 0], position: {position}, shift: {shift}, frames: 64, size: 512)
+}}");
+        let out = render_chunk(&source, 24000, block_size());
+        let tail = &out[16000..];
+        assert!(
+            rms(tail) > 0.05,
+            "position {position}, shift {shift}: {}",
+            rms(tail)
+        );
+        let cycles = tail
+            .windows(2)
+            .filter(|s| s[0] < 0.0 && s[1] >= 0.0)
+            .count();
+        let hz = cycles as f64 * 48000.0 / tail.len() as f64;
+        assert!(
+            (hz - expected).abs() < 8.0,
+            "position {position}, shift {shift}: {hz}, expected {expected}"
+        );
+        assert_eq!(out, render_chunk(&source, 24000, 37));
+    }
+}
+
+#[test]
+fn empty_spectral_memory_is_silent_and_storage_settings_are_checked() {
+    let out = render(
+        "instr a() { spectral_memory(noise(), record: 0, frames: 8, size: 512) }",
+        50,
+    );
+    assert!(out.iter().all(|v| *v == 0.0));
+    for arguments in [
+        "frames: 0",
+        "frames: 1.5",
+        "frames: 65536, size: 65536",
+        "overlap: 3",
+        "size: 100",
+        "detail: 0",
+    ] {
+        assert!(
+            compile(&format!(
+                "instr a() {{ spectral_memory(noise(), {arguments}) }}"
+            ))
+            .is_err(),
+            "{arguments}"
+        );
+    }
+}
+
+#[test]
+fn independent_formant_control_changes_colour_at_unchanged_pitch() {
+    let render_colour = |formant: i32| {
+        render_chunk(
+            &format!(
+                "use std/spectral\ninstr a() {{
+  source=osc(saw, 93.75hz).bpf(cutoff: 1500hz, res: 0.7) * 0.2
+  spectral_pitch(source, formant: {formant}, detail: 32, size: 1024)
+}}"
+            ),
+            24000,
+            block_size(),
+        )
+    };
+    let roughness = |out: &[f32]| {
+        let tail = &out[8192..];
+        tail.windows(2)
+            .map(|s| (s[1] - s[0]).powi(2) as f64)
+            .sum::<f64>()
+            / tail.iter().map(|x| (*x as f64).powi(2)).sum::<f64>()
+    };
+    let low = render_colour(-12);
+    let original = render_colour(0);
+    let high = render_colour(12);
+    let (lo, plain, hi) = (roughness(&low), roughness(&original), roughness(&high));
+    assert!(
+        lo < plain * 0.8 && hi > plain * 1.5,
+        "low {lo}, original {plain}, high {hi}"
+    );
+    for audio in [&low, &high] {
+        assert!(audio.iter().all(|v| v.is_finite()));
+        let tail = &audio[8192..];
+        let difference: Vec<_> = tail[512..].iter().zip(tail).map(|(a, b)| a - b).collect();
+        assert!(
+            rms(&difference) < rms(tail) * 0.02,
+            "formant shift changed the 512-sample fundamental period"
+        );
+    }
+}
+
+#[test]
+fn envelope_preservation_keeps_a_resonance_below_the_shifted_pitch_envelope() {
+    let render_preserve = |preserve: i32| {
+        render_chunk(
+            &format!(
+                "use std/spectral\ninstr a() {{
+  source=osc(saw, 93.75hz).bpf(cutoff: 1500hz, res: 0.7) * 0.2
+  spectral_pitch(source, shift: 12, preserve: {preserve}, detail: 32, size: 1024)
+}}"
+            ),
+            24000,
+            block_size(),
+        )
+    };
+    let amplitude = |audio: &[f32], hz: f64| {
+        let tail = &audio[audio.len() - 8192..];
+        let (re, im) = tail
+            .iter()
+            .enumerate()
+            .fold((0.0, 0.0), |(re, im), (i, &x)| {
+                let angle = std::f64::consts::TAU * hz * i as f64 / 48000.0;
+                (re + x as f64 * angle.cos(), im + x as f64 * angle.sin())
+            });
+        re.hypot(im)
+    };
+    let natural = render_preserve(0);
+    let preserved = render_preserve(1);
+    let natural_ratio = amplitude(&natural, 1500.0) / amplitude(&natural, 3000.0);
+    let preserved_ratio = amplitude(&preserved, 1500.0) / amplitude(&preserved, 3000.0);
+    assert!(
+        preserved_ratio > natural_ratio * 2.0,
+        "natural {natural_ratio}, preserved {preserved_ratio}"
+    );
+}
+
+#[test]
+fn peak_remapping_keeps_off_bin_tones_tuned_on_large_upward_shifts() {
+    for shift in [24, 36, 48] {
+        let source = format!(
+            "use std/spectral\ninstr a() {{ spectral_pitch(osc(sine, 997hz) * 0.1, shift: {shift}, size: 512, transients: 0) }}"
+        );
+        let out = render_chunk(&source, 24000, block_size());
+        let tail = &out[8192..];
+        let cycles = tail
+            .windows(2)
+            .filter(|s| s[0] < 0.0 && s[1] >= 0.0)
+            .count();
+        let actual = cycles as f64 * 48000.0 / tail.len() as f64;
+        let expected = 997.0 * 2.0_f64.powf(shift as f64 / 12.0);
+        assert!(
+            (actual - expected).abs() < 8.0,
+            "shift {shift}: {actual}, expected {expected}"
+        );
+        assert!(rms(tail) > 0.01);
+    }
+}

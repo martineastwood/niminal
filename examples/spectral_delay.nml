@@ -14,12 +14,12 @@ instr pluck(freq: hz, spread: 0..1 = 0.8) {
 
 // The same note, first with all bins together, then with the spectrum spread out.
 pluck(freq: a3, spread: 0) for 1/4beat
-at 4beats pluck(freq: a3, spread: 1) for 1/4beat
+at +4beats pluck(freq: a3, spread: 1) for 1/4beat
 
 // Leave space between phrases for the delayed harmonics to answer.
-at 8beats pluck(freq: a3) for 1/4beat
-at 9beats pluck(freq: c4) for 1/4beat
-at 10beats pluck(freq: e4) for 1/4beat
-at 12beats pluck(freq: g3) for 1/4beat
-at 13beats pluck(freq: b3) for 1/4beat
-at 14beats pluck(freq: d4) for 1/4beat
+at +8beats pluck(freq: a3) for 1/4beat
+at +9beats pluck(freq: c4) for 1/4beat
+at +10beats pluck(freq: e4) for 1/4beat
+at +12beats pluck(freq: g3) for 1/4beat
+at +13beats pluck(freq: b3) for 1/4beat
+at +14beats pluck(freq: d4) for 1/4beat

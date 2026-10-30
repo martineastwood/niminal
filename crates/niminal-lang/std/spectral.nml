@@ -90,19 +90,11 @@ fn phase_accumulate(frequency: [num], size: const int = 2048, hop: const 1..6553
   phase
 }
 
-/// Phase-vocoder pitch shift in semitones. Keeps duration, moves the spectral envelope with pitch.
-/// Higher overlap smooths resynthesis at a CPU cost; transients can smear and stereo is independent.
-fn spectral_pitch(x, shift: -48..48 = 0, size: const int = 2048, overlap: const int = 4) {
-  x.frames(size, fn(w) {
-    s = fft(w)
-    magnitude = sqrt(s[0] * s[0] + s[1] * s[1])
-    frequency = phase_frequency(atan2(s[1], s[0]), size: size, hop: size / overlap)
-    ratio = pow(2, shift / 12)
-    positions = (0..<size / 2 + 1).map(it / ratio)
-    // Clamp before interpolation so the real spectrum never wraps from Nyquist back to DC.
-    moved_magnitude = positions.map(magnitude.at(min(it, size / 2)) * (it <= size / 2))
-    moved_frequency = positions.map(frequency.at(min(it, size / 2))) * ratio
-    phase = phase_accumulate(moved_frequency, size: size, hop: size / overlap)
-    ifft(moved_magnitude * cos(phase), moved_magnitude * sin(phase))
-  }, overlap: overlap)
+/// Peak-locked pitch shifting with transient handling and independent spectral-envelope control.
+/// preserve: 1 retains the source envelope; formant shifts its colour independently in semitones.
+/// transients: 1 resets growing peak regions on attacks; 0 keeps phase integration uninterrupted.
+fn spectral_pitch(x, shift: -48..48 = 0, size: const int = 2048, overlap: const int = 4,
+                  formant: -48..48 = 0, preserve: 0..1 = 0, transients: 0..1 = 1, detail: const int = 32) {
+  spectral_warp(x, shift: shift, formant: formant, preserve: preserve, transients: transients,
+                size: size, overlap: overlap, detail: detail)
 }

@@ -29,6 +29,6 @@ instr pluck(tone: hz = 220hz) {
 }
 
 pluck(tone: c4) for 1beat
-at 1beat pluck(tone: e4) for 2beats
-at 3beats pluck(tone: g4) for 1beat
-at 4beats pluck(tone: c5) for 1beat
+at +1beat pluck(tone: e4) for 2beats
+at +3beats pluck(tone: g4) for 1beat
+at +4beats pluck(tone: c5) for 1beat

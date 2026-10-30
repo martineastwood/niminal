@@ -42,8 +42,8 @@ instr debris() {
 }
 
 fragments() for 8beats
-at 8beats cloud() for 8beats
-at 16beats debris() for 8beats
+at +8beats cloud() for 8beats
+at +16beats debris() for 8beats
 
 // Masks and displacement share a steady clock. The second cloud follows its sync
 // and gain cursor, even while the lead's audible grains are displaced in time.
@@ -81,5 +81,5 @@ instr trainlets(freq: hz = 110hz) {
   particles * env[0 150ms 1 | 600ms 0] * 0.18
 }
 
-at 24beats orbit() for 8beats
-at 32beats trainlets(freq: a2) for 8beats
+at +24beats orbit() for 8beats
+at +32beats trainlets(freq: a2) for 8beats

@@ -23,5 +23,5 @@ instr pulse(freq: hz, cutoff: hz = 2khz) {
 }
 
 pulse(freq: c3) for 1beat
-at 1beat pulse(freq: eb3) for 1beat
-at 2beats pulse(freq: g3) for 2beats
+at +1beat pulse(freq: eb3) for 1beat
+at +2beats pulse(freq: g3) for 2beats
