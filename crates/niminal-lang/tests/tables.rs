@@ -85,11 +85,10 @@ instr a(freq: hz) { pad(freq: freq) }
     let errors = compile("const wave = zeros(64)\npad = sample(wave).interp(nearest)\n")
         .err()
         .unwrap();
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.message.contains("`interp` is `linear`, `cubic` or `sinc`"))
-    );
+    assert!(errors.iter().any(|e| {
+        e.message
+            .contains("`interp` is `linear`, `cubic` or `sinc`")
+    }));
 }
 
 #[test]

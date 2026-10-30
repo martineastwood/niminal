@@ -266,8 +266,6 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .separator()
         .item(&item("export-wav", "Export WAV…", None)?)
         .item(&item("export-stems", "Export WAV and Track Stems…", None)?)
-        .separator()
-        .close_window()
         .build()?;
     let edit = SubmenuBuilder::new(app, "Edit")
         .item(&item("undo", "Undo", Some("CmdOrCtrl+Z"))?)
@@ -320,26 +318,17 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .separator()
         .item(&item("palette", "Command Palette… (⌘K)", None)?)
         .item(&item("shortcuts", "Keyboard Shortcuts (⌘/)", None)?)
-        .separator()
-        .fullscreen()
         .build()?;
-    let window = SubmenuBuilder::new(app, "Window").minimize().maximize().build()?;
     let mut menu = MenuBuilder::new(app);
     if cfg!(target_os = "macos") {
         let name = SubmenuBuilder::new(app, "niminal tracker")
-            .about(None)
-            .separator()
-            .services()
-            .separator()
             .hide()
-            .hide_others()
-            .show_all()
             .separator()
             .quit()
             .build()?;
         menu = menu.item(&name);
     }
-    menu.items(&[&file, &edit, &song, &sound, &view, &window]).build()
+    menu.items(&[&file, &edit, &song, &sound, &view]).build()
 }
 
 fn main() {

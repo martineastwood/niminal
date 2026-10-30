@@ -1,7 +1,7 @@
-import { addMacro, linkParameter, removeMacro, returnIndex, stripOf } from './effects';
+import { addMacro, master, linkParameter, removeMacro, returnIndex, stripOf } from './effects';
 import type { EffectParameters, Definition, Device, Lfo, MacroLink, Parameter, Project, FxTarget } from './project';
 import { maxMacros } from './project';
-import { trackColour, masterColour } from './grid';
+import { trackColour, masterColour, returnColour } from './grid';
 import { dropTarget } from './drag';
 import { divisions, nearestDivision } from './divisions';
 import { readLfos, setLfo, lfoShapes, modulatable, type SourceLfo } from './modulation';
@@ -66,9 +66,10 @@ export interface FxActions {
 
 export function renderMixer(parent: HTMLElement, project: Project, activeTrack: number, edited: () => void, parameters: EffectParameters = {}, write: (target: FxTarget, value: number) => void = () => {}, fx: FxActions) {
   parent.replaceChildren();
-  const track = stripOf(project, activeTrack), isMaster = activeTrack < 0, isReturn = activeTrack < -1;
+  const track = stripOf(project, activeTrack), isMaster = activeTrack === master, isReturn = activeTrack < -1;
   const refresh = () => renderMixer(parent, project, activeTrack, edited, parameters, write, fx);
-  const output = document.createElement('section'); output.className = 'device-card track-output'; output.style.setProperty('--track-colour', isMaster ? masterColour : trackColour(track, activeTrack));
+  const stripColour = isMaster ? masterColour : isReturn ? returnColour : trackColour(track, activeTrack);
+  const output = document.createElement('section'); output.className = 'device-card track-output'; output.style.setProperty('--track-colour', stripColour);
   const heading = document.createElement('div'); heading.className = 'device-heading';
   const name = document.createElement('strong'); name.textContent = isMaster ? 'Master' : track.name; heading.append(name); output.append(heading);
   const volume = slider('Volume', track.volume_db, -60, 6, 'dB', value => { track.volume_db = value; edited(); }, () => write({ kind: 'volume' }, track.volume_db));
@@ -78,7 +79,7 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
   const channel = document.createElement('div'); channel.className = 'mixer-channel';
   channel.append(output, macrosCard(project, activeTrack, edited, write, refresh, fx.lanesRemoved)); parent.append(channel);
   const before = parent.querySelector<HTMLElement>('.effect-device'), scrolled = before?.scrollLeft ?? 0, selectedBefore = before?.dataset.selected;
-  const effects = document.createElement('section'); effects.className = 'effect-device'; effects.setAttribute('aria-label', 'Effect chain'); effects.dataset.selected = fx.selected ?? '';
+  const effects = document.createElement('section'); effects.className = 'effect-device'; effects.style.setProperty('--track-colour', stripColour); effects.setAttribute('aria-label', 'Effect chain'); effects.dataset.selected = fx.selected ?? '';
   effects.addEventListener('wheel', event => wheelAlong(effects, event), { passive: false });
   dropTarget(effects, item => item.kind === 'fx', item => fx.add(item.value));
   if (!track.fx.length) { const hint = document.createElement('p'); hint.className = 'device-note'; hint.textContent = 'No effects yet: double-click one in the list, or drag it here'; effects.append(hint); }

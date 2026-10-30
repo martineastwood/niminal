@@ -826,7 +826,12 @@ fn an_fx_parameter_in_beats_follows_the_tempo_and_one_in_seconds_does_not() {
         vec![route(
             0,
             vec![
-                Edit::Fx { output_channels: None, name: "timed".into(), source: "(level: num = 1, length: sec = 0.5sec) { out = in * length / 1sec }".into() },
+                Edit::Fx {
+                    output_channels: None,
+                    name: "timed".into(),
+                    source: "(level: num = 1, length: sec = 0.5sec) { out = in * length / 1sec }"
+                        .into(),
+                },
                 Edit::Node {
                     id: "a".into(),
                     fx: Some("timed".into()),
@@ -845,8 +850,23 @@ fn an_fx_parameter_in_beats_follows_the_tempo_and_one_in_seconds_does_not() {
         )],
     )
     .unwrap();
-    let tempo = |at: u64, bpm: f64| Op::Tempo { at: At::Sample(at), bpm, meter: None, beat: None, tag: None };
-    s.send_events(1, vec![note("a", 0, 5.0), note("b", 0, 5.0), tempo(0, 120.0), tempo(9_600, 60.0)]).unwrap();
+    let tempo = |at: u64, bpm: f64| Op::Tempo {
+        at: At::Sample(at),
+        bpm,
+        meter: None,
+        beat: None,
+        tag: None,
+    };
+    s.send_events(
+        1,
+        vec![
+            note("a", 0, 5.0),
+            note("b", 0, 5.0),
+            tempo(0, 120.0),
+            tempo(9_600, 60.0),
+        ],
+    )
+    .unwrap();
     let out = s.process(24_000).remove(0);
     // a beat at 120 bpm is half a second, and the other is a tenth: 0.6 together; at 60 bpm, 1.1
     assert!((out[4_000] - 0.6).abs() < 1e-3, "{}", out[4_000]);

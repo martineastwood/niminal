@@ -83,7 +83,7 @@ pub fn blocks(count: usize) -> Vec<Vec<f32>> {
 }
 
 /// Stack input capacity for scalar opcodes. Array opcodes read graph slots directly.
-pub const MAX_INPUTS: usize = 16;
+pub const MAX_INPUTS: usize = 64;
 
 /// A named input of an opcode. `default: None` means the port must be wired.
 #[derive(Debug, Clone, PartialEq)]

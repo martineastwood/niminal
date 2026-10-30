@@ -8,13 +8,17 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 use niminal_engine::Opcode;
 pub use niminal_engine::ops::Wave;
 use niminal_engine::ops::{
-    Allpass, Biquad, BiquadMode, Bitcrush, Chorus, Clip, Comb, Compressor, Convolve, DcBlock, Delay, Distortion, Eq,
-    EqMode, Fdn, FilterMode, FinishWhen, Fn1, Fold, Follow, Formant, Func, GLITCH_MAX_SECONDS, Gain, Gate, Impulse,
-    IrSpectrum, Ladder, Lag, Limiter, Modal, Noise, NoiseColor, Osc, Phaser, Phasor, PitchShift, Resonator,
-    RepeatLast, Reverb, RewindLast, SampleHold, Scatter, SlowDown, Freeze, SpectralDelay, SpectralFreeze, Svf, Waveshape, Wavetable,
+    Allpass, Biquad, BiquadMode, Bitcrush, Chorus, Clip, Comb, Compressor, Convolve, DcBlock,
+    Delay, Distortion, Eq, EqMode, Fdn, FilterMode, FinishWhen, Fn1, Fold, Follow, Formant, Freeze,
+    Func, GLITCH_MAX_SECONDS, Gain, Gate, Granular, Impulse, IrSpectrum, Ladder, Lag, Limiter,
+    Modal, Noise, NoiseColor, Osc, Phaser, Phasor, PitchShift, RepeatLast, Resonator, Reverb,
+    RewindLast, SampleHold, Scatter, SlowDown, SpectralDelay, SpectralFreeze, Svf, Waveshape,
+    Wavetable,
 };
 
 use crate::unit::Unit;
+
+mod granular;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Kind {
@@ -142,6 +146,8 @@ pub struct BuildArgs {
     pub wave: Option<WaveArg>,
     /// The table for a `Kind::Table` parameter: the one for this copy's channel.
     pub table: Option<Arc<niminal_engine::Table>>,
+    /// Named table arguments, including every channel of a source.
+    pub tables: HashMap<String, Vec<Arc<niminal_engine::Table>>>,
     /// Which channel of a multichannel signal this copy of the opcode serves.
     pub channel: usize,
     /// Tells apart the copies of an opcode in one instrument, for those that vary by it.
@@ -190,7 +196,11 @@ const MAX_DELAY_SECONDS: f64 = 30.0;
 
 /// The `max:` of a glitch opcode: how much sound it keeps, in seconds.
 fn glitch_max(a: &BuildArgs) -> Result<f32, String> {
-    let max = a.consts.get("max").copied().unwrap_or(f64::from(GLITCH_MAX_SECONDS));
+    let max = a
+        .consts
+        .get("max")
+        .copied()
+        .unwrap_or(f64::from(GLITCH_MAX_SECONDS));
     if max > MAX_DELAY_SECONDS {
         return Err(format!("`max` can be at most {MAX_DELAY_SECONDS} seconds"));
     }
@@ -709,11 +719,9 @@ impl Registry {
                 "A two-pole low-pass. `q` is the height of the peak at the cutoff: 0.707 is flat.",
                 |_| Ok(Box::new(Biquad::new(BiquadMode::Low))),
             ),
-            biquad(
-                "biquad_hp",
-                "A two-pole high-pass.",
-                |_| Ok(Box::new(Biquad::new(BiquadMode::High))),
-            ),
+            biquad("biquad_hp", "A two-pole high-pass.", |_| {
+                Ok(Box::new(Biquad::new(BiquadMode::High)))
+            }),
             biquad(
                 "biquad_bp",
                 "A two-pole band-pass with a constant peak gain of 1; `q` sets how narrow it is.",
@@ -841,6 +849,7 @@ impl Registry {
                     Ok(Box::new(Waveshape::new(table)))
                 }),
             ),
+            granular::spec(),
             OpSpec::new(
                 "convolve",
                 "Convolution with an impulse response: `x.convolve(hall.data, mix: 0.3)` for a `sample hall = \"hall.wav\"`. A stereo response convolves each channel of `x` with its own. Partitioned for real-time use; `mix` blends wet with dry. No latency.",

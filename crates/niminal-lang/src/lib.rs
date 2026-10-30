@@ -8,8 +8,11 @@ mod call;
 mod compile;
 mod diag;
 mod dsp;
+pub use dsp::{
+    CLOCK_BPM, CLOCK_METER, CLOCK_ORIGIN, ClockEdit, ClockState, dsp_value, lower_clock,
+    lower_clock_edits, unlowered_span, validate_dsp,
+};
 pub use prelude::reads_clock;
-pub use dsp::{CLOCK_BPM, CLOCK_METER, CLOCK_ORIGIN, ClockEdit, ClockState, dsp_value, lower_clock, lower_clock_edits, unlowered_span, validate_dsp};
 mod env_shortcut;
 mod explain;
 mod funcs;
@@ -23,8 +26,8 @@ mod modules;
 mod namespace;
 mod opcodes;
 mod parser;
-pub mod presets;
 mod prelude;
+pub mod presets;
 mod program;
 mod project;
 pub use project::{Entry, Located, Origin, Piece, Problem, Project};

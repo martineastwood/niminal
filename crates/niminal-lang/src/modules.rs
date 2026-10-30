@@ -301,8 +301,7 @@ impl Walk<'_> {
                 })?,
             };
             self.stack.push(path.clone());
-            let body =
-                self.visit(&module_source, path.parent().unwrap_or(dir), Some(used_at))?;
+            let body = self.visit(&module_source, path.parent().unwrap_or(dir), Some(used_at))?;
             self.stack.pop();
             self.done.push(Done {
                 path,

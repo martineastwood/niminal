@@ -149,7 +149,9 @@ fn at_hz(x: &[f32], hz: f32) -> f32 {
 fn a_string_is_in_tune() {
     for (freq, damp) in [(220, "0.5"), (440, "0.5"), (220, "0.2")] {
         let out = render(
-            &format!("use std/physical\ninstr a() {{ (noise() * env[1 4ms 0]).string({freq}hz, decay: 0.998, damp: {damp}) }}"),
+            &format!(
+                "use std/physical\ninstr a() {{ (noise() * env[1 4ms 0]).string({freq}hz, decay: 0.998, damp: {damp}) }}"
+            ),
             1200,
         );
         let heard = &out[4800..4800 + 24_000];
@@ -162,7 +164,10 @@ fn a_string_is_in_tune() {
             }
             hz += 0.25;
         }
-        assert!((best - freq as f32).abs() < 1.0, "{freq}hz with damp {damp} sounds at {best}");
+        assert!(
+            (best - freq as f32).abs() < 1.0,
+            "{freq}hz with damp {damp} sounds at {best}"
+        );
     }
 }
 
@@ -232,14 +237,24 @@ fn a_bar_and_a_bell_have_their_partials() {
 /// regular train of them.
 #[test]
 fn taps_are_delays_and_echoes_is_a_train_of_them() {
-    let peak = |out: &[f32], range: std::ops::Range<usize>| out[range].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    let peak = |out: &[f32], range: std::ops::Range<usize>| {
+        out[range].iter().fold(0.0f32, |m, v| m.max(v.abs()))
+    };
     // the click at the start, and echoes 4800 and 12000 samples after it
     let out = render(
         "instr a() { x = impulse(0.5hz) * 0.5\n x + x.delay(100ms) * 0.5 + x.delay(250ms) * 0.25 }",
         400,
     );
-    assert!(peak(&out, 4700..4900) > 0.2 && peak(&out, 4700..4900) < 0.3, "{}", peak(&out, 4700..4900));
-    assert!(peak(&out, 11_900..12_100) > 0.1 && peak(&out, 11_900..12_100) < 0.15, "{}", peak(&out, 11_900..12_100));
+    assert!(
+        peak(&out, 4700..4900) > 0.2 && peak(&out, 4700..4900) < 0.3,
+        "{}",
+        peak(&out, 4700..4900)
+    );
+    assert!(
+        peak(&out, 11_900..12_100) > 0.1 && peak(&out, 11_900..12_100) < 0.15,
+        "{}",
+        peak(&out, 11_900..12_100)
+    );
     assert!(peak(&out, 7000..9000) < 0.01, "silence between the echoes");
     // three echoes 100 ms apart, each half the level of the one before
     let out = render(
@@ -273,10 +288,7 @@ fn a_tape_delay_repeats_and_each_repeat_is_quieter_and_darker() {
 
 #[test]
 fn the_fdn_reverb_has_a_tail_that_falls_away() {
-    let out = render(
-        "instr a() { impulse(0.2hz).fdn_reverb(time: 1sec) }",
-        1500,
-    );
+    let out = render("instr a() { impulse(0.2hz).fdn_reverb(time: 1sec) }", 1500);
     assert!(finite(&out));
     let early = rms(&out[2400..9600]);
     let late = rms(&out[40_000..46_000]);
@@ -415,7 +427,13 @@ fn the_effect_library_compiles() {
     let expanded = expand(&take_all("std/fx"), Path::new(".")).unwrap();
     let text = at_120bpm(&expanded.text);
     let program = compile(&text).unwrap_or_else(|errors| {
-        panic!("{}", errors.iter().map(|e| e.render("std", &text)).collect::<String>())
+        panic!(
+            "{}",
+            errors
+                .iter()
+                .map(|e| e.render("std", &text))
+                .collect::<String>()
+        )
     });
     assert!(program.instruments.is_empty());
     assert!(expanded.text.matches("\nfx ").count() >= 15);
@@ -483,7 +501,10 @@ fn no_drum_preset_is_named_like_a_choice_of_the_drum_voice() {
 
 /// Renders `instr a() { drum_call }` from `std/drums` through the engine and returns its samples.
 fn render_drum(call: &str, blocks: usize) -> Vec<f32> {
-    render(&format!("use std/drums.{{kick_808}}\ninstr a() {{ {call} }}"), blocks)
+    render(
+        &format!("use std/drums.{{kick_808}}\ninstr a() {{ {call} }}"),
+        blocks,
+    )
 }
 
 #[test]
@@ -635,9 +656,19 @@ fn repeat_last_repeats_the_last_piece_while_held_and_passes_the_sound_after() {
     let piece = 2256; // 47 ms: not a whole number of cycles, so only a real repeat matches
     let at = 24_000 + 300; // past the 3 ms blend that fades the repeat in
     let (first, second) = (&out[at..at + 500], &out[at + piece..at + piece + 500]);
-    let differ = first.iter().zip(second).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
-    assert!(differ < 0.01, "the second repeat matches the first: {differ}");
-    assert!(rms(&out[40_000..46_000]) > 0.3, "the sound returns after the hold");
+    let differ = first
+        .iter()
+        .zip(second)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        differ < 0.01,
+        "the second repeat matches the first: {differ}"
+    );
+    assert!(
+        rms(&out[40_000..46_000]) > 0.3,
+        "the sound returns after the hold"
+    );
 }
 
 #[test]
@@ -649,8 +680,16 @@ fn rewind_last_plays_the_last_piece_backwards_while_held() {
     );
     assert!(finite(&out));
     let at = 24_000 + 200;
-    assert!(out[at + 400] < out[at + 100], "the ramp falls while rewinding: {} then {}", out[at + 100], out[at + 400]);
-    assert!(out[40_000] > out[30_000], "the live ramp is back after the hold");
+    assert!(
+        out[at + 400] < out[at + 100],
+        "the ramp falls while rewinding: {} then {}",
+        out[at + 100],
+        out[at + 400]
+    );
+    assert!(
+        out[40_000] > out[30_000],
+        "the live ramp is back after the hold"
+    );
 }
 
 #[test]
@@ -660,12 +699,27 @@ fn slow_down_lowers_the_pitch_and_comes_to_a_stop() {
         1000,
     );
     assert!(finite(&out));
-    let crossings = |range: std::ops::Range<usize>| out[range].windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count();
-    let (before, early, late) = (crossings(20_000..22_400), crossings(24_000..26_400), crossings(27_000..29_400));
+    let crossings = |range: std::ops::Range<usize>| {
+        out[range]
+            .windows(2)
+            .filter(|w| w[0] < 0.0 && w[1] >= 0.0)
+            .count()
+    };
+    let (before, early, late) = (
+        crossings(20_000..22_400),
+        crossings(24_000..26_400),
+        crossings(27_000..29_400),
+    );
     assert!(before >= 45, "a 1 khz tone: {before}");
-    assert!(early < before && late < early, "the pitch falls: {before} {early} {late}");
+    assert!(
+        early < before && late < early,
+        "the pitch falls: {before} {early} {late}"
+    );
     assert!(rms(&out[30_000..32_000]) < 0.05, "it has stopped");
-    assert!(rms(&out[40_000..46_000]) > 0.3, "the sound returns after the hold");
+    assert!(
+        rms(&out[40_000..46_000]) > 0.3,
+        "the sound returns after the hold"
+    );
 }
 
 #[test]
@@ -684,14 +738,24 @@ fn scatter_plays_the_slices_of_the_last_piece_shuffled_and_the_seed_decides_the_
     assert!(finite(&a) && finite(&b));
     assert_eq!(a, again, "the same seed shuffles the same way");
     let starts = |out: &[f32]| -> Vec<i32> {
-        (0..4).map(|k| (out[24_000 + 600 * k + 300] * 1000.0).round() as i32).collect()
+        (0..4)
+            .map(|k| (out[24_000 + 600 * k + 300] * 1000.0).round() as i32)
+            .collect()
     };
     assert_ne!(starts(&a), starts(&b), "another seed, another order");
     let mut sorted = starts(&a);
     sorted.sort_unstable();
     sorted.dedup();
-    assert_eq!(sorted.len(), 4, "every slice is played once per pass: {:?}", starts(&a));
-    assert!(rms(&a[40_000..46_000]) > 0.0, "the sound returns after the hold");
+    assert_eq!(
+        sorted.len(),
+        4,
+        "every slice is played once per pass: {:?}",
+        starts(&a)
+    );
+    assert!(
+        rms(&a[40_000..46_000]) > 0.0,
+        "the sound returns after the hold"
+    );
 }
 
 #[test]
@@ -705,13 +769,35 @@ fn scatter_can_drop_repeat_and_detune_slices() {
         )
     };
     let held = |out: &[f32]| rms(&out[24_500..28_000]);
-    let (plain, dropped, all_dropped) = (render_with(""), render_with(", drop: 0.5"), render_with(", drop: 1"));
-    assert!(finite(&dropped) && held(&all_dropped) < 0.001, "every slice dropped is silent: {}", held(&all_dropped));
-    assert!(held(&dropped) < held(&plain) * 0.9, "dropping some slices lowers the level");
-    assert_ne!(render_with(", repeat: 1"), plain, "swapping slices changes the order");
+    let (plain, dropped, all_dropped) = (
+        render_with(""),
+        render_with(", drop: 0.5"),
+        render_with(", drop: 1"),
+    );
+    assert!(
+        finite(&dropped) && held(&all_dropped) < 0.001,
+        "every slice dropped is silent: {}",
+        held(&all_dropped)
+    );
+    assert!(
+        held(&dropped) < held(&plain) * 0.9,
+        "dropping some slices lowers the level"
+    );
+    assert_ne!(
+        render_with(", repeat: 1"),
+        plain,
+        "swapping slices changes the order"
+    );
     let detuned = render_with(", detune: 12");
-    assert!(finite(&detuned) && detuned != plain, "detuned slices differ");
-    assert_eq!(detuned, render_with(", detune: 12"), "and the same way every time");
+    assert!(
+        finite(&detuned) && detuned != plain,
+        "detuned slices differ"
+    );
+    assert_eq!(
+        detuned,
+        render_with(", detune: 12"),
+        "and the same way every time"
+    );
 }
 
 #[test]
@@ -722,8 +808,15 @@ fn freeze_holds_the_last_piece_as_a_steady_cloud() {
         1000,
     );
     assert!(finite(&out));
-    assert!(rms(&out[28_000..36_000]) > 0.2, "the held tone sounds: {}", rms(&out[28_000..36_000]));
-    assert!(rms(&out[46_000..47_900]) < 0.01, "silence returns after the hold");
+    assert!(
+        rms(&out[28_000..36_000]) > 0.2,
+        "the held tone sounds: {}",
+        rms(&out[28_000..36_000])
+    );
+    assert!(
+        rms(&out[46_000..47_900]) < 0.01,
+        "silence returns after the hold"
+    );
 }
 
 #[test]
@@ -734,19 +827,36 @@ fn bitcrush_keeps_silence_silent_and_full_scale_exact() {
             &format!("instr a() {{ (osc(sine, 100hz) * 0).bitcrush(rate: 12khz, bits: {bits}) }}"),
             200,
         );
-        assert!(out.iter().all(|v| *v == 0.0), "{bits} bits: silence stays at zero");
+        assert!(
+            out.iter().all(|v| *v == 0.0),
+            "{bits} bits: silence stays at zero"
+        );
     }
     // two bits are three levels: -1, 0 and 1
     let out = render("instr a() { osc(sine, 100hz).bitcrush(bits: 2) }", 200);
-    assert!(out.iter().all(|v| [-1.0, 0.0, 1.0].contains(v)), "two bits give three levels");
-    assert!(out.contains(&1.0) && out.contains(&-1.0), "full scale is reached");
+    assert!(
+        out.iter().all(|v| [-1.0, 0.0, 1.0].contains(v)),
+        "two bits give three levels"
+    );
+    assert!(
+        out.contains(&1.0) && out.contains(&-1.0),
+        "full scale is reached"
+    );
     // eight bits: 255 levels, evenly spaced and including both ends
     let out = render("instr a() { osc(saw, 50hz).bitcrush(bits: 8) }", 2000);
     let mut levels: Vec<i32> = out.iter().map(|v| (v * 127.0).round() as i32).collect();
     levels.sort_unstable();
     levels.dedup();
-    assert!(levels.len() > 200 && levels[0] == -127 && levels[levels.len() - 1] == 127, "{} levels", levels.len());
-    assert!(out.iter().all(|v| ((v * 127.0) - (v * 127.0).round()).abs() < 1e-3), "levels sit on the 1/127 grid");
+    assert!(
+        levels.len() > 200 && levels[0] == -127 && levels[levels.len() - 1] == 127,
+        "{} levels",
+        levels.len()
+    );
+    assert!(
+        out.iter()
+            .all(|v| ((v * 127.0) - (v * 127.0).round()).abs() < 1e-3),
+        "levels sit on the 1/127 grid"
+    );
 }
 
 #[test]
@@ -759,7 +869,10 @@ fn slow_down_starts_from_the_sound_as_it_is_now() {
     );
     assert!(finite(&out));
     let start = out[24_300];
-    assert!((start - 0.25).abs() < 0.01, "the tape starts at the current level: {start}");
+    assert!(
+        (start - 0.25).abs() < 0.01,
+        "the tape starts at the current level: {start}"
+    );
 }
 
 #[test]
@@ -773,7 +886,11 @@ fn shrink_makes_each_repeat_shorter() {
     );
     assert!(finite(&out));
     let silent: Vec<usize> = (24_000..43_000).filter(|&i| out[i].abs() < 1e-9).collect();
-    let gaps: Vec<usize> = silent.windows(2).map(|w| w[1] - w[0]).filter(|g| *g > 100).collect();
+    let gaps: Vec<usize> = silent
+        .windows(2)
+        .map(|w| w[1] - w[0])
+        .filter(|g| *g > 100)
+        .collect();
     assert_eq!(gaps[..4], [1200, 600, 300, 192], "{gaps:?}");
 }
 
@@ -785,7 +902,10 @@ fn a_moving_length_is_read_once_per_repeat() {
         1000,
     );
     assert!(finite(&out));
-    let jump = out[26_000..43_000].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    let jump = out[26_000..43_000]
+        .windows(2)
+        .map(|w| (w[1] - w[0]).abs())
+        .fold(0.0f32, f32::max);
     assert!(jump < 0.1, "a jump of {jump}");
 }
 
@@ -793,52 +913,113 @@ fn a_moving_length_is_read_once_per_repeat() {
 fn gate_silences_the_end_of_each_repeat_and_reverse_plays_it_backwards() {
     let held = "(phasor(1hz) > 0.5) * (phasor(1hz) < 0.9)";
     let render_with = |args: &str| {
-        render(&format!("instr a() {{ phasor(0.5hz).repeat_last(hold: {held}, length: 50ms{args}) }}"), 1000)
+        render(
+            &format!("instr a() {{ phasor(0.5hz).repeat_last(hold: {held}, length: 50ms{args}) }}"),
+            1000,
+        )
     };
     let (open, half) = (render_with(""), render_with(", gate: 0.5"));
-    let silent = |out: &[f32]| out[24_300..24_300 + 2400].iter().filter(|v| v.abs() < 1e-9).count();
-    assert!(silent(&half) > silent(&open) + 800, "half of each repeat is silent: {} {}", silent(&half), silent(&open));
+    let silent = |out: &[f32]| {
+        out[24_300..24_300 + 2400]
+            .iter()
+            .filter(|v| v.abs() < 1e-9)
+            .count()
+    };
+    assert!(
+        silent(&half) > silent(&open) + 800,
+        "half of each repeat is silent: {} {}",
+        silent(&half),
+        silent(&open)
+    );
     let back = render_with(", reverse: 1");
     assert!(finite(&back));
-    assert!(back[24_400 + 400] < back[24_400 + 100], "a rising ramp falls when reversed");
+    assert!(
+        back[24_400 + 400] < back[24_400 + 100],
+        "a rising ramp falls when reversed"
+    );
 }
 
 #[test]
 fn shape_and_damp_change_each_repeat() {
     let held = "(phasor(1hz) > 0.5) * (phasor(1hz) < 0.9)";
     let render_with = |args: &str| {
-        render(&format!("instr a() {{ osc(saw, 440hz).repeat_last(hold: {held}, length: 50ms{args}) }}"), 1000)
+        render(
+            &format!(
+                "instr a() {{ osc(saw, 440hz).repeat_last(hold: {held}, length: 50ms{args}) }}"
+            ),
+            1000,
+        )
     };
     let window = |out: &[f32], from: usize| rms(&out[from..from + 400]);
     // the start of a 2400-sample repeat against its end
-    let (plain, fading, swelling) = (render_with(""), render_with(", shape: 1"), render_with(", shape: -1"));
+    let (plain, fading, swelling) = (
+        render_with(""),
+        render_with(", shape: 1"),
+        render_with(", shape: -1"),
+    );
     let (head, tail) = (24_400, 24_000 + 2000);
-    assert!(window(&fading, tail) < window(&fading, head) * 0.5, "a fade-out dies away");
-    assert!(window(&swelling, head) < window(&swelling, tail) * 0.5, "a swell builds");
-    assert!(window(&plain, tail) > window(&plain, head) * 0.8, "no shape stays level");
+    assert!(
+        window(&fading, tail) < window(&fading, head) * 0.5,
+        "a fade-out dies away"
+    );
+    assert!(
+        window(&swelling, head) < window(&swelling, tail) * 0.5,
+        "a swell builds"
+    );
+    assert!(
+        window(&plain, tail) > window(&plain, head) * 0.8,
+        "no shape stays level"
+    );
     // a damped saw loses its highs, so later repeats jump less from sample to sample
     let damped = render_with(", shrink: 1, damp: 0.6");
-    let later = |out: &[f32]| out[24_000 + 2400 * 4..24_000 + 2400 * 4 + 1500].windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>();
-    assert!(finite(&damped) && later(&damped) < later(&plain) * 0.8, "later repeats are darker: {} {}", later(&damped), later(&plain));
+    let later = |out: &[f32]| {
+        out[24_000 + 2400 * 4..24_000 + 2400 * 4 + 1500]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .sum::<f32>()
+    };
+    assert!(
+        finite(&damped) && later(&damped) < later(&plain) * 0.8,
+        "later repeats are darker: {} {}",
+        later(&damped),
+        later(&plain)
+    );
 }
 
 #[test]
 fn attack_bend_and_accent_shape_the_repeats() {
     let held = "(phasor(1hz) > 0.5) * (phasor(1hz) < 0.9)";
     let render_with = |args: &str| {
-        render(&format!("instr a() {{ osc(saw, 440hz).repeat_last(hold: {held}, length: 50ms{args}) }}"), 1000)
+        render(
+            &format!(
+                "instr a() {{ osc(saw, 440hz).repeat_last(hold: {held}, length: 50ms{args}) }}"
+            ),
+            1000,
+        )
     };
     let window = |out: &[f32], from: usize| rms(&out[from..from + 300]);
     // a slow attack: the start of a repeat is quieter than its middle
     let slow = render_with(", attack: 0.5");
-    assert!(window(&slow, 24_400) < window(&slow, 24_000 + 1000) * 0.6, "it rises");
+    assert!(
+        window(&slow, 24_400) < window(&slow, 24_000 + 1000) * 0.6,
+        "it rises"
+    );
     // a bent fade-out is quieter by the middle than a straight one
-    let (straight, bent) = (render_with(", shape: 1"), render_with(", shape: 1, bend: 1"));
-    assert!(window(&bent, 24_000 + 1200) < window(&straight, 24_000 + 1200) * 0.5, "a pluck");
+    let (straight, bent) = (
+        render_with(", shape: 1"),
+        render_with(", shape: 1, bend: 1"),
+    );
+    assert!(
+        window(&bent, 24_000 + 1200) < window(&straight, 24_000 + 1200) * 0.5,
+        "a pluck"
+    );
     // accent: the second repeat is quieter than the first
     let accented = render_with(", accent: 0.8");
     assert!(finite(&accented));
-    assert!(window(&accented, 24_000 + 2400 + 600) < window(&accented, 24_000 + 600) * 0.4, "the second is softer");
+    assert!(
+        window(&accented, 24_000 + 2400 + 600) < window(&accented, 24_000 + 600) * 0.4,
+        "the second is softer"
+    );
 }
 
 #[test]
@@ -852,13 +1033,21 @@ fn a_hold_starts_and_ends_without_a_click() {
         "freeze(hold: gate, length: 50ms)",
     ] {
         let out = render(
-            &format!("instr a() {{ gate = (phasor(1hz) > 0.5) * (phasor(1hz) < 0.7)\n osc(sine, 220hz).{call} }}"),
+            &format!(
+                "instr a() {{ gate = (phasor(1hz) > 0.5) * (phasor(1hz) < 0.7)\n osc(sine, 220hz).{call} }}"
+            ),
             1000,
         );
         assert!(finite(&out));
-        let jump = out[20_000..40_000].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        let jump = out[20_000..40_000]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
         assert!(jump < 0.1, "{call}: a jump of {jump}");
-        assert!(rms(&out[40_000..46_000]) > 0.3, "{call}: the sound returns after the hold");
+        assert!(
+            rms(&out[40_000..46_000]) > 0.3,
+            "{call}: the sound returns after the hold"
+        );
     }
 }
 
@@ -883,16 +1072,26 @@ fn apply_fades_between_dry_and_wet_without_a_click() {
         "instr a() { osc(sine, 220hz).apply(fn(s) { s * 0 }, when: (phasor(1hz) > 0.5) * (phasor(1hz) < 0.7)) }",
         1000,
     );
-    let jump = out[20_000..40_000].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    let jump = out[20_000..40_000]
+        .windows(2)
+        .map(|w| (w[1] - w[0]).abs())
+        .fold(0.0f32, f32::max);
     assert!(jump < 0.1, "a jump of {jump}");
-    assert!(rms(&out[25_000..30_000]) < 0.01, "the function is in force while gated");
+    assert!(
+        rms(&out[25_000..30_000]) < 0.01,
+        "the function is in force while gated"
+    );
 }
 
 /// `use std/fx` alone would add every effect to the piece, so it asks for names; naming some adds only those.
 #[test]
 fn std_fx_is_taken_by_name() {
     let err = expand("use std/fx\n", Path::new(".")).err().unwrap();
-    assert!(err.message.contains("name the ones you want"), "{}", err.message);
+    assert!(
+        err.message.contains("name the ones you want"),
+        "{}",
+        err.message
+    );
     let err = expand("use std/fx.{nope}\n", Path::new(".")).err().unwrap();
     assert!(err.message.contains("no `nope`"), "{}", err.message);
     let expanded = expand("use std/fx.{echo, soft_clip}\n", Path::new(".")).unwrap();
@@ -925,7 +1124,9 @@ fn at_120bpm(text: &str) -> String {
 }
 
 fn take_all(shelf: &str) -> String {
-    let names: Vec<&str> = niminal_lang::presets::of_shelf(shelf).map(|p| p.id.as_str()).collect();
+    let names: Vec<&str> = niminal_lang::presets::of_shelf(shelf)
+        .map(|p| p.id.as_str())
+        .collect();
     format!("use {shelf}.{{{}}}\n", names.join(", "))
 }
 
@@ -936,16 +1137,39 @@ fn take_all(shelf: &str) -> String {
 fn the_preset_catalog_is_complete_and_its_json_is_current() {
     use niminal_lang::presets::{PresetKind, all, find, json};
     let presets = all();
-    assert_eq!(presets.iter().filter(|p| p.kind == PresetKind::Instrument).count(), 29);
-    assert!(presets.iter().filter(|p| p.kind == PresetKind::Effect).count() >= 15);
+    assert_eq!(
+        presets
+            .iter()
+            .filter(|p| p.kind == PresetKind::Instrument)
+            .count(),
+        29
+    );
+    assert!(
+        presets
+            .iter()
+            .filter(|p| p.kind == PresetKind::Effect)
+            .count()
+            >= 15
+    );
     for p in presets {
-        assert!(!p.folder.is_empty() && !p.description.is_empty(), "{} needs a folder and a description", p.id);
+        assert!(
+            !p.folder.is_empty() && !p.description.is_empty(),
+            "{} needs a folder and a description",
+            p.id
+        );
         assert!(!p.params.is_empty(), "{} lists its parameters", p.id);
         let alone = format!("{}\n{}", p.helpers, p.source);
-        compile(&at_120bpm(&alone)).unwrap_or_else(|e| panic!("{} on its own: {}", p.id, e[0].message));
+        compile(&at_120bpm(&alone))
+            .unwrap_or_else(|e| panic!("{} on its own: {}", p.id, e[0].message));
     }
     assert_eq!(find("kick_808").unwrap().folder, "drums/kicks");
-    assert!(find("kick_808").unwrap().helpers.starts_with("/// A drum voice") || find("kick_808").unwrap().helpers.contains("fn drum("));
+    assert!(
+        find("kick_808")
+            .unwrap()
+            .helpers
+            .starts_with("/// A drum voice")
+            || find("kick_808").unwrap().helpers.contains("fn drum(")
+    );
     assert!(find("echo").unwrap().helpers.is_empty());
     assert_eq!(find("echo").unwrap().name, "Echo");
     assert_eq!(find("band_cut").unwrap().name, "Band cut");
@@ -953,5 +1177,9 @@ fn the_preset_catalog_is_complete_and_its_json_is_current() {
     if std::env::var_os("BLESS").is_some() {
         std::fs::write(&path, json()).unwrap();
     }
-    assert_eq!(std::fs::read_to_string(&path).unwrap_or_default(), json(), "std/presets.json is out of date; run with BLESS=1");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap_or_default(),
+        json(),
+        "std/presets.json is out of date; run with BLESS=1"
+    );
 }

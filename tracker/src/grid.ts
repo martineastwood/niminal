@@ -3,9 +3,11 @@ import { targetKey } from './automation';
 import { describeAnyCommand } from './describe';
 import { columnCommands, commandProblem, commandValue, glideRetriggers, maxFxColumns, maxTrackCommandColumns, trackCommandProblem, trackCommandValue, keyboardNote, noteAt, noteNumber, transposeNote, blankColumn, subColumns, maxNoteColumns, columnCount, columnStrip, columnLanes, type FxTarget, type Project, type Song, type Pattern, type Track, type SubColumn } from './project';
 import { NoteHistory, parseNotes, type NoteEdit } from './history';
+import { draggable, dropTarget } from './drag';
+import { openMenu, type MenuEntry } from './menu';
 
 /** What the grid asks of the sequence: move between steps, insert or remove one, or point the step at another pattern. */
-export type SequenceAction = 'previous' | 'next' | 'first' | 'last' | 'new' | 'remove' | 'pattern-previous' | 'pattern-next';
+export type SequenceAction = 'previous' | 'next' | 'first' | 'last' | 'new' | 'remove';
 
 const ROW_WIDTH = 30, NOTE_WIDTH = 44, SUB_WIDTH = 26, MIN_TRACK_WIDTH = 104, MIN_STRIP_WIDTH = 84, FX_WIDTH = 34;
 
@@ -61,11 +63,10 @@ export class PatternGrid {
   private histories = new Map<string, NoteHistory>();
   private targetSignatures = new Map<string, string>();
   private playing: number | null = null;
-  private pad = 0;
+  /** The space above the first row and below the last, which lets the cursor row stay at one height while the grid scrolls under it. */
+  private pad = { top: 0, bottom: 0 };
   /** Set while a blurred cell editor commits, so clicking away does not scroll the grid. */
   private keepView = false;
-  /** The cells a click or drag has selected without moving the cursor, outside record mode; null when the selection is the cursor's. */
-  private marked: { from: { row: number; column: number }; to: { row: number; column: number } } | null = null;
   private origin = 0;
   private shown = -1;
   private animation = 0;
@@ -77,6 +78,10 @@ export class PatternGrid {
   /** Set by the owner: why a track's cells in the selected sequence step are not played, if they are not. */
   slot: (track: number) => { kind: 'mute' | 'alias'; text: string } | null = () => null;
   private dragging = false;
+  /** A drag that began inside the selection: it carries the selected cells to wherever it is dropped. */
+  private moving: { from: { row: number; column: number }; by: { rows: number; columns: number } } | null = null;
+  /** Set by the owner: whether the cursor rides the play position while recording over playback. Off, it stays where it is. */
+  follows: () => boolean = () => true;
 
   constructor(
     private parent: HTMLElement,
@@ -86,7 +91,8 @@ export class PatternGrid {
     private edited: () => void,
     /** Plays a note: for a moment, or with `hold` (a number for the key) until `releaseHeld` is given it. */
     private audition: (id: string, note: string, track: number, expression?: { commands?: string[]; hold?: number }) => void,
-    private togglePlay: () => void,
+    /** Plays or stops the pattern, from the cursor's row when `fromCursor`. */
+    private togglePlay: (fromCursor: boolean) => void,
     private trackSelected: (track: number) => void = () => {},
     private step: () => number = () => 1,
     private feedback: (text: string) => void = () => {},
@@ -120,53 +126,85 @@ export class PatternGrid {
       if (!cell || event.button !== 0 || (event.target as HTMLElement).closest('input, .value-drag')) return;
       event.preventDefault(); this.dragging = true;
       const at = { row: Number(cell.dataset.noteRow), column: Number(cell.dataset.column) };
-      if (this.recording) {
-        this.marked = null; this.row = at.row; this.column = at.column;
-        if (!event.shiftKey) this.anchor = { row: this.row, column: this.column };
-      } else this.marked = { from: event.shiftKey ? this.marked?.from ?? { row: this.anchor.row, column: this.anchor.column } : at, to: at };
-      parent.setPointerCapture?.(event.pointerId); parent.focus(); this.trackSelected(this.activeTrack); this.paintSelection();
+      parent.setPointerCapture?.(event.pointerId); parent.focus();
+      // a drag that starts inside a block of selected cells moves them; a plain click there just puts the cursor on the cell
+      if (this.recording && !event.shiftKey && this.selected(at.row, at.column) && this.selectionSize() > 1) { this.moving = { from: at, by: { rows: 0, columns: 0 } }; return; }
+      this.row = at.row; this.column = at.column;
+      if (!event.shiftKey) this.anchor = { row: this.row, column: this.column };
+      this.trackSelected(this.activeTrack); this.paintSelection();
     });
     parent.addEventListener('pointermove', event => {
       if (!this.dragging) return;
       const cell = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-column]');
       if (!cell || !parent.contains(cell)) return;
       const row = Number(cell.dataset.noteRow), column = Number(cell.dataset.column);
-      const at = this.marked && !this.recording ? this.marked.to : { row: this.row, column: this.column };
-      if (row === at.row && column === at.column) return;
-      if (this.marked && !this.recording) this.marked.to = { row, column }; else { this.row = row; this.column = column; }
+      if (this.moving) { this.moving.by = this.clampMove(row - this.moving.from.row, column - this.moving.from.column); this.paintMove(); return; }
+      if (row === this.row && column === this.column) return;
+      this.row = row; this.column = column;
       this.trackSelected(this.activeTrack); this.paintSelection();
       cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     });
-    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) parent.addEventListener(name, () => { this.dragging = false; });
-    // outside record mode a double click is what moves the cursor to the cell
-    parent.addEventListener('dblclick', event => {
-      const cell = (event.target as HTMLElement).closest<HTMLElement>('[data-column]'); if (!cell || this.recording) return;
-      this.row = Number(cell.dataset.noteRow); this.column = Number(cell.dataset.column); this.anchor = { row: this.row, column: this.column }; this.marked = null;
-      this.trackSelected(this.activeTrack); this.render();
+    parent.addEventListener('pointerup', event => {
+      const moving = this.moving; this.moving = null; this.dragging = false;
+      if (!moving) return;
+      if (moving.by.rows || moving.by.columns) this.moveSelection(moving.by.rows, moving.by.columns, event.altKey);
+      else { this.row = moving.from.row; this.column = moving.from.column; this.anchor = { row: this.row, column: this.column }; this.trackSelected(this.activeTrack); this.paintSelection(); }
+      this.paintMove();
     });
+    for (const name of ['pointercancel', 'lostpointercapture']) parent.addEventListener(name, () => { this.dragging = false; if (this.moving) { this.moving = null; this.paintMove(); } });
     parent.addEventListener('keydown', event => this.keydown(event));
     parent.addEventListener('copy', event => this.copy(event));
     parent.addEventListener('cut', event => { if ((event.target as HTMLElement).closest('input')) return; this.copy(event); if (this.recording) this.clearSelection(); });
     parent.addEventListener('paste', event => {
       if ((event.target as HTMLElement).closest('input')) return;
-      const rows = parseNotes(event.clipboardData?.getData('text/plain') ?? ''); event.preventDefault();
-      if (!rows) { this.feedback('Clipboard needs notes or values, separated by tabs.'); return; }
-      // cells marked by a click are only there to copy from: pasting lands at the cursor
-      const lanes = this.lanes, edits: NoteEdit[] = [], origin = this.marked ? { row: this.row, column: this.column } : { row: this.bounds.top, column: this.bounds.left };
-      for (const [r, values] of rows.entries()) for (const [c, raw] of values.entries()) {
-        const row = origin.row + r, column = origin.column + c;
-        if (row >= this.pattern().rows || column >= lanes.length) continue;
-        let value = raw;
-        if (value !== null) {
-          const lane = lanes[column];
-          if (lane.kind === 'note') value = /^([A-G][#-][0-8]|OFF|CUT)$/.test(value) ? value : null;
-          else value = subValue(lane.kind, value, this.project());
-          if (value === null) { this.feedback('Paste needs values in the destination lane’s units and range.'); return; }
-        }
-        edits.push({ row, track: column, before: lanes[column].values[row], after: value });
-      }
-      this.apply(edits);
+      event.preventDefault(); this.paste(event.clipboardData?.getData('text/plain') ?? '');
     });
+    parent.addEventListener('contextmenu', event => {
+      const cell = (event.target as HTMLElement).closest<HTMLElement>('[data-column]'); if (!cell) return;
+      event.preventDefault();
+      const row = Number(cell.dataset.noteRow), column = Number(cell.dataset.column);
+      if (!this.selected(row, column)) { this.row = row; this.column = column; this.anchor = { row, column }; this.trackSelected(this.activeTrack); this.paintSelection(); }
+      this.cellMenu(cell);
+    });
+  }
+
+  /** Writes clipboard text at the top left of the selection. */
+  private paste(text: string) {
+    const rows = parseNotes(text);
+    if (!rows) { this.feedback('Clipboard needs notes or values, separated by tabs.'); return; }
+    const lanes = this.lanes, edits: NoteEdit[] = [], origin = { row: this.bounds.top, column: this.bounds.left };
+    for (const [r, values] of rows.entries()) for (const [c, raw] of values.entries()) {
+      const row = origin.row + r, column = origin.column + c;
+      if (row >= this.pattern().rows || column >= lanes.length) continue;
+      let value = raw;
+      if (value !== null) {
+        const lane = lanes[column];
+        if (lane.kind === 'note') value = /^([A-G][#-][0-8]|OFF|CUT)$/.test(value) ? value : null;
+        else value = subValue(lane.kind, value, this.project());
+        if (value === null) { this.feedback('Paste needs values in the destination lane’s units and range.'); return; }
+      }
+      edits.push({ row, track: column, before: lanes[column].values[row], after: value });
+    }
+    this.apply(edits);
+  }
+  /** The right-click menu: what can be done to the selected cells, with the keys that do it. */
+  private cellMenu(anchor: HTMLElement) {
+    const mod = /Mac/.test(navigator.platform) ? '⌘' : 'Ctrl+', alt = /Mac/.test(navigator.platform) ? '⌥' : 'Alt+';
+    const edit = (run: () => void) => () => { if (!this.recording) { this.feedback('Turn on record mode (Esc) to edit.'); return; } run(); this.parent.focus(); };
+    openMenu(anchor, [
+      { text: 'Copy', run: () => { void navigator.clipboard?.writeText(this.selectionText()).catch(() => this.feedback('Could not reach the clipboard.')); this.parent.focus(); } },
+      { text: 'Paste', run: edit(() => { void navigator.clipboard?.readText().then(text => this.paste(text), () => this.feedback('Could not reach the clipboard.')); }) },
+      { text: 'Clear  ⌫', run: edit(() => this.clearSelection()) },
+      { heading: 'Selection' },
+      { text: `Transpose up a semitone  ${mod}${alt}↑`, run: edit(() => this.transpose(1)) },
+      { text: `Transpose down a semitone  ${mod}${alt}↓`, run: edit(() => this.transpose(-1)) },
+      { text: `Transpose up an octave  ${mod}⇧↑`, run: edit(() => this.transpose(12)) },
+      { text: `Transpose down an octave  ${mod}⇧↓`, run: edit(() => this.transpose(-12)) },
+      { text: `Interpolate  ${mod}I`, run: edit(() => this.interpolate()) },
+      { text: `Repeat below  ${mod}D`, run: edit(() => this.duplicate()) },
+      { text: 'Reverse', run: () => this.reverseSelection() },
+      { text: 'Randomize', run: () => this.randomizeSelection() },
+    ]);
   }
 
   private get lanes(): Lane[] {
@@ -184,6 +222,7 @@ export class PatternGrid {
   }
   private get values() { return this.lanes.map(lane => lane.values); }
   private get barRows() { const t = patternTiming(this.project(), this.pattern()); return Math.max(1, Math.round(t.rows_per_beat * 4 / t.beat_unit * t.beats_per_bar)); }
+  get cursorRow() { return this.row; }
   get activeTrack() { return this.lanes[this.column]?.track ?? 0; }
   private get history() {
     const pattern = this.pattern(), id = pattern.id;
@@ -193,6 +232,10 @@ export class PatternGrid {
     if (!this.histories.has(id)) this.histories.set(id, new NoteHistory());
     return this.histories.get(id)!;
   }
+  /** Called when a track header is dragged onto another: the track at `from` should take the place of the one at `to`. */
+  onMoveTrack: (from: number, to: number) => void = () => {};
+  /** Set by the owner: what the right-click menu of a track header adds for the track already selected, such as duplicating or deleting it. */
+  trackMenu: () => MenuEntry[] = () => [];
   resetHistory() { this.histories.clear(); this.anchor = { row: this.row, column: this.column }; }
   undo() { if (this.projectUndo) { this.projectUndo(false); return; } if (this.history.undo(this.values)) { this.render(); this.edited(); } }
   redo() { if (this.projectUndo) { this.projectUndo(true); return; } if (this.history.redo(this.values)) { this.render(); this.edited(); } }
@@ -291,11 +334,30 @@ export class PatternGrid {
         label.className = lane.kind === 'note' ? 'col-label' : lane.kind === 'fx' || lane.kind === 'cmd' ? 'col-label sub-label fx-label' : 'col-label sub-label'; if (lane.kind === 'note' && lane.col > 0) label.classList.add('col-start');
         if (lane.kind !== 'note') label.title = subTitle[lane.kind]; columns.append(label);
       }
+      if (isTrack) {
+        tools.dataset.noDrag = ''; strip.dataset.noDrag = '';
+        draggable(cell, () => ({ kind: 'track', value: String(index), name: track.name }));
+        dropTarget(cell, item => item.kind === 'track' && item.value !== String(index), item => this.onMoveTrack(Number(item.value), index));
+        name.title = 'Double-click to rename · drag to reorder';
+      }
       cell.append(strip, heading, tools, columns); cell.onkeydown = event => event.stopPropagation();
       cell.onclick = event => { if (!(event.target as HTMLElement).closest('button, select, input')) this.selectTrack(index, false); };
+      cell.oncontextmenu = event => {
+        event.preventDefault(); this.selectTrack(index, false);
+        openMenu(cell, [
+          ...(isMaster ? [] : [{ text: 'Rename', run: () => name.ondblclick?.(new MouseEvent('dblclick')) }]),
+          ...(isTrack ? [{ text: 'Colour…', run: () => this.pickColour(track, strip) }] : []),
+          ...(isMaster ? [] : [{ text: track.muted ? 'Unmute' : 'Mute', run: () => mute.click() }]),
+          ...(isTrack ? [{ text: track.solo ? 'Unsolo' : 'Solo', run: () => solo.click() }] : []),
+          { text: 'Columns…', run: () => this.pickColumns(index, more) },
+          ...(isTrack ? this.trackMenu() : []),
+        ]);
+      };
       header.append(cell);
     }
-    this.parent.append(header, this.pads());
+    this.parent.append(header, this.spacer('top'));
+    // a note sounds until the next note, OFF or CUT in its column; the rows between are drawn as a line
+    const sounding = new Set<number>();
     for (let row = 0; row < pattern.rows; row++) {
       const line = document.createElement('div'); line.className = `grid-row ${row % (beatRows) === 0 ? 'beat' : ''} ${row % (beatRows * timing.beats_per_bar) === 0 ? 'bar' : ''}`; line.setAttribute('role', 'row'); line.dataset.row = String(row);
       const number = document.createElement('span'); number.className = 'row-number'; number.textContent = String(row).padStart(2, '0'); line.append(number);
@@ -306,7 +368,10 @@ export class PatternGrid {
           const c = column++, value = lane.values[row], cell = document.createElement('div'); cell.setAttribute('role', 'gridcell');
           cell.className = `${lane.kind === 'note' ? 'note' : lane.kind === 'fx' || lane.kind === 'cmd' ? 'sub fxc' : 'sub'} ${value ? 'filled' : ''}`; cell.dataset.noteRow = String(row); cell.dataset.column = String(c);
           if (lane.kind === 'note' && lane.col > 0) cell.classList.add('col-start'); if (value === 'OFF') cell.classList.add('off'); if (value === 'CUT') cell.classList.add('cut');
-          cell.id = this.id(row, lane); cell.textContent = value === null ? lane.kind === 'note' ? '···' : '··' : this.text(lane, value);
+          const held = lane.kind === 'note' && value === null && sounding.has(c);
+          cell.id = this.id(row, lane); cell.textContent = value === null ? lane.kind === 'note' ? held ? '│' : '···' : '··' : this.text(lane, value);
+          if (held) cell.classList.add('held');
+          if (lane.kind === 'note') { if (value === null) { /* unchanged */ } else if (value === 'OFF' || value === 'CUT') sounding.delete(c); else sounding.add(c); }
           if (value !== null && (lane.kind === 'fx' || lane.kind === 'cmd')) cell.title = `${value} ${this.explain(lane.kind, value, lane.track)}`;
           cell.onclick = event => {
             if (!this.recording) return;
@@ -320,7 +385,7 @@ export class PatternGrid {
       }
       this.parent.append(line);
     }
-    this.parent.append(this.pads());
+    this.parent.append(this.spacer('bottom'));
     this.paintSelection();
     const cursor = this.parent.querySelector<HTMLElement>(`#${this.id(this.row, lanes[this.column])}`);
     if (recentre && !this.keepView && this.playing === null) this.centre(this.row);
@@ -344,7 +409,9 @@ export class PatternGrid {
     this.animation ||= requestAnimationFrame(this.follow);
   }
   /** Recording while the pattern plays: the cursor rides the play position and notes land on the nearest row. */
-  private get live() { return this.recording && this.playing !== null; }
+  private get live() { return this.recording && this.riding; }
+  /** While playing with Follow on, the cursor is the play position: it moves down the pattern with it and stays on its row when playback stops. */
+  private get riding() { return this.playing !== null && this.follows(); }
   private currentRow() { return patternRow(patternTiming(this.project(), this.pattern()), (Date.now() - this.origin) / 1000, this.pattern().rows, patternSwing(this.project(), this.pattern())); }
   private nearestRow() { return Math.round(this.currentRow()) % this.pattern().rows; }
   private follow = () => {
@@ -353,7 +420,7 @@ export class PatternGrid {
     const row = Math.min(Math.max(Math.floor(this.currentRow()), 0), this.pattern().rows - 1);
     if (row !== this.shown) {
       this.shown = row; this.followRow(row);
-      if (this.live) { this.row = row; this.anchor = { row, column: this.column }; this.paintSelection(); }
+      if (this.riding) { this.row = row; this.anchor = { row, column: this.column }; this.paintSelection(); }
     }
     this.animation = requestAnimationFrame(this.follow);
   };
@@ -515,14 +582,20 @@ export class PatternGrid {
   /** Scrolls `row` to a third of the way down the view, as Renoise does; the padding below lets the last row get there too. */
   private centre(row: number) {
     const header = this.parent.querySelector<HTMLElement>('.grid-header')?.offsetHeight ?? 0;
-    const body = this.parent.clientHeight - header, above = Math.round(body / 3), pad = body - above; if (pad !== this.pad) this.setPad(pad);
+    // the cursor row sits a third of the way down, or ten rows if that is less, so a tall grid does not open with a screenful of blank
+    const line = this.parent.querySelector<HTMLElement>('.grid-row[data-row]')?.offsetHeight || 20;
+    const body = this.parent.clientHeight - header, above = Math.min(Math.round(body / 3), line * 10);
+    if (above !== this.pad.top || body - above !== this.pad.bottom) this.setPad(above, body - above);
     const top = this.contentTop(row); if (top === null) return null;
     const half = (this.parent.querySelector<HTMLElement>(`[data-row="${row}"]`)?.offsetHeight ?? 0) / 2;
     this.parent.scrollTop = top + half - header - above;
     return top;
   }
-  private setPad(pad: number) { this.pad = pad; for (const spacer of this.parent.querySelectorAll<HTMLElement>('.grid-pad')) spacer.style.height = `${pad}px`; }
-  private pads() { const spacer = document.createElement('div'); spacer.className = 'grid-pad'; spacer.style.height = `${this.pad}px`; return spacer; }
+  private setPad(top: number, bottom: number) {
+    this.pad = { top, bottom };
+    for (const spacer of this.parent.querySelectorAll<HTMLElement>('.grid-pad')) spacer.style.height = `${spacer.dataset.edge === 'top' ? top : bottom}px`;
+  }
+  private spacer(edge: 'top' | 'bottom') { const spacer = document.createElement('div'); spacer.className = 'grid-pad'; spacer.dataset.edge = edge; spacer.style.height = `${this.pad[edge]}px`; return spacer; }
   private contentTop(row: number) {
     const line = this.parent.querySelector<HTMLElement>(`[data-row="${row}"]`); if (!line) return null;
     return line.getBoundingClientRect().top - this.parent.getBoundingClientRect().top + this.parent.scrollTop;
@@ -582,6 +655,29 @@ export class PatternGrid {
     if (!edits.length) { this.feedback('Randomize needs two or more notes or values in a column, that differ.'); return; }
     this.apply(edits);
   }
+  /** Where Cmd/Ctrl+`key` takes the cursor, as in a spreadsheet: along a run of filled cells to its end, or from a gap to the next filled cell, else to the edge. Sideways it goes to the edge of the track, then the next. */
+  private jump(key: string) {
+    const lanes = this.lanes, rows = this.pattern().rows;
+    if (key === 'Home') return { row: 0, column: 0 };
+    if (key === 'End') return { row: rows - 1, column: lanes.length - 1 };
+    if (key === 'ArrowLeft' || key === 'ArrowRight') {
+      const stops = lanes.flatMap((lane, i) => lane.track !== lanes[i - 1]?.track || lane.track !== lanes[i + 1]?.track ? [i] : []);
+      const column = key === 'ArrowLeft' ? stops.filter(i => i < this.column).pop() ?? 0 : stops.find(i => i > this.column) ?? lanes.length - 1;
+      return { row: this.row, column };
+    }
+    const values = lanes[this.column].values, step = key === 'ArrowUp' ? -1 : 1, edge = step < 0 ? 0 : rows - 1;
+    const filled = (row: number) => values[row] != null && values[row] !== '';
+    let row = this.row;
+    if (row === edge) return { row, column: this.column };
+    if (filled(row) && filled(row + step)) { row += step; while (row !== edge && filled(row + step)) row += step; }
+    else { row += step; while (row !== edge && !filled(row)) row += step; }
+    return { row, column: this.column };
+  }
+  /** Selects every row of the column the cursor is in. */
+  private selectColumn() {
+    this.anchor = { row: 0, column: this.column }; this.row = this.pattern().rows - 1;
+    this.trackSelected(this.activeTrack); this.render();
+  }
   /** Selects every row of every column of the track the cursor is in, ready to copy or cut and paste onto another track or pattern. */
   selectWholeTrack() {
     const columns = this.lanes.flatMap((lane, index) => lane.track === this.activeTrack ? [index] : []);
@@ -590,7 +686,7 @@ export class PatternGrid {
   }
   /** The selected rectangle: first and last row and column. */
   private get bounds() {
-    const a = this.marked?.from ?? this.anchor, b = this.marked?.to ?? { row: this.row, column: this.column };
+    const a = this.anchor, b = { row: this.row, column: this.column };
     return { top: Math.min(a.row, b.row), bottom: Math.max(a.row, b.row), left: Math.min(a.column, b.column), right: Math.max(a.column, b.column) };
   }
   /** Moves the selected notes up or down by `semitones`; OFF, CUT and notes that would leave the range stay as they are. */
@@ -644,6 +740,36 @@ export class PatternGrid {
     this.apply(edits);
     const shift = Math.min(height, rows - 1 - bottom); this.row += shift; this.anchor.row += shift;
     this.render();
+  }
+  private selectionSize() { const { top, bottom, left, right } = this.bounds; return (bottom - top + 1) * (right - left + 1); }
+  /** Keeps a move inside the pattern and over lanes of the same kind as those it leaves, so a note never lands in a velocity column. */
+  private clampMove(rows: number, columns: number) {
+    const { top, bottom, left, right } = this.bounds, lanes = this.lanes;
+    rows = Math.max(-top, Math.min(this.pattern().rows - 1 - bottom, rows));
+    const fits = (by: number) => left + by >= 0 && right + by < lanes.length && lanes.slice(left, right + 1).every((lane, i) => lanes[left + i + by].kind === lane.kind);
+    while (columns && !fits(columns)) columns += columns > 0 ? -1 : 1;
+    return { rows, columns };
+  }
+  private paintMove() {
+    const by = this.moving?.by, { top, bottom, left, right } = this.bounds;
+    for (const cell of this.parent.querySelectorAll<HTMLElement>('[data-column]')) {
+      const row = Number(cell.dataset.noteRow), column = Number(cell.dataset.column);
+      cell.classList.toggle('drop-preview', !!by && (by.rows !== 0 || by.columns !== 0) && row >= top + by.rows && row <= bottom + by.rows && column >= left + by.columns && column <= right + by.columns);
+    }
+  }
+  /** Carries the selected cells `rows` down and `columns` across, leaving blanks behind them unless `copy`, and selects them where they land. */
+  private moveSelection(rows: number, columns: number, copy: boolean) {
+    const { top, bottom, left, right } = this.bounds, lanes = this.lanes, after = new Map<string, { track: number; row: number; value: string | null }>();
+    const at = (column: number, row: number) => `${column}:${row}`;
+    for (let column = left; column <= right; column++) for (let row = top; row <= bottom; row++) {
+      if (!copy) after.set(at(column, row), { track: column, row, value: null });
+    }
+    for (let column = left; column <= right; column++) for (let row = top; row <= bottom; row++) {
+      after.set(at(column + columns, row + rows), { track: column + columns, row: row + rows, value: lanes[column].values[row] });
+    }
+    this.apply([...after.values()].map(({ track, row, value }) => ({ row, track, before: lanes[track].values[row], after: value })));
+    this.anchor = { row: top + rows, column: left + columns }; this.row = bottom + rows; this.column = right + columns;
+    this.trackSelected(this.activeTrack); this.render(false);
   }
   private clearSelection() {
     const edits: NoteEdit[] = [];
@@ -734,36 +860,48 @@ export class PatternGrid {
     this.hold(event, instrument, note, Math.min(this.lanes[this.column].track, this.project().tracks.length - 1));
   }
   private keydown(event: KeyboardEvent) {
-    if (this.marked && !event.metaKey && !event.ctrlKey) this.marked = null;
     if ((event.target as HTMLElement).closest('input, select, textarea')) return;
     if (event.ctrlKey || event.metaKey) {
       const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
-      // Option+arrows alone choose the instrument, and Cmd+arrows alone move through the sequence, so
-      // transposing is Cmd/Ctrl+Option+arrows for a semitone and Cmd/Ctrl+Shift+arrows for an octave
-      if ((key === 'ArrowUp' || key === 'ArrowDown') && (event.altKey || event.shiftKey)) {
+      // Cmd/Ctrl+arrows jump as they do in a spreadsheet (with Shift they select as they go), so transposing is
+      // Cmd/Ctrl+Option+arrows for a semitone and with Shift for an octave, and the sequence is Alt+Shift+arrows
+      if ((key === 'ArrowUp' || key === 'ArrowDown') && event.altKey) {
         event.preventDefault();
-        if (this.recording && event.altKey !== event.shiftKey) this.transpose((key === 'ArrowUp' ? 1 : -1) * (event.shiftKey ? 12 : 1));
+        if (this.recording) this.transpose((key === 'ArrowUp' ? 1 : -1) * (event.shiftKey ? 12 : 1));
         return;
       }
+      if (!event.altKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(key)) {
+        event.preventDefault();
+        if (this.riding && key !== 'ArrowLeft' && key !== 'ArrowRight') return;
+        const to = this.jump(key); this.row = to.row; this.column = to.column;
+        if (!event.shiftKey) this.anchor = { row: this.row, column: this.column };
+        this.trackSelected(this.activeTrack); this.render(); return;
+      }
+      if (key === ' ') { event.preventDefault(); this.selectColumn(); return; }
       if (key === 'z') { event.preventDefault(); if (event.shiftKey) this.redo(); else this.undo(); }
       if (key === 'y') { event.preventDefault(); this.redo(); }
-      if (key === 'a') { event.preventDefault(); this.marked = null; if (event.shiftKey) this.selectWholeTrack(); else { this.anchor = { row: 0, column: 0 }; this.row = this.pattern().rows - 1; this.column = this.lanes.length - 1; this.trackSelected(this.activeTrack); this.render(); } }
-      const sequence: Record<string, SequenceAction> = { ArrowUp: 'previous', ArrowDown: 'next', Home: 'first', End: 'last', ArrowLeft: 'pattern-previous', ArrowRight: 'pattern-next', ...(event.shiftKey ? {} : { Insert: 'new', Delete: 'remove' }) };
+      if (key === 'a') { event.preventDefault(); if (event.shiftKey) this.selectWholeTrack(); else { this.anchor = { row: 0, column: 0 }; this.row = this.pattern().rows - 1; this.column = this.lanes.length - 1; this.trackSelected(this.activeTrack); this.render(); } }
+      const sequence: Record<string, SequenceAction> = event.shiftKey ? {} : { Insert: 'new', Delete: 'remove' };
       const edit: Record<string, () => void> = { i: () => this.interpolate(), d: () => this.duplicate(), Enter: () => this.shiftRows(1), Backspace: () => this.shiftRows(-1), ...(event.shiftKey ? { Insert: () => this.shiftRows(1, 'column'), Delete: () => this.shiftRows(-1, 'column') } : {}) };
       if (sequence[key]) { event.preventDefault(); this.sequence(sequence[key]); }
       else if (edit[key]) { event.preventDefault(); if (this.recording) edit[key](); }
       return;
     }
+    if (event.altKey && event.shiftKey) {
+      const action: Record<string, SequenceAction> = { ArrowUp: 'previous', ArrowDown: 'next', Home: 'first', End: 'last' };
+      if (action[event.key]) { event.preventDefault(); this.sequence(action[event.key]); }
+      return;
+    }
     if (event.altKey) return;
     const lanes = this.lanes, lane = lanes[this.column];
-    // the play position owns the cursor's row while recording over playback
-    if (this.live && ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', 'F9', 'F10', 'F11', 'F12'].includes(event.key)) { event.preventDefault(); return; }
+    // the play position owns the cursor's row while playing with Follow on
+    if (this.riding && ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', 'F9', 'F10', 'F11', 'F12'].includes(event.key)) { event.preventDefault(); return; }
     switch (event.key) {
-      case ' ': event.preventDefault(); this.togglePlay(); return;
-      case 'ArrowUp': this.row = event.shiftKey ? Math.max(0, this.row - 1) : (this.row + this.pattern().rows - 1) % this.pattern().rows; break;
-      case 'ArrowDown': this.row = event.shiftKey ? Math.min(this.pattern().rows - 1, this.row + 1) : (this.row + 1) % this.pattern().rows; break;
-      case 'ArrowLeft': this.column = event.shiftKey ? Math.max(0, this.column - 1) : (this.column + lanes.length - 1) % lanes.length; break;
-      case 'ArrowRight': this.column = event.shiftKey ? Math.min(lanes.length - 1, this.column + 1) : (this.column + 1) % lanes.length; break;
+      case ' ': event.preventDefault(); this.togglePlay(event.shiftKey); return;
+      case 'ArrowUp': this.row = Math.max(0, this.row - 1); break;
+      case 'ArrowDown': this.row = Math.min(this.pattern().rows - 1, this.row + 1); break;
+      case 'ArrowLeft': this.column = Math.max(0, this.column - 1); break;
+      case 'ArrowRight': this.column = Math.min(lanes.length - 1, this.column + 1); break;
       case 'Tab': this.selectTrack((this.activeTrack + (event.shiftKey ? columnCount(this.project()) - 1 : 1)) % columnCount(this.project())); event.preventDefault(); return;
       case 'PageUp': this.row = Math.max(0, this.row - this.barRows); break;
       case 'PageDown': this.row = Math.min(this.pattern().rows - 1, this.row + this.barRows); break;
@@ -814,9 +952,10 @@ export function instrumentAt(inst: (string | null)[], row: number): string | nul
 export const trackPalette = ['#d8352f', '#e8741c', '#e3b616', '#1fae4f', '#16a89a', '#1f9fd6', '#a352d9', '#d04a88', '#86ac1a', '#5fc8e8', '#6b72dc', '#8d9299'];
 /** A track's own colour if it has one, otherwise a default from its position. */
 export function trackColour(track: Track, index: number) { return track.colour ?? trackPalette[index % 8]; }
-/** The colour of a column of the grid: a track's own, or the fixed colours of the returns and the master. */
-/** The master's colour, wherever it is drawn. */
+/** The master's and the returns' colours, wherever they are drawn. */
 export const masterColour = '#f2f4f7';
+export const returnColour = '#5fa8a0';
+/** The colour of a column of the grid: a track's own, or the fixed colours of the returns and the master. */
 export function columnColour(project: Song, column: number) {
-  return column < project.tracks.length ? trackColour(project.tracks[column], column) : column === columnCount(project) - 1 ? masterColour : '#5fa8a0';
+  return column < project.tracks.length ? trackColour(project.tracks[column], column) : column === columnCount(project) - 1 ? masterColour : returnColour;
 }

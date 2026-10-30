@@ -112,7 +112,11 @@ impl Opcode for Biquad {
             Port::required("cutoff"),
             Port::optional("q", std::f32::consts::FRAC_1_SQRT_2),
         ];
-        if self.mode == BiquadMode::Raw { RAW } else { NAMED }
+        if self.mode == BiquadMode::Raw {
+            RAW
+        } else {
+            NAMED
+        }
     }
 
     fn box_clone(&self) -> Box<dyn Opcode> {

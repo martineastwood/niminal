@@ -31,7 +31,11 @@ pub struct ClockState {
 
 impl Default for ClockState {
     fn default() -> Self {
-        ClockState { bpm: 120.0, beats_per_bar: 4.0, origin: 0.0 }
+        ClockState {
+            bpm: 120.0,
+            beats_per_bar: 4.0,
+            origin: 0.0,
+        }
     }
 }
 
@@ -45,7 +49,11 @@ impl ClockState {
     /// there; without, the beat in progress carries on from where it was.
     pub fn changed(&self, t: f64, bpm: f64, beats_per_bar: f64, beat: Option<f64>) -> ClockState {
         let beat = beat.unwrap_or_else(|| self.beat_at(t));
-        ClockState { bpm, beats_per_bar, origin: t - beat * 60.0 / bpm }
+        ClockState {
+            bpm,
+            beats_per_bar,
+            origin: t - beat * 60.0 / bpm,
+        }
     }
 }
 
@@ -102,7 +110,9 @@ fn clock_reads(source: &str) -> Result<Vec<(usize, usize, String)>, Diagnostic> 
         {
             continue;
         }
-        let Some(field) = tokens.get(i + 2) else { continue };
+        let Some(field) = tokens.get(i + 2) else {
+            continue;
+        };
         let replacement = match &field.tok {
             Tok::Ident(n) if n == "beat" => beat.clone(),
             Tok::Ident(n) if n == "bar" => format!("({beat} / {CLOCK_METER})"),
@@ -118,7 +128,10 @@ fn clock_reads(source: &str) -> Result<Vec<(usize, usize, String)>, Diagnostic> 
 }
 
 /// [`lower_clock`], with where it changed the text.
-pub fn lower_clock_edits(source: &str, clock: ClockState) -> Result<(String, Vec<ClockEdit>), Diagnostic> {
+pub fn lower_clock_edits(
+    source: &str,
+    clock: ClockState,
+) -> Result<(String, Vec<ClockEdit>), Diagnostic> {
     // a library function that reads the clock goes in the text of whoever calls it, so that it reads the
     // controls declared with that text
     let library = crate::prelude::clock_functions(source);
@@ -131,7 +144,11 @@ pub fn lower_clock_edits(source: &str, clock: ClockState) -> Result<(String, Vec
     let mut text = source.to_string();
     let made = edits
         .iter()
-        .map(|(start, end, replacement)| ClockEdit { start: *start, old_len: end - start, new_len: replacement.len() })
+        .map(|(start, end, replacement)| ClockEdit {
+            start: *start,
+            old_len: end - start,
+            new_len: replacement.len(),
+        })
         .collect();
     for (start, end, replacement) in edits.into_iter().rev() {
         text.replace_range(start..end, &replacement);
@@ -178,8 +195,7 @@ pub fn validate_dsp(source: &str) -> Result<(), Diagnostic> {
         let musical = (i > 0
             && matches!(tokens[i - 1].tok, Tok::Dot)
             && matches!(&t.tok, Tok::Ident(u) if matches!(u.as_str(), "beat" | "beats" | "bar" | "bars")))
-            || matches!(&t.tok, Tok::Num { unit: Some(u), .. } if matches!(u.as_str(), "beat" | "beats" | "bar" | "bars" | "bpm"))
-;
+            || matches!(&t.tok, Tok::Num { unit: Some(u), .. } if matches!(u.as_str(), "beat" | "beats" | "bar" | "bars" | "bpm"));
         if musical {
             return Err(Diagnostic::new(
                 "resolve musical time in the client before sending DSP definitions",

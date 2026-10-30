@@ -126,7 +126,11 @@ pub(crate) fn kind_of(ty: &TypeSpec, tempo: Tempo) -> Res<Kind> {
         // a length in beats, from a 32nd note to four beats; the body gets it snapped to a musical division
         TypeSpec::Unit(id) if id.name == "division" => {
             let beat = 60.0 / tempo.bpm;
-            Kind::Range { unit: Unit::Time, lo: beat / 8.0, hi: beat * 4.0 }
+            Kind::Range {
+                unit: Unit::Time,
+                lo: beat / 8.0,
+                hi: beat * 4.0,
+            }
         }
         TypeSpec::Unit(id) => {
             let (unit, whole) = unit_type(id)?;

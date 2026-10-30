@@ -1260,7 +1260,10 @@ mod tests {
             assert!((s.read_linear() - expected).abs() < 1e-4, "{position}");
         }
         // between a frame and the next, cubic bends and linear does not
-        let data = Arc::new(Table::from_f32(vec![0.0, 0.0, 1.0, 0.0, 0.0], Some(48_000.0)));
+        let data = Arc::new(Table::from_f32(
+            vec![0.0, 0.0, 1.0, 0.0, 0.0],
+            Some(48_000.0),
+        ));
         let mut s = sampler(data, None).with_interp(SampleInterp::Linear);
         s.position = 1.5;
         assert!((s.read_linear() - 0.5).abs() < 1e-6 && (s.read() - 0.5625).abs() < 1e-6);

@@ -853,9 +853,22 @@ fn sample_analysis(table: &Arc<Table>) -> Arc<SampleAnalysis> {
     if let Some(found) = seen.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
         return found.clone();
     }
-    let energy = table.data().iter().map(|x| f64::from(*x).powi(2)).sum::<f64>();
-    let transients = niminal_engine::ops::detect_transients(table.data(), table.sample_rate_or(48_000.0), usize::MAX).into();
-    let made = Arc::new(SampleAnalysis { _table: table.clone(), energy, transients });
+    let energy = table
+        .data()
+        .iter()
+        .map(|x| f64::from(*x).powi(2))
+        .sum::<f64>();
+    let transients = niminal_engine::ops::detect_transients(
+        table.data(),
+        table.sample_rate_or(48_000.0),
+        usize::MAX,
+    )
+    .into();
+    let made = Arc::new(SampleAnalysis {
+        _table: table.clone(),
+        energy,
+        transients,
+    });
     let mut seen = seen.lock().unwrap_or_else(|e| e.into_inner());
     if seen.len() >= KEPT {
         seen.clear();
@@ -1009,9 +1022,10 @@ impl Lower<'_> {
         let transients: Vec<Arc<[usize]>> = references
             .iter()
             .map(|reference| {
-                reference
-                    .as_ref()
-                    .map_or_else(|| Arc::from([]), |table| sample_analysis(table).transients.clone())
+                reference.as_ref().map_or_else(
+                    || Arc::from([]),
+                    |table| sample_analysis(table).transients.clone(),
+                )
             })
             .collect();
         let mut mix: Option<Sig> = None;
@@ -4753,9 +4767,18 @@ impl<'a> Lower<'a> {
         {
             let unit = sig.unit;
             let hidden = "__lag_input";
-            self.scope.insert(hidden.into(), Datum::Sig(Sig { unit: Unit::Num, ..sig }));
+            self.scope.insert(
+                hidden.into(),
+                Datum::Sig(Sig {
+                    unit: Unit::Num,
+                    ..sig
+                }),
+            );
             let mut plain = args.to_vec();
-            plain[0].value = Expr { kind: ExprKind::Name(hidden.into()), span: args[0].value.span };
+            plain[0].value = Expr {
+                kind: ExprKind::Name(hidden.into()),
+                span: args[0].value.span,
+            };
             let smoothed = self.call(name, &plain, span);
             self.scope.remove(hidden);
             return self.map_value(smoothed?, span, move |_, s| Ok(Sig { unit, ..s }));
@@ -4939,7 +4962,7 @@ impl<'a> Lower<'a> {
             vals.push(Some(match param.kind {
                 Kind::Wave => Val::Wave(self.wave_arg(&arg.value)?),
                 Kind::Layout => Val::Layout(layout_from_expr(&arg.value)?),
-                Kind::Table => Val::Tables(self.table_arg(&arg.value)?),
+                Kind::Table => Val::Tables(self.table_arg(&arg.value, true)?),
                 Kind::Signal(_) | Kind::Gain => {
                     let value = self.value(&arg.value)?;
                     self.builtin_value(value, param, &arg.value)?
@@ -4951,10 +4974,13 @@ impl<'a> Lower<'a> {
     }
 
     /// One table, or an array of them (one per channel), known while compiling.
-    fn table_arg(&mut self, e: &Expr) -> Res<Vec<Arc<Table>>> {
+    fn table_arg(&mut self, e: &Expr, nested: bool) -> Res<Vec<Arc<Table>>> {
         let tables = match self.value(e)? {
             Datum::Array(items)
-                if !items.is_empty() && items.iter().all(|i| matches!(i, Datum::Table(_))) =>
+                if !items.is_empty()
+                    && items.iter().all(|i| {
+                        matches!(i, Datum::Table(_)) || (nested && matches!(i, Datum::Array(_)))
+                    }) =>
             {
                 items
                     .into_iter()
@@ -4983,7 +5009,7 @@ impl<'a> Lower<'a> {
                 names.join(", ")
             ))
         };
-        let tables = match self.table_arg(e) {
+        let tables = match self.table_arg(e, false) {
             Err(_) if matches!(e.kind, ExprKind::Name(_)) => return Err(not_a_wave()),
             tables => tables?,
         };
@@ -5037,7 +5063,29 @@ impl<'a> Lower<'a> {
         span: Span,
     ) -> Res<Datum> {
         if !vals.iter().any(|v| matches!(v, Some(Val::Array(_)))) {
-            return self.dispatch(spec, vals, span).map(Datum::Sig);
+            let sig = self.dispatch(spec, vals, span)?;
+            let monitor = spec.name == "granular"
+                && spec.params.iter().zip(vals).any(|(p, v)| {
+                    p.name == "monitor" && matches!(v, Some(Val::Sig(s)) if s.konst == Some(1.0))
+                });
+            if monitor {
+                let fields = niminal_engine::ops::GRANULAR_MONITOR_FIELDS;
+                let channels = sig.count() - fields.len();
+                let audio = if channels == 1 {
+                    Self::element(&sig, 0)
+                } else {
+                    Sig::channels(sig.srcs[..channels].to_vec(), Layout::from_count(channels))
+                };
+                let mut result = vec![("audio".into(), Datum::Sig(audio))];
+                result.extend(fields.iter().enumerate().map(|(i, name)| {
+                    (
+                        name.to_string(),
+                        Datum::Sig(Self::element(&sig, channels + i)),
+                    )
+                }));
+                return Ok(Datum::Record(result));
+            }
+            return Ok(Datum::Sig(sig));
         }
         // These operations consume audio channel layouts, rather than mapping
         // a scalar DSP operation over the array.
@@ -5130,7 +5178,8 @@ impl<'a> Lower<'a> {
         let mut srcs = Vec::with_capacity(width);
         for channel in 0..width {
             let salt = (self.g.node_count() + channel) as u32;
-            let build = call::build_args(spec, vals, |s| s.konst, channel, salt);
+            let build = call::build_args(spec, vals, |s| s.konst, channel, salt)
+                .map_err(|m| Diagnostic::new(m, span))?;
             let opcode = spec
                 .instantiate(&build)
                 .map_err(|m| Diagnostic::new(m, span))?
@@ -5145,13 +5194,23 @@ impl<'a> Lower<'a> {
                     _ => None,
                 })
                 .collect();
-            srcs.push(
+            let outputs = opcode.outputs();
+            if outputs > 1 && width > 1 {
+                return Err(Diagnostic::new(
+                    "an opcode with multiple outputs needs scalar controls; map over control arrays to make separate clouds",
+                    span,
+                ));
+            }
+            srcs.extend(
                 self.g
-                    .add(opcode, &wired)
+                    .add_outputs(opcode, &wired)
                     .expect("ports match the opcode table"),
             );
+            if outputs > 1 {
+                layout = Layout::from_count(outputs);
+            }
         }
-        Ok(if width == 1 {
+        Ok(if srcs.len() == 1 {
             Sig::signal(srcs[0], Unit::Num)
         } else {
             Sig::channels(srcs, layout)
@@ -5703,11 +5762,30 @@ impl Lower<'_> {
             if shadowed || !funcs::reads(&def, &control.name) {
                 continue;
             }
-            let id = Ident { name: control.name.clone(), span };
-            def.params.push(ParamDef { name: id.clone(), rate: None, ty: None, default: None });
-            params.push(PParam { name: id.clone(), rate: None, kind: PKind::Any, default: None });
+            let id = Ident {
+                name: control.name.clone(),
+                span,
+            };
+            def.params.push(ParamDef {
+                name: id.clone(),
+                rate: None,
+                ty: None,
+                default: None,
+            });
+            params.push(PParam {
+                name: id.clone(),
+                rate: None,
+                kind: PKind::Any,
+                default: None,
+            });
             let value = Datum::Sig(self.name(&control.name, span)?);
-            given.push(Some((value, Expr { kind: ExprKind::Name(control.name.clone()), span })));
+            given.push(Some((
+                value,
+                Expr {
+                    kind: ExprKind::Name(control.name.clone()),
+                    span,
+                },
+            )));
         }
         let (def, params) = (&def, &params[..]);
         let mut kargs = Vec::with_capacity(params.len());

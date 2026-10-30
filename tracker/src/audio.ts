@@ -10,7 +10,7 @@ type Command =
   | { op: 'connect'; port: number; token: string | null }
   | { op: 'disconnect' | 'stop' }
   | { op: 'apply'; id: string; source: string; kind: 'instr' | 'fx'; dir: string | null }
-  | { op: 'play'; song: Song; mode: 'pattern' | 'song'; pattern_id: string; start_position: number }
+  | { op: 'play'; song: Song; mode: 'pattern' | 'song'; pattern_id: string; start_position: number; start_row?: number }
   | { op: 'update'; song: Song }
   | { op: 'export'; song: Song; path: string; stems: boolean }
   | { op: 'scopes'; strips: boolean }

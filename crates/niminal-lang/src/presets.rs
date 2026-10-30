@@ -98,10 +98,7 @@ fn parse_shelf(shelf: &'static str) -> Vec<Preset> {
             .into_iter()
             .find_map(|k| defines(block, k.keyword()).map(|id| (k, id)));
         let Some((kind, id)) = kind else {
-            if let Some(f) = block
-                .lines()
-                .find_map(|l| l.strip_prefix("// folder:"))
-            {
+            if let Some(f) = block.lines().find_map(|l| l.strip_prefix("// folder:")) {
                 folder = f.trim().to_string();
             }
             continue;

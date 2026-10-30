@@ -929,7 +929,13 @@ fn controls_at_one_sample_apply_in_the_order_they_were_sent() {
 }
 
 fn tempo(at: u64, bpm: f64) -> Op {
-    Op::Tempo { at: At::Sample(at), bpm, meter: None, beat: None, tag: None }
+    Op::Tempo {
+        at: At::Sample(at),
+        bpm,
+        meter: None,
+        beat: None,
+        tag: None,
+    }
 }
 
 fn hold_on(s: &mut Session, client: u64) {
@@ -948,7 +954,8 @@ fn hold_on(s: &mut Session, client: u64) {
     .unwrap();
 }
 
-const CLOCKED: &str = "instr beat_sig(freq: hz) { clock.beat * 0.001 }\nnode beat_node { instrument = beat_sig }\n";
+const CLOCKED: &str =
+    "instr beat_sig(freq: hz) { clock.beat * 0.001 }\nnode beat_node { instrument = beat_sig }\n";
 
 #[test]
 fn clock_beat_follows_the_connections_tempo_without_jumping() {
@@ -968,15 +975,25 @@ fn clock_beat_follows_the_connections_tempo_without_jumping() {
 fn the_length_of_a_beat_and_a_bar_follow_the_tempo() {
     // seconds: 0.5 and 2 at 120 bpm, then 1 and 4 at 60
     for (field, before, after) in [("beat_length", 0.5, 1.0), ("bar_length", 2.0, 4.0)] {
-        let source = format!("instr beat_sig(freq: hz) {{ clock.{field} / 1sec * 0.001 }}\nnode beat_node {{ instrument = beat_sig }}\n");
+        let source = format!(
+            "instr beat_sig(freq: hz) {{ clock.{field} / 1sec * 0.001 }}\nnode beat_node {{ instrument = beat_sig }}\n"
+        );
         let mut s = Session::new(SR, Layout::Mono).without_limiter();
         s.eval(&source, Some("now")).unwrap();
         hold_on(&mut s, 0);
         s.send_events(0, vec![tempo(SR as u64, 60.0)]).unwrap();
         let out = s.process(3 * SR as usize).remove(0);
         let seconds = |at: usize| f64::from(out[at]) * 1000.0;
-        assert!((seconds(SR as usize / 2) - before).abs() < 1e-3, "{field}: {}", seconds(SR as usize / 2));
-        assert!((seconds(3 * SR as usize - 1) - after).abs() < 1e-3, "{field}: {}", seconds(3 * SR as usize - 1));
+        assert!(
+            (seconds(SR as usize / 2) - before).abs() < 1e-3,
+            "{field}: {}",
+            seconds(SR as usize / 2)
+        );
+        assert!(
+            (seconds(3 * SR as usize - 1) - after).abs() < 1e-3,
+            "{field}: {}",
+            seconds(3 * SR as usize - 1)
+        );
     }
 }
 
@@ -1009,7 +1026,16 @@ fn a_filter_swept_by_a_synced_lfo_plays() {
 fn two_connections_keep_their_own_tempo() {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
     for client in [1, 2] {
-        s.send_events(client, vec![Op::Define { source: CLOCKED.into(), at: At::Now, dir: None, tag: None }]).unwrap();
+        s.send_events(
+            client,
+            vec![Op::Define {
+                source: CLOCKED.into(),
+                at: At::Now,
+                dir: None,
+                tag: None,
+            }],
+        )
+        .unwrap();
     }
     s.send_events(2, vec![tempo(0, 240.0)]).unwrap();
     for client in [1, 2] {
@@ -1041,7 +1067,12 @@ fn a_tempo_in_the_batch_that_defines_what_reads_it_reaches_it() {
     s.send_events(
         1,
         vec![
-            Op::Define { source: CLOCKED.into(), at: At::Sample(0), dir: None, tag: None },
+            Op::Define {
+                source: CLOCKED.into(),
+                at: At::Sample(0),
+                dir: None,
+                tag: None,
+            },
             tempo(0, 240.0),
         ],
     )
@@ -1057,7 +1088,15 @@ fn a_problem_after_clock_beat_is_pointed_at_where_it_was_written() {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
     let source = "instr a(freq: hz) { clock.beat + nope(1) }";
     let problems = s
-        .send_events(1, vec![Op::Define { source: source.into(), at: At::Now, dir: None, tag: None }])
+        .send_events(
+            1,
+            vec![Op::Define {
+                source: source.into(),
+                at: At::Now,
+                dir: None,
+                tag: None,
+            }],
+        )
         .unwrap_err();
     let at = source.find("nope").unwrap();
     let span = problems[0].span.expect("a span");
@@ -1073,7 +1112,14 @@ fn pause_at(s: &mut Session, from: usize, len: usize) -> f64 {
 }
 
 fn set_pause(at: u64, value: f64, unit: &str) -> Op {
-    Op::Control { name: "pause".into(), at: At::Sample(at), value, unit: Some(unit.into()), glide: None, tag: None }
+    Op::Control {
+        name: "pause".into(),
+        at: At::Sample(at),
+        value,
+        unit: Some(unit.into()),
+        glide: None,
+        tag: None,
+    }
 }
 
 fn hold_pause(s: &mut Session) {
@@ -1098,29 +1144,60 @@ fn a_control_set_in_beats_follows_the_tempo_and_one_set_in_seconds_does_not() {
     s.eval(TIMED, Some("now")).unwrap();
     hold_pause(&mut s);
     // a quarter of a beat at 120 bpm is 0.125 sec; at 60 bpm it is 0.25
-    s.send_events(0, vec![set_pause(100, 0.25, "beats")]).unwrap();
+    s.send_events(0, vec![set_pause(100, 0.25, "beats")])
+        .unwrap();
     assert!((pause_at(&mut s, 0, 4_800) - 0.125).abs() < 1e-4);
     s.send_events(0, vec![tempo(10_000, 60.0)]).unwrap();
     assert!((pause_at(&mut s, 4_800, 9_600) - 0.25).abs() < 1e-4);
     // a bar is as many beats as the meter says
-    s.send_events(0, vec![set_pause(20_000, 0.5, "bars")]).unwrap();
+    s.send_events(0, vec![set_pause(20_000, 0.5, "bars")])
+        .unwrap();
     assert!((pause_at(&mut s, 14_400, 9_600) - 2.0).abs() < 1e-4);
     // set in seconds, it stays put through the next change
-    s.send_events(0, vec![set_pause(30_000, 0.3, "sec"), tempo(40_000, 120.0)]).unwrap();
+    s.send_events(0, vec![set_pause(30_000, 0.3, "sec"), tempo(40_000, 120.0)])
+        .unwrap();
     assert!((pause_at(&mut s, 24_000, 24_000) - 0.3).abs() < 1e-4);
 }
 
 #[test]
 fn another_connections_tempo_does_not_move_a_control_kept_to_beats() {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
-    s.send_events(1, vec![Op::Define { source: TIMED.into(), at: At::Now, dir: None, tag: None }]).unwrap();
-    s.send_events(1, vec![Op::Control { name: "pause".into(), at: At::Sample(0), value: 1.0, unit: Some("beats".into()), glide: None, tag: None }]).unwrap();
+    s.send_events(
+        1,
+        vec![Op::Define {
+            source: TIMED.into(),
+            at: At::Now,
+            dir: None,
+            tag: None,
+        }],
+    )
+    .unwrap();
+    s.send_events(
+        1,
+        vec![Op::Control {
+            name: "pause".into(),
+            at: At::Sample(0),
+            value: 1.0,
+            unit: Some("beats".into()),
+            glide: None,
+            tag: None,
+        }],
+    )
+    .unwrap();
     s.send_events(2, vec![tempo(100, 30.0)]).unwrap();
-    s.send_events(1, vec![Op::Note {
-        to: None, target: "pause_node".into(), at: At::Now,
-        args: [("freq".to_string(), Value::Hz(100.0))].into(),
-        dur: Some(Time::Seconds(200.0)), id: None, tag: None,
-    }]).unwrap();
+    s.send_events(
+        1,
+        vec![Op::Note {
+            to: None,
+            target: "pause_node".into(),
+            at: At::Now,
+            args: [("freq".to_string(), Value::Hz(100.0))].into(),
+            dur: Some(Time::Seconds(200.0)),
+            id: None,
+            tag: None,
+        }],
+    )
+    .unwrap();
     assert!((pause_at(&mut s, 0, 4_800) - 0.5).abs() < 1e-4);
 }
 
@@ -1129,7 +1206,15 @@ fn a_control_kept_to_beats_replays_to_the_same_audio() {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
     s.eval(TIMED, Some("now")).unwrap();
     hold_pause(&mut s);
-    s.send_events(0, vec![set_pause(100, 0.25, "beats"), tempo(10_000, 60.0), tempo(20_000, 90.0)]).unwrap();
+    s.send_events(
+        0,
+        vec![
+            set_pause(100, 0.25, "beats"),
+            tempo(10_000, 60.0),
+            tempo(20_000, 90.0),
+        ],
+    )
+    .unwrap();
     let live = s.process(30_000).remove(0);
     let replayed = Session::replay(SR, Layout::Mono, s.log(), 30_000, false).remove(0);
     assert_eq!(live, replayed);
@@ -1142,7 +1227,12 @@ fn a_control_can_be_set_in_the_batch_that_defines_it() {
     s.send_events(
         0,
         vec![
-            Op::Define { source: TIMED.into(), at: At::Sample(2_000), dir: None, tag: None },
+            Op::Define {
+                source: TIMED.into(),
+                at: At::Sample(2_000),
+                dir: None,
+                tag: None,
+            },
             set_pause(2_000, 0.25, "beats"),
         ],
     )

@@ -9,6 +9,8 @@ export interface ViewPrefs {
   /** The sequence bar and the right bar (project instruments and sound browser) are shown */
   sequence: boolean;
   side: boolean;
+  /** The sequence bar shows a cell for each track on every step */
+  matrix: boolean;
   sequenceWidth: number;
   sideWidth: number;
   /** Brighter text and borders */
@@ -17,7 +19,7 @@ export interface ViewPrefs {
 
 export const scales = [0.85, 1, 1.15, 1.3, 1.5, 1.75, 2];
 export const fontRange = { min: 9, max: 32 };
-export const defaultView: ViewPrefs = { scale: 1, codeFont: 12, sequence: true, side: true, sequenceWidth: 168, sideWidth: 280, contrast: false };
+export const defaultView: ViewPrefs = { scale: 1, codeFont: 12, sequence: true, side: true, matrix: false, sequenceWidth: 168, sideWidth: 280, contrast: false };
 export const widthRange = { min: 120, max: 520 };
 const storageKey = 'niminal-tracker-view';
 
@@ -42,6 +44,7 @@ export function readView(raw: string | null): ViewPrefs {
     codeFont: clampFont(number(saved.codeFont, defaultView.codeFont)),
     sequence: flag(saved.sequence, defaultView.sequence),
     side: flag(saved.side, defaultView.side),
+    matrix: flag(saved.matrix, defaultView.matrix),
     sequenceWidth: clampWidth(number(saved.sequenceWidth, defaultView.sequenceWidth)),
     sideWidth: clampWidth(number(saved.sideWidth, defaultView.sideWidth)),
     contrast: flag(saved.contrast, defaultView.contrast),

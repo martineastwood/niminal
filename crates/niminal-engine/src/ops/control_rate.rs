@@ -122,7 +122,9 @@ impl Opcode for ControlRate {
                 // the body counts in steps, so its clock does too: a time read there is where this step is
                 let sub = ProcessCtx {
                     sample_rate: ctx.sample_rate / self.step as f32,
-                    clock: crate::opcode::Clock { sample: (ctx.clock.sample + at as u64) / self.step as u64 },
+                    clock: crate::opcode::Clock {
+                        sample: (ctx.clock.sample + at as u64) / self.step as u64,
+                    },
                     ..*ctx
                 };
                 for (input, &index) in self.inputs.iter_mut().zip(indices) {

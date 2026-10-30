@@ -378,24 +378,17 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .separator()
         .item(&item("previous-tab", "Previous Tab (⇧⌘[)", None)?)
         .item(&item("next-tab", "Next Tab (⇧⌘])", None)?)
-        .separator()
-        .fullscreen()
         .build()?;
-    let window = SubmenuBuilder::new(app, "Window").minimize().maximize().build()?;
     let mut menu = MenuBuilder::new(app);
     if cfg!(target_os = "macos") {
         let name = SubmenuBuilder::new(app, "niminal stage")
-            .about(None)
-            .separator()
             .hide()
-            .hide_others()
-            .show_all()
             .separator()
             .quit()
             .build()?;
         menu = menu.item(&name);
     }
-    menu.items(&[&file, &edit, &view, &window]).build()
+    menu.items(&[&file, &edit, &view]).build()
 }
 
 fn main() {

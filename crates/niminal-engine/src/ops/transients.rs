@@ -7,10 +7,25 @@ pub fn detect_transients(samples: &[f32], rate: f32, max: usize) -> Vec<usize> {
 
 /// Like [`detect_transients`], with a `sensitivity` from 0 to 1: 0.5 is the usual, higher finds softer hits (and
 /// more of them), lower only the clearest.
-pub fn detect_transients_at(samples: &[f32], rate: f32, max: usize, sensitivity: f32) -> Vec<usize> {
+pub fn detect_transients_at(
+    samples: &[f32],
+    rate: f32,
+    max: usize,
+    sensitivity: f32,
+) -> Vec<usize> {
     let s = sensitivity.clamp(0.0, 1.0);
     // how far a hit must jump above what came before it, and how loud it must be next to the loudest part
-    let (jump, floor) = if s < 0.5 { (2.5 * (6.0f32 / 2.5).powf((0.5 - s) * 2.0), 0.1 * 2.0f32.powf((0.5 - s) * 2.0)) } else { (2.5 * (1.4f32 / 2.5).powf((s - 0.5) * 2.0), 0.1 * 0.5f32.powf((s - 0.5) * 2.0)) };
+    let (jump, floor) = if s < 0.5 {
+        (
+            2.5 * (6.0f32 / 2.5).powf((0.5 - s) * 2.0),
+            0.1 * 2.0f32.powf((0.5 - s) * 2.0),
+        )
+    } else {
+        (
+            2.5 * (1.4f32 / 2.5).powf((s - 0.5) * 2.0),
+            0.1 * 0.5f32.powf((s - 0.5) * 2.0),
+        )
+    };
     let window = ((rate * 0.005) as usize).max(16);
     let hop = window / 2;
     let energy: Vec<f32> = (0..samples.len().saturating_sub(window) / hop + 1)

@@ -140,6 +140,7 @@ fn real_engine_plays_last_good_source_and_stop_cancels_the_loop() {
             mode: Mode::Pattern,
             pattern_id: "p0".into(),
             start_position: 0,
+            start_row: 0,
         })
         .unwrap();
     let audio = engine.lock().unwrap().session_mut().process(10000);
@@ -881,6 +882,7 @@ fn a_held_note_sounds_until_its_off_and_a_chord_adds_up() {
             mode: Mode::Song,
             pattern_id: "p0".into(),
             start_position: 0,
+            start_row: 0,
         })
         .unwrap();
     let audio = engine.lock().unwrap().session_mut().process(48000);
@@ -950,6 +952,7 @@ fn instrument_parameters_are_exposed_and_reach_the_notes_that_play() {
                 mode: Mode::Pattern,
                 pattern_id: "p0".into(),
                 start_position: 0,
+                start_row: 0,
             })
             .unwrap();
         let audio = engine.lock().unwrap().session_mut().process(24000);
@@ -1129,6 +1132,7 @@ fn device_chain_runs_in_order_and_can_be_edited_while_playing() {
             mode: Mode::Pattern,
             pattern_id: "p0".into(),
             start_position: 0,
+            start_row: 0,
         })
         .unwrap();
     assert!(worker.status.playing);
@@ -1193,6 +1197,7 @@ fn song_playback_completes_and_leaves_the_final_release_audible() {
             mode: Mode::Song,
             pattern_id: "p0".into(),
             start_position: 0,
+            start_row: 0,
         })
         .unwrap();
     let mut timeline_change = song;
@@ -1314,7 +1319,7 @@ fn language_macro_scaling_reaches_audio_and_survives_effect_replacement() {
     song.tracks[0].macros[0].value = 0.0;
     song.patterns[0].fx[0][0].target = Some(crate::commands::FxTarget::Macro { index: 0 });
     song.patterns[0].fx[0][0].held(&[(0, 0.5)]);
-    worker.command(Command::Play { song, mode: Mode::Pattern, pattern_id: "p0".into(), start_position: 0 }).unwrap();
+    worker.command(Command::Play { song, mode: Mode::Pattern, pattern_id: "p0".into(), start_position: 0, start_row: 0 }).unwrap();
     let lead = (worker.playback.as_ref().unwrap().origin - worker.clock().unwrap()) as usize;
     let audio = engine.lock().unwrap().session_mut().process(lead + 4000);
     let actual = audio[0][lead + 2000..lead + 4000].iter().copied().fold(0.0_f32, f32::max);
@@ -1401,6 +1406,7 @@ fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
             mode: Mode::Pattern,
             pattern_id: "p0".into(),
             start_position: 0,
+            start_row: 0,
         })
         .unwrap();
     let origin = worker.playback.as_ref().unwrap().origin;
@@ -1439,6 +1445,7 @@ fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
             mode: Mode::Pattern,
             pattern_id: "p0".into(),
             start_position: 0,
+            start_row: 0,
         })
         .unwrap();
     let origin = worker.playback.as_ref().unwrap().origin;
@@ -1490,6 +1497,7 @@ fn track_processor_named_automation_and_bus_lfo_change_rendered_audio() {
             mode: Mode::Pattern,
             pattern_id: "p0".into(),
             start_position: 0,
+            start_row: 0,
         })
         .unwrap();
     for _ in 0..24 {
@@ -1811,6 +1819,7 @@ fn graphical_envelopes_render_native_linear_ramps_at_fractional_rows() {
             mode: Mode::Pattern,
             pattern_id: "p0".into(),
             start_position: 0,
+            start_row: 0,
         })
         .unwrap();
     let origin = worker.playback.as_ref().unwrap().origin as usize;
@@ -1854,7 +1863,7 @@ fn parameter_lanes_on_the_master_and_a_return_change_the_sound() {
         song.patterns[0].return_fx = vec![vec![FxLane::empty()]];
         song.tracks[0].fx = vec![Device { id: "s1".into(), definition: "pass".into(), target: Some(0), ..Device::default() }];
         shape(&mut song);
-        worker.command(Command::Play { song, mode: Mode::Song, pattern_id: "p0".into(), start_position: 0 }).unwrap();
+        worker.command(Command::Play { song, mode: Mode::Song, pattern_id: "p0".into(), start_position: 0, start_row: 0 }).unwrap();
         let audio = engine.lock().unwrap().session_mut().process(24000);
         worker.command(Command::Stop).unwrap();
         audio[0][8000..20000].iter().map(|s| s.abs()).sum::<f32>() / 12000.0
@@ -1889,7 +1898,7 @@ fn a_cut_silences_a_note_at_once_where_an_off_lets_its_release_ring() {
         let mut song = test_song(None);
         song.patterns[0].notes[0][0].notes[0] = Some("C-4".into());
         song.patterns[0].notes[0][0].notes[2] = Some(end.into());
-        worker.command(Command::Play { song, mode: Mode::Song, pattern_id: "p0".into(), start_position: 0 }).unwrap();
+        worker.command(Command::Play { song, mode: Mode::Song, pattern_id: "p0".into(), start_position: 0, start_row: 0 }).unwrap();
         let audio = engine.lock().unwrap().session_mut().process(30000);
         worker.command(Command::Stop).unwrap();
         let during = audio[0][4000..10000].iter().map(|s| s.abs()).sum::<f32>() / 6000.0;
@@ -1975,7 +1984,7 @@ fn run(engine: &Arc<Mutex<EngineServer>>, worker: &mut Worker, samples: usize) -
 }
 
 fn play_song(worker: &mut Worker, song: Song) {
-    worker.command(Command::Play { song, mode: Mode::Song, pattern_id: "p0".into(), start_position: 0 }).unwrap();
+    worker.command(Command::Play { song, mode: Mode::Song, pattern_id: "p0".into(), start_position: 0, start_row: 0 }).unwrap();
 }
 
 #[test]

@@ -1,0 +1,85 @@
+// One break: fragments, clouds, reverse debris, synchronized masks and trainlets. Render:
+// niminal-live render examples/granular.nml --out /tmp/granular.wav
+config { channels: stereo }
+tempo 100bpm
+
+brk = sample("break.wav")
+const body = harmonics([1, 0.3, 0, 0.15], size: 256)
+const soft_window = window(blackman, size: 257)
+
+// Clocked fragments with missing grains and captured accents; the clock stays steady.
+instr fragments() {
+  pointer = phasor(0.11hz)
+  particles = granular(brk.data, density: 0hz, trigger: impulse(9hz),
+    duration: 45ms, position: pointer, spray: 30ms,
+    rate: 1, pitch_scatter: 2, shape: 0.08,
+    probability: 0.7, gain: 0.35 + 0.85 * (phasor(1.5hz) < 0.25),
+    pan: osc(sine, 0.3hz) * 0.7, spread: 0.25, seed: 11)
+  particles * env[0 5ms 1 | 80ms 0] * 0.35
+}
+
+// Scan the break and the pitched body independently; the second reader is tuned a fifth up.
+instr cloud() {
+  particles = granular(brk.data, density: 55hz, duration: 240ms,
+    position: 0.37 + phasor(0.025hz) * 0.12, rate: 0.5,
+    spray: 90ms, pitch_scatter: 12, jitter: 0.8,
+    window: soft_window, sweep: -5, source2: body, mix: 0.2,
+    position2: phasor(0.09hz), pitch2: 7,
+    spread: 1, fm: osc(sine, 93hz), fm_depth: 0.15, seed: 21)
+  dry = particles.hpf(120hz)
+  (dry + dry.reverb(room: 0.7) * 0.25) * env[0 800ms 1 | 900ms 0] * 0.18
+}
+
+// Reverse debris blends a moving playhead with a different frozen region an octave lower.
+instr debris() {
+  particles = granular(brk.data, density: 31hz, duration: 130ms,
+    position: phasor(-0.13hz), rate: -1,
+    spray: 200ms, pitch_scatter: 19, jitter: 1,
+    shape: 0.06, sweep: -24, spread: 0.9,
+    source2: brk.data, mix: 0.35, position2: 0.61, pitch2: -12, rate2: -1,
+    fm: osc(sine, 317hz), fm_depth: 0.4, seed: 31)
+  particles * env[0 10ms 1 | 300ms 0] * 0.18
+}
+
+fragments() for 8beats
+at 8beats cloud() for 8beats
+at 16beats debris() for 8beats
+
+// Masks and displacement share a steady clock. The second cloud follows its sync
+// and gain cursor, even while the lead's audible grains are displaced in time.
+const accents = [0, 7, 1, 0.2, 0, 0.7, 0.4, 0, 1, 0.3]
+const orbit_pan = (0..<264).map(sin(it.mod(33) / 32 * pi / 2))
+instr orbit() {
+  leader = granular(brk.data, source2: body, source3: brk.data, source4: body,
+    source_bank: [brk.data, body], select: phasor(0.4hz) > 0.6,
+    weight1: 0.5, weight2: 0.08, weight3: 0.3, weight4: 0.06,
+    position: phasor(0.09hz), position2: 0.17, position3: 0.61, position4: phasor(0.13hz),
+    pitch2: 7, pitch3: -12, pitch4: 12, rate3: -1,
+    density: 19hz, duration: 90ms, spray: 10ms,
+    distribution: -0.8, distribution_table: [0, 0.125, 0.5, 0.25],
+    gain_mask: accents, channel_mask: [0, 5, 0, 0.2, 0.5, 0.8, 1, 1.5], pan_law: orbit_pan,
+    sweep: -7, sweep_shape: 0.8, shape: 0.12,
+    max_grains: 64, monitor: 1, seed: 51)
+  answer = granular(body, density: 0hz, sync: leader.sync, duration: 60ms,
+    gain_mask: accents, gain_index: leader.gain_index - 1,
+    rate: 0.5, pitch: -12, spread: 0.8, sweep: 12, sweep_shape: 0.2,
+    fm: leader.phase - 0.5, fm_depth: 0.15, seed: 52)
+  (leader.audio + answer * 0.1) * env[0 20ms 1 | 200ms 0] * 0.22
+}
+
+// Trainlets are normalized pulse trains inside grains. FM fades from a metallic
+// attack into a clean body; a rising harmonic tilt makes the later grains brighter.
+instr trainlets(freq: hz = 110hz) {
+  particles = granular([0], weight1: 0, density: 27hz, duration: 170ms,
+    train_gain: 0.7, train_freq: freq,
+    train_partials: 5 + phasor(0.1hz) * 45, train_chroma: 0.4 + phasor(0.2hz) * 1.4,
+    pitch_start: -12, pitch_end: 7, sweep_shape: 0.8,
+    shape: 0.18, sustain: 0.25, attack_window: [0, 0.1, 1], decay_window: [1, 0.4, 0],
+    window: soft_window, window_amount: 0.8,
+    fm: osc(sine, 71hz), fm_depth: 0.45, fm_window: [1, 0.4, 0],
+    spread: 1, seed: 61)
+  particles * env[0 150ms 1 | 600ms 0] * 0.18
+}
+
+at 24beats orbit() for 8beats
+at 32beats trainlets(freq: a2) for 8beats

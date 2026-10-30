@@ -11,7 +11,7 @@ afterEach(() => document.body.replaceChildren());
 function setup() {
   const project = newProject(), parent = document.createElement('div'); document.body.append(parent);
   makePattern(project); project.sequence.push(project.patterns[1].id, project.patterns[0].id);
-  const selected = vi.fn(), edited = vi.fn(), arrangement = new Arrangement(parent, () => project, selected, edited); arrangement.reset();
+  const selected = vi.fn(), edited = vi.fn(), arrangement = new Arrangement(parent, () => project, selected, edited); arrangement.setCells(true); arrangement.reset();
   const cell = (step: number, track: number) => parent.querySelectorAll<HTMLButtonElement>(`.sequence-entry[data-position="${step}"] .matrix-cell`)[track];
   return { project, parent, selected, edited, cell };
 }

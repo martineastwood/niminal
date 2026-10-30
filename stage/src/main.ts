@@ -18,6 +18,9 @@ import { Action, EvalOutcome, Problem, Queued, Scene, Snapshot, beatsUntil, queu
 import { StoredTabs, loadTabs, moveItem, tabTitle, tabsKey } from './tabs';
 import './style.css';
 
+// The browser's own right-click menu (reload, inspect…) is not part of the app: only text fields keep theirs, for cut, copy and paste.
+document.addEventListener('contextmenu', event => { if (!(event.target as HTMLElement).closest?.('input, textarea, .cm-editor')) event.preventDefault(); });
+
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <header id="topbar">

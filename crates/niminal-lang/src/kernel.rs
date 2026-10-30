@@ -3632,7 +3632,7 @@ impl Kb<'_> {
             };
             vals[index] = Some(match param.kind {
                 opcodes::Kind::Wave => ArgVal::Wave(self.wave_arg(&arg.value)?),
-                opcodes::Kind::Table => ArgVal::Tables(self.table_arg(&arg.value)?),
+                opcodes::Kind::Table => ArgVal::Tables(self.table_arg(&arg.value, true)?),
                 opcodes::Kind::Layout => {
                     return Err(Diagnostic::new(
                         format!("`{}` can't be used inside a function with state", name.name),
@@ -3662,7 +3662,7 @@ impl Kb<'_> {
                 names.join(", ")
             ))
         };
-        let tables = match self.table_arg(e) {
+        let tables = match self.table_arg(e, false) {
             Err(_) if matches!(e.kind, ExprKind::Name(_)) => return Err(not_a_wave()),
             tables => tables?,
         };
@@ -3687,10 +3687,14 @@ impl Kb<'_> {
     }
 
     /// A table known while compiling, or one per channel.
-    fn table_arg(&mut self, e: &Expr) -> Res<Vec<Arc<Table>>> {
+    fn table_arg(&mut self, e: &Expr, nested: bool) -> Res<Vec<Arc<Table>>> {
         let value = self.value(e)?;
-        let not_a_table =
-            || Diagnostic::new("expected a table of numbers known while compiling", e.span);
+        let not_a_table = || {
+            Diagnostic::new(
+                "expected a one-dimensional table of numbers known while compiling",
+                e.span,
+            )
+        };
         let constants = |this: &Self, items: &[KVal]| -> Option<Arc<Table>> {
             let numbers: Option<Vec<f64>> = items
                 .iter()
@@ -3706,15 +3710,19 @@ impl Kb<'_> {
         let tables = match value {
             KVal::Table { values, .. } => vec![values],
             KVal::Array(items)
-                if !items.is_empty() && items.iter().all(|i| matches!(i, KVal::Table { .. })) =>
+                if !items.is_empty()
+                    && items.iter().all(|i| {
+                        matches!(i, KVal::Table { .. }) || (nested && matches!(i, KVal::Array(_)))
+                    }) =>
             {
                 items
                     .iter()
                     .map(|i| match i {
-                        KVal::Table { values, .. } => values.clone(),
+                        KVal::Table { values, .. } => Ok(values.clone()),
+                        KVal::Array(items) => constants(self, items).ok_or_else(not_a_table),
                         _ => unreachable!(),
                     })
-                    .collect()
+                    .collect::<Res<Vec<_>>>()?
             }
             KVal::Array(items) => vec![constants(self, &items).ok_or_else(not_a_table)?],
             _ => return Err(not_a_table()),
@@ -3755,7 +3763,8 @@ impl Kb<'_> {
                 ));
             }
         }
-        let build = call::build_args(spec, vals, |v| self.konst(v), 0, self.natives.len() as u32);
+        let build = call::build_args(spec, vals, |v| self.konst(v), 0, self.natives.len() as u32)
+            .map_err(|m| Diagnostic::new(m, name.span))?;
         let op = spec
             .instantiate(&build)
             .map_err(|e| Diagnostic::new(e, name.span))?
@@ -3796,16 +3805,51 @@ impl Kb<'_> {
                 }
             });
         }
+        let outputs = op.outputs();
         let index = self.natives.len();
         self.natives.push(Native { op, inputs: wired });
-        let guard = self.guard;
-        let reg = self.emit(Rate::Audio, |dst| Instr::Native { dst, index, guard });
-        Ok(KVal::Num(Value {
-            reg,
-            unit: Unit::Num,
-            rate: Rate::Audio,
-            port: None,
-        }))
+        let first = self.registers;
+        self.registers += outputs;
+        self.push(
+            Rate::Audio,
+            Instr::Native {
+                dst: first,
+                index,
+                guard: self.guard,
+            },
+        );
+        let values: Vec<_> = (0..outputs)
+            .map(|i| {
+                KVal::Num(Value {
+                    reg: first + i,
+                    unit: Unit::Num,
+                    rate: Rate::Audio,
+                    port: None,
+                })
+            })
+            .collect();
+        if spec.name == "granular" && build.consts.get("monitor") == Some(&1.0) {
+            let fields = niminal_engine::ops::GRANULAR_MONITOR_FIELDS;
+            let channels = outputs - fields.len();
+            let audio = if channels == 1 {
+                values[0].clone()
+            } else {
+                KVal::Array(values[..channels].to_vec().into())
+            };
+            let mut result = vec![("audio".into(), audio)];
+            result.extend(
+                fields
+                    .iter()
+                    .enumerate()
+                    .map(|(i, name)| (name.to_string(), values[channels + i].clone())),
+            );
+            return Ok(KVal::Record(result));
+        }
+        Ok(if outputs == 1 {
+            values.into_iter().next().unwrap()
+        } else {
+            KVal::Array(values.into())
+        })
     }
 }
 

@@ -33,13 +33,14 @@ it('reorders and removes sequence entries while keeping patterns available for r
   view.insert('new'); const second = view.pattern;
   view.move(-1); expect(project.sequence).toEqual([second.id, first.id]);
   view.remove(); expect(project.sequence).toEqual([first.id]);
-  expect(project.patterns).toHaveLength(2);
+  expect(project.patterns.map(p => p.id)).toEqual([first.id]); // the removed step's pattern went with it
   view.remove(); expect(project.sequence).toHaveLength(1);
-  view.choose(second.id); view.insert('reuse');
-  expect(project.sequence).toEqual([first.id, second.id]);
+  view.insert('new'); const third = view.pattern; view.select(0); view.insert('reuse'); // [first, first, third]
+  view.repoint(1, third.id); expect(project.sequence).toEqual([first.id, third.id, third.id]);
+  view.repoint(0, third.id); expect(project.patterns.map(p => p.id)).toEqual([third.id]); // nothing plays the first any more
   view.paint(1, true);
   expect(parent.querySelectorAll('.playing')).toHaveLength(1);
-  expect([...parent.querySelectorAll('select')].every(select => select.disabled)).toBe(true);
+  view.moveTo(0, 1); expect(project.sequence).toEqual([third.id, third.id, third.id]); // locked while it plays
 });
 
 it('retains notes when shortening a pattern and rejects missing sequence references', () => {
@@ -101,9 +102,9 @@ it('groups steps into named sections that collapse, loop, and follow the sequenc
   view.paint(3, true); expect(parent.querySelector('.sequence-section[data-start="2"]')!.classList.contains('playing')).toBe(true);
   parent.querySelector<HTMLButtonElement>('[aria-label="Expand Chorus"]')!.click(); expect(project.sections![1].collapsed).toBeUndefined(); expect(steps()).toBe(6);
   // Loop a section; again clears it.
-  parent.querySelector<HTMLButtonElement>('[aria-label="Loop Chorus"]')!.click(); expect(project.loop_range).toEqual({ start: 2, end: 3 });
-  parent.querySelector<HTMLButtonElement>('[aria-label="Loop Chorus"]')!.click(); expect(project.loop_range).toBeUndefined();
-  parent.querySelector<HTMLButtonElement>('[aria-label="Loop Section 3"]')!.click(); expect(project.loop_range).toEqual({ start: 4, end: 5 });
+  view.loopSection(project.sections![1]); expect(project.loop_range).toEqual({ start: 2, end: 3 });
+  view.loopSection(project.sections![1]); expect(project.loop_range).toBeUndefined();
+  view.loopSection(project.sections![2]); expect(project.loop_range).toEqual({ start: 4, end: 5 });
   // A step added inside a section joins it, one added after its last step joins the section before the next one.
   view.select(2); view.insert('reuse'); expect(project.sections!.map(s => s.start)).toEqual([0, 2, 5]);
   view.select(0); view.insert('reuse'); expect(project.sections!.map(s => s.start)).toEqual([0, 3, 6]);
@@ -123,17 +124,6 @@ it('rejects sections that are out of order or outside the sequence', () => {
   for (const bad of [[{ start: 4, name: 'A' }], [{ start: 2, name: 'A' }, { start: 2, name: 'B' }], [{ start: 2, name: 'A' }, { start: 1, name: 'B' }], [{ start: 0, name: 7 }], [{ start: 0, name: 'A', collapsed: 'yes' }], 'x']) expect(read(bad)).toThrow();
 });
 
-it('points the selected step at the previous or next pattern, within the pool', () => {
-  const project = newProject(), parent = document.createElement('div'), edited = vi.fn();
-  const view = new Arrangement(parent, () => project, vi.fn(), edited); view.reset();
-  view.insert('new'); view.insert('new'); view.select(0);
-  const [a, b, c] = project.patterns.map(p => p.id);
-  view.shiftPattern(1); expect(project.sequence[0]).toBe(b); expect(view.pattern.id).toBe(b);
-  view.shiftPattern(1); expect(project.sequence[0]).toBe(c); view.shiftPattern(1); expect(project.sequence[0]).toBe(c);
-  view.shiftPattern(-2); expect(project.sequence[0]).toBe(a); view.shiftPattern(-1); expect(project.sequence[0]).toBe(a);
-  expect(edited).toHaveBeenCalled();
-});
-
 it('keeps each step\'s mutes and redirects with the step as the sequence changes', () => {
   const project = newProject(), parent = document.createElement('div');
   const view = new Arrangement(parent, () => project, vi.fn(), vi.fn()); view.reset();
@@ -145,4 +135,46 @@ it('keeps each step\'s mutes and redirects with the step as the sequence changes
   expect(project.matrix).toEqual([[], [], [{ kind: 'mute' }], [], [null, { kind: 'mute' }]]);
   view.select(2); view.remove(); expect(project.matrix).toEqual([[], [], [], [null, { kind: 'mute' }]]);
   view.select(3); view.remove(); expect(project.matrix).toBeUndefined();
+});
+
+it('moves a step to any place, taking its mutes with it', () => {
+  const project = newProject(), parent = document.createElement('div');
+  const view = new Arrangement(parent, () => project, vi.fn(), vi.fn()); view.reset();
+  view.insert('new'); view.insert('new'); // three steps, each its own pattern
+  const [a, b, c] = project.sequence;
+  project.matrix = [[{ kind: 'mute' }], [], []];
+  view.moveTo(0, 2); expect(project.sequence).toEqual([b, c, a]); expect(project.matrix).toEqual([[], [], [{ kind: 'mute' }]]);
+  expect(view.position).toBe(2);
+  view.moveTo(2, 0); expect(project.sequence).toEqual([a, b, c]); expect(project.matrix).toEqual([[{ kind: 'mute' }]]);
+});
+
+it('shows a cell for each track only on request, and a step menu with the actions the glyphs used to be', () => {
+  const project = newProject(), parent = document.createElement('div'); document.body.append(parent);
+  const view = new Arrangement(parent, () => project, vi.fn(), vi.fn()); view.reset(); view.insert('new');
+  expect(parent.querySelectorAll('.matrix-cell')).toHaveLength(0);
+  view.setCells(true); expect(parent.querySelectorAll('.matrix-cell')).toHaveLength(2 * project.tracks.length);
+  view.setCells(false);
+  parent.querySelector<HTMLButtonElement>('.sequence-entry[data-position="0"] .row-menu')!.click();
+  const items = () => [...document.querySelectorAll<HTMLButtonElement>('.menu button')];
+  expect(items().map(b => b.textContent)).toContain('Move down'); expect(items().map(b => b.textContent)).not.toContain('Move up');
+  items().find(b => b.textContent === 'Move down')!.click(); expect(view.position).toBe(1);
+  parent.querySelector<HTMLElement>('.sequence-entry[data-position="1"]')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  items().find(b => b.textContent === 'Loop this step')!.click(); expect(project.loop_range).toEqual({ start: 1, end: 1 });
+  view.paint(null, true);
+  parent.querySelector<HTMLButtonElement>('.sequence-entry[data-position="0"] .row-menu')!.click();
+  expect(items().map(b => b.textContent)).not.toContain('Remove step'); expect(items().map(b => b.textContent)).toContain('Loop this step');
+});
+
+it('renames a step\'s pattern in place, from a double-click or the menu', () => {
+  const project = newProject(), parent = document.createElement('div'); document.body.append(parent);
+  const selected = vi.fn(), edited = vi.fn(), view = new Arrangement(parent, () => project, selected, edited); view.reset();
+  const row = () => parent.querySelector<HTMLElement>('.sequence-entry[data-position="0"]')!;
+  row().dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  const input = parent.querySelector<HTMLInputElement>('.sequence-rename')!; input.value = '  Verse '; input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  expect(project.patterns[0].name).toBe('Verse'); expect(row().querySelector('.name')!.textContent).toBe('Verse'); expect(edited).toHaveBeenCalled(); expect(selected).toHaveBeenCalled();
+  view.rename(0); const again = parent.querySelector<HTMLInputElement>('.sequence-rename')!; again.value = 'Nope'; again.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  expect(project.patterns[0].name).toBe('Verse');
+  parent.querySelector<HTMLButtonElement>('.row-menu')!.click();
+  [...document.querySelectorAll<HTMLButtonElement>('.menu button')].find(b => b.textContent === 'Rename pattern')!.click();
+  expect(parent.querySelector('.sequence-rename')).not.toBeNull();
 });

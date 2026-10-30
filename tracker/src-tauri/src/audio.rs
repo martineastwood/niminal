@@ -56,6 +56,9 @@ pub enum Command {
         mode: Mode,
         pattern_id: String,
         start_position: usize,
+        /// The row of the pattern to begin on, when looping a single pattern.
+        #[serde(default)]
+        start_row: u64,
     },
     Update {
         song: Song,
@@ -552,9 +555,13 @@ impl Worker {
                 mode,
                 pattern_id,
                 start_position,
+                start_row,
             } => {
                 self.check_assignments(&song)?;
                 let mut playback = Playback::new(0, song, mode, pattern_id, start_position)?;
+                if mode == Mode::Pattern && start_row as usize >= playback.pattern_rows().unwrap_or(0) {
+                    return Err("That row is past the end of the pattern".into());
+                }
                 self.stop()?;
                 self.set_mixer(&playback.song)?;
                 self.send_events(mixer::reset(
@@ -566,16 +573,21 @@ impl Worker {
                 playback.parameters = self.status.effect_parameters.clone();
                 playback.instrument_parameters = self.status.instrument_parameters.clone();
                 playback.instrument_slices = self.status.instrument_slices.clone();
-                playback.origin = self.clock()? + (self.status.sample_rate * 0.15).round() as u64;
+                let begin = self.clock()? + (self.status.sample_rate * 0.15).round() as u64;
+                if mode == Mode::Pattern {
+                    playback.start_at(start_row, begin, self.status.sample_rate);
+                } else {
+                    playback.origin = begin;
+                }
                 // the tempo and meter of the first pattern, which the rows say when it changes
                 let (bpm, meter) = playback.start_tempo();
-                self.send_events(vec![json!({"op":"tempo", "at":playback.origin, "bpm":bpm, "meter":meter, "beat":0.0})])?;
+                self.send_events(vec![json!({"op":"tempo", "at":begin, "bpm":bpm, "meter":meter, "beat":0.0})])?;
                 self.send_events(crate::modulation::reset(
                     &playback.song.tracks,
                     &playback.song.returns,
                     &playback.song.master,
                     &self.status.effect_parameters,
-                    playback.origin,
+                    begin,
                 ))?;
                 self.status.skipped_rows = 0;
                 self.status.late_events = 0;

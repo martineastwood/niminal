@@ -88,15 +88,34 @@ fn snap_divisions(items: &mut [Item]) {
                 }
             }
             let at = param.name.span;
-            let read = Expr { kind: ExprKind::Name(param.name.name.clone()), span: at };
+            let read = Expr {
+                kind: ExprKind::Name(param.name.name.clone()),
+                span: at,
+            };
             let call = Expr {
                 kind: ExprKind::Call {
-                    name: Ident { name: "snap_division".into(), span: at },
-                    args: vec![Arg { name: None, value: read, receiver: false }],
+                    name: Ident {
+                        name: "snap_division".into(),
+                        span: at,
+                    },
+                    args: vec![Arg {
+                        name: None,
+                        value: read,
+                        receiver: false,
+                    }],
                 },
                 span: at,
             };
-            body.insert(0, Stmt::Bind { name: Ident { name: snapped, span: at }, value: call });
+            body.insert(
+                0,
+                Stmt::Bind {
+                    name: Ident {
+                        name: snapped,
+                        span: at,
+                    },
+                    value: call,
+                },
+            );
         }
     }
 }

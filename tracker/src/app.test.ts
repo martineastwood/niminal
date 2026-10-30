@@ -78,7 +78,7 @@ it('leaves the cursor in the grid after Escape and after clicks on buttons and m
   const grid = document.getElementById('grid')!, active = () => document.activeElement;
   const record = () => document.getElementById('record')!.getAttribute('aria-pressed');
   // Escape from a text box turns record mode on and puts the cursor back in the grid
-  const name = document.getElementById('pattern-name')!; name.focus();
+  const name = document.getElementById('velocity')!; name.focus();
   const before = record();
   name.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
   expect(record()).not.toBe(before);
@@ -87,10 +87,10 @@ it('leaves the cursor in the grid after Escape and after clicks on buttons and m
   const undo = document.getElementById('undo') as HTMLButtonElement; undo.focus(); undo.click();
   await vi.waitFor(() => expect(active()).toBe(grid));
   // a button of the sequence bar
-  const first = document.querySelector<HTMLButtonElement>('#sequence .sequence-entry > button')!; first.focus(); first.click();
+  const first = document.querySelector<HTMLButtonElement>('#sequence .sequence-main')!; first.focus(); first.click();
   await vi.waitFor(() => expect(active()).toBe(grid));
   // a choice made in a menu of the toolbar
-  const picker = document.getElementById('pattern-picker') as HTMLSelectElement; picker.focus();
+  const picker = document.getElementById('meter-unit') as HTMLSelectElement; picker.focus();
   picker.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); picker.dispatchEvent(new Event('change', { bubbles: true }));
   await vi.waitFor(() => expect(active()).toBe(grid));
   // but not when the button opened something that wants the keyboard
@@ -112,7 +112,7 @@ it('gives the keyboard back to the grid after Enter in a box, a tick box, a slid
   await vi.waitFor(() => expect(active()).toBe(grid));
   const follow = document.getElementById('follow') as HTMLInputElement; follow.focus(); follow.click();
   await vi.waitFor(() => expect(active()).toBe(grid));
-  const picker = document.getElementById('pattern-picker') as HTMLSelectElement; picker.focus();
+  const picker = document.getElementById('meter-unit') as HTMLSelectElement; picker.focus();
   picker.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })); picker.dispatchEvent(new Event('change', { bubbles: true }));
   await tick(); expect(active()).toBe(picker); // moving through the options is not a choice
   picker.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); picker.dispatchEvent(new Event('change', { bubbles: true }));

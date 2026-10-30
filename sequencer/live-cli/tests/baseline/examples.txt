@@ -9,6 +9,7 @@ functions.nml: 2x293633
 fx.nml: 2x583652
 gestures.nml: 2x353001
 glitch.nml: 2x353001
+granular.nml: 2x1180758
 groove.nml: 2x570512
 instrument_scopes.nml: 1x100807
 library.nml: 1x327199

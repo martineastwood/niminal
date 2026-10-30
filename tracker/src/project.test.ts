@@ -1,6 +1,6 @@
 import { patternSeconds, patternRow } from './project';
 import { expect, it } from 'vitest';
-import { emptyProject, keyboardNote, transposeNote, setTrackSource, trackSource, newProject, emptyFxLane, blankColumn, makePattern, removeTrack, restoreTrack, readProject, resizePattern, patternSwing, commandValue, commandProblem, glideRetriggers, trackCommandValue, duplicateTrack } from './project';
+import { emptyProject, keyboardNote, transposeNote, setTrackSource, trackSource, newProject, emptyFxLane, blankColumn, makePattern, removeTrack, restoreTrack, readProject, resizePattern, patternSwing, commandValue, commandProblem, glideRetriggers, trackCommandValue, duplicateTrack, moveTrack } from './project';
 
 it('round trips source and notes and rejects unsupported project data', () => {
   const project = newProject();
@@ -44,6 +44,20 @@ it('accepts more tracks only when every pattern has matching note columns', () =
     project.patterns[0].notes.push([blankColumn(32)]); project.patterns[0].fx.push([emptyFxLane()]);
   }
   expect(() => readProject(JSON.stringify(project))).toThrow();
+});
+
+it('moves a track with its notes and matrix cells', () => {
+  const project = newProject();
+  const names = project.tracks.map(t => t.name);
+  project.patterns[0].notes[0][0].notes[2] = 'C-4';
+  setTrackSource(project, 0, 0, { kind: 'mute' });
+  expect(moveTrack(project, 0, 2)).toBe(true);
+  expect(project.tracks.map(t => t.name)).toEqual([names[1], names[2], names[0], names[3]]);
+  expect(project.patterns[0].notes[2][0].notes[2]).toBe('C-4');
+  expect(trackSource(project, 0, 2)).toEqual({ kind: 'mute' });
+  expect(trackSource(project, 0, 0)).toBeNull();
+  expect(moveTrack(project, 1, 1)).toBe(false);
+  expect(readProject(JSON.stringify(project))).toEqual(project);
 });
 
 it('deletes a track across all patterns and restores its notes and mixer settings', () => {

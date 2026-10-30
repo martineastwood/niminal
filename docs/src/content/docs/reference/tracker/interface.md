@@ -12,6 +12,7 @@ description: Zooming the tracker, resizing and hiding its bars, the command pale
 ## Bars
 
 - **Cmd/Ctrl+\\** or the **◧** button in the footer hides and shows the sequence bar.
+- **Cmd/Ctrl+J** or the **Track FX** tab hides and shows the bottom dock (the selected track's effects and automation).
 - **Cmd/Ctrl+Shift+B** or **◨** hides and shows the right bar (project instruments and the sound browser). **Cmd/Ctrl+B** still opens the sound browser, showing the bar if it was hidden.
 - Drag the edge beside a bar to size it, or focus the edge with Tab and use **←** / **→** (Shift for bigger steps). Double-click an edge for the default width.
 - **Cmd/Ctrl+Shift+F** is focus mode: only the toolbar and the grid. Press it again to come back.

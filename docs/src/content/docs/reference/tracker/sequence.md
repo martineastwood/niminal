@@ -3,34 +3,37 @@ title: Patterns, the sequence and timing
 description: Song order, patterns, loops, sections, per-track cells, tracks and tempo in the tracker.
 ---
 
-The left-hand sequence controls song order. Each step occupies one compact row; the **◂ / ▸** button hides or shows pattern names. Hover over the small action buttons for their labels.
+The left-hand sequence controls song order. Each step is one row showing its number, its pattern's name and the pattern number. Click a row to edit it, or drag it to reorder. The bar has three labelled buttons (**+ Add**, **Loop**, **Tracks**), and every row has a **⋯** menu (also on right-click) with the rest. While the song plays, the bar says so and steps can't be added, moved, removed or repointed.
 
 ## The sequence
 
-- **+ Blank** creates an empty pattern and inserts it after the selected sequence step.
-- **Reuse pattern** inserts another reference to the current pattern. Edits affect every entry referencing it; the pattern toolbar shows the reference count.
-- **Duplicate as variation** creates an independent copy and inserts it after the selected step.
-- Use the pattern selector on a sequence entry to change what it plays. **↑ Move / ↓ Move** reorder entries; **Remove step** removes a reference while keeping the pattern in the pattern pool. At least one sequence entry remains.
+**+ Add** inserts a step after the selected one:
+
+- **New blank pattern** creates an empty pattern.
+- **Copy of this pattern** creates an independent copy, to edit on its own.
+- **Repeat this pattern** inserts another reference to the same pattern. Edits affect every step using it; hover a step to see how many steps use its pattern.
+
+Double-click a step to rename its pattern. A step's **⋯** menu renames it, moves it up or down, removes it (its pattern is deleted too unless another step or track cell still uses it; at least one step remains; Undo brings it back), loops it, starts or removes a section, and lists every pattern under **PLAY PATTERN** to change what the step plays. A small dot after a step's name means some of its tracks are muted or play another pattern there.
 
 ## Patterns
 
-The pattern picker above the grid can open any pattern, including one not currently sequenced. Patterns have a name and **1–256 active rows**. Shortening a pattern keeps hidden notes, so lengthening it restores them.
+Every pattern belongs to at least one step; there is no separate pattern list. Patterns have a name (rename it from its step) and **1–256 active rows**. Shortening a pattern keeps hidden notes, so lengthening it restores them.
 
 ## Looping part of the song
 
-**⟲ Loop** repeats part of the sequence during **▶ Song**. Press it to loop the selected step, shift-click another step's number to loop everything between them, and press it again to clear the loop. The looped steps are outlined.
+**Loop** repeats part of the sequence during **▶ Song**. Press it to loop the selected step and again to clear the loop. To loop a range, drag down the narrow strip at the left edge of the rows (or shift-click another step). The looped steps are marked orange in that strip.
 
 Song playback runs from where it starts up to the end of the loop, repeats the loop until you stop it, and ignores a loop that lies before its start. The loop can be set, moved or cleared while playing: playback carries on to the end of the pattern now sounding and loops from there. Steps added inside the loop join it, and the loop follows the sequence as steps are inserted or removed.
 
 ## Sections
 
-**§ Section** starts a named section at the selected step, running up to the next section's start; press it on a step that starts one to remove it.
+**Start a section here** (in **+ Add** or a step's **⋯** menu) starts a named section at a step, running up to the next section's start; the same item removes the section that starts there.
 
-A section header sits above its steps: **▾ / ▸** collapses or expands the steps (the count shows how many are hidden, and a collapsed section lights up while one of its steps plays), the name is editable, and **⟲** loops exactly that section (press it again to clear). Sections only organise the list and don't change playback. Steps added after a section's first step join it, steps removed move later sections up, and a section left with no steps disappears. Sections are saved with the project.
+A section header sits above its steps: **▾ / ▸** collapses or expands the steps (the count shows how many are hidden, and a collapsed section lights up while one of its steps plays), the name is editable, and the header's **⋯** menu collapses it, loops exactly that section (again to clear), or removes it (its steps stay). Sections only organise the list and don't change playback. Steps added after a section's first step join it, steps removed move later sections up, and a section left with no steps disappears. Sections are saved with the project.
 
 ## Track cells
 
-Each sequence step has a small cell for every track at the end of its row (the sequence bar widens to fit them), so each step can differ per track without copying a whole pattern. This is the pattern matrix.
+Press **Tracks** to give each sequence step a small cell for every track at the end of its row (the sequence bar widens to fit them), so each step can differ per track without copying a whole pattern. This is the pattern matrix.
 
 A cell is blank when the track plays the step's own pattern. **Click** a cell for a menu to mute that track in that step (**✕**) or have it play another pattern's notes and lanes (shown as that pattern's number, like **03**), or choose *Own pattern* to undo; **Shift-click** mutes or unmutes at once.
 

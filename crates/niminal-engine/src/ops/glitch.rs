@@ -209,16 +209,38 @@ impl Opcode for RepeatLast {
             let mut wet = x;
             if held || mix > 0.0 {
                 let open = size * f64::from(inputs[7][i]).clamp(0.05, 1.0);
-                let at = if inputs[8][i] > 0.0 { self.frozen as f64 - self.phase } else { self.frozen as f64 - size + self.phase };
-                let window = if self.phase < open { edge(self.phase, open, seam) } else { 0.0 };
+                let at = if inputs[8][i] > 0.0 {
+                    self.frozen as f64 - self.phase
+                } else {
+                    self.frozen as f64 - size + self.phase
+                };
+                let window = if self.phase < open {
+                    edge(self.phase, open, seam)
+                } else {
+                    0.0
+                };
                 let t = (self.phase / open.max(1.0)).min(1.0) as f32;
                 let shape = inputs[9][i].clamp(-1.0, 1.0);
-                let curve = if shape >= 0.0 { 1.0 - shape * t } else { 1.0 + shape * (1.0 - t) };
+                let curve = if shape >= 0.0 {
+                    1.0 - shape * t
+                } else {
+                    1.0 + shape * (1.0 - t)
+                };
                 let curve = curve.powf(1.0 + 4.0 * inputs[12][i].clamp(0.0, 1.0));
                 let attack = inputs[11][i].clamp(0.0, 1.0);
-                let rise = if attack > 0.0 { (t / attack).min(1.0) } else { 1.0 };
-                let accent = if self.repeats % 2 == 1 { 1.0 - inputs[13][i].clamp(0.0, 1.0) } else { 1.0 };
-                let a = (1.0 - inputs[10][i].clamp(0.0, 0.95)).powi(self.repeats).max(0.02);
+                let rise = if attack > 0.0 {
+                    (t / attack).min(1.0)
+                } else {
+                    1.0
+                };
+                let accent = if self.repeats % 2 == 1 {
+                    1.0 - inputs[13][i].clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+                let a = (1.0 - inputs[10][i].clamp(0.0, 0.95))
+                    .powi(self.repeats)
+                    .max(0.02);
                 self.lp += a * (self.ring.at(at) - self.lp);
                 wet = self.lp * self.level * window * curve * rise * accent;
                 self.phase += (f64::from(inputs[3][i]) * 0.057_762_265).exp();
@@ -602,7 +624,8 @@ impl Opcode for Scatter {
                 self.phase = 0.0;
                 self.pass = 0;
                 self.count = (inputs[3][i].round().max(2.0) as usize).min(MAX_SLICES);
-                self.size = (f64::from(inputs[2][i]) * sr).clamp(self.count as f64 * 4.0 * seam, longest.max(1.0));
+                self.size = (f64::from(inputs[2][i]) * sr)
+                    .clamp(self.count as f64 * 4.0 * seam, longest.max(1.0));
                 self.seed = inputs[4][i];
                 self.reverse = inputs[5][i];
                 self.repeat = inputs[6][i];
@@ -617,10 +640,18 @@ impl Opcode for Scatter {
                 let within = self.phase - index as f64 * slice;
                 let base = self.frozen as f64 - self.size + f64::from(self.order[index]) * slice;
                 let along = within * self.speed[index];
-                let at = if self.flipped[index] { base + slice - along } else { base + along };
+                let at = if self.flipped[index] {
+                    base + slice - along
+                } else {
+                    base + along
+                };
                 // a slice shifted up must not read on past the end of what was held
                 let at = at.min(self.frozen as f64 - 1.0);
-                wet = if self.dropped[index] { 0.0 } else { self.ring.at(at) * edge(within, slice, seam) };
+                wet = if self.dropped[index] {
+                    0.0
+                } else {
+                    self.ring.at(at) * edge(within, slice, seam)
+                };
                 self.phase += 1.0;
                 if self.phase >= self.size {
                     self.phase -= self.size;
@@ -740,7 +771,9 @@ impl Opcode for Freeze {
         let longest = (self.ring.buf.len() - 1) as f64;
         for (i, o) in out.iter_mut().enumerate() {
             let x = inputs[0][i];
-            let (held, rising, mix) = self.hold.step(inputs[1][i], inputs[10][i], self.sample_rate);
+            let (held, rising, mix) = self
+                .hold
+                .step(inputs[1][i], inputs[10][i], self.sample_rate);
             if rising {
                 self.frozen = self.ring.pos;
                 self.region = (f64::from(inputs[2][i]) * sr).clamp(64.0, longest.max(64.0));
@@ -757,13 +790,20 @@ impl Opcode for Freeze {
                     if self.until_next <= 0.0 {
                         self.until_next += size / density;
                         if let Some(slot) = self.grains.iter_mut().find(|g| g.age >= g.size) {
-                            let detune = (random_unit(&mut self.random) * 2.0 - 1.0) * f64::from(inputs[8][i]);
+                            let detune = (random_unit(&mut self.random) * 2.0 - 1.0)
+                                * f64::from(inputs[8][i]);
                             let speed = ((f64::from(inputs[7][i]) + detune) * 0.057_762_265).exp();
                             let span = (size * speed).min(self.region);
                             let place = f64::from(inputs[5][i])
-                                + (random_unit(&mut self.random) * 2.0 - 1.0) * f64::from(inputs[6][i]);
+                                + (random_unit(&mut self.random) * 2.0 - 1.0)
+                                    * f64::from(inputs[6][i]);
                             let back = span + (1.0 - place.clamp(0.0, 1.0)) * (self.region - span);
-                            *slot = Grain { read: self.frozen as f64 - back, speed, age: 0.0, size };
+                            *slot = Grain {
+                                read: self.frozen as f64 - back,
+                                speed,
+                                age: 0.0,
+                                size,
+                            };
                         }
                     }
                 }

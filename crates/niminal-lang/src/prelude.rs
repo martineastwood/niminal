@@ -133,7 +133,9 @@ pub const DOCS: [(&str, &str); 8] = [
 
 /// The text of the prelude function `name` as it is written here, for copying into a project.
 pub fn source_of(name: &str) -> Option<String> {
-    let (text, start) = [SOURCE, CLOCK_SOURCE].into_iter().find_map(|t| t.find(&format!("fn {name}(")).map(|i| (t, i)))?;
+    let (text, start) = [SOURCE, CLOCK_SOURCE]
+        .into_iter()
+        .find_map(|t| t.find(&format!("fn {name}(")).map(|i| (t, i)))?;
     let mut depth = 0;
     let mut end = None;
     for (i, c) in text[start..].char_indices() {

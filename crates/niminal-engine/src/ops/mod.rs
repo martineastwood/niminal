@@ -22,6 +22,7 @@ mod follow;
 mod formant;
 mod gate;
 mod glitch;
+mod granular;
 mod impulse;
 mod ladder;
 mod lag;
@@ -66,7 +67,10 @@ pub use fold::{Clip, Fold};
 pub use follow::Follow;
 pub use formant::Formant;
 pub use gate::Gate;
-pub use glitch::{DEFAULT_MAX_SECONDS as GLITCH_MAX_SECONDS, RepeatLast, RewindLast, Scatter, SlowDown, Freeze};
+pub use glitch::{
+    DEFAULT_MAX_SECONDS as GLITCH_MAX_SECONDS, Freeze, RepeatLast, RewindLast, Scatter, SlowDown,
+};
+pub use granular::{GRANULAR_MONITOR_FIELDS, Granular, GranularConfig};
 pub use impulse::Impulse;
 pub use ladder::Ladder;
 pub use lag::Lag;

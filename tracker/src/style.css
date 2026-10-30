@@ -64,37 +64,46 @@ main { display: flex; flex: 1; min-height: 0; }
 .dock-row { flex: 1; min-height: 0; display: flex; }
 .dock-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 aside { width: var(--sequence-width, 168px); min-width: calc(112px + var(--sequence-cells, 0px)); flex-shrink: 0; display: flex; flex-direction: column; background: var(--bg-panel); border-right: 1px solid var(--line); overflow: hidden; }
-aside.names-hidden { width: calc(84px + var(--sequence-cells, 0px)); min-width: 0; }
 .side-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; min-height: 22px; padding: 0 4px 0 6px; background: var(--bg-bar); border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .side-tools { display: flex; flex-wrap: wrap; gap: 1px; margin-left: auto; }
 .side-tools button { height: 16px; min-width: 16px; padding: 0 3px; font-size: var(--fs-2); line-height: 1; background: transparent; border-color: transparent; }
 .side-tools button:hover { background: var(--bg-ctl-hover); }
 .side-tools button[aria-pressed=true] { background: var(--accent); border-color: #7a4a1a; color: #1a1006; }
-#loop { font-size: var(--fs-4); }
 #sequence { overflow: auto; flex: 0 1 auto; max-height: 55%; min-height: 20px; }
-.sequence-entry { display: grid; grid-template-columns: 22px 34px minmax(0, 1fr) auto; align-items: center; gap: 2px; height: 18px; padding: 0 3px 0 0; border-left: 2px solid transparent; border-bottom: 1px solid #16181b; }
-.sequence-entry > button { height: 16px; padding: 0 2px; border: 0; background: transparent; font-family: var(--mono); font-size: var(--fs-2); color: var(--dim); text-align: center; overflow: hidden; text-overflow: ellipsis; }
-.sequence-entry > select { height: 16px; width: 100%; padding: 0 2px; text-align: center; background-image: none; color: var(--accent-text); background-color: transparent; border-color: transparent; font-size: var(--fs-2); }
-.sequence-entry > select:hover:not(:disabled) { border-color: var(--edge); }
-.sequence-entry > .sequence-name { text-align: left; color: var(--text); font-family: var(--sans); font-size: var(--fs-2); white-space: nowrap; }
-.sequence-entry.selected { background: #2a2d33; border-left-color: var(--accent); }
-.sequence-entry.selected > button:first-child { color: var(--hi); }
-.sequence-entry.in-loop { background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: inset -2px 0 0 var(--accent); }
-.sequence-entry.loop-start { border-top: 1px solid var(--accent); }
-.sequence-entry.loop-end { border-bottom: 1px solid var(--accent); }
+.sequence-tools { display: flex; gap: 3px; padding: 4px 5px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.sequence-tools button { height: 22px; padding: 0 8px; }
+.sequence-tools button[aria-pressed=true] { background: var(--accent); border-color: #7a4a1a; color: #1a1006; }
+.sequence-lock { padding: 3px 6px; font-size: var(--fs-1); color: var(--accent-text); background: var(--bg-bar); border-bottom: 1px solid var(--line); }
+.sequence-entry { display: flex; align-items: center; gap: 2px; height: 22px; padding-right: 2px; border-bottom: 1px solid #16181b; }
+.loop-gutter { align-self: stretch; flex: none; width: 9px; cursor: ns-resize; border-right: 1px solid transparent; }
+.loop-gutter:hover { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+.sequence-main { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; height: 20px; padding: 0 2px; border: 0; background: transparent; text-align: left; overflow: hidden; }
+.sequence-rename { flex: 1; min-width: 0; height: 20px; font-size: var(--fs-2); }
+.sequence-main .step { font-family: var(--mono); font-size: var(--fs-2); color: var(--dim); }
+.sequence-main .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-2); color: var(--text); }
+.sequence-main .pattern { font-family: var(--mono); font-size: var(--fs-1); color: var(--dim); }
+.sequence-main .flag { color: var(--accent-text); }
+.sequence-entry.selected { background: #2a2d33; }
+.sequence-entry.selected .step { color: var(--accent-text); }
+.sequence-entry.in-loop { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.sequence-entry.in-loop > .loop-gutter { background: var(--accent); }
+.sequence-entry.loop-start > .loop-gutter { border-top-left-radius: 3px; border-top-right-radius: 3px; }
+.sequence-entry.loop-end > .loop-gutter { border-bottom-left-radius: 3px; border-bottom-right-radius: 3px; }
 .sequence-entry.selected.in-loop { background: color-mix(in srgb, var(--accent) 8%, #2a2d33); }
+.row-menu { flex: none; width: 20px; height: 18px; padding: 0; border-color: transparent; background: transparent; color: var(--dim); opacity: 0; }
+.sequence-entry:hover .row-menu, .sequence-entry.selected .row-menu, .row-menu:focus-visible, .sequence-section .row-menu { opacity: 1; }
+.row-menu:hover { background: var(--bg-ctl-hover); color: var(--hi); }
+.sequence-entry.drop-over { outline-offset: -2px; }
+#sequencer.locked .sequence-entry { cursor: default; }
 .sequence-section { display: flex; align-items: center; gap: 2px; height: 18px; padding: 0 3px 0 2px; background: var(--bg-bar); border-bottom: 1px solid var(--line); border-left: 2px solid var(--edge); }
 .sequence-section button { height: 16px; min-width: 16px; padding: 0 2px; border-color: transparent; background: transparent; font-size: var(--fs-2); color: var(--dim); }
 .sequence-section button:hover { background: var(--bg-ctl-hover); color: var(--hi); }
-.sequence-section button[aria-pressed=true] { background: var(--accent); border-color: #7a4a1a; color: #1a1006; }
 .sequence-section input { flex: 1; min-width: 0; height: 16px; background: transparent; border-color: transparent; font-family: var(--sans); font-size: var(--fs-2); font-weight: 600; letter-spacing: .5px; text-transform: uppercase; color: var(--text); }
 .sequence-section input:hover, .sequence-section input:focus { background: var(--bg-input); border-color: var(--border-input); }
 .sequence-count { color: var(--dim); font-family: var(--mono); font-size: var(--fs-1); }
 .sequence-section.selected { border-left-color: var(--accent); }
 .sequence-section.playing { background: var(--accent-bg); }
 .sequence-entry.playing { background: var(--accent-bg); }
-.names-hidden .sequence-entry { grid-template-columns: 22px 34px auto; }
-.names-hidden .sequence-name { display: none; }
 
 /* Pattern grid */
 .workspace { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
@@ -145,6 +154,8 @@ aside.names-hidden { width: calc(84px + var(--sequence-cells, 0px)); min-width: 
 .grid-row.cursor-row .track-cells { background: #232932; }
 .grid-row.cursor-row .row-number { color: var(--accent-text); background: #2a2f37; }
 .range-selected { background: #4a2a33 !important; box-shadow: inset 0 0 0 1px #8e4a58; }
+.note.held { color: #8a7f55; }
+.drop-preview { box-shadow: inset 0 0 0 2px #e8b44a !important; }
 .cursor { background: #3a4452 !important; box-shadow: inset 0 0 0 1px #8a93a0; }
 #grid:focus .cursor { background: #6b4b25 !important; box-shadow: inset 0 0 0 1px var(--accent); color: #fff2dc; }
 .lane-value { width: 100%; height: 100%; padding: 0; background: #1c2a38; border: 0; text-align: right; font: inherit; color: #ffe0ad; }
@@ -201,7 +212,7 @@ button.apply.dirty { background: var(--accent); border-color: #7a4a1a; color: #1
 .device-note { margin: 4px 0; color: var(--dim); }
 .show-sliders { margin: 4px; font-size: var(--fs-2); }
 .device { margin-bottom: 3px; border: 1px solid var(--line); border-left: 3px solid #3a3f46; background: #1f2226; }
-.device.selected { border-left-color: var(--accent); background: #24282d; }
+.device.selected { border-left-color: var(--track-colour, var(--accent)); background: #24282d; }
 .device.bypassed .device-name { opacity: .5; text-decoration: line-through; }
 .device-head { display: flex; align-items: center; gap: 2px; padding: 2px; }
 .device-head button { height: 18px; min-width: 20px; padding: 0 4px; }
@@ -417,8 +428,8 @@ footer input { height: 20px; font-size: var(--fs-2); }
 .parameter-row.with-lfo { grid-template-columns: 62px minmax(40px, 1fr) 70px 18px 18px 18px; }
 
 /* Larger hit areas: the small tool buttons keep their look, but reach a few px beyond it */
-.side-tools button, .track-tools button, .sequence-section button, .sequence-entry > button, .parameter-row button, .mix-buttons button, footer button { position: relative; }
-.side-tools button::after, .track-tools button::after, .sequence-section button::after, .sequence-entry > button::after, .parameter-row button::after, .mix-buttons button::after, footer button::after { content: ''; position: absolute; inset: -4px -3px; }
+.side-tools button, .track-tools button, .sequence-section button, .parameter-row button, .mix-buttons button, footer button { position: relative; }
+.side-tools button::after, .track-tools button::after, .sequence-section button::after, .parameter-row button::after, .mix-buttons button::after, footer button::after { content: ''; position: absolute; inset: -4px -3px; }
 
 /* Side bars: hidden by the footer buttons or the keys, sized by dragging the edge beside them */
 .hide-sequence #sequencer, .hide-sequence #left-resize, .hide-side #right-bar, .hide-side #right-resize { display: none; }
@@ -445,8 +456,8 @@ kbd { font-family: var(--mono); font-size: var(--fs-1); color: var(--dim); white
 .shortcuts-body { overflow: auto; padding: 4px 10px 10px; columns: 2 300px; outline: none; }
 .shortcuts-body section { break-inside: avoid; margin-bottom: 8px; }
 .shortcuts-body h3 { margin: 8px 0 3px; color: var(--accent-text); font-size: var(--fs-2); letter-spacing: 1px; text-transform: uppercase; }
-.shortcuts-body section > div { display: grid; grid-template-columns: 150px 1fr; gap: 8px; padding: 1px 0; }
-.shortcuts-body kbd { color: var(--hi); font-size: var(--fs-2); }
+.shortcuts-body section > div { display: grid; grid-template-columns: minmax(0, 42%) minmax(0, 1fr); gap: 12px; padding: 5px 0; align-items: start; }
+.shortcuts-body kbd { color: var(--hi); font-size: var(--fs-2); min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 
 /* A region the keyboard is in (Ctrl+1 to 4 jump between them) */
 #sequencer:focus-within, #right-bar:focus-within { box-shadow: inset 0 0 0 1px var(--edge); }

@@ -226,6 +226,49 @@ chops = brk.slices(16).choke(g(s4, s12))
 
 A sample's audio is a table. `kick.data` is that table (or an array of channel tables). A const table can be played as a sample: `pad = sample(organ).root(c4).loop(forward)`. See [Tables](/reference/language/tables/).
 
+### Granular synthesis
+
+`granular` reads a sample or table through overlapping grains. Its output is stereo. Drive `position` with a slow signal to scan independently of playback pitch, or hold it still to keep exploring one detail:
+
+```nml
+brk = sample("break.wav")
+const grain_window = window(blackman, size: 257)
+const body = harmonics([1, 0.3, 0, 0.15], size: 256)
+
+instr cloud() {
+  particles = granular(brk.data,
+    density: 45hz, duration: 180ms,
+    position: phasor(0.05hz), rate: 0.5,
+    spray: 60ms, pitch_scatter: 7, jitter: 0.6,
+    pan: 0, spread: 0.9, window: grain_window,
+    source2: body, mix: 0.2, position2: phasor(0.09hz), pitch2: 7,
+    fm: osc(sine, 93hz), fm_depth: 0.15, seed: 21)
+  particles * env[0 100ms 1 | 300ms 0] * 0.1
+}
+```
+
+Each grain captures its duration, gain, both source positions, playback rate, source-2 tuning, pitch scatter, sweep, pan, source blend and FM depth when it starts. Changing those controls affects new grains. The `fm` signal remains live inside every active grain: `fm * fm_depth * fm_window` proportionally modulates its instantaneous playback rate, so deep modulation can reverse the read direction. `sweep` is a pitch change in semitones over the grain's lifetime.
+
+`pan` ranges from -1 (left) to 1 (right). `spread` randomly offsets each grain's pan, with the result clamped to that range. Mono sources use equal-power panning; stereo sources retain both channels, with unity gain at center and balance toward either side.
+
+`source2` blends another mono or stereo source into each grain. `mix: 0` plays the first source; `mix: 1` plays the second. By default it follows the first source's normalized start position. Set `position2` to scan or hold a different region, and `pitch2` to transpose the second reader in semitones (for example, 7 for a fifth or -12 for an octave down). Both are captured when a grain starts. They share time spray, pitch scatter, the base rate and sweep, and each respects its own sample rate. The transposition also scales the second reader's FM deviation. A synthetic table uses the output sample rate. This is a blend of two readers inside the same grain and window.
+
+Use `gain` for accents captured by each grain: it accepts a linear factor or decibels, defaults to 1, and can be negative to invert a grain's phase. Changing it leaves already-playing grains at their captured level. `gain: 0` skips new grains.
+
+`probability` (0..1, default 1) decides whether each scheduled or externally triggered grain starts. It leaves the clock running and existing grains playing. Its seeded random stream is separate, so thinning a cloud does not reshuffle its position, pitch or pan choices. For example, `probability: 0.6` admits roughly 60% of grain opportunities, while a moving gain control can accent the survivors:
+
+```nml
+granular(brk.data, density: 0hz, trigger: impulse(9hz),
+  duration: 45ms, position: phasor(0.11hz),
+  probability: 0.6, gain: 0.35 + 0.85 * (phasor(1.5hz) < 0.25))
+```
+
+`window` accepts a mono table with at least two finite values. It is read with linear interpolation from its first to last value over the grain's lifetime. Zero endpoints avoid hard cuts. Without a custom window, grains use a raised-cosine envelope whose attack fraction is set by `shape` (default 0.5).
+
+For clocked fragments, set `density: 0hz` and feed pulses to `trigger`. For continuous clouds, `density` schedules grains and `jitter` varies their intervals. `seed` makes the randomness repeatable. The default pool holds 256 grains; `max_grains` can set a limit from 1 to 4096, stealing the oldest grain when full. Dense or long grains need output headroom. After release and the end of the note's envelopes, scheduling stops, delayed grains are cancelled and active grains drain.
+
+See `examples/granular.nml` for accented fragments, independent readers, synchronized masks and trainlets. The [full granular reference](/reference/language/granular/) covers all four sources, timing distributions, layered envelopes, routing, mask cursors and clock outputs.
+
 ## Built-in DSP
 
 For filters, delay, reverb, compression, chorus, pan and math on any signal (including sample output), see [Built-in opcodes](/reference/opcodes/). Convolution (`convolve`), real-time pitch shifting (`pitch_shift`), spectral freeze (`spectral_freeze`) and spectral delay (`spectral_delay`) are also available. SFZ multisamples are not in the language yet.

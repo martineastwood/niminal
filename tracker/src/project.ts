@@ -179,6 +179,13 @@ export function emptyProject(): Project {
   return project;
 }
 
+/** Deletes the patterns no step plays and no track cell redirects to. */
+export function dropUnusedPatterns(project: Project) {
+  const used = new Set(project.sequence);
+  for (const step of project.matrix ?? []) for (const source of step) if (source?.kind === 'pattern') used.add(source.id);
+  project.patterns = project.patterns.filter(p => used.has(p.id));
+}
+
 export function makePattern(project: Project, source?: Pattern): Pattern {
   const pattern: Pattern = {
     id: `pattern_${crypto.randomUUID().replaceAll('-', '_')}`,
@@ -288,6 +295,21 @@ export function removeTrack(project: Project, index: number): DeletedTrack | nul
   for (const step of project.matrix ?? []) if (index < step.length) step.splice(index, 1);
   tidyMatrix(project);
   return { index, track: project.tracks.splice(index, 1)[0], matrix, sequence: [...project.sequence], notes: new Map(project.patterns.map(p => [p.id, p.notes.splice(index, 1)[0]])), fx: new Map(project.patterns.map(p => [p.id, p.fx.splice(index, 1)[0]])) };
+}
+
+/** Moves a track to a new place in the order, taking its notes, parameter lanes and matrix cells with it. */
+export function moveTrack(project: Project, from: number, to: number): boolean {
+  const last = project.tracks.length - 1;
+  if (from === to || from < 0 || to < 0 || from > last || to > last) return false;
+  const shift = <T>(items: T[]) => items.splice(to, 0, items.splice(from, 1)[0]);
+  shift(project.tracks);
+  for (const pattern of project.patterns) { shift(pattern.notes); shift(pattern.fx); }
+  for (const step of project.matrix ?? []) {
+    while (step.length <= last) step.push(null);
+    shift(step);
+  }
+  tidyMatrix(project);
+  return true;
 }
 
 /**

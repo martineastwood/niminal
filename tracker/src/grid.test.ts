@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PatternGrid } from './grid';
 import { newProject, emptyFxLane, blankColumn } from './project';
 
@@ -274,8 +274,8 @@ it('transposes the selected notes by semitones and octaves, leaving OFF and note
   notes[0] = 'C-4'; notes[1] = 'OFF'; notes[2] = 'B-8'; notes[3] = 'C-0';
   click(0, 0); for (let i = 0; i < 3; i++) key('ArrowDown', { shiftKey: true });
   key('ArrowUp', { altKey: true, metaKey: true }); expect(notes.slice(0, 4)).toEqual(['C#4', 'OFF', 'B-8', 'C#0']);
-  key('ArrowUp', { metaKey: true, shiftKey: true }); expect(notes.slice(0, 4)).toEqual(['C#5', 'OFF', 'B-8', 'C#1']);
-  key('ArrowDown', { metaKey: true, shiftKey: true }); key('ArrowDown', { altKey: true, metaKey: true }); expect(notes.slice(0, 4)).toEqual(['C-4', 'OFF', 'A#7', 'C-0']); // B-8 could not go up, so it only came down
+  key('ArrowUp', { metaKey: true, altKey: true, shiftKey: true }); expect(notes.slice(0, 4)).toEqual(['C#5', 'OFF', 'B-8', 'C#1']);
+  key('ArrowDown', { metaKey: true, altKey: true, shiftKey: true }); key('ArrowDown', { altKey: true, metaKey: true }); expect(notes.slice(0, 4)).toEqual(['C-4', 'OFF', 'A#7', 'C-0']); // B-8 could not go up, so it only came down
   key('z', { metaKey: true }); expect(notes[0]).toBe('C#4');
 });
 
@@ -345,8 +345,9 @@ it('jumps to the quarter points of the pattern with F9 to F12', () => {
 
 it('asks the sequence to move between steps, add or remove one, and change the pattern a step plays', () => {
   const { key, sequence } = setup();
-  for (const [name, options, action] of [['ArrowUp', { metaKey: true }, 'previous'], ['ArrowDown', { ctrlKey: true }, 'next'], ['Home', { metaKey: true }, 'first'], ['End', { metaKey: true }, 'last'],
-    ['ArrowLeft', { metaKey: true }, 'pattern-previous'], ['ArrowRight', { metaKey: true }, 'pattern-next'], ['Insert', { metaKey: true }, 'new'], ['Delete', { metaKey: true }, 'remove']] as const) {
+  const move = { altKey: true, shiftKey: true };
+  for (const [name, options, action] of [['ArrowUp', move, 'previous'], ['ArrowDown', move, 'next'], ['Home', move, 'first'], ['End', move, 'last'],
+    ['Insert', { metaKey: true }, 'new'], ['Delete', { metaKey: true }, 'remove']] as const) {
     sequence.mockClear(); key(name, options); expect(sequence).toHaveBeenCalledWith(action);
   }
 });
@@ -408,11 +409,24 @@ it('enters OFF with A and a CUT with the minus key, neither with an instrument o
   grid.undo(); expect(column.notes[6]).toBeNull();
 });
 
-it('keeps Cmd+arrows for the sequence, and takes Cmd+Shift+arrows and Cmd+Option+arrows for transposing', () => {
-  const sequence = vi.fn(), { key } = setup(sequence);
-  key('ArrowUp', { metaKey: true }); expect(sequence).toHaveBeenLastCalledWith('previous');
-  sequence.mockClear();
-  key('ArrowUp', { metaKey: true, shiftKey: true }); key('ArrowDown', { metaKey: true, altKey: true }); key('ArrowDown', { metaKey: true, altKey: true, shiftKey: true });
+it('jumps with Cmd/Ctrl+arrows as a spreadsheet does, and selects as it goes with Shift', () => {
+  const sequence = vi.fn(), { project, key, click, parent } = setup(sequence);
+  const notes = project.patterns[0].notes[0][0].notes; notes.fill(null);
+  notes[2] = 'C-4'; notes[3] = 'D-4'; notes[4] = 'E-4'; notes[9] = 'G-4';
+  const cursor = () => { const c = parent.querySelector<HTMLElement>('.cursor')!; return [Number(c.dataset.noteRow), Number(c.dataset.column)]; };
+  click(0, 0);
+  key('ArrowDown', { metaKey: true }); expect(cursor()).toEqual([2, 0]); // across the gap to the first note
+  key('ArrowDown', { metaKey: true }); expect(cursor()).toEqual([4, 0]); // to the end of the run
+  key('ArrowDown', { ctrlKey: true }); expect(cursor()).toEqual([9, 0]);
+  key('ArrowDown', { metaKey: true }); expect(cursor()).toEqual([31, 0]); // nothing more: the last row
+  key('ArrowUp', { metaKey: true, shiftKey: true }); expect(cursor()).toEqual([9, 0]);
+  expect(parent.querySelectorAll('[data-column="0"].range-selected').length).toBe(31 - 9 + 1);
+  key('Home', { metaKey: true }); expect(cursor()).toEqual([0, 0]);
+  key('End', { metaKey: true }); expect(cursor()[0]).toBe(31);
+  key('Home', { metaKey: true }); key('ArrowRight', { metaKey: true }); const edge = cursor()[1]; expect(edge).toBeGreaterThan(0); // the end of the first track
+  key('ArrowRight', { metaKey: true }); expect(cursor()[1]).toBeGreaterThan(edge); // then the next track's start
+  key('ArrowLeft', { metaKey: true }); expect(cursor()[1]).toBe(edge);
+  click(5, 0); key(' ', { ctrlKey: true }); expect(parent.querySelectorAll('[data-column="0"].range-selected').length).toBe(32);
   expect(sequence).not.toHaveBeenCalled();
 });
 
@@ -480,7 +494,7 @@ it('enters absolute MIDI pitch, hardware velocity and instrument as one undoable
 
 it('previews MIDI without editing when record is off, including from an instrument column', () => {
   const { project, grid, parent, edited } = setup(undefined, () => 'tone');
-  grid.setRecording(false); parent.querySelector<HTMLElement>('#cell-4-1-0-inst')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  grid.setRecording(false); parent.querySelector<HTMLElement>('#cell-4-1-0-inst')!.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
   const before = JSON.stringify(project);
   expect(grid.midiNoteOn(60, 100)).toEqual({ note: 'C-4', track: 1, instrument: 'tone', velocity: 100 });
   expect(JSON.stringify(project)).toBe(before); expect(edited).not.toHaveBeenCalled();
@@ -605,28 +619,100 @@ it('gives each track one command column, and adds and removes them for a whole t
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
 });
 
-it('outside record mode a click only marks cells; a double click moves the cursor', () => {
+it('a click moves the cursor in either mode, and drag selects', () => {
   const { grid, parent } = setup();
   grid.setRecording(false);
-  const cell = parent.querySelector<HTMLElement>('[data-note-row="3"][data-column="0"]')!;
-  cell.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 })); cell.click();
-  expect(cell.classList.contains('range-selected')).toBe(true); expect(cell.classList.contains('cursor')).toBe(false);
-  cell.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  const at = (row: number) => parent.querySelector<HTMLElement>(`[data-note-row="${row}"][data-column="0"]`)!;
+  at(3).dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 })); at(3).dispatchEvent(new MouseEvent('pointerup', { bubbles: true }));
   expect(parent.querySelector('[data-note-row="3"][data-column="0"]')!.classList.contains('cursor')).toBe(true);
 });
 
-it('pastes at the cursor outside record mode, from cells marked by a click', () => {
+it('copies a selection and pastes it at the cursor outside record mode', () => {
   const { grid, parent, project, click } = setup();
   click(0, 0); grid.setRecording(false);
-  const cell = parent.querySelector<HTMLElement>('[data-note-row="0"][data-column="0"]')!;
-  cell.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 })); cell.click();
   const copied = clipboard(parent, 'copy'); expect(copied.split('\t')[0]).toBe('C-4');
-  const target = parent.querySelector<HTMLElement>('[data-note-row="5"][data-column="0"]')!;
-  target.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  parent.querySelector<HTMLElement>('#cell-5-0')!.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
   clipboard(parent, 'paste', copied);
   expect(project.patterns[0].notes[0][0].notes[5]).toBe('C-4');
 });
 
+it('draws a line under a note until the next note, OFF or CUT', () => {
+  const { project, grid, parent } = setup();
+  const notes = project.patterns[0].notes[0][0].notes; notes.fill(null);
+  notes[2] = 'C-4'; notes[5] = 'OFF'; notes[7] = 'E-4'; notes[9] = 'CUT'; grid.render();
+  const held = () => [...parent.querySelectorAll('[data-column="0"].held')].map(cell => Number((cell as HTMLElement).dataset.noteRow));
+  expect(held()).toEqual([3, 4, 8]);
+});
+
+it('stops at the edges of the pattern instead of wrapping', () => {
+  const { grid, parent, key } = setup();
+  key('ArrowUp'); key('ArrowLeft');
+  expect(parent.querySelector('[data-note-row="0"][data-column="0"]')!.classList.contains('cursor')).toBe(true);
+  grid.render();
+});
+
+it('opens a menu of selection actions on right click, which edit only in record mode', () => {
+  const { project, parent, feedback, grid } = setup();
+  const notes = project.patterns[0].notes[0][0].notes; notes.fill(null); notes[2] = 'C-4'; grid.render();
+  const cell = parent.querySelector<HTMLElement>('[data-note-row="2"][data-column="0"]')!;
+  cell.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  const item = (text: string) => [...document.querySelectorAll<HTMLButtonElement>('.menu button')].find(b => b.textContent!.startsWith(text))!;
+  item('Transpose up an octave').click(); expect(notes[2]).toBe('C-5');
+  parent.querySelector<HTMLElement>('[data-note-row="2"][data-column="0"]')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  grid.setRecording(false); item('Clear').click();
+  expect(notes[2]).toBe('C-5'); expect(feedback).toHaveBeenCalledWith('Turn on record mode (Esc) to edit.');
+});
+
+it('opens a menu on a track header, with what the owner adds', () => {
+  const { project, parent, grid } = setup();
+  const duplicate = vi.fn(); grid.trackMenu = () => [{ text: 'Duplicate', run: duplicate }];
+  parent.querySelector<HTMLElement>('.track-header[data-track="1"]')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  const item = (text: string) => [...document.querySelectorAll<HTMLButtonElement>('.menu button')].find(b => b.textContent === text)!;
+  expect(['Rename', 'Colour…', 'Mute', 'Solo', 'Columns…', 'Duplicate'].every(text => item(text))).toBe(true);
+  item('Mute').click(); expect(project.tracks[1].muted).toBe(true);
+  parent.querySelector<HTMLElement>('.track-header[data-track="1"]')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  item('Duplicate').click(); expect(duplicate).toHaveBeenCalled();
+});
+
+describe('dragging a selection', () => {
+  const cell = (parent: HTMLElement, row: number, column = 0) => parent.querySelector<HTMLElement>(`[data-note-row="${row}"][data-column="${column}"]`)!;
+  const drag = (parent: HTMLElement, from: HTMLElement, to: HTMLElement, options: MouseEventInit = {}) => {
+    from.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+    const original = document.elementFromPoint; document.elementFromPoint = () => to;
+    parent.dispatchEvent(new MouseEvent('pointermove', { bubbles: true }));
+    document.elementFromPoint = original;
+    parent.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, ...options }));
+  };
+  function selected() {
+    const t = setup(); const notes = t.project.patterns[0].notes[0][0].notes; notes.fill(null);
+    notes[0] = 'C-4'; notes[1] = 'E-4'; t.grid.render();
+    t.click(0, 0); t.key('ArrowDown', { shiftKey: true });
+    return { ...t, notes };
+  }
+  it('moves the cells and leaves blanks behind, in one undo step', () => {
+    const { parent, notes, grid } = selected();
+    drag(parent, cell(parent, 0), cell(parent, 4));
+    expect(notes[0]).toBeNull(); expect(notes[1]).toBeNull(); expect(notes[4]).toBe('C-4'); expect(notes[5]).toBe('E-4');
+    grid.undo(); expect(notes[0]).toBe('C-4'); expect(notes[4]).toBeNull();
+  });
+  it('copies with Alt', () => {
+    const { parent, notes } = selected();
+    drag(parent, cell(parent, 1), cell(parent, 5), { altKey: true });
+    expect(notes[0]).toBe('C-4'); expect(notes[4]).toBe('C-4'); expect(notes[5]).toBe('E-4');
+  });
+  it('handles a move that overlaps itself', () => {
+    const { parent, notes } = selected();
+    drag(parent, cell(parent, 0), cell(parent, 1));
+    expect(notes[0]).toBeNull(); expect(notes[1]).toBe('C-4'); expect(notes[2]).toBe('E-4');
+  });
+  it('stops at the pattern bounds, and a plain click inside the selection only moves the cursor', () => {
+    const { parent, notes } = selected();
+    drag(parent, cell(parent, 0), cell(parent, 0));
+    expect(notes[0]).toBe('C-4'); expect(parent.querySelector('[data-note-row="0"][data-column="0"]')!.classList.contains('cursor')).toBe(true);
+    drag(parent, cell(parent, 0), cell(parent, 31));
+    expect(notes[0]).toBe('C-4'); expect(notes[30]).toBeNull();
+  });
+});
 
 function stripSetup() {
   const parent = document.createElement('div'); parent.tabIndex = 0; document.body.append(parent);

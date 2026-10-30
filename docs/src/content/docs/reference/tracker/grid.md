@@ -17,13 +17,23 @@ Enter notes on the keyboard as a piano: the **Z** row (**Z S X D C V G B H N J M
 
 **Record mode** (**● Rec** in the toolbar, or **Escape** from anywhere) controls editing. With it off, note keys play the selected instrument from any grid column, including during playback, and typing, Delete, cut and value editing do nothing. With it on, a red frame surrounds the grid and notes and values are entered at the cursor. Corner brackets and a tinted header always mark the selected track.
 
-The cursor's row is highlighted across every track, and the grid scrolls to keep it in the middle of the view. With record mode on, a click moves the cursor to that cell and centres its row. With it off, a click only marks cells (red) so you can copy them with **Cmd/Ctrl+C**, and drag or shift-click marks a block; the cursor stays where it is and the grid does not scroll. **Double-click** a cell to move the cursor there and centre it, then paste with **Cmd/Ctrl+V**, which works with record mode off too. Pressing a key clears the marked cells.
+The cursor's row is highlighted across every track, and the grid scrolls to keep it in the middle of the view. A click moves the cursor to that cell in either mode, and dragging or shift-clicking selects a block. With record mode on, a click on a command, velocity or other value cell also starts editing it. The arrows stop at the edges of the pattern and the columns rather than wrapping round.
+
+**Follow** (in the toolbar) decides what the grid does while the song plays. Ticked, the pattern changes with the song and the cursor is the play position: it moves down the pattern with the music, the grid scrolls beneath it, and when you stop it stays on the row where playback ended. In record mode notes land on the nearest row as it passes. Unticked, the cursor stays where you put it: move around and edit freely while the music loops.
+
+**Space** plays the pattern from its first row and **Shift+Space** from the cursor's row. Both loop the pattern.
+
+## Moving and copying cells
+
+In record mode, drag a block of selected cells to move it: grab any cell inside the selection and drop it where you want it, and the notes and values go with it, leaving blanks behind. Hold **Alt/Option** as you let go to copy instead. The block stays inside the pattern and over columns of the same kind, so a note never lands in a velocity column, and one undo step reverses the move. A plain click inside a selection just puts the cursor there.
+
+**Right-click** a cell for a menu of what you can do with the selection (copy, paste, clear, transpose, interpolate, repeat below, reverse, randomize), with the keys beside each item. Everything but copy needs record mode on, and says so if it is off.
 
 ## How long a note lasts
 
 Notes are held until the next note, an **OFF** or a **CUT** in the same column. Press **A** in a note column to enter an OFF, which lets the note release (an instrument with a release stage fades out), or the **minus** key to enter a CUT, which stops it at once with no release. Neither takes an instrument or makes a sound as you enter it, and both advance by the Step like a note.
 
-There is no fixed note length, so leave a gap with OFF for staccato. A looped pattern holds a lone note for the whole pattern, and a song holds the last note until it ends.
+A faint line (│) runs down the empty rows of a note column for as long as its note sounds, up to the next note, OFF or CUT, so you can see where notes end and where they run on. There is no fixed note length, so leave a gap with OFF for staccato. A looped pattern holds a lone note for the whole pattern, and a song holds the last note until it ends.
 
 ## Note columns and sub-columns
 

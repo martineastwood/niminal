@@ -1100,6 +1100,17 @@ impl Playback {
         self.seconds.borrow()[index] + self.row_seconds(index as u64, row.fract())
     }
 
+    /// Starts on `row`, which sounds at sample `begin`: the rows before it are skipped.
+    pub fn start_at(&mut self, row: u64, begin: u64, sample_rate: f64) {
+        self.next_row = row;
+        self.origin = begin.saturating_sub((self.seconds_at(row as f64) * sample_rate).round() as u64);
+    }
+
+    /// The length in rows of the pattern being looped.
+    pub fn pattern_rows(&self) -> Option<usize> {
+        self.song.patterns.iter().find(|p| p.id == self.pattern_id).map(|p| p.rows)
+    }
+
     pub fn row_at(&self, index: u64, sample_rate: f64) -> u64 {
         self.origin + (self.seconds_at(index as f64) * sample_rate).round() as u64
     }
@@ -1788,6 +1799,16 @@ mod tests {
         assert_eq!(play.position(18000, 48000.0).unwrap().row, 0);
         play.set_loop(None, 18000, 48000.0);
         assert_eq!(play.row_at(3, 48000.0), 24000);
+    }
+
+    #[test]
+    fn a_pattern_can_start_part_way_through() {
+        let mut song = song(); song.bpm = 120.0;
+        let mut play = Playback::new(0, song, Mode::Pattern, "a".into(), 0).unwrap();
+        assert_eq!(play.pattern_rows(), Some(2));
+        play.start_at(1, 100_000, 48000.0);
+        assert_eq!(play.row_at(1, 48000.0), 100_000);
+        assert_eq!(play.position(100_000, 48000.0).unwrap().row, 1);
     }
 
     #[test]

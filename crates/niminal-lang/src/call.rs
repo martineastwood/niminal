@@ -79,7 +79,7 @@ pub(crate) fn build_args<S>(
     konst: impl Fn(&S) -> Option<f64>,
     channel: usize,
     salt: u32,
-) -> BuildArgs {
+) -> Result<BuildArgs, String> {
     let mut build = BuildArgs {
         channel,
         salt,
@@ -88,14 +88,19 @@ pub(crate) fn build_args<S>(
     for (param, val) in spec.params.iter().zip(vals) {
         match val {
             Some(ArgVal::Wave(w)) => build.wave = Some(w.clone()),
-            Some(ArgVal::Tables(t)) => build.table = Some(t[channel % t.len()].clone()),
+            Some(ArgVal::Tables(t)) => {
+                build.table = Some(t[channel % t.len()].clone());
+                build.tables.insert(param.name.clone(), t.clone());
+            }
             Some(ArgVal::Sig(s)) => {
                 if let Some(k) = konst(s) {
                     build.consts.insert(param.name.clone(), k);
+                } else if !param.wired {
+                    return Err(format!("`{}` must be known while compiling", param.name));
                 }
             }
             Some(ArgVal::Layout(_) | ArgVal::Array(_)) | None => {}
         }
     }
-    build
+    Ok(build)
 }

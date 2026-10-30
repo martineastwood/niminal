@@ -199,10 +199,7 @@ impl Session {
                 Op::Note { dur, args, .. } => (*dur, Some(args)),
                 Op::Set { glide, args, .. } => (*glide, Some(args)),
                 Op::Control { glide, unit, .. } => {
-                    if unit
-                        .as_deref()
-                        .is_some_and(|u| u == "bpm")
-                    {
+                    if unit.as_deref().is_some_and(|u| u == "bpm") {
                         invalid.push(problem_at(index, "`bpm` is not a unit a control takes"));
                     }
                     (*glide, None)
@@ -558,7 +555,10 @@ impl Session {
                     } else {
                         self.pending
                             .iter()
-                            .find(|p| p.lands_at > at && p.program.controls.iter().any(|c| c.name == *name))
+                            .find(|p| {
+                                p.lands_at > at
+                                    && p.program.controls.iter().any(|c| c.name == *name)
+                            })
                             .map_or(at, |p| p.lands_at)
                     };
                     let program = self.program_at(at);
@@ -585,12 +585,17 @@ impl Session {
                     linked.insert(
                         name.clone(),
                         musical.then(|| {
-                            let per_unit = if unit.as_deref().is_some_and(|u| u.starts_with("bar")) {
+                            let per_unit = if unit.as_deref().is_some_and(|u| u.starts_with("bar"))
+                            {
                                 clock_state.beats_per_bar
                             } else {
                                 1.0
                             };
-                            Link { client, beats: value * per_unit, node: false }
+                            Link {
+                                client,
+                                beats: value * per_unit,
+                                node: false,
+                            }
                         }),
                     );
                     let seconds = glide.map_or(def.smooth_seconds, |g| g.to_seconds(program.tempo));
@@ -685,11 +690,13 @@ impl Session {
                     let mut kept: Vec<_> = kept.into_iter().collect();
                     kept.sort_by(|a, b| a.0.cmp(b.0));
                     for (name, link) in kept {
-                        let Some(def) = program
-                            .controls
-                            .iter()
-                            .find(|c| if link.node { c.key == *name } else { c.name == *name })
-                        else {
+                        let Some(def) = program.controls.iter().find(|c| {
+                            if link.node {
+                                c.key == *name
+                            } else {
+                                c.name == *name
+                            }
+                        }) else {
                             continue;
                         };
                         let Ok(value) = def.convert(link.beats, Some("beats"), tempo) else {
@@ -697,7 +704,13 @@ impl Session {
                         };
                         let frames = (def.smooth_seconds * rate).round() as u64;
                         if link.node {
-                            plans.push(Plan::Node { key: name.clone(), value, frames, at: start, tag: tag.clone() });
+                            plans.push(Plan::Node {
+                                key: name.clone(),
+                                value,
+                                frames,
+                                at: start,
+                                tag: tag.clone(),
+                            });
                         } else {
                             controls += 1;
                             plans.push(Plan::Control {
@@ -823,12 +836,18 @@ impl Session {
                                 _ => None,
                             })
                             .collect();
-                        let start = if ids.iter().all(|id| self.routing_at(start).has_node(client, id)) {
+                        let start = if ids
+                            .iter()
+                            .all(|id| self.routing_at(start).has_node(client, id))
+                        {
                             start
                         } else {
                             self.pending
                                 .iter()
-                                .find(|p| p.lands_at > start && ids.iter().all(|id| p.routing.has_node(client, id)))
+                                .find(|p| {
+                                    p.lands_at > start
+                                        && ids.iter().all(|id| p.routing.has_node(client, id))
+                                })
                                 .map_or(start, |p| p.lands_at)
                         };
                         // a length in beats or bars is kept to them, as it is for a control
@@ -1829,7 +1848,11 @@ fn in_seconds(
             }
             linked.insert(
                 crate::routing::param_key(client, id, param),
-                beats.map(|beats| Link { client, beats, node: true }),
+                beats.map(|beats| Link {
+                    client,
+                    beats,
+                    node: true,
+                }),
             );
         }
     }

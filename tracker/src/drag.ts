@@ -1,5 +1,5 @@
 /** What a row of the sound browser carries when it is dragged. */
-export interface Dragged { kind: 'instr' | 'sample' | 'fx'; value: string; name: string }
+export interface Dragged { kind: 'instr' | 'sample' | 'fx' | 'track' | 'step'; value: string; name: string }
 
 const threshold = 5;
 const targets = new WeakMap<Element, { accept: (item: Dragged) => boolean; drop: (item: Dragged, target: Element) => void }>();
