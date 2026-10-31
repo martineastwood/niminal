@@ -1,0 +1,40 @@
+// Hear two sources, then follow their harmonics as a bowed A3 becomes a breathing, vowel-like C4.
+// Unlike spectral_morph.nml, matching partials can glide between different FFT regions.
+// Evaluate the whole file in VS Code; + times restart the demonstration from this submission.
+// niminal-live render examples/partial_morph.nml --out /tmp/partial_morph.wav
+config { channels: stereo }
+tempo 100bpm
+
+instr transformation(mode: 0..2 = 2) {
+  // A: a rounded bow, with a stable fundamental and gently opening upper harmonics.
+  bow = osc(tri, a3) * 0.7 + osc(saw, a3) * 0.3
+  source_a = bow.lpf(cutoff: env[900hz 200ms 2400hz]) * 0.4
+
+  // B: a brighter note a minor third above, with broad vowel resonances and a little breath.
+  reed = osc(saw, c4) * 0.7 + osc(tri, c4) * 0.3
+  body = (reed * 0.6 + reed.bpf(cutoff: 900hz, res: 0.45) * 0.8
+    + reed.bpf(cutoff: 2200hz, res: 0.4) * 0.4).lpf(cutoff: 5khz)
+  breathing = lfo((1 / (2beats).num).hz).unipolar.range(0.55..1)
+  air = noise(seed: 89).hpf(cutoff: 2500hz).lpf(cutoff: 7khz) * 0.008
+  source_b = (body * 0.4 + air) * breathing
+
+  // First two beats: tracked A. Over four beats, matched partials glide to B's pitches
+  // while their strengths blend to B's colour. The two controls can also move separately.
+  magnitude = env[0 2beats 0 4beats 1]
+  frequency = env[0 2beats 0 4beats 1 2beats 1 2beats 0]
+  // Capture both banks once B has arrived. The last two beats bring its held colour back
+  // toward A3: matched pitches return to A while magnitude remains at B. No sample is replayed.
+  // Unmatched components keep their own pitch, as in the rest of the transformation.
+  freeze = env[0 6beats 0 1ms 1]
+  changed = partial_morph(source_a, source_b, magnitude: magnitude, frequency: frequency,
+    freeze: freeze, count: 24, threshold: 0.025, size: 2048, overlap: 8, max_tracks: 48)
+
+  // Modes 0 and 1 audition the original sources; mode 2 plays the tracked transformation.
+  // This resynthesizes tonal partials. The original breath is not a separately preserved layer.
+  voice = source_a * (mode == 0) + source_b * (mode == 1) + changed * (mode == 2)
+  out = (voice + voice.reverb(room: 0.3, damp: 0.7) * 0.08).pan(azimuth: 0deg) * env[0 100ms 1 | 400ms 0]
+}
+
+transformation(mode: 0) for 2beats          // Learn the rounded A3 source.
+at +3beats transformation(mode: 1) for 2beats // Learn the brighter, breathing C4 source.
+at +6beats transformation() for 10beats     // A -> B, capture, then bring matched pitches back to A.

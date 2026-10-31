@@ -15,8 +15,8 @@ type Row = {
   clip: Clip;
   element: HTMLElement;
   playhead: HTMLElement;
-  notes: NoteElement[];
-  parameters: NoteElement[];
+  /** Every event drawn in its lanes, lit while it sounds. */
+  events: NoteElement[];
   /** The countdown to a queued start or stop, if there is one. */
   eta: HTMLElement | null;
   /** How loud the clip is. */
@@ -136,8 +136,8 @@ export class LaneView {
         '<strong>No engine yet</strong><span>The stage looks for one on the port above. Start one with <code>niminal server</code>, then connect.</span>';
       const connect = button('Connect', 'Look for the engine again', 'connect');
       connect.classList.add('ready-connect');
+      connect.addEventListener('click', () => this.onAction('connect'));
       empty.append(connect);
-      this.wire(empty);
       this.root.append(empty);
       return;
     }
@@ -178,13 +178,6 @@ export class LaneView {
       list.append(text('dt', '', keys), text('dd', '', what));
     }
     return list;
-  }
-
-  /** Make the buttons in `node` do their action, as a clip's buttons do. */
-  private wire(node: HTMLElement) {
-    node.querySelectorAll<HTMLElement>('button[data-action]').forEach(item => {
-      item.addEventListener('click', () => this.onAction(item.dataset.action ?? ''));
-    });
   }
 
   private row(clip: Clip, index: number) {
@@ -245,9 +238,8 @@ export class LaneView {
     });
     article.append(head);
 
-    const notes: NoteElement[] = [];
-    const parameters: NoteElement[] = [];
-    let playhead = element('div', 'playhead');
+    const events: NoteElement[] = [];
+    const playhead = element('div', 'playhead');
     if (open) {
       const detail = element('div', 'clip-detail');
       const loop = clip.endless
@@ -262,21 +254,17 @@ export class LaneView {
       if (!noteLane) {
         lanes.append(text('div', 'clip-empty', clip.running ? 'playing from keys' : 'no lanes'));
       } else {
-        lanes.append(this.lane(noteLane, window, true, clip));
+        lanes.append(this.lane(noteLane, window, true, clip, events));
         for (const lane of clip.lanes) {
-          if (lane !== noteLane) lanes.append(this.lane(lane, window, false, clip));
+          if (lane !== noteLane) lanes.append(this.lane(lane, window, false, clip, events));
         }
       }
       playhead.append(element('span', 'playhead-dot'));
-      gates(lanes).append(playhead);
+      const gates = element('div', 'clip-gates');
+      gates.append(playhead);
+      lanes.append(gates);
       detail.append(lanes);
       article.append(detail);
-      for (const node of article.querySelectorAll<HTMLElement>('.event')) {
-        notes.push({ element: node, start: Number(node.dataset.start), dur: Number(node.dataset.dur) });
-      }
-      for (const node of article.querySelectorAll<HTMLElement>('.param-event')) {
-        parameters.push({ element: node, start: Number(node.dataset.start), dur: Number(node.dataset.dur) });
-      }
     }
 
     article.querySelectorAll<HTMLElement>('button[data-action]').forEach(node => {
@@ -287,7 +275,7 @@ export class LaneView {
       });
     });
 
-    const row: Row = { clip, element: article, playhead, notes, parameters, eta, bar, active: new Set(), cycle: -1 };
+    const row: Row = { clip, element: article, playhead, events, eta, bar, active: new Set(), cycle: -1 };
     this.rows.set(clip.name, row);
     return article;
   }
@@ -317,7 +305,7 @@ export class LaneView {
     return box;
   }
 
-  private lane(lane: Lane, window: number, notes: boolean, clip: Clip) {
+  private lane(lane: Lane, window: number, notes: boolean, clip: Clip, events: NoteElement[]) {
     const wrap = element('div', notes ? 'lane notes-lane' : 'lane param-lane');
     wrap.append(text('span', 'lane-name', lane.name));
     const track = element('div', 'lane-track');
@@ -325,8 +313,7 @@ export class LaneView {
     track.style.backgroundSize = `${100 / cycles}% 100%`;
     for (const event of lane.events) {
       const node = bar(lane, event, window, notes);
-      node.dataset.start = String(event.start);
-      node.dataset.dur = String(event.dur);
+      events.push({ element: node, start: event.start, dur: event.dur });
       track.append(node);
     }
     if (lane.truncated) {
@@ -378,10 +365,7 @@ export class LaneView {
       row.playhead.style.opacity = '1';
       row.playhead.style.left = `${(phase / window) * 100}%`;
       const active = new Set<HTMLElement>();
-      for (const note of row.notes) {
-        if (isSounding(clip, note, cycles)) active.add(note.element);
-      }
-      for (const note of row.parameters) {
+      for (const note of row.events) {
         if (isSounding(clip, note, cycles)) active.add(note.element);
       }
       for (const node of row.active) if (!active.has(node)) node.classList.remove('active');
@@ -391,13 +375,4 @@ export class LaneView {
       row.active = active;
     }
   }
-}
-
-function gates(parent: HTMLElement) {
-  let gate = parent.querySelector<HTMLElement>('.clip-gates');
-  if (!gate) {
-    gate = element('div', 'clip-gates');
-    parent.append(gate);
-  }
-  return gate;
 }

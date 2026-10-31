@@ -6,7 +6,6 @@ import { Clip, Snapshot } from './live';
 function snapshot(overrides: Partial<Snapshot>): Snapshot {
   return {
     connected: true,
-    revision: 0,
     transport: null,
     beats_per_bar: 4,
   meter: [4, 4],
@@ -22,7 +21,6 @@ function snapshot(overrides: Partial<Snapshot>): Snapshot {
     health: null,
     learned: [],
     midi: { inputs: [], last: null },
-    error: null,
     ...overrides,
   };
 }

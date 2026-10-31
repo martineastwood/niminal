@@ -1,4 +1,4 @@
-import { invoke, isTauri } from '@tauri-apps/api/core';
+import { invoke } from '@tauri-apps/api/core';
 
 export type LaneEvent = {
   start: number;
@@ -60,7 +60,6 @@ export type Transport = {
 
 export type Snapshot = {
   connected: boolean;
-  revision: number;
   transport: Transport | null;
   beats_per_bar: number;
   meter: [number, number];
@@ -81,13 +80,10 @@ export type Snapshot = {
     starved_frames: number;
     deadline_misses: number;
     capacity_drops: number;
-    max_render_micros: number;
   } | null;
-  /** Every control, with its range and what drives it. */
   /** Controls that took a MIDI control change since the last snapshot. */
   learned: { control: string; source: string }[];
   midi: { inputs: string[]; last: string | null };
-  error: string | null;
 };
 
 export type Accepted = {
@@ -112,7 +108,6 @@ export type EvalOutcome = {
 
 export type OpenedFile = {
   path: string;
-  dir: string;
   source: string;
 };
 
@@ -129,12 +124,7 @@ export type Action = {
   change?: string;
 };
 
-const desktop = isTauri();
-
 export const stage = {
-  get desktop() {
-    return desktop;
-  },
   async connect(port: number, token: string) {
     await invoke<void>('connect', { port, token: token || null });
     // a missing MIDI device must not stop the stage
@@ -212,11 +202,7 @@ export function windowOf(clip: Clip) {
 /** Where in the drawn window the clip is, at `cycles` since it started. */
 export function phaseOf(clip: Clip, cycles: number) {
   const window = windowOf(clip);
-  if (!clip.endless) {
-    const phase = cycles % window;
-    return phase < 0 ? phase + window : phase;
-  }
-  return cycles % window;
+  return ((cycles % window) + window) % window;
 }
 
 /**
@@ -239,23 +225,6 @@ export function isSounding(clip: Clip, event: { start: number; dur: number }, cy
   const age = sinceOnset(clip, event, cycles);
   const flash = Math.max(event.dur, windowOf(clip) * 0.06);
   return age !== null && age < flash;
-}
-
-/** A stable description of everything the lane view draws, so it is only rebuilt when that changes. */
-export function laneSignature(clips: Clip[]) {
-  return JSON.stringify(
-    clips.map(clip => [
-      clip.name,
-      clip.instrument,
-      clip.running,
-      clip.muted,
-      clip.soloed,
-      clip.edits,
-      clip.length,
-      clip.endless,
-      clip.lanes.map(lane => [lane.name, lane.events.map(event => [event.start, event.dur, event.value])]),
-    ]),
-  );
 }
 
 /** How many beats until sample `landsAt`, with `elapsed` seconds gone since the snapshot was taken. */

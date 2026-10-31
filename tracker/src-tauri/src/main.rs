@@ -1,7 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
-mod browse;
 mod commands;
 mod files;
 mod midi;
@@ -22,8 +21,12 @@ use tauri::{
     menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
 };
 
-#[derive(Default, Clone)]
-struct LanguageServer(Arc<Mutex<niminal_lsp::Server>>);
+type LanguageServer = Arc<Mutex<niminal_lsp::Server>>;
+
+/// Run `work` off the window thread.
+async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work).await.map_err(|e| e.to_string())
+}
 
 // The same LSP implementation as `niminal-live lsp`, without stdio framing or a child
 // process. Keep compilation off the window thread; the frontend orders messages.
@@ -33,12 +36,9 @@ async fn lsp_message(
     server: tauri::State<'_, LanguageServer>,
 ) -> Result<Vec<Value>, String> {
     let server = server.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut server = server.0.lock().map_err(|e| e.to_string())?;
-        Ok(server.handle(&message))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || {
+        Ok(server.lock().map_err(|e| e.to_string())?.handle(&message))
+    }).await?
 }
 
 /// Asks a yes or no question in a native dialog.
@@ -96,9 +96,7 @@ async fn import_samples(app: tauri::AppHandle, id: String) -> Result<Vec<Importe
         return Ok(vec![]);
     };
     let paths: Vec<_> = picked.iter().map(|f| f.path().to_path_buf()).collect();
-    tauri::async_runtime::spawn_blocking(move || import_files(&dir, &paths))
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(move || import_files(&dir, &paths)).await?
 }
 
 /// What was dropped on the window, without anything that is not an audio file.
@@ -112,9 +110,7 @@ fn audio_files(mut paths: Vec<PathBuf>) -> Result<Vec<PathBuf>, String> {
 async fn import_dropped(app: tauri::AppHandle, id: String, paths: Vec<PathBuf>) -> Result<Vec<ImportedSample>, String> {
     let dir = files::project_dir(&app_data(&app)?, &id)?;
     let paths = audio_files(paths)?;
-    tauri::async_runtime::spawn_blocking(move || import_files(&dir, &paths))
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(move || import_files(&dir, &paths)).await?
 }
 
 /// Deletes the samples of the project that no instrument plays, after asking. `code` is everything in the project that
@@ -122,7 +118,7 @@ async fn import_dropped(app: tauri::AppHandle, id: String, paths: Vec<PathBuf>) 
 #[tauri::command]
 async fn clean_samples(app: tauri::AppHandle, id: String, code: String) -> Result<usize, String> {
     let dir = files::project_dir(&app_data(&app)?, &id)?;
-    let unused = { let dir = dir.clone(); tauri::async_runtime::spawn_blocking(move || files::unused_samples(&dir, &code)).await.map_err(|e| e.to_string())? };
+    let unused = { let dir = dir.clone(); blocking(move || files::unused_samples(&dir, &code)).await? };
     if unused.is_empty() {
         return Ok(0);
     }
@@ -138,25 +134,20 @@ async fn clean_samples(app: tauri::AppHandle, id: String, code: String) -> Resul
         return Ok(0);
     }
     let count = unused.len();
-    tauri::async_runtime::spawn_blocking(move || files::delete_samples(&dir, &unused)).await.map_err(|e| e.to_string())??;
+    blocking(move || files::delete_samples(&dir, &unused)).await??;
     Ok(count)
 }
 
 /// The audio files under a folder of the sample library.
 #[tauri::command]
 async fn list_library(dir: String) -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || browse::list(std::path::Path::new(&dir)))
-        .await
-        .map_err(|e| e.to_string())
+    blocking(move || niminal_lang::files_under(std::path::Path::new(&dir), niminal_lang::is_audio)).await
 }
 
 /// A sample of the library as WAV bytes, for the window to audition.
 #[tauri::command]
 async fn read_sample(path: String) -> Result<tauri::ipc::Response, String> {
-    let bytes = tauri::async_runtime::spawn_blocking(move || browse::read(std::path::Path::new(&path)))
-        .await
-        .map_err(|e| e.to_string())??;
-    Ok(tauri::ipc::Response::new(bytes))
+    blocking(move || niminal_lang::audition_wav(std::path::Path::new(&path))).await?.map(tauri::ipc::Response::new)
 }
 
 /// Asks for the folder the sample library shows.
@@ -173,10 +164,10 @@ struct ImportedKit {
 }
 
 /// Copies audio files into a kit folder of the project, named for the folder they came from.
-fn import_kit_files(dir: &std::path::Path, paths: &[PathBuf]) -> Result<Option<ImportedKit>, String> {
+fn import_kit_files(dir: &std::path::Path, paths: &[PathBuf]) -> Result<ImportedKit, String> {
     let name = paths.first().and_then(|p| p.parent()).and_then(|p| p.file_name()).and_then(|n| n.to_str()).unwrap_or("kit");
     let (folder, members) = files::import_kit(dir, paths, name)?;
-    Ok(Some(ImportedKit { folder, members }))
+    Ok(ImportedKit { folder, members })
 }
 
 /// Asks for audio files and copies them into a kit folder of the project, named for the folder they came from.
@@ -192,28 +183,22 @@ async fn import_kit(app: tauri::AppHandle, id: String) -> Result<Option<Imported
         return Ok(None);
     };
     let paths: Vec<_> = picked.iter().map(|f| f.path().to_path_buf()).collect();
-    tauri::async_runtime::spawn_blocking(move || import_kit_files(&dir, &paths))
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(move || import_kit_files(&dir, &paths).map(Some)).await?
 }
 
 /// Copies audio files that were dropped on the window into a kit folder of the project.
 #[tauri::command]
-async fn import_dropped_kit(app: tauri::AppHandle, id: String, paths: Vec<PathBuf>) -> Result<Option<ImportedKit>, String> {
+async fn import_dropped_kit(app: tauri::AppHandle, id: String, paths: Vec<PathBuf>) -> Result<ImportedKit, String> {
     let dir = files::project_dir(&app_data(&app)?, &id)?;
     let paths = audio_files(paths)?;
-    tauri::async_runtime::spawn_blocking(move || import_kit_files(&dir, &paths))
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(move || import_kit_files(&dir, &paths)).await?
 }
 
 /// The waveform of an imported sample, for drawing.
 #[tauri::command]
 async fn sample_peaks(app: tauri::AppHandle, id: String, file: String, buckets: usize) -> Result<slicing::Peaks, String> {
     let dir = files::project_dir(&app_data(&app)?, &id)?;
-    tauri::async_runtime::spawn_blocking(move || slicing::peaks(&dir, &file, buckets))
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(move || slicing::peaks(&dir, &file, buckets)).await?
 }
 
 /// Opens a project's `project.json`, bringing along the `samples` folder beside it.
@@ -228,7 +213,7 @@ async fn open_project(app: tauri::AppHandle) -> Result<Option<String>, String> {
     };
     let path = file.path().to_path_buf();
     let base = app_data(&app)?;
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
         if let Ok(project) = serde_json::from_str::<Value>(&text)
             && let Some(id) = project["id"].as_str()
@@ -238,18 +223,14 @@ async fn open_project(app: tauri::AppHandle) -> Result<Option<String>, String> {
             files::copy_samples(&parent.join("samples"), &dir.join("samples"))?;
         }
         Ok(Some(text))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    }).await?
 }
 
 /// Where the hits of an imported sample begin, as shares of its length, for cutting it into pieces there.
 #[tauri::command]
 async fn detect_slices(app: tauri::AppHandle, id: String, file: String, max: usize, sensitivity: Option<f32>) -> Result<Vec<f64>, String> {
     let dir = files::project_dir(&app_data(&app)?, &id)?;
-    tauri::async_runtime::spawn_blocking(move || slicing::detect(&dir, &file, max, sensitivity.unwrap_or(0.5)))
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(move || slicing::detect(&dir, &file, max, sensitivity.unwrap_or(0.5))).await?
 }
 
 /// Asks where to write an exported WAV; None if the dialog is dismissed.
@@ -275,14 +256,12 @@ async fn save_project(app: tauri::AppHandle, source: String, id: String) -> Resu
         return Ok(false);
     };
     let target = file.path().to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
         std::fs::write(target.join("project.json"), source).map_err(|e| e.to_string())?;
         files::copy_samples(&dir.join("samples"), &target.join("samples"))?;
         Ok(true)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    }).await?
 }
 
 /// The menu bar. Items send their id to the page as a `menu` event, which does the work, so the

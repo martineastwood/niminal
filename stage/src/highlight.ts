@@ -1,4 +1,4 @@
-import { ChangeSet, StateEffect, StateField } from '@codemirror/state';
+import { ChangeSet, StateEffect, StateEffectType, StateField, Text } from '@codemirror/state';
 import { Decoration, DecorationSet, EditorView } from '@codemirror/view';
 import { Problem, Snapshot, sinceOnset } from './live';
 import { sceneStates } from './scenes';
@@ -39,8 +39,9 @@ function unitMap(text: string): (byte: number) => number {
   const map = new Uint32Array(bytes.length + 1);
   let byte = 0;
   let unit = 0;
+  const encoder = new TextEncoder();
   for (const char of text) {
-    const size = new TextEncoder().encode(char).length;
+    const size = encoder.encode(char).length;
     for (let i = 0; i < size; i++) map[byte + i] = unit;
     byte += size;
     unit += char.length;
@@ -78,50 +79,40 @@ const drift = StateField.define<Map<number, Drift>>({
   },
 });
 
-const hits = StateField.define<DecorationSet>({
-  create: () => Decoration.none,
-  update(value, tr) {
-    for (const effect of tr.effects) if (effect.is(lit)) return effect.value;
-    return tr.docChanged ? value.map(tr.changes) : value;
-  },
-  provide: field => EditorView.decorations.from(field),
-});
+/** Decorations that `set` replaces, which follow the text as it is edited; with `clearOnEval`, an evaluation clears them. */
+function decorations(set: StateEffectType<DecorationSet>, clearOnEval = false) {
+  return StateField.define<DecorationSet>({
+    create: () => Decoration.none,
+    update(value, tr) {
+      for (const effect of tr.effects) {
+        if (effect.is(set)) return effect.value;
+        if (clearOnEval && effect.is(evaluated)) return Decoration.none;
+      }
+      return tr.docChanged ? value.map(tr.changes) : value;
+    },
+    provide: field => EditorView.decorations.from(field),
+  });
+}
 
+const hits = decorations(lit);
 /** Lines of code just evaluated, shown briefly so it is clear what was sent. */
 const flashed = StateEffect.define<DecorationSet>();
-const flash = StateField.define<DecorationSet>({
-  create: () => Decoration.none,
-  update(value, tr) {
-    for (const effect of tr.effects) if (effect.is(flashed)) return effect.value;
-    return tr.docChanged ? value.map(tr.changes) : value;
-  },
-  provide: field => EditorView.decorations.from(field),
-});
-
+const flash = decorations(flashed);
 /** The `clip` and `scene` header lines, marked with whether they are playing, muted or waiting to start. */
 const marked = StateEffect.define<DecorationSet>();
-const headers = StateField.define<DecorationSet>({
-  create: () => Decoration.none,
-  update(value, tr) {
-    for (const effect of tr.effects) if (effect.is(marked)) return effect.value;
-    return tr.docChanged ? value.map(tr.changes) : value;
-  },
-  provide: field => EditorView.decorations.from(field),
-});
-
+const headers = decorations(marked);
 /** Where the last evaluation went wrong, underlined until the next one. */
 const refused = StateEffect.define<DecorationSet>();
-const refusals = StateField.define<DecorationSet>({
-  create: () => Decoration.none,
-  update(value, tr) {
-    for (const effect of tr.effects) {
-      if (effect.is(refused)) return effect.value;
-      if (effect.is(evaluated)) return Decoration.none;
-    }
-    return tr.docChanged ? value.map(tr.changes) : value;
-  },
-  provide: field => EditorView.decorations.from(field),
-});
+const refusals = decorations(refused, true);
+
+/** The start of each line from the one holding `from` to the one holding `to`. */
+function lineStarts(doc: Text, from: number, to: number) {
+  const starts = [];
+  for (let n = doc.lineAt(Math.min(from, doc.length)).number, last = doc.lineAt(Math.min(to, doc.length)).number; n <= last; n++) {
+    starts.push(doc.line(n).from);
+  }
+  return starts;
+}
 
 type Sent = { from: number; to: number; landed: boolean };
 const sentEval = StateEffect.define<{ id: number; from: number; to: number }>();
@@ -157,12 +148,9 @@ const sentLines = StateField.define<Map<number, Sent>>({
     EditorView.decorations.compute([field], state => {
       const marks = new Map<number, string>();
       for (const s of state.field(field).values()) {
-        const doc = state.doc;
-        const last = Math.min(s.to, doc.length);
-        for (let line = doc.lineAt(Math.min(s.from, doc.length)); ; line = doc.line(line.number + 1)) {
+        for (const start of lineStarts(state.doc, s.from, s.to)) {
           // landed wins over waiting where two evaluations share a line
-          if (marks.get(line.from) !== 'cm-landed') marks.set(line.from, s.landed ? 'cm-landed' : 'cm-queued-eval');
-          if (line.to >= last || line.number >= doc.lines) break;
+          if (marks.get(start) !== 'cm-landed') marks.set(start, s.landed ? 'cm-landed' : 'cm-queued-eval');
         }
       }
       return Decoration.set([...marks].sort((a, b) => a[0] - b[0]).map(([from, cls]) => Decoration.line({ class: cls }).range(from)));
@@ -199,11 +187,7 @@ export function markProblems(view: EditorView, base: number, text: string, probl
 
 /** Flash the lines from `from` to `to`, which fade on their own and are then taken off. */
 export function flashLines(view: EditorView, from: number, to: number) {
-  const marks = [];
-  for (let line = view.state.doc.lineAt(from); ; line = view.state.doc.line(line.number + 1)) {
-    marks.push(Decoration.line({ class: 'cm-flash' }).range(line.from));
-    if (line.to >= to || line.number >= view.state.doc.lines) break;
-  }
+  const marks = lineStarts(view.state.doc, from, to).map(start => Decoration.line({ class: 'cm-flash' }).range(start));
   view.dispatch({ effects: flashed.of(Decoration.set(marks)) });
   setTimeout(() => view.dispatch({ effects: flashed.of(Decoration.none) }), 700);
 }

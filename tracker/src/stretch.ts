@@ -1,26 +1,12 @@
-/** The ways a sampler's code is given its time-stretch settings. Samplers the tracker wrote before stretching existed lack them. */
-
-/** `source` with the `stretch` and `stretch_mode` parameters of a sampler, passed on to its sample. */
-export function withStretch(source: string): string {
-  source = source.replace(/stretch_mode: 0\.\.1 = ([01])/, 'stretch_mode: 0..2 = $1');
-  if (!/stretch: 0\.25\.\.4 = /.test(source)) {
-    source = source.replace('rate: -4..4 = 1', 'rate: -4..4 = 1, stretch: 0.25..4 = 1').replaceAll('rate: rate)', 'rate: rate, stretch: stretch)');
-  }
-  if (!/stretch_mode: 0\.\.2 = /.test(source)) {
-    source = source.replace(/stretch: 0\.25\.\.4 = [\d.]+/, '$&, stretch_mode: 0..2 = 0').replaceAll('stretch: stretch)', 'stretch: stretch, stretch_mode: stretch_mode)');
-  }
-  return source;
-}
+/** A sampler's time-stretch and tempo-fit settings, as its code sets them. */
 
 /** The tempo, in beats a minute, the sample was recorded at, as the code sets it; 0 when it is not fitted to the song's tempo. */
 export function readFit(source: string): number {
   return Number(/from_bpm: 0\.\.400 = ([\d.]+)/.exec(source)?.[1] ?? 0) || 0;
 }
 
-/** `source` with its `from_bpm` set (0 turns the fit off), adding the parameters it needs to a sampler that lacks them. */
+/** `source` with its `from_bpm` set; 0 turns the fit off. */
 export function withFit(source: string, bpm: number): string {
-  source = withStretch(source);
-  if (!/from_bpm: 0\.\.400 = /.test(source)) source = source.replace(/stretch_mode: 0\.\.2 = [012]/, '$&, from_bpm: 0..400 = 0');
   return source.replace(/from_bpm: 0\.\.400 = [\d.]+/, `from_bpm: 0..400 = ${bpm}`);
 }
 
@@ -29,9 +15,8 @@ export type FitMode = 'stretch' | 'repitch';
 
 export const readFitMode = (source: string): FitMode => /fit_mode: 0\.\.1 = 1/.test(source) ? 'repitch' : 'stretch';
 
-/** `source` with its fit mode set, adding the parameter (and `from_bpm`, which it goes with) to a sampler that lacks it. */
+/** `source` with its fit mode set, adding the parameter after `from_bpm` the first time. */
 export function withFitMode(source: string, mode: FitMode): string {
-  source = withFit(source, readFit(source));
   if (!/fit_mode: 0\.\.1 = /.test(source)) source = source.replace(/from_bpm: 0\.\.400 = [\d.]+/, '$&, fit_mode: 0..1 = 0');
   return source.replace(/fit_mode: 0\.\.1 = [01]/, `fit_mode: 0..1 = ${mode === 'repitch' ? 1 : 0}`);
 }

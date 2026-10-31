@@ -16,17 +16,17 @@ import { SamplePanel } from './waveform';
 import { pieceKey } from './slices';
 import { SoundBrowser, type SoundKind, type SoundBrowserActions } from './soundbrowser';
 import type { Dragged } from './drag';
-import { instrumentPresets, effectPresets, type Preset } from './library';
+import { instrumentPresets, type Preset } from './library';
 import { emptyProject, columnCount, emptyFxLane, blankColumn, type Device, readProject, dropUnusedPatterns, storageKey, maxReturns, resizePattern, removeTrack, restoreTrack, moveTrack, duplicateTrack, trackSource, type Definition, type Song, type DeletedTrack } from './project';
 import { Arrangement } from './arrangement';
 import { PatternGrid } from './grid';
 import { EnvelopeEditor } from './envelope-editor';
 import { renderMixer, renderInstrument } from './mixer';
-import { addDevice, effectChoices, removeDevice, moveDevice, commandsFor, newEffect, duplicateEffect, effectUsers, removeEffect, stripOf, columnToStrip, stripToColumn } from './effects';
+import { addDevice, effectChoices, removeDevice, moveDevice, commandsFor, newEffect, duplicateEffect, removeEffect, stripOf, columnToStrip, stripToColumn } from './effects';
 import { MixPanel } from './mix';
 import { drawScope } from './scope';
 import { renameDefinition, freeCodeName, slug } from './naming';
-import { presetSource, addInstrument, addInstrumentFromPreset, duplicateInstrument, instrumentUsers, removeInstrument, sliceInstrument, sampleFile, maxSlices, addKit, samplerSource, withSample } from './instruments';
+import { presetSource, addInstrument, addInstrumentFromPreset, duplicateInstrument, instrumentUsers, removeInstrument, sliceInstrument, maxSlices, addKit, samplerSource, withSample } from './instruments';
 import { readPlayback, playbackNames, playbackHints } from './playback';
 import { audioCommand, audioStatus, observeAudio } from './audio';
 import './style.css';
@@ -39,7 +39,7 @@ app.innerHTML = `
   <div id="toolbar">
     <div class="group"><button id="play" title="Loop pattern (Space)">▶ Pattern</button><button id="play-song" title="Play from the selected sequence step to the end, or repeat the loop once it is reached">▶ Song</button><button id="stop" title="Stop">■</button><button id="record" aria-pressed="false" title="Record mode: typed notes and values are entered (Esc)">● Rec</button><label class="check" title="Follow the song as it plays: the pattern changes with it, and while recording the cursor rides the play position. Untick to move around and edit freely while it plays"><input id="follow" type="checkbox" checked> Follow</label><label class="check" title="Volume 0 to 100 given to notes entered in record mode; blank leaves it unset">Vel <input id="velocity" type="number" min="0" max="100" placeholder="–" style="width:3.5em"></label><span id="play-position" class="muted"></span><span id="midi-controls" class="group"></span></div>
     <div class="group"><label>BPM <input id="bpm" type="number" min="20" max="300" step="1"></label><label>LPB <input id="rows-per-beat" type="number" min="1" max="16" title="Rows per beat"></label><label>Swing <input id="swing" type="number" min="0" max="75" title="Swing: how much of every pair of rows' time moves to the first row, 0 to 75 percent. Acts on rows, so LPB sets the subdivision swung"></label><label>Oct <input id="octave" type="number" min="0" max="8" value="4"></label><label>Step <input id="entry-step" aria-label="Note entry step" title="Rows to advance after entering a note; 0 stays on this row" type="number" min="0" max="256" value="4"></label></div>
-    <div class="group"><label>Rows <input id="pattern-rows" type="number" min="1" max="256" data-structure></label></div>
+    <div class="group"><label>Rows <input id="pattern-rows" type="number" min="1" max="256" data-structure></label><div class="group"><label>Pattern BPM <input id="pattern-bpm" aria-label="Pattern BPM" type="number" min="20" max="300" step="any"></label><label>LPB <input id="pattern-lpb" aria-label="Pattern rows per quarter note" type="number" min="1" max="16"></label><label>Meter <input id="meter-beats" aria-label="Beats per bar" type="number" min="1" max="32"> / <select id="meter-unit" aria-label="Meter beat unit"><option>1</option><option>2</option><option>4</option><option>8</option><option>16</option></select></label><label>Swing <input id="pattern-swing" aria-label="Pattern swing" type="number" min="0" max="75" title="Swing for this pattern, 0 to 75 percent; blank follows the song. 0 is straight even when the song swings"></label><label>Tempo points <input id="tempo-points" aria-label="Tempo automation points" placeholder="0:125, 32:80" title="Row:BPM points, separated by commas. Linear ramps between points; BPM counts quarter notes."></label><button id="reset-timing">Use song timing</button></div></div>
     <div class="group"><button id="undo" title="Undo (Cmd/Ctrl+Z)" aria-label="Undo">↶</button><button id="redo" title="Redo (Cmd/Ctrl+Shift+Z)" aria-label="Redo">↷</button><button id="add-track" data-structure title="Add track" aria-label="Add track">+ Track</button><button id="delete-track" data-structure title="Delete selected track" aria-label="Delete selected track">− Track</button><button id="duplicate-track" data-structure title="Duplicate the selected track, with its effects and notes" aria-label="Duplicate the selected track">⧉ Track</button><button id="restore-track" data-structure title="Restore last deleted track" aria-label="Restore last deleted track">↺</button></div>
     <div class="group push"><button id="open-mix" aria-pressed="false" title="Mixer: levels, pan, mute, solo and a scope for each channel">Mixer</button><button id="import">Open</button><button id="export">Save</button></div>
   </div>
@@ -111,18 +111,18 @@ function undoProject(redo = false) {
   receiveMidi({ kind: 'reset' });
   restoringHistory = true;
   const selectedId = selected.id;
-  envelopeEditor?.reset();
+  envelopeEditor.reset();
   project = restored;
   deviceTrack = deviceTrack >= project.tracks.length || deviceTrack < -project.returns.length - 1 ? 0 : deviceTrack;
   chosenDevice.clear(); deletedTrack = null;
-  selected = project.definitions.find(d => d.id === selectedId) ?? project.definitions[0];
+  selected = definitionOf(selectedId) ?? project.definitions[0];
   states.clear();
   for (const kind of ['instr', 'fx'] as const) {
-    const was = shown[kind], now = was && (project.definitions.find(d => d.id === was.id) ?? (kind === 'instr' ? project.definitions.find(d => d.kind === 'instr') : undefined));
+    const was = shown[kind], now = was && (definitionOf(was.id) ?? (kind === 'instr' ? project.definitions.find(d => d.kind === 'instr') : undefined));
     shown[kind] = now; if (now) editors[kind]?.setState(documentState(now));
   }
   arrangement.position = Math.min(arrangement.position, project.sequence.length - 1);
-  arrangement.render(); grid.resetHistory(); grid.render(); selectDefinition(selected, false); mixerView(); patternControls(); timingInputs();
+  arrangement.render(); grid.resetSelection(); grid.render(); selectDefinition(selected, false); mixerView(); patternControls(); timingInputs();
   editedPattern(); restoringHistory = false;
 }
 window.addEventListener('keydown', event => {
@@ -131,6 +131,8 @@ window.addEventListener('keydown', event => {
   if (key !== 'z' && key !== 'y') return;
   event.preventDefault(); event.stopImmediatePropagation(); undoProject(key === 'y' || event.shiftKey);
 }, true);
+/** The most tracks a project can have. */
+const maxTracks = 16;
 let updateTimer: number | undefined;
 let transportRevision = 0;
 let starting = false;
@@ -159,7 +161,6 @@ let libraryFx: string | null = null;
 const chosenDevice = new Map<number, string>();
 let deletedTrack: DeletedTrack | null = null;
 let wasPlaying = false;
-let envelopeEditor: EnvelopeEditor | undefined;
 let connectionPending: 'connect' | 'disconnect' | null = null;
 let connectionAttempt: Promise<void> | null = null;
 let autoConnect = true;
@@ -189,16 +190,18 @@ function selectDefinition(definition: Definition, reveal = true, library = false
   element<HTMLInputElement>(`${kind}-name`).value = definition.name;
   element(`${kind}-kind`).textContent = kind === 'instr' ? 'INSTRUMENT' : 'EFFECT';
   if (kind === 'fx') { libraryFx = library ? definition.id : null; element('mixer').hidden = false; element('code').hidden = false; element('fx-tools').hidden = element('code-panel').hidden; }
-  renderDefinitions(); renderApplyStatus(); mixerView(); sampleChanged();
+  renderApplyStatus(); mixerView(); sampleChanged();
 }
-/** The browser's Project folder lists the definitions, so it follows them. */
-function renderDefinitions() { soundBrowser.refresh(); projectPanel.refresh(); }
+/** The instrument or effect with id `id`. */
+const definitionOf = (id: string | undefined) => project.definitions.find(d => d.id === id);
 /** Effect and instrument parameters share one table: definition ids are unique across both. */
 function allParameters() { return { ...audioStatus.instrument_parameters, ...audioStatus.effect_parameters }; }
 function song(): Song {
   const instrument_values = Object.fromEntries(project.definitions.filter(d => d.kind === 'instr' && d.values).map(d => [d.id, d.values!]));
   return { bpm: project.bpm, rows_per_beat: project.rows_per_beat, swing: project.swing ?? 0, tracks: project.tracks, returns: project.returns, master: project.master, patterns: project.patterns, sequence: project.sequence, loop_range: project.loop_range, matrix: project.matrix, instrument_values };
 }
+/** Draws what shows the project's sounds again, and saves. */
+function soundsChanged() { grid.render(); mixerView(); save(); }
 async function action(work: () => Promise<unknown>) {
   audioError = null;
   try { await work(); }
@@ -222,7 +225,7 @@ async function applyAndAudition(definition: Definition) {
   await audition(instrument, 'C-3', track);
 }
 async function ensureSound(id: string) {
-  const definition = project.definitions.find(d => d.id === id);
+  const definition = definitionOf(id);
   if (!definition) throw new Error('Sound definition is missing');
   const ready = definition.kind === 'instr' ? audioStatus.instruments[id] : audioStatus.effects[id];
   if (!ready) await applyDefinition(definition);
@@ -233,11 +236,18 @@ function usedInstruments() {
   for (const pattern of project.patterns) for (const column of pattern.notes.flat()) for (const id of column.inst) if (id) ids.add(id);
   return ids;
 }
-async function ensureAssignments() {
+/** Applies every instrument the song plays and every effect on its strips that the engine lacks, while `wanted` holds. */
+async function ensureAssignments(wanted = () => true) {
   for (const id of usedInstruments()) await ensureSound(id);
   for (const track of [...project.tracks, ...project.returns, project.master]) {
     for (const device of track.fx) await ensureSound(device.definition);
+    if (!wanted()) return;
   }
+}
+/** Sends the song as it is now, with every sound it needs, so what plays next hears the latest edits. */
+async function syncSong() {
+  await ensureAssignments();
+  await audioCommand({ op: 'update', song: song() });
 }
 function currentDevice(): Device | undefined {
   const chain = stripOf(project, deviceTrack).fx;
@@ -253,7 +263,7 @@ function mixerView() {
   if (shown.instr) renderInstrument(element('instr-controls'), shown.instr, allParameters(), editedPattern, (target, value) => grid.writeParameter(stripToColumn(project, deviceTrack), target, value), deviceTrack, changeSelectedSource);
   if (libraryFx !== null) { element('mixer').hidden = true; return; }
   element('mixer').hidden = false;
-  envelopeEditor?.select(stripToColumn(project, deviceTrack));
+  envelopeEditor.select(stripToColumn(project, deviceTrack));
   if (element('code-panel').hidden) return;
   if (shownEffect() !== (currentDevice()?.definition ?? null)) { showFx(); return; }
   const device = currentDevice();
@@ -277,18 +287,18 @@ function mixerView() {
       const before = definition.source;
       renameDefinition(project, definition, name);
       if (definition.source !== before) { if (shown.fx === definition) replaceSource(definition, definition.source); else states.delete(definition.id); }
-      renderDefinitions(); grid.render(); mixerView(); save();
+      soundsChanged();
     },
     move: (id, delta) => { if (moveDevice(project, deviceTrack, id, delta)) { editedPattern(); grid.render(); mixerView(); } },
     changed: () => { editedPattern(); grid.render(); mixerView(); },
-    lanesRemoved: () => grid.resetHistory(),
+    lanesRemoved: () => grid.resetSelection(),
   });
 }
 /** Show the selected track's chain: the controls beside the code of its selected effect. */
 function showFx() {
   libraryFx = null;
   const device = currentDevice();
-  const definition = device && project.definitions.find(d => d.id === device.definition);
+  const definition = device && definitionOf(device.definition);
   if (definition) selectDefinition(definition);
   else { showPanel('code', true); element('mixer').hidden = false; element('code').hidden = true; element('fx-tools').hidden = true; }
   mixerView();
@@ -297,10 +307,11 @@ function showFx() {
 function followTrack() {
   if (!element('code-panel').hidden) showFx(); else mixerView();
 }
-function openTrackFx() { showFx(); if (!element('code').hidden) editor.focus(); }
+/** Forgets a start that is still on its way, so it does not play once it is ready. */
+function cancelStart() { transportRevision++; starting = false; }
 async function stopPlayback() {
   receiveMidi({ kind: 'reset' });
-  transportRevision++; starting = false;
+  cancelStart();
   await audioCommand({ op: 'stop' });
 }
 async function togglePlay(mode: 'pattern' | 'song' = 'pattern', startRow = 0) {
@@ -308,11 +319,8 @@ async function togglePlay(mode: 'pattern' | 'song' = 'pattern', startRow = 0) {
   const revision = ++transportRevision;
   starting = true;
   try {
-    for (const id of usedInstruments()) await ensureSound(id);
-    for (const track of [...project.tracks, ...project.returns, project.master]) {
-      for (const device of track.fx) await ensureSound(device.definition);
-      if (revision !== transportRevision) return;
-    }
+    await ensureAssignments(() => revision === transportRevision);
+    if (revision !== transportRevision) return;
     await audioCommand({ op: 'play', song: song(), mode, pattern_id: arrangement.pattern.id, start_position: arrangement.position, start_row: startRow });
   } finally { if (revision === transportRevision) starting = false; }
 }
@@ -332,15 +340,11 @@ function editedPattern() {
   save();
   clearTimeout(updateTimer);
   updateTimer = window.setTimeout(() => {
-    if (audioStatus.connected) void action(async () => {
-      await ensureAssignments();
-      await audioCommand({ op: 'update', song: song() });
-    });
+    if (audioStatus.connected) void action(syncSong);
   }, 50);
 }
 async function audition(id: string, note: string, track: number, ms = 300, expression: { commands?: string[] } = {}) {
-  await ensureSound(id); await ensureAssignments();
-  await audioCommand({ op: 'update', song: song() });
+  await ensureSound(id); await syncSong();
   await audioCommand({ op: 'audition', instrument: id, note, track, ms, ...expression });
 }
 /** Slots in the engine for what the sound browser is playing; they are not part of the project. */
@@ -349,9 +353,8 @@ const previewInstrument = 'preview_instr';
 async function previewSource(source: string, note = 'C-3', ms = 700) {
   const track = noteTrack();
   await projectDirReady;
-  await ensureAssignments();
   await audioCommand({ op: 'apply', id: previewInstrument, source, kind: 'instr', dir: projectDir });
-  await audioCommand({ op: 'update', song: song() });
+  await syncSong();
   await audioCommand({ op: 'audition', instrument: previewInstrument, note, track, ms });
 }
 const previewPreset = (preset: Preset) => previewSource(presetSource(preset, 'browser_preview'));
@@ -385,44 +388,36 @@ let midiPending = Promise.resolve();
 let midiRevision = 0;
 const midiKeys = new Set<number>();
 function midiAction(work: () => Promise<unknown>) { midiPending = midiPending.then(() => action(work)); }
-/** A note of the computer keyboard sounds until its key comes up, in order with the MIDI keys it shares the engine's held notes with. */
-function holdNote(key: number, instrument: string, note: string, track: number) {
+/** A note that sounds until `releaseNote` is given its key: from the computer keyboard or a MIDI one, which share the engine's held notes. */
+function holdNote(key: number, instrument: string, note: string, track: number, velocity = 127) {
   const revision = midiRevision;
   midiAction(async () => {
     if (!audioStatus.connected || revision !== midiRevision) return;
-    await ensureSound(instrument); await ensureAssignments();
+    await ensureSound(instrument); await syncSong();
     if (revision !== midiRevision) return;
-    await audioCommand({ op: 'update', song: song() });
-    await audioCommand({ op: 'midi_on', key, instrument, note, track, velocity: 127 });
+    await audioCommand({ op: 'midi_on', key, instrument, note, track, velocity });
   });
+}
+/** Lets go of a held note, or of every one with `null`. */
+function releaseNote(key: number | null) {
+  midiAction(async () => { if (audioStatus.connected) await audioCommand({ op: 'midi_off', key }); });
 }
 function receiveMidi(message: MidiMessage) {
   if (message.kind === 'on') {
     const target = grid.midiNoteOn(message.note, message.velocity);
     if (!target?.instrument) return;
-    const instrument = target.instrument, key = message.channel * 128 + message.note;
+    const key = message.channel * 128 + message.note;
     midiKeys.add(key);
-    const revision = midiRevision;
-    midiAction(async () => {
-      if (!audioStatus.connected || revision !== midiRevision) return;
-      await ensureSound(instrument); await ensureAssignments();
-      if (revision !== midiRevision) return;
-      await audioCommand({ op: 'update', song: song() });
-      if (revision !== midiRevision) return;
-      await audioCommand({ op: 'midi_on', key, instrument, note: target.note, track: target.track, velocity: target.velocity });
-    });
+    holdNote(key, target.instrument, target.note, target.track, target.velocity);
   } else if (message.kind === 'reset') {
     midiRevision++; midiKeys.clear();
-    midiAction(async () => { if (audioStatus.connected) await audioCommand({ op: 'midi_off', key: null }); });
+    releaseNote(null);
   } else {
     const keys = message.kind === 'off' ? [message.channel * 128 + message.note] : [...midiKeys].filter(key => Math.floor(key / 128) === message.channel);
-    for (const key of keys) {
-      midiKeys.delete(key);
-      midiAction(async () => { if (audioStatus.connected) await audioCommand({ op: 'midi_off', key }); });
-    }
+    for (const key of keys) { midiKeys.delete(key); releaseNote(key); }
   }
 }
-grid.releaseHeld = key => midiAction(async () => { if (audioStatus.connected) await audioCommand({ op: 'midi_off', key }); });
+grid.releaseHeld = releaseNote;
 void mountMidi(element('midi-controls'), receiveMidi, status).catch(error => status(`MIDI: ${error}`));
 const presetItem = (p: Preset): BrowserItem => ({ value: p.id, name: p.name, folder: p.folder, description: p.description });
 /** Loads a ready-made instrument into an existing slot: its name and code are replaced, and the slot keeps its number. */
@@ -433,7 +428,7 @@ function loadPresetIntoSlot(definition: Definition, preset: Preset) {
   states.delete(definition.id);
   if (shown[definition.kind] === definition) replaceSource(definition, definition.source);
   else selectDefinition(definition, false);
-  renderDefinitions(); grid.render(); mixerView(); save();
+  soundsChanged();
   applyNewInstrument(definition);
 }
 /** Replaces the code of the instrument being edited, as typing would, and applies it so the change is heard. */
@@ -454,7 +449,7 @@ function applyNewInstrument(definition: Definition) {
 /** Makes an instrument from a preset and chooses it, so the notes entered next use it. */
 function useInstrumentPreset(preset: Preset) {
   const definition = addInstrumentFromPreset(project, preset);
-  selectDefinition(definition, false); grid.render(); mixerView(); save();
+  selectDefinition(definition, false); soundsChanged();
   applyNewInstrument(definition);
 }
 /** Adds an effect to the end of the selected strip's chain and shows its code: a preset's id, or `fx:<id>` for one already in the project. */
@@ -503,19 +498,23 @@ async function toggleSample(path: string) {
   source.start();
   heard = { path, source };
 }
-/** Copies library samples into the project, each as its own sampler. */
-async function importLibrarySamplers(paths: string[]) {
-  try { addImported(await invoke<{ file: string; seconds: number }[]>('import_dropped', { id: project.id, paths })); }
+/** A sample copied into the project, and how long it plays. */
+type Imported = { file: string; seconds: number };
+/** A folder of samples copied into the project to play as a kit. */
+type ImportedKit = { folder: string; members: string[] };
+/** Copies audio files on disk into the project, each as its own sampler. */
+async function importAsSamplers(paths: string[]) {
+  try { addImported(await invoke<Imported[]>('import_dropped', { id: project.id, paths })); }
   catch (error) { status(`Could not import the samples: ${error}`); }
 }
-/** Copies library samples into one kit folder of the project, a sample on each key from C-4. */
-async function importLibraryKit(paths: string[]) {
-  try { addImportedKit(await invoke<{ folder: string; members: string[] } | null>('import_dropped_kit', { id: project.id, paths })); }
+/** Copies audio files on disk into one kit folder of the project, a sample on each key from C-4. */
+async function importAsKit(paths: string[]) {
+  try { addImportedKit(await invoke<ImportedKit>('import_dropped_kit', { id: project.id, paths })); }
   catch (error) { status(`Could not import the kit: ${error}`); }
 }
 /** Copies a library sample into the project, as the samplers need it there. */
 async function importLibrarySample(item: { value: string }) {
-  const [imported] = await invoke<{ file: string; seconds: number }[]>('import_dropped', { id: project.id, paths: [sampleOf(item)] });
+  const [imported] = await invoke<Imported[]>('import_dropped', { id: project.id, paths: [sampleOf(item)] });
   return imported;
 }
 /** What each sample looks like and how long it plays, read once. */
@@ -550,7 +549,7 @@ async function loadSampleIntoSlot(definition: Definition, file: string) {
   if (!swapped) definition.name = file.split('/').pop()!.replace(/\.[^.]+$/, '');
   setDefinitionSource(definition, swapped ?? samplerSource(freeCodeName(project, slug(definition.name), definition), file, seconds));
   delete definition.values;
-  renderDefinitions(); grid.render(); mixerView(); save();
+  soundsChanged();
   applyNewInstrument(definition);
 }
 const browserActions: SoundBrowserActions = {
@@ -564,7 +563,7 @@ const browserActions: SoundBrowserActions = {
   pick: (kind, item, replace) => {
     if (kind === 'fx') { addEffectToStrip(item.value); return; }
     // an instrument becomes the current one, and the cursor goes back to the grid to enter notes with it
-    const slot = project.definitions.find(d => d.id === currentInstrument);
+    const slot = definitionOf(currentInstrument);
     if (kind === 'sample') { void bringIn(item, replace ? slot : undefined); element('grid').focus(); return; }
     const preset = instrumentPresets.find(p => p.id === item.value)!;
     if (replace && slot) loadPresetIntoSlot(slot, preset);
@@ -572,7 +571,7 @@ const browserActions: SoundBrowserActions = {
     element('grid').focus();
   },
   menu: (kind, item, anchor) => {
-    const replacing = project.definitions.find(d => d.id === currentInstrument)?.name ?? 'the current instrument';
+    const replacing = definitionOf(currentInstrument)?.name ?? 'the current instrument';
     const use = (replace: boolean) => () => browserActions.pick(kind, item, replace);
     openMenu(anchor, kind === 'fx' ? [{ text: 'Add to the selected track', run: use(false) }]
       : [{ text: kind === 'sample' ? 'New sampler' : 'Add as a new instrument', run: use(false) }, { text: `Put in "${replacing}"`, run: use(true) }]);
@@ -580,8 +579,8 @@ const browserActions: SoundBrowserActions = {
   group: (items, anchor) => {
     const paths = items.map(sampleOf), plural = `${paths.length} samples`;
     openMenu(anchor, [
-      { text: `${plural} as one kit`, run: () => void importLibraryKit(paths) },
-      { text: `${plural} as a sampler each`, run: () => void importLibrarySamplers(paths) },
+      { text: `${plural} as one kit`, run: () => void importAsKit(paths) },
+      { text: `${plural} as a sampler each`, run: () => void importAsSamplers(paths) },
     ]);
   },
   manage: op => { if (op === 'folder') void chooseLibrary(); else if (op === 'kit') void importKit(); else void importSamples(); },
@@ -593,10 +592,6 @@ const fxBrowser = new SoundBrowser(element('fx-browser'), browserItems, browserA
 /** The browser is as wide as the sequence bar above it, whatever that bar's width works out to (its minimum depends on the track count and on hidden names). */
 new ResizeObserver(() => { const width = element('sequencer').offsetWidth; if (width) element('fx-browser').style.flexBasis = `${width}px`; }).observe(element('sequencer'));
 const projectInstruments = () => project.definitions.filter(d => d.kind === 'instr');
-/** Makes an instrument the current one and shows its code. */
-function chooseInstrument(definition: Definition) {
-  selectDefinition(definition, false);
-}
 /** Asks whether a cut instrument may play its whole sample as one, which drops its pieces and makes the notes written for them play the whole sample. */
 const askToPlayAsOne = (definition: Definition) => isTauri()
   ? invoke<boolean>('confirm', { message: `Play "${definition.name}" as one sample? Its pieces go, and notes written for them (C-4, C#4, …) will each play the whole sample from its start.` })
@@ -613,22 +608,22 @@ function definitionMenu(definition: Definition): MenuEntry[] {
 const projectPanel = new ProjectPanel(element('project-panel'),
   () => projectInstruments().map(d => { const users = instrumentUsers(project, d.id).length; const how = readPlayback(d.source); return { id: d.id, name: d.name, note: users ? `×${users}` : undefined, tag: how ? { text: playbackNames[how].toLowerCase(), title: playbackHints[how] } : undefined }; }),
   () => currentInstrument, {
-    choose: id => { const definition = project.definitions.find(d => d.id === id); if (definition) chooseInstrument(definition); },
-    edit: id => { const definition = project.definitions.find(d => d.id === id); if (definition) { selectDefinition(definition); editor.focus(); } },
+    choose: id => { const definition = definitionOf(id); if (definition) selectDefinition(definition, false); },
+    edit: id => { const definition = definitionOf(id); if (definition) { selectDefinition(definition); editor.focus(); } },
     add: anchor => openMenu(anchor, [
       { text: 'Blank instrument', run: () => newInstrument() },
       { text: 'Sampler from audio files…', run: () => void importSamples() },
       { text: 'Kit from audio files…', run: () => void importKit() },
       { text: 'Browse the instrument library', run: () => toggleBrowser('instr') },
     ]),
-    menu: (id, anchor) => { const definition = project.definitions.find(d => d.id === id); if (definition) openMenu(anchor, definitionMenu(definition)); },
-    remove: id => { const definition = project.definitions.find(d => d.id === id); if (definition) deleteSound(definition); },
+    menu: (id, anchor) => { const definition = definitionOf(id); if (definition) openMenu(anchor, definitionMenu(definition)); },
+    remove: id => { const definition = definitionOf(id); if (definition) deleteSound(definition); },
     drop: (item, id) => dropOnSlot(item, id),
     leave: () => element('grid').focus(),
   });
 /** A row of the browser dropped on an instrument of the project (which it replaces) or on the empty space of the list (which adds it). */
 function dropOnSlot(item: Dragged, id: string | null) {
-  const slot = id ? project.definitions.find(d => d.id === id) : undefined;
+  const slot = id ? definitionOf(id) : undefined;
   if (item.kind === 'sample') { if (slot) selectDefinition(slot, false); void bringIn(item, slot); return; }
   const preset = instrumentPresets.find(p => p.id === item.value);
   if (!preset) return;
@@ -658,17 +653,17 @@ function sampleChanged() {
 
 /** A new instrument that plays the current sampler in pieces, one per key from C-4: a count of equal pieces, or the shares of the sample where each starts. */
 function sliceCurrent(pieces: number | number[]) {
-  const source = project.definitions.find(d => d.id === currentInstrument);
+  const source = definitionOf(currentInstrument);
   const definition = source && sliceInstrument(project, source, pieces);
   if (!definition) { status(`Choose a sampler first: cutting needs an instrument that plays a sample, into 2 to ${maxSlices} pieces`); return; }
-  selectDefinition(definition, false); grid.render(); mixerView(); save();
+  selectDefinition(definition, false); soundsChanged();
   applyNewInstrument(definition);
   status(`${definition.name}: C-4 plays the first of ${typeof pieces === 'number' ? pieces : pieces.length} pieces`);
 }
 /** Option+Up and Option+Down: the previous or next instrument of the project, from anywhere but a text box. */
 function stepInstrument(delta: number) {
   const id = neighbour(projectInstruments().map(d => d.id), currentInstrument, delta), next = projectInstruments().find(d => d.id === id);
-  if (next) chooseInstrument(next);
+  if (next) selectDefinition(next, false);
 }
 document.addEventListener('keydown', event => {
   if (!event.altKey || event.metaKey || event.ctrlKey || event.shiftKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return;
@@ -692,7 +687,7 @@ function browserTarget() {
   const instruments = project.definitions.filter(d => d.kind === 'instr'), at = instruments.findIndex(d => d.id === currentInstrument), strip = stripOf(project, deviceTrack);
   soundBrowser.setTarget(`Notes use ${at < 0 ? 'no instrument' : `${String(at).padStart(2, '0')} ${instruments[at].name}`} · effects go on ${strip.name} · Shift+Enter or Shift+double-click replaces the current instrument`);
 }
-envelopeEditor = new EnvelopeEditor(element('automation'), () => project, () => arrangement.pattern, () => allParameters(),
+const envelopeEditor = new EnvelopeEditor(element('automation'), () => project, () => arrangement.pattern, () => allParameters(),
   () => { editedPattern(); grid.render(); });
 const mix = new MixPanel(element('mix'), () => project, {
   openFx: (track, device) => { if (track < 0) deviceTrack = track; else grid.selectTrack(track); if (device) chosenDevice.set(deviceTrack, device); showFx(); },
@@ -770,7 +765,7 @@ window.addEventListener('keydown', event => {
 // As in Renoise, whatever you click or choose leaves the cursor in the grid, so the keys sound notes and enter them at once: a button, a tick box or
 // slider, a choice made in a drop-down, and Enter in a text or number box. Not where the keyboard is wanted: the code editor and its bar, the grid's own
 // cell editor, the sound browser's search, and pop-ups (menus, the palette). These look at the target before its own handler can redraw it.
-const keepsKeys = '.cm-editor, .modal-backdrop, .palette, .menu, .browser, #grid, #sound-browser';
+const keepsKeys = '.cm-editor, .modal-backdrop, .palette, .menu, #grid, #sound-browser';
 const keepInGrid = (target: Element) => setTimeout(() => { const active = document.activeElement; if (!active || active === document.body || active === target) element('grid').focus(); });
 document.addEventListener('click', event => {
   const target = event.target as HTMLElement;
@@ -825,7 +820,7 @@ async function ensureConnected() {
   renderConnectButton();
   setText('audio-status', 'Connecting…');
   connectionAttempt = (async () => {
-    transportRevision++; starting = false;
+    cancelStart();
     appliedSources.clear();
     const port = Number(element<HTMLInputElement>('engine-port').value);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Enter an engine port between 1 and 65535');
@@ -854,7 +849,7 @@ function toggleConnection() {
   connectionPending = 'disconnect';
   renderConnectButton();
   void action(async () => {
-    transportRevision++; starting = false;
+    cancelStart();
     appliedSources.clear();
     await audioCommand({ op: 'disconnect' });
   }).finally(() => { connectionPending = null; renderConnectButton(); });
@@ -900,34 +895,34 @@ for (const kind of ['instr', 'fx'] as const) {
     renameDefinition(project, definition, input.value);
     input.value = definition.name;
     if (definition.source !== before) replaceSource(definition, definition.source);
-    renderDefinitions(); grid.render(); mixerView(); save();
+    soundsChanged();
   };
 }
 function newInstrument(sample?: string, seconds = 0) {
   const definition = addInstrument(project, sample, seconds);
-  selectDefinition(definition); editor.focus(); grid.render(); mixerView(); save();
+  selectDefinition(definition); editor.focus(); soundsChanged();
   applyNewInstrument(definition);
   return definition;
 }
 /** Adds samplers for copied-in audio files, and lists them in the browser. */
-function addImported(files: { file: string; seconds: number }[]) {
+function addImported(files: Imported[]) {
   for (const { file, seconds } of files) newInstrument(file, seconds);
   if (files.length) status(`Added ${files.length} sampler${files.length > 1 ? 's' : ''}`);
   void refreshSamples();
 }
 /** Adds an instrument that plays a copied-in kit folder, and lists its samples in the browser. */
-function addImportedKit(kit: { folder: string; members: string[] } | null) {
+function addImportedKit(kit: ImportedKit | null) {
   void refreshSamples();
   if (!kit) return;
   const definition = addKit(project, kit.folder, kit.members);
   if (!definition) { status(`A kit holds 1 to ${maxSlices} samples, one on each key from C-4`); return; }
-  selectDefinition(definition); editor.focus(); grid.render(); mixerView(); save();
+  selectDefinition(definition); editor.focus(); soundsChanged();
   applyNewInstrument(definition);
   status(`${definition.name}: ${kit.members.length} samples, C-4 plays ${kit.members[0]}`);
 }
 async function importSamples() {
   if (!isTauri()) { status('Importing samples needs the desktop app'); return; }
-  try { addImported(await invoke<{ file: string; seconds: number }[]>('import_samples', { id: project.id })); }
+  try { addImported(await invoke<Imported[]>('import_samples', { id: project.id })); }
   catch (error) { status(`Could not import samples: ${error}`); }
 }
 /** Every string in the project: the code that may name a sample. */
@@ -943,23 +938,21 @@ async function cleanSamples() {
 /** Several audio files as one instrument with a sample on each key from C-4. */
 async function importKit() {
   if (!isTauri()) { status('Importing samples needs the desktop app'); return; }
-  try { addImportedKit(await invoke<{ folder: string; members: string[] } | null>('import_kit', { id: project.id })); }
+  try { addImportedKit(await invoke<ImportedKit | null>('import_kit', { id: project.id })); }
   catch (error) { status(`Could not import the kit: ${error}`); }
 }
 /** Audio files dropped on the window from outside: one is a sampler, several are asked about. */
-async function importDropped(paths: string[]) {
-  try {
-    if (paths.length === 1) { addImported(await invoke<{ file: string; seconds: number }[]>('import_dropped', { id: project.id, paths })); return; }
-    openMenu(element('right-bar'), [
-      { text: `${paths.length} samplers, one for each file`, run: () => void invoke<{ file: string; seconds: number }[]>('import_dropped', { id: project.id, paths }).then(addImported, error => status(`Could not import samples: ${error}`)) },
-      { text: 'One kit, a sample on each key', run: () => void invoke<{ folder: string; members: string[] } | null>('import_dropped_kit', { id: project.id, paths }).then(addImportedKit, error => status(`Could not import the kit: ${error}`)) },
-    ]);
-  } catch (error) { status(`Could not import samples: ${error}`); }
+function importDropped(paths: string[]) {
+  if (paths.length === 1) { void importAsSamplers(paths); return; }
+  openMenu(element('right-bar'), [
+    { text: `${paths.length} samplers, one for each file`, run: () => void importAsSamplers(paths) },
+    { text: 'One kit, a sample on each key', run: () => void importAsKit(paths) },
+  ]);
 }
 if (isTauri()) void getCurrentWebview().onDragDropEvent(event => {
   const bar = element('right-bar'), kind = event.payload.type;
   bar.classList.toggle('file-drop', kind === 'enter' || kind === 'over');
-  if (kind === 'drop' && event.payload.paths.length) void importDropped(event.payload.paths);
+  if (kind === 'drop' && event.payload.paths.length) importDropped(event.payload.paths);
 });
 function duplicateSound(definition: Definition) {
   const library = definition.kind === 'fx';
@@ -984,15 +977,15 @@ document.addEventListener('keydown', event => {
 async function loadProject(raw: string) {
   const loaded = readProject(raw); dropUnusedPatterns(loaded);
   receiveMidi({ kind: 'reset' });
-  transportRevision++; starting = false;
+  cancelStart();
   if (audioStatus.connected) await audioCommand({ op: 'disconnect' });
   appliedSources.clear();
   for (const kind of ['instr', 'fx'] as const) { editors[kind]?.destroy(); delete editors[kind]; delete shown[kind]; }
   states.clear();
-  envelopeEditor?.reset();
+  envelopeEditor.reset();
   projectHistory.reset(JSON.stringify(loaded));
   project = loaded; deletedTrack = null; deviceTrack = 0; chosenDevice.clear(); libraryFx = null; refreshProjectDir(); selected = project.definitions.find(d => d.kind === 'instr') ?? project.definitions[0];
-  selectDefinition(selected, false); arrangement.reset(); grid.resetHistory(); grid.selectTrack(0); mixerView(); patternControls(); timingInputs(); save();
+  selectDefinition(selected, false); arrangement.reset(); grid.resetSelection(); grid.selectTrack(0); mixerView(); patternControls(); timingInputs(); save();
   if (isTauri()) void action(ensureConnected);
 }
 element('export').onclick = async () => {
@@ -1050,7 +1043,7 @@ for (const button of document.querySelectorAll<HTMLElement>('[data-tab]')) {
   button.onclick = () => {
     fxCodeShown = false;
     showPanel(tabPanel(tab), true);
-    if (tab === 'automation') envelopeEditor?.select(stripToColumn(project, deviceTrack));
+    if (tab === 'automation') envelopeEditor.select(stripToColumn(project, deviceTrack));
     else if (tab === 'fx') showFx();
   };
 }
@@ -1084,10 +1077,6 @@ element('dock-resize').onpointerdown = event => {
   target.onpointermove = move => { dock.style.height = `${Math.max(120, startHeight + startY - move.clientY)}px`; measure(); };
   target.onpointerup = () => { target.onpointermove = null; target.onpointerup = null; };
 };
-const timingControls = document.createElement('div');
-timingControls.className = 'group';
-timingControls.innerHTML = `<label>Pattern BPM <input id="pattern-bpm" aria-label="Pattern BPM" type="number" min="20" max="300" step="any"></label><label>LPB <input id="pattern-lpb" aria-label="Pattern rows per quarter note" type="number" min="1" max="16"></label><label>Meter <input id="meter-beats" aria-label="Beats per bar" type="number" min="1" max="32"> / <select id="meter-unit" aria-label="Meter beat unit"><option>1</option><option>2</option><option>4</option><option>8</option><option>16</option></select></label><label>Swing <input id="pattern-swing" aria-label="Pattern swing" type="number" min="0" max="75" title="Swing for this pattern, 0 to 75 percent; blank follows the song. 0 is straight even when the song swings"></label><label>Tempo points <input id="tempo-points" aria-label="Tempo automation points" placeholder="0:125, 32:80" title="Row:BPM points, separated by commas. Linear ramps between points; BPM counts quarter notes."></label><button id="reset-timing">Use song timing</button>`;
-element('pattern-rows').parentElement!.parentElement!.append(timingControls);
 function renderTiming() {
   const t = patternTiming(project, arrangement.pattern);
   element<HTMLInputElement>('pattern-bpm').value = String(t.bpm);
@@ -1123,44 +1112,44 @@ element<HTMLInputElement>('pattern-rows').onchange = event => {
 };
 element('sequence-add').onclick = event => arrangement.addMenu(event.currentTarget as HTMLElement);
 element('add-track').onclick = () => {
-  if (audioStatus.playing || project.tracks.length >= 16) return;
+  if (audioStatus.playing || project.tracks.length >= maxTracks) return;
   project.tracks.push({ name: `Track ${String(project.tracks.length + 1).padStart(2, '0')}`, fx: [], pan: 0, muted: false, volume_db: 0 });
   for (const pattern of project.patterns) { const rows = pattern.notes[0][0].notes.length; pattern.notes.push([blankColumn(rows)]); pattern.fx.push([emptyFxLane()]); }
   grid.selectTrack(project.tracks.length - 1); arrangement.render(); editedPattern();
 };
 element('duplicate-track').onclick = () => { void action(async () => {
-  if (audioStatus.playing || project.tracks.length >= 16) return;
+  if (audioStatus.playing || project.tracks.length >= maxTracks) return;
   if (audioStatus.connected) await stopPlayback();
   const index = grid.activeTrack;
   if (index >= project.tracks.length) return;
   const copy = duplicateTrack(project, index);
   if (copy === null) return;
-  envelopeEditor?.reset(); grid.resetHistory(); grid.selectTrack(copy); mixerView(); arrangement.render(); editedPattern();
+  envelopeEditor.reset(); grid.resetSelection(); grid.selectTrack(copy); mixerView(); arrangement.render(); editedPattern();
 }); };
 element('delete-track').onclick = () => { void action(async () => {
   if (audioStatus.playing || project.tracks.length <= 1) return;
   if (audioStatus.connected) await stopPlayback();
   const index = grid.activeTrack;
   if (index >= project.tracks.length) return; // the cursor is in a return or the master, which cannot be deleted here
-  envelopeEditor?.reset();
+  envelopeEditor.reset();
   deletedTrack = removeTrack(project, index);
-  grid.resetHistory(); grid.selectTrack(Math.min(index, project.tracks.length - 1)); mixerView(); arrangement.render(); editedPattern();
+  grid.resetSelection(); grid.selectTrack(Math.min(index, project.tracks.length - 1)); mixerView(); arrangement.render(); editedPattern();
 }); };
 grid.onMoveTrack = (from, to) => { void action(async () => {
   if (audioStatus.playing) return;
-  envelopeEditor?.reset();
+  envelopeEditor.reset();
   if (!moveTrack(project, from, to)) return;
-  deletedTrack = null; chosenDevice.clear(); grid.resetHistory(); grid.selectTrack(to); mixerView(); arrangement.render(); editedPattern();
+  deletedTrack = null; chosenDevice.clear(); grid.resetSelection(); grid.selectTrack(to); mixerView(); arrangement.render(); editedPattern();
 }); };
 element('restore-track').onclick = () => {
-  if (audioStatus.playing || !deletedTrack || project.tracks.length >= 16) return;
+  if (audioStatus.playing || !deletedTrack || project.tracks.length >= maxTracks) return;
   const index = deletedTrack.index;
-  envelopeEditor?.reset();
+  envelopeEditor.reset();
   if (!restoreTrack(project, deletedTrack)) return;
-  deletedTrack = null; grid.resetHistory(); grid.selectTrack(index); mixerView(); arrangement.render(); editedPattern();
+  deletedTrack = null; grid.resetSelection(); grid.selectTrack(index); mixerView(); arrangement.render(); editedPattern();
 };
 refreshProjectDir();
-if (envelopeEditor) envelopeEditor.projectHistory = { undo: undoProject, canUndo: () => projectHistory.canUndo, canRedo: () => projectHistory.canRedo };
+envelopeEditor.projectHistory = { undo: undoProject, canUndo: () => projectHistory.canUndo, canRedo: () => projectHistory.canRedo };
 selectDefinition(selected, false); arrangement.reset(); grid.render(); mixerView(); patternControls(); timingInputs();
 showView('pattern'); showPanel('code', true); showFx();
 const audioTimer = observeAudio(state => {
@@ -1176,18 +1165,16 @@ const audioTimer = observeAudio(state => {
   element<HTMLButtonElement>('play-song').disabled = !state.connected || state.playing;
   for (const input of document.querySelectorAll<HTMLInputElement | HTMLButtonElement>('[data-structure]')) {
     if (input.closest('#mixer')) continue;
-    input.disabled = state.playing || (input.id === 'add-track' || input.id === 'duplicate-track') && project.tracks.length >= 16 || input.id === 'delete-track' && project.tracks.length <= 1 || input.id === 'restore-track' && (!deletedTrack || project.tracks.length >= 16);
+    input.disabled = state.playing || (input.id === 'add-track' || input.id === 'duplicate-track') && project.tracks.length >= maxTracks || input.id === 'delete-track' && project.tracks.length <= 1 || input.id === 'restore-track' && (!deletedTrack || project.tracks.length >= maxTracks);
   }
   arrangement.paint(state.sequence_position, state.playing);
   element('sequencer').querySelector<HTMLElement>('.sequence-lock')!.hidden = !state.playing;
   if (state.playing && element<HTMLInputElement>('follow').checked && state.pattern_id && state.sequence_position !== null && (arrangement.pattern.id !== state.pattern_id || arrangement.position !== state.sequence_position)) {
-    if (state.sequence_position !== null) arrangement.select(state.sequence_position, false);
+    arrangement.select(state.sequence_position, false);
   }
   setText('play-position', state.playing && state.pattern_id ? `${state.sequence_position === null ? 'Loop' : `Step ${state.sequence_position + 1}`} · row ${state.row ?? '…'}` : '');
-  element<HTMLInputElement>('bpm').disabled = false;
-  element<HTMLInputElement>('rows-per-beat').disabled = false;
   setText('audio-status', audioError ?? state.error ?? (state.connected ? `${state.playing ? 'Playing' : 'Connected'} · ${state.sample_rate / 1000} kHz${state.skipped_rows ? ` · ${state.skipped_rows} skipped rows` : ''}${state.late_events ? ` · ${state.late_events} late events` : ''}` : 'Engine not connected'));
-  envelopeEditor?.paint(state.pattern_id === arrangement.pattern.id ? state.row : null);
+  envelopeEditor.paint(state.pattern_id === arrangement.pattern.id ? state.row : null);
   grid.paint(state.pattern_id === arrangement.pattern.id ? state.row : null, state.row_phase, state.row_at_ms); renderApplyStatus();
 });
 void connectLanguageServer(status);
@@ -1200,7 +1187,7 @@ function renderView() {
   setText('zoom-level', `${Math.round(view.scale * 100)}%`);
   element('toggle-sequence').setAttribute('aria-pressed', String(view.sequence));
   element('sequence-cells').setAttribute('aria-pressed', String(view.matrix));
-  if (arrangement) arrangement.setCells(view.matrix);
+  arrangement.setCells(view.matrix);
   element('toggle-side').setAttribute('aria-pressed', String(view.side));
   measure();
 }
@@ -1333,10 +1320,3 @@ if (isTauri()) {
   void action(ensureConnected);
 }
 window.addEventListener('beforeunload', () => { clearInterval(audioTimer); clearInterval(scopeTimer); for (const each of Object.values(editors)) each.destroy(); });
-
-// Enter in a toolbar or timing field commits the value and hands the keyboard back to the grid
-for (const panel of [element('toolbar'), timingControls]) panel.addEventListener('keydown', event => {
-  const input = event.target as HTMLElement;
-  if (event.key !== 'Enter' || !(input instanceof HTMLInputElement)) return;
-  event.preventDefault(); input.blur(); element('grid').focus();
-});

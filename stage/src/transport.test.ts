@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { languageTransport } from './transport';
+import { languageTransport } from '../../editors/codemirror/lsp';
 
 it('orders document updates ahead of requests even when the backend is asynchronous', async () => {
   const calls: string[] = [], replies: string[] = [];

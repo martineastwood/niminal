@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { HealthWatch } from './health';
 
-const reading = (starved: number) => ({ late_events: 0, starved_frames: starved, deadline_misses: 0, capacity_drops: 0, max_render_micros: 0 });
+const reading = (starved: number) => ({ late_events: 0, starved_frames: starved, deadline_misses: 0, capacity_drops: 0 });
 
 describe('watching the engine', () => {
   it('is fine while the counters stand still', () => {

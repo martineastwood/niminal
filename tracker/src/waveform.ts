@@ -2,7 +2,7 @@ import { readLoop, writeLoop, type SampleLoop } from './loops';
 import type { Definition } from './project';
 import { sampleFile } from './instruments';
 import { readPlayback, writePlayback, playbackNames, playbackHints, type Playback } from './playback';
-import { withFit, withStretch, readFit, readFitMode, withFitMode, sourceTempo, estimateBeats, type FitMode } from './stretch';
+import { withFit, readFit, readFitMode, withFitMode, sourceTempo, estimateBeats, type FitMode } from './stretch';
 import { noteName, readRoot, writeRoot, readRelease, writeRelease, readInterpolation, writeInterpolation, type Interpolation } from './sampleprops';
 import { unslice, addCut, cutNear, moveCut, pieceAt, pieceKey, readCuts, removeCut, writeCuts } from './slices';
 
@@ -57,7 +57,6 @@ export class SamplePanel {
   private readonly fitBox = document.createElement('input');
   private readonly sensitivity = document.createElement('input');
   private readonly uncutButton = document.createElement('button');
-  private stage!: HTMLElement;
   private readonly rootNote = document.createElement('select');
   private readonly finetune = document.createElement('input');
   private readonly matchButton = document.createElement('button');
@@ -171,7 +170,6 @@ export class SamplePanel {
     const stage = document.createElement('div'); stage.className = 'sample-stage'; stage.append(this.canvas);
     const main = document.createElement('div'); main.className = 'sample-main'; main.append(toolbar, stage, this.hint);
     root.replaceChildren(main, props);
-    this.stage = stage;
     this.canvas.onpointerdown = event => this.down(event);
     this.canvas.onpointermove = event => this.move(event);
     this.canvas.onpointerup = () => this.up();
@@ -301,8 +299,7 @@ export class SamplePanel {
   private commitStretch() {
     const value = this.stretch.valueAsNumber, mode = this.stretchMode.value;
     if (!this.definition || !Number.isFinite(value) || value < 0.25 || value > 4 || !['0', '1', '2'].includes(mode)) return;
-    let source = withStretch(this.definition.source);
-    source = source.replace(/stretch: 0\.25\.\.4 = [\d.]+/, `stretch: 0.25..4 = ${value}`).replace(/stretch_mode: 0\.\.2 = [012]/, `stretch_mode: 0..2 = ${mode}`);
+    const source = this.definition.source.replace(/stretch: 0\.25\.\.4 = [\d.]+/, `stretch: 0.25..4 = ${value}`).replace(/stretch_mode: 0\.\.2 = [012]/, `stretch_mode: 0..2 = ${mode}`);
     if (source !== this.definition.source) this.actions.edit(this.definition, source);
   }
 

@@ -75,6 +75,40 @@ instr changing() {
 
 This is interpolation between corresponding FFT bins, not matching one sound's harmonics to another's. It is most predictable with overlapping frequency content; unrelated sounds can give deliberately diffuse results. Intermediate frequencies integrate continuously, while frequency endpoints use their source's analysis phases. It is a different transformation from `envelope_transfer`, which transfers the broad spectral shape and retains the carrier's fine structure.
 
+## Morph tracked partials
+
+`partial_morph(x, other, magnitude: 0.5, frequency: 0.5)` tracks both inputs and pairs their tonal components before sine-bank resynthesis. It can glide between widely separated pitches, even when their FFT peaks occupy different bins.
+
+```nml
+instr transforming() {
+  left = osc(tri, a3) * 0.2
+  right = osc(saw, c4).lpf(cutoff: 3khz) * 0.15
+  movement = env[0 1beat 0 4beats 1]
+  out = partial_morph(left, right, magnitude: movement, frequency: movement,
+    count: 24, size: 2048, overlap: 8) * env[0 80ms 1 | 300ms 0]
+}
+```
+
+| Control | Default | Meaning |
+| --- | --- | --- |
+| `magnitude` | `0.5` | Linear blend of paired track amplitudes: 0 is the first source, 1 the second. |
+| `frequency` | `0.5` | Logarithmic blend of paired frequencies: halfway through an octave is a tritone. Controls clamp to 0…1. |
+| `count` | `32` | Strongest peak candidates per source, clamped to `max_tracks`. |
+| `threshold` | `0.01` | Peak magnitude relative to each source's current largest FFT bin, 0…1. |
+| `freeze` | `0` | Above 0.5, hold both track banks; magnitude and frequency blends remain live. |
+| `max_tracks` | `64` | Compile-time track capacity **per source**, a whole number from 1 to 256. |
+| `size`, `overlap` | `2048`, `4` | Compile-time FFT settings, with the ranges described above. |
+
+Matching compares each track's frequency relative to its source's lowest currently audible track. For harmonic sources with a detected fundamental, this tends to pair corresponding harmonic numbers. New partners must be within three semitones of that relative position. Existing pairs stay together across changes in loudness and brief detection gaps. Track generations prevent a newly born track from inheriting an old track's partner when a storage slot is reused.
+
+Unmatched components keep their own frequency and fade with their source's magnitude weight. If one source is silent, the other remains available. Each matched pair has one continuously running oscillator; amplitude and frequency targets interpolate over a hop, without restarting its phase when the blend changes. There are at most `2 * max_tracks` oscillator slots. During complete track turnover, retiring oscillators may need to fade out for a hop before all new tracks can sound.
+
+This is **tonal resynthesis**, so endpoints reproduce the tracked approximation rather than the original audio. Noise, breath and attacks are not preserved as a separate residual layer. The lowest-track reference is not a fundamental-frequency detector: missing fundamentals, noisy inputs and polyphonic mixtures can produce less predictable pairings. Begin with clear monophonic sources and leave output headroom. Stereo channels track and pair independently.
+
+All controls are sampled at frame boundaries. Declared latency is `size / 2 + size / overlap` samples, as for `spectral_partials`; extracted attack timing is approximate. Reset clears both banks and all pairs. Compatible live redefinitions preserve the complete capture and oscillator state when size, overlap and capacity match. Audio processing uses only preallocated buffers.
+
+`examples/partial_morph.nml` first auditions a rounded bowed A3 and a brighter, breathing C4. It then moves between their tracked partials, freezes the banks, and brings the matched pitches back toward A while retaining B's held amplitude profile. Compare it with `examples/spectral_morph.nml`, which demonstrates bin-based interpolation.
+
 ## Select and arpeggiate spectral components
 
 | Opcode | Controls | Result |
@@ -116,6 +150,6 @@ Adding Hz changes harmonic spacing relative to the fundamental, producing inharm
 
 Track slots keep their identity when loudness ordering changes. Matching uses nearest frequency within the greater of three FFT bins or 4% of the previous frequency, with at most one candidate per slot. Missing tracks fade over one hop and can reconnect for three frames before their slots are released. Slots are reused after tracks die; these are bounded live identities, not permanent IDs for an entire recording. Crossing or unresolved partials can still exchange identities. Freeze a capture before selecting slots when you want a stable component to audition.
 
-All six new opcodes accept compile-time `size: 2048` and `overlap: 4`, with the same ranges as `spectral_warp`. Controls are sampled at frame boundaries, except partial oscillator transposition and slot selection, which are sampled per audio sample. The first five add `size` samples of latency. Partial resynthesis declares `size / 2 + size / overlap` samples for its window-centre analysis and one-hop interpolation; its extracted attacks are approximate. Stereo channels are processed independently. Working buffers and track storage are allocated before processing, and compatible live redefinitions carry their state.
+These spectral tools accept compile-time `size: 2048` and `overlap: 4`, with the same ranges as `spectral_warp`. Controls are sampled at frame boundaries, except `spectral_partials` transposition and slot selection, which are sampled per audio sample. Bin-based morphing, thinning, arpeggiation, holding and Hz shifting add `size` samples of latency. Both `spectral_partials` and `partial_morph` declare `size / 2 + size / overlap` samples for window-centre analysis and one-hop interpolation; extracted attacks are approximate. Stereo channels are processed independently. Working buffers and track storage are allocated before processing, and compatible live redefinitions carry their state.
 
 Examples: `spectral_morph.nml`, `spectral_select.nml`, `spectral_hold.nml`, `spectral_shift.nml` and `spectral_partials.nml` each start with an audible source before introducing their transformation.

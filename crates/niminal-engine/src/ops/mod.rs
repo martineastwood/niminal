@@ -134,3 +134,6 @@ mod spectral_edit;
 mod spectral_partials;
 pub use spectral_edit::{SpectralEdit, SpectralEditKind, SpectralMorph};
 pub use spectral_partials::SpectralPartials;
+
+mod partial_morph;
+pub use partial_morph::PartialMorph;

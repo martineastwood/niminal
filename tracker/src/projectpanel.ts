@@ -32,7 +32,7 @@ export interface ProjectPanelActions {
 export class ProjectPanel {
   private readonly list = document.createElement('div');
 
-  constructor(private readonly root: HTMLElement, private readonly items: () => ProjectInstrument[], private readonly current: () => string | null, private readonly actions: ProjectPanelActions) {
+  constructor(root: HTMLElement, private readonly items: () => ProjectInstrument[], private readonly current: () => string | null, private readonly actions: ProjectPanelActions) {
     const heading = document.createElement('div'); heading.className = 'pp-heading';
     const title = document.createElement('span'); title.className = 'section-title'; title.textContent = 'INSTRUMENTS'; heading.append(title);
     const add = document.createElement('button'); add.className = 'pp-add'; add.textContent = '+ Add'; add.title = 'Add an instrument: blank, from audio files, or cut from a sampler';

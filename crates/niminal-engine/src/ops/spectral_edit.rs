@@ -317,7 +317,7 @@ impl Opcode for SpectralMorph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ops::SpectralPartials;
+    use crate::ops::{PartialMorph, SpectralPartials};
 
     fn render(op: &mut dyn Opcode, offset: usize, held: bool) -> Vec<f32> {
         let len = 4096;
@@ -362,6 +362,7 @@ mod tests {
         .map(|kind| Box::new(SpectralEdit::new(kind, 512, 4)) as Box<dyn Opcode>)
         .collect();
         ops.push(Box::new(SpectralMorph::new(512, 4)));
+        ops.push(Box::new(PartialMorph::new(512, 4, 16)));
         ops.push(Box::new(SpectralPartials::new(512, 4, 16)));
         for mut original in ops {
             let mut parallel = original.box_clone();

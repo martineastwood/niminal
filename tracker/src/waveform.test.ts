@@ -112,10 +112,8 @@ it('selects the stretch algorithm without changing duration or cuts', async () =
   expect(definition.source).toContain('stretch_mode: 0..2 = 0');
 });
 
-it('adds the algorithm control to an existing generated sampler when selected', async () => {
-  const { root, definition, panel } = await setup(null);
-  definition.source = definition.source.replace(',\n  stretch_mode: 0..2 = 0', '').replaceAll(', stretch_mode: stretch_mode', '');
-  await panel.refresh();
+it('sets the stretch algorithm in the code when one is chosen', async () => {
+  const { root, definition } = await setup(null);
   const mode = root.querySelector<HTMLSelectElement>('[aria-label="Stretch algorithm"]')!;
   mode.value = '1'; mode.dispatchEvent(new Event('change'));
   expect(definition.source).toContain('stretch_mode: 0..2 = 1');

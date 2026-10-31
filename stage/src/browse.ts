@@ -1,6 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-
-export type BrowseFile = { path: string; bytes: number };
+import { divider } from './divider';
 
 const slashes = (path: string) => path.replace(/\\/g, '/');
 
@@ -43,7 +42,8 @@ export function snippetFor(lineBefore: string, lineAfter: string, path: string) 
   return blank ? `${nameFor(path)} = ${call}` : call;
 }
 
-const listing = (dir: string) => invoke<BrowseFile[]>('list_files', { dir });const pickFolder = () => invoke<string | null>('pick_folder');
+const listing = (dir: string) => invoke<string[]>('list_files', { dir });
+const pickFolder = () => invoke<string | null>('pick_folder');
 const bytesOf = (path: string) => invoke<ArrayBuffer>('read_sample', { path });
 
 /** One column of a waveform per pixel: the quietest and loudest sample in it. */
@@ -73,7 +73,7 @@ type Options = {
 };
 
 /** A row of the tree: a folder (its path ends in `/`) or a file, shown `depth` levels in. */
-type Row = { path: string; depth: number; file?: BrowseFile };
+type Row = { path: string; depth: number; file?: string };
 
 const isPiece = (path: string) => path.toLowerCase().endsWith('.nml');
 const ROWS = 400;
@@ -82,8 +82,8 @@ const ROWS = 400;
  * The rows to show for files under `root`: a tree with the folders in `open` opened, or, when searching, a
  * flat list of the paths containing every word.
  */
-export function rowsFor(files: BrowseFile[], root: string, open: Set<string>, words: string[]): Row[] {
-  const rel = (file: BrowseFile) => slashes(file.path).slice(root.length).replace(/^\//, '');
+export function rowsFor(files: string[], root: string, open: Set<string>, words: string[]): Row[] {
+  const rel = (file: string) => slashes(file).slice(root.length).replace(/^\//, '');
   if (words.length) {
     return files
       .filter(file => words.every(word => rel(file).toLowerCase().includes(word)))
@@ -112,7 +112,7 @@ export function rowsFor(files: BrowseFile[], root: string, open: Set<string>, wo
 export class FileBrowse {
   readonly element: HTMLElement;
   private folder: string | null = localStorage.getItem('niminal-stage:samples');
-  private files: BrowseFile[] = [];
+  private files: string[] = [];
   private rows: Row[] = [];
   private opened = new Set<string>();
   private selected = -1;
@@ -157,7 +157,6 @@ export class FileBrowse {
     find('.files-close').addEventListener('click', () => this.close());
     find('.files-up').addEventListener('click', () => void this.up());
     find('.files-folder').addEventListener('click', () => void this.choose());
-    const divider = find('.files-divider');
     const widthKey = 'niminal-stage:browser-width';
     const savedWidth = Number(localStorage.getItem(widthKey));
     if (savedWidth > 0) this.element.style.setProperty('--browser-width', `${savedWidth}px`);
@@ -167,38 +166,9 @@ export class FileBrowse {
       this.element.style.setProperty('--browser-width', `${clamped}px`);
       localStorage.setItem(widthKey, String(clamped));
     };
-    let startX = 0;
-    let startWidth = 0;
-    divider.addEventListener('pointerdown', event => {
-      if (event.button !== 0) return;
-      event.preventDefault();
-      startX = event.clientX;
-      startWidth = this.element.getBoundingClientRect().width;
-      divider.setPointerCapture(event.pointerId);
-      divider.classList.add('dragging');
-      document.body.classList.add('resizing');
-    });
-    divider.addEventListener('pointermove', event => {
-      if (divider.hasPointerCapture(event.pointerId)) resize(startWidth + event.clientX - startX);
-    });
-    const endResize = () => {
-      divider.classList.remove('dragging');
-      document.body.classList.remove('resizing');
-    };
-    divider.addEventListener('pointerup', event => {
-      if (divider.hasPointerCapture(event.pointerId)) divider.releasePointerCapture(event.pointerId);
-      endResize();
-    });
-    divider.addEventListener('lostpointercapture', endResize);
-    divider.addEventListener('pointercancel', endResize);
-    divider.addEventListener('dblclick', () => {
+    divider(find('.files-divider'), 1, () => this.element.getBoundingClientRect().width, resize, () => {
       this.element.style.removeProperty('--browser-width');
       localStorage.removeItem(widthKey);
-    });
-    divider.addEventListener('keydown', event => {
-      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
-      event.preventDefault();
-      resize(this.element.getBoundingClientRect().width + (event.key === 'ArrowRight' ? 1 : -1) * (event.shiftKey ? 80 : 20));
     });
     this.filter.addEventListener('input', () => this.refilter());
     const navigate = (event: KeyboardEvent) => {
@@ -325,7 +295,7 @@ export class FileBrowse {
         el.style.paddingLeft = `calc(${6 + row.depth * 12}px * var(--z))`;
         const name = searching ? row.path : (row.path.replace(/\/$/, '').split('/').pop() ?? row.path);
         el.textContent = row.file ? name : `${this.opened.has(row.path) ? '▾' : '▸'} ${name}`;
-        el.title = row.file?.path ?? row.path;
+        el.title = row.file ?? row.path;
         el.addEventListener('click', () => {
           this.list.focus();
           this.select(index);
@@ -373,12 +343,12 @@ export class FileBrowse {
     this.playing = null;
   }
 
-  private async audition(file: BrowseFile) {
+  private async audition(file: string) {
     this.stop();
     const heard = this.heard;
     try {
       this.context ??= new AudioContext();
-      const data = await bytesOf(file.path);
+      const data = await bytesOf(file);
       const buffer = await this.context.decodeAudioData(data);
       // another sample was chosen while this one loaded
       if (heard !== this.heard) return;
@@ -422,10 +392,10 @@ export class FileBrowse {
       return;
     }
     if (isPiece(row.path)) {
-      this.options.openPiece(row.file.path);
+      this.options.openPiece(row.file);
       return;
     }
-    const path = relativePath(this.options.fileDir(), row.file.path);
+    const path = relativePath(this.options.fileDir(), row.file);
     this.options.insert((before, after) => snippetFor(before, after, path));
     this.options.status(`inserted sample("${path}")`);
   }

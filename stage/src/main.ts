@@ -13,8 +13,9 @@ import { sceneCommand, sceneStates } from './scenes';
 import { HealthWatch } from './health';
 import { learnedRange } from './learn';
 import { FileBrowse } from './browse';
+import { divider } from './divider';
 import { Bar, loudest } from './meters';
-import { Action, EvalOutcome, Problem, Queued, Scene, Snapshot, beatsUntil, queuedStates, stage } from './live';
+import { Action, EvalOutcome, OpenedFile, Problem, Queued, Scene, Snapshot, beatsUntil, queuedStates, stage } from './live';
 import { StoredTabs, loadTabs, moveItem, tabTitle, tabsKey } from './tabs';
 import './style.css';
 
@@ -133,7 +134,6 @@ let connected = false;
 let connectedOnce = false;
 let lastSceneSignature = '';
 let lastClipCount = -1;
-let noticeLog: string[] = [];
 
 /** The code an evaluation sends and where it begins in the editor: the selection, else the block the cursor is in. */
 function chunk(scope: Scope) {
@@ -402,19 +402,10 @@ function flash(kind: 'landed' | 'sent' | 'refused') {
 /** How long until the next change lands, counted in beats so it is felt rather than read. */
 function updateLanding(snapshot: Snapshot) {
   const landing = $('landing');
-  const t = snapshot.transport;
-  const next = snapshot.pending.reduce<number | null>(
-    (soonest, p) => (soonest == null ? p.lands_at : Math.min(soonest, p.lands_at)),
-    null,
-  );
-  if (!t || next == null || !snapshot.sample_rate) {
-    landing.textContent = '';
-    landing.classList.remove('on');
-    return;
-  }
-  const beats = Math.max(0, ((next - t.sample) / snapshot.sample_rate) * (t.bpm / 60));
-  landing.textContent = `lands in ${beats.toFixed(1)} beats`;
-  landing.classList.add('on');
+  const on = snapshot.transport !== null && snapshot.sample_rate > 0 && snapshot.pending.length > 0;
+  const next = Math.min(...snapshot.pending.map(p => p.lands_at));
+  landing.textContent = on ? `lands in ${beatsUntil(snapshot, next).toFixed(1)} beats` : '';
+  landing.classList.toggle('on', on);
 }
 
 /** What lands next, with a countdown in beats that is updated in place, so its buttons can be clicked. */
@@ -463,29 +454,28 @@ function updatePending(snapshot: Snapshot) {
   }
 }
 
+/** The latest thing the engine said, or the latest change that landed. */
 function updateNotices(snapshot: Snapshot) {
+  let latest: string | undefined;
   for (const notice of snapshot.notices) {
-    noticeLog.push(notice);
+    latest = notice;
     status(notice);
     // the engine can turn down a change that compiled, when it lands: that must not pass unseen
     if (/was refused by the engine/.test(notice)) {
-      showBanner([{ message: notice, help: null, line: null, column: null, in_definition: null }], 'not applied');
+      showBanner([problem(notice)], 'not applied');
       flash('refused');
     }
   }
-  for (const landed of snapshot.landed) {
-    noticeLog.push(`landed: ${landed.changes.join(' · ')}`);
+  const landed = snapshot.landed.at(-1);
+  if (landed) {
+    latest = `landed: ${landed.changes.join(' · ')}`;
+    flash('landed');
   }
-  if (snapshot.landed.length) flash('landed');
-  noticeLog = noticeLog.slice(-1);
-  notices.replaceChildren(
-    ...noticeLog.map(message => {
-      const row = document.createElement('div');
-      row.className = 'notice';
-      row.textContent = message;
-      return row;
-    }),
-  );
+  if (latest === undefined) return;
+  const row = document.createElement('div');
+  row.className = 'notice';
+  row.textContent = latest;
+  notices.replaceChildren(row);
 }
 
 /** The output meter: one bar per channel (up to two), stepped and drawn every frame. */
@@ -602,7 +592,7 @@ function drawTake() {
         if (done) status(done);
       } catch (error) {
         status(String(error));
-        showBanner([{ message: String(error), help: null, line: null, column: null, in_definition: null }], 'take');
+        showBanner([problem(String(error))], 'take');
       }
     });
     return node;
@@ -657,6 +647,8 @@ function updateTransport(snapshot: Snapshot) {
 
 /** A refused evaluation is shown big at the top of the code, where it cannot be missed from across a room. */
 let bannerTimer: ReturnType<typeof setTimeout> | undefined;
+/** A message shown as a problem that points at no line. */
+const problem = (message: string): Problem => ({ message, help: null, line: null, column: null, in_definition: null });
 /** How long the banner stays up; the problems list below the code keeps the detail. */
 const BANNER_SECONDS = 6;
 
@@ -765,14 +757,18 @@ async function cancelPending(id: number) {
   }
 }
 
+/** Show the file at `path` in its tab, opening one with what `read` gives if it has none. */
+async function openTab(path: string, read: () => Promise<OpenedFile>) {
+  const open = tabs.find(tab => tab.path === path);
+  if (open) show(open);
+  else addTab((await read()).source, path, 'untitled');
+  status(`opened ${path}; evaluate it when you are ready`);
+}
+
 async function openFile() {
   try {
     const opened = await stage.openFile();
-    if (!opened) return;
-    const open = tabs.find(tab => tab.path === opened.path);
-    if (open) show(open);
-    else addTab(opened.source, opened.path, 'untitled');
-    status(`opened ${opened.path}; evaluate it when you are ready`);
+    if (opened) await openTab(opened.path, async () => opened);
   } catch (error) {
     status(String(error));
   }
@@ -781,13 +777,7 @@ async function openFile() {
 /** Open one file from the file browse panel in a tab, or switch to it if it is already open. */
 async function openPath(path: string) {
   try {
-    const open = tabs.find(tab => tab.path === path);
-    if (open) show(open);
-    else {
-      const opened = await stage.openPath(path);
-      addTab(opened.source, opened.path, 'untitled');
-    }
-    status(`opened ${path}; evaluate it when you are ready`);
+    await openTab(path, () => stage.openPath(path));
   } catch (error) {
     status(String(error));
   }
@@ -855,7 +845,6 @@ let linkLost = false;
 function offline(): Snapshot {
   return {
     connected: false,
-    revision: 0,
     transport: null,
     beats_per_bar: 4,
     meter: [4, 4],
@@ -871,7 +860,6 @@ function offline(): Snapshot {
     health: null,
     learned: [],
     midi: { inputs: [], last: null },
-    error: null,
   };
 }
 
@@ -1024,35 +1012,7 @@ function setRail(width: number | null, save = true) {
 }
 const savedRail = Number(localStorage.getItem(railKey));
 if (savedRail) setRail(savedRail, false);
-const divider = $('divider');
-divider.addEventListener('pointerdown', event => {
-  // without this the drag also selects the text and controls it passes over
-  event.preventDefault();
-  divider.setPointerCapture(event.pointerId);
-  divider.classList.add('dragging');
-  document.body.classList.add('resizing');
-});
-divider.addEventListener('pointermove', event => {
-  if (divider.hasPointerCapture(event.pointerId)) setRail(mainPane.getBoundingClientRect().right - event.clientX);
-});
-divider.addEventListener('pointerup', event => {
-  divider.releasePointerCapture(event.pointerId);
-  divider.classList.remove('dragging');
-  document.body.classList.remove('resizing');
-});
-divider.addEventListener('pointercancel', () => {
-  divider.classList.remove('dragging');
-  document.body.classList.remove('resizing');
-});
-divider.addEventListener('dblclick', () => setRail(null));
-divider.addEventListener('keydown', event => {
-  const step = event.shiftKey ? 80 : 20;
-  const width = $('stage').getBoundingClientRect().width;
-  if (event.key === 'ArrowLeft') setRail(width + step);
-  else if (event.key === 'ArrowRight') setRail(width - step);
-  else return;
-  event.preventDefault();
-});
+divider($('divider'), -1, () => $('stage').getBoundingClientRect().width, setRail, () => setRail(null));
 
 const highlighter = new Highlighter(() => view ?? undefined);
 const laneView = new LaneView($('lanes'), (action, target, change) => {

@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PatternGrid } from './grid';
-import { newProject, emptyFxLane, blankColumn } from './project';
+import { newProject, emptyFxLane, blankColumn, type Project } from './project';
+import { ProjectHistory } from './history';
 
 Element.prototype.scrollIntoView = () => {};
 // happy-dom does not expose the browser's Option convenience constructor.
@@ -10,16 +11,40 @@ vi.stubGlobal('Option', function (text: string, value: string) {
 });
 afterEach(() => document.body.replaceChildren());
 
+/** Puts `from` into `into` in place, so the arrays a test holds see what an undo restores. */
+function restore(into: Record<string, unknown> | unknown[], from: Record<string, unknown> | unknown[]) {
+  const nested = (a: unknown, b: unknown) => a !== null && b !== null && typeof a === 'object' && typeof b === 'object';
+  if (Array.isArray(into) && Array.isArray(from)) into.length = from.length;
+  else for (const key of Object.keys(into)) if (!(key in from)) delete (into as Record<string, unknown>)[key];
+  for (const [key, value] of Object.entries(from)) {
+    const target = into as Record<string, unknown>;
+    if (nested(target[key], value)) restore(target[key] as Record<string, unknown>, value as Record<string, unknown>); else target[key] = value;
+  }
+}
+
+/** Gives `grid` the project undo the app gives it: every edit is recorded, and undo puts the project back. */
+function withHistory(grid: PatternGrid, project: Project, edited = vi.fn()) {
+  const history = new ProjectHistory(JSON.stringify(project));
+  edited.mockImplementation(() => history.record(JSON.stringify(project)));
+  grid.projectUndo = redo => {
+    const raw = redo ? history.redo() : history.undo();
+    if (raw !== undefined) { restore(project as unknown as Record<string, unknown>, JSON.parse(raw)); grid.render(); }
+  };
+  /** Starts the history from the project as it is now, after a test has set it up by hand. */
+  return () => history.reset(JSON.stringify(project));
+}
+
 function setup(sequence = vi.fn(), current: () => string | null = () => null, velocity: () => number | null = () => null) {
   const feedback = vi.fn();
   const parent = document.createElement('div'); parent.tabIndex = 0; document.body.append(parent);
   const project = newProject(), edited = vi.fn(), audition = vi.fn(), play = vi.fn();
   const grid = new PatternGrid(parent, () => project, () => project.patterns[0], () => 4, edited, audition, play, undefined, undefined, feedback, sequence, current, velocity);
+  const baseline = withHistory(grid, project, edited);
   grid.recording = true;
   grid.render();
   const key = (key: string, options: KeyboardEventInit = {}) => parent.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...options }));
   const click = (row: number, track: number) => parent.querySelector<HTMLElement>(`#cell-${row}-${track}`)!.click();
-  return { parent, project, grid, key, click, edited, audition, play, sequence, feedback };
+  return { parent, project, grid, key, click, edited, audition, play, sequence, feedback, baseline };
 }
 
 function clipboard(parent: HTMLElement, type: 'copy' | 'paste', text = '') {
@@ -37,7 +62,7 @@ it('enters and auditions a note, then undoes/redoes it through grid keyboard sho
   expect(audition).toHaveBeenCalledWith('tone', 'C-4', 0, { hold: 2096 });
   key('z', { metaKey: true }); expect(project.patterns[0].notes[0][0].notes[1]).toBeNull();
   key('z', { metaKey: true, shiftKey: true }); expect(project.patterns[0].notes[0][0].notes[1]).toBe('C-4');
-  expect(edited).toHaveBeenCalledTimes(3);
+  expect(edited).toHaveBeenCalledTimes(1);
 });
 
 it('copies a rectangular selection and treats a multi-cell paste as one undoable edit', () => {
@@ -74,23 +99,16 @@ it('keeps selector typing out of the note grid and space playback local to the g
   expect(play).toHaveBeenCalledTimes(1);
 });
 
-it('keeps note undo history independent for each pattern and supports longer patterns', () => {
+it('edits a pattern longer than the first', () => {
   const parent = document.createElement('div'); document.body.append(parent);
   const project = newProject();
   const second = { id: 'second', name: 'Second', rows: 64, fx: Array.from({ length: 4 }, () => [emptyFxLane()]), return_fx: [], master_fx: [emptyFxLane()], commands: [[], [], [], [], []], notes: Array.from({ length: 4 }, () => [blankColumn(64)]) };
   project.patterns.push(second);
-  let pattern = project.patterns[0];
-  const grid = new PatternGrid(parent, () => project, () => pattern, () => 4, vi.fn(), vi.fn(), vi.fn());
-  grid.recording = true;
-  const key = (key: string) => parent.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
-  grid.render(); key('s'); // change first pattern's C to C#
-  pattern = second; grid.render();
-  parent.querySelector<HTMLElement>('#cell-63-0')!.click(); key('x');
+  const grid = new PatternGrid(parent, () => project, () => second, () => 4, vi.fn(), vi.fn(), vi.fn());
+  grid.recording = true; grid.render();
+  parent.querySelector<HTMLElement>('#cell-63-0')!.click();
+  parent.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true, cancelable: true }));
   expect(second.notes[0][0].notes[63]).toBe('D-4');
-  pattern = project.patterns[0]; grid.render(); grid.undo();
-  expect(project.patterns[0].notes[0][0].notes[0]).toBe('C-4');
-  expect(second.notes[0][0].notes[63]).toBe('D-4');
-  pattern = second; grid.render(); grid.undo(); expect(second.notes[0][0].notes[63]).toBeNull();
 });
 
 it('selects a track from its header buttons without entering notes, and navigates beyond the starter tracks', () => {
@@ -287,8 +305,8 @@ it('only edits with record mode on', () => {
 });
 
 it('interpolates the values between the first and last selected row, and rejects a selection with nothing to fill from', () => {
-  const { project, key, grid, parent } = setup(); project.tracks[0].show = { vol: true }; grid.render();
-  const vol = project.patterns[0].notes[0][0].vol; vol[0] = '0'; vol[4] = '128';
+  const { project, key, grid, parent, baseline } = setup(); project.tracks[0].show = { vol: true }; grid.render();
+  const vol = project.patterns[0].notes[0][0].vol; vol[0] = '0'; vol[4] = '128'; baseline();
   parent.querySelector<HTMLElement>('#cell-0-0-0-vol')!.click(); for (let i = 0; i < 4; i++) key('ArrowDown', { shiftKey: true });
   key('i', { metaKey: true }); expect(vol.slice(0, 5)).toEqual(['0', '32', '64', '96', '128']);
   key('z', { metaKey: true }); expect(vol.slice(0, 5)).toEqual(['0', null, null, null, '128']);
@@ -323,8 +341,8 @@ it('plays a second octave on the Q row and moves by bars and to the ends of the 
 });
 
 it('follows Renoise for Backspace, Delete and the column variants of insert and delete row', () => {
-  const { project, key, click } = setup(); const first = project.patterns[0].notes[0][0].notes, second = project.patterns[0].notes[1][0].notes;
-  first.fill(null); second.fill(null); first[1] = 'C-4'; first[2] = 'D-4'; second[1] = 'E-4'; second[2] = 'F-4';
+  const { project, key, click, baseline } = setup(); const first = project.patterns[0].notes[0][0].notes, second = project.patterns[0].notes[1][0].notes;
+  first.fill(null); second.fill(null); first[1] = 'C-4'; first[2] = 'D-4'; second[1] = 'E-4'; second[2] = 'F-4'; baseline();
   click(1, 0); key('Backspace'); expect(first.slice(0, 3)).toEqual([null, 'D-4', null]); // deletes the row and pulls the rest up
   key('z', { metaKey: true }); expect(first.slice(0, 3)).toEqual([null, 'C-4', 'D-4']);
   key('Delete'); expect(first.slice(0, 3)).toEqual([null, null, 'D-4']); // Delete only clears
@@ -526,9 +544,9 @@ it('records MIDI on the nearest live row without stepping away from playback', (
 });
 
 it('reverses and randomizes the selection, one undo step each, and keeps rests and OFF where they are', () => {
-  const { project, grid, key, click, feedback } = setup();
+  const { project, grid, key, click, feedback, baseline } = setup();
   const notes = project.patterns[0].notes[0][0].notes;
-  notes.splice(0, 8, 'C-4', null, 'E-4', 'OFF', 'G-4', null, 'C-5', null);
+  notes.splice(0, 8, 'C-4', null, 'E-4', 'OFF', 'G-4', null, 'C-5', null); baseline();
   click(0, 0); for (let i = 0; i < 7; i++) key('ArrowDown', { shiftKey: true });
   grid.reverseSelection();
   expect(notes.slice(0, 8)).toEqual([null, 'C-5', null, 'G-4', 'OFF', 'E-4', null, 'C-4']);
@@ -685,7 +703,7 @@ describe('dragging a selection', () => {
   };
   function selected() {
     const t = setup(); const notes = t.project.patterns[0].notes[0][0].notes; notes.fill(null);
-    notes[0] = 'C-4'; notes[1] = 'E-4'; t.grid.render();
+    notes[0] = 'C-4'; notes[1] = 'E-4'; t.baseline(); t.grid.render();
     t.click(0, 0); t.key('ArrowDown', { shiftKey: true });
     return { ...t, notes };
   }
@@ -725,7 +743,7 @@ function stripSetup() {
 }
 
 it('draws each return and the master after the tracks, each with a command column and no notes', () => {
-  const { parent, project } = stripSetup();
+  const { parent } = stripSetup();
   const headers = [...parent.querySelectorAll('.track-header')].map(h => h.querySelector('.track-name')!.textContent);
   expect(headers).toEqual(['Lead', 'Bass', 'Drums', 'Texture', 'Verb', 'Master']);
   for (const column of [4, 5]) {

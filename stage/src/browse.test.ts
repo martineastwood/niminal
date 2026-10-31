@@ -39,10 +39,7 @@ describe('drawing a waveform', () => {
 });
 
 describe('the rows of the file browse panel', () => {
-  const files = ['drums/hats/open.wav', 'drums/kick.wav', 'loops/amen.wav', 'main.nml'].map(p => ({
-    path: `/set/${p}`,
-    bytes: 1,
-  }));
+  const files = ['drums/hats/open.wav', 'drums/kick.wav', 'loops/amen.wav', 'main.nml'].map(p => `/set/${p}`);
   const paths = (open: string[], words: string[] = []) =>
     rowsFor(files, '/set', new Set(open), words).map(r => r.path);
 

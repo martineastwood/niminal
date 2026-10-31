@@ -58,7 +58,7 @@ export class SoundBrowser {
   private readonly favourites = new Set<string>();
 
   /** `items` gives what each tab lists, asked again on `refresh` so it follows the project. */
-  constructor(private readonly root: HTMLElement, private readonly items: (kind: SoundKind) => BrowserItem[], private readonly actions: SoundBrowserActions, focusGrid: () => void, only?: SoundKind) {
+  constructor(root: HTMLElement, private readonly items: (kind: SoundKind) => BrowserItem[], private readonly actions: SoundBrowserActions, focusGrid: () => void, only?: SoundKind) {
     if (only) this.kind = only;
     const bar = document.createElement('div'); bar.className = 'sb-tabs';
     for (const [kind, label] of labels) {

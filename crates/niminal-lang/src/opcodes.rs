@@ -11,10 +11,10 @@ use niminal_engine::ops::{
     Allpass, Biquad, BiquadMode, Bitcrush, Chorus, Clip, Comb, Compressor, Convolve, DcBlock,
     Delay, Distortion, Eq, EqMode, Fdn, FilterMode, FinishWhen, Fn1, Fold, Follow, Formant, Freeze,
     Func, GLITCH_MAX_SECONDS, Gain, Gate, Granular, Impulse, IrSpectrum, Ladder, Lag, Limiter,
-    Modal, Noise, NoiseColor, Osc, Phaser, Phasor, PitchShift, RepeatLast, Resonator, Reverb,
-    RewindLast, SampleHold, Scatter, SlowDown, SpectralDelay, SpectralEdit, SpectralEditKind,
-    SpectralFreeze, SpectralMemory, SpectralMorph, SpectralPartials, SpectralWarp, Svf, Waveshape,
-    Wavetable,
+    Modal, Noise, NoiseColor, Osc, PartialMorph, Phaser, Phasor, PitchShift, RepeatLast, Resonator,
+    Reverb, RewindLast, SampleHold, Scatter, SlowDown, SpectralDelay, SpectralEdit,
+    SpectralEditKind, SpectralFreeze, SpectralMemory, SpectralMorph, SpectralPartials,
+    SpectralWarp, Svf, Waveshape, Wavetable,
 };
 
 use crate::unit::Unit;
@@ -196,6 +196,14 @@ fn fft_size(a: &BuildArgs) -> Result<usize, String> {
 fn spectral_edit(a: &BuildArgs, kind: SpectralEditKind) -> Result<Box<dyn Opcode>, String> {
     let (size, overlap, _) = vocoder_settings(a)?;
     Ok(Box::new(SpectralEdit::new(kind, size, overlap)))
+}
+
+fn partial_capacity(a: &BuildArgs) -> Result<usize, String> {
+    let count = a.consts.get("max_tracks").copied().unwrap_or(64.0);
+    if count.fract() != 0.0 || !(1.0..=256.0).contains(&count) {
+        return Err("max_tracks must be a whole number from 1 to 256".into());
+    }
+    Ok(count as usize)
 }
 
 fn vocoder_settings(a: &BuildArgs) -> Result<(usize, usize, usize), String> {
@@ -918,6 +926,30 @@ impl Registry {
                 }),
             ),
             OpSpec::new(
+                "partial_morph",
+                "Track and pair partials from two inputs by relative frequency, then morph magnitudes linearly and frequencies logarithmically. Unmatched tracks fade independently. Count (32) and threshold (0.01) apply per source; freeze holds both track banks while blends remain live. Lowest detected tracks anchor relative matching, not a pitch detector. Size defaults to 2048, overlap to 4, max_tracks to 64 (1..256 per source). Tonal resynthesis only; latency size/2 + hop samples.",
+                vec![
+                    req("x", SIGNAL),
+                    req("other", SIGNAL),
+                    opt("magnitude", SIGNAL),
+                    opt("frequency", SIGNAL),
+                    opt("count", SIGNAL),
+                    opt("threshold", SIGNAL),
+                    opt("freeze", SIGNAL),
+                    setting("size", SIGNAL),
+                    setting("overlap", SIGNAL),
+                    setting("max_tracks", SIGNAL),
+                ],
+                Build::Builtin(|a| {
+                    let (size, overlap, _) = vocoder_settings(a)?;
+                    Ok(Box::new(PartialMorph::new(
+                        size,
+                        overlap,
+                        partial_capacity(a)?,
+                    )))
+                }),
+            ),
+            OpSpec::new(
                 "spectral_partials",
                 "Track spectral peaks in stable slots and resynthesize with interpolated sine oscillators. Count keeps the strongest candidates (default 32); threshold is relative to the frame maximum (0.01). Shift is semitones, freeze holds tracks, track selects a 1-based slot (0 all), lowest/highest are Hz. Max_tracks is compile-time 1..256 (default 64). Slots can be reused after tracks die. Latency is size/2 + hop samples.",
                 vec![
@@ -935,14 +967,10 @@ impl Registry {
                 ],
                 Build::Builtin(|a| {
                     let (size, overlap, _) = vocoder_settings(a)?;
-                    let count = a.consts.get("max_tracks").copied().unwrap_or(64.0);
-                    if count.fract() != 0.0 || !(1.0..=256.0).contains(&count) {
-                        return Err("max_tracks must be a whole number from 1 to 256".into());
-                    }
                     Ok(Box::new(SpectralPartials::new(
                         size,
                         overlap,
-                        count as usize,
+                        partial_capacity(a)?,
                     )))
                 }),
             ),

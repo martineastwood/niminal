@@ -239,6 +239,7 @@ fn spectral_edits_morphing_and_partial_tracking_do_not_allocate_on_audio_thread(
         "spectral_shift(x,shift: 73hz,size: 512)",
         "spectral_morph(x,osc(saw,330hz),size: 512)",
         "spectral_partials(x,count: 8,freeze: phasor(8hz)>0.5,size: 512)",
+        "partial_morph(x,osc(saw,330hz)*0.1,magnitude: phasor(3hz),frequency: phasor(2hz),freeze: phasor(8hz)>0.5,count: 8,size: 512)",
     ] {
         let program = niminal_lang::compile(&format!(
             "instr a() {{ x=osc(saw,220hz)*0.1\n {expression} }}"

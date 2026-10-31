@@ -1,7 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod project;
-mod browse;
 mod session;
 
 use std::path::{Path, PathBuf};
@@ -14,76 +13,59 @@ use tauri::{Emitter, State};
 
 use session::{EvalOutcome, Snapshot};
 
-#[derive(Clone, Default)]
-struct LanguageServer(Arc<Mutex<niminal_lsp::Server>>);
-
-#[derive(Clone)]
 struct AppState {
     shared: Arc<session::Shared>,
-    lsp: LanguageServer,
+    lsp: Arc<Mutex<niminal_lsp::Server>>,
+}
+
+/// Run `work` off the window thread.
+async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn connect(state: State<'_, AppState>, port: u16, token: Option<String>) -> Result<(), String> {
     let shared = state.shared.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        session::connect(&shared, port, token.as_deref())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || session::connect(&shared, port, token.as_deref())).await?
 }
 
 /// Listen to the MIDI inputs whose names contain `filter` (all of them when empty); returns their names.
 #[tauri::command]
 async fn midi_open(state: State<'_, AppState>, filter: Option<String>) -> Result<Vec<String>, String> {
     let shared = state.shared.clone();
-    tauri::async_runtime::spawn_blocking(move || session::open_midi(&shared, filter.as_deref().unwrap_or("")))
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(move || session::open_midi(&shared, filter.as_deref().unwrap_or(""))).await?
 }
 
 /// The MIDI inputs and outputs there are.
 #[tauri::command]
 async fn midi_ports() -> Result<session::MidiPorts, String> {
-    tauri::async_runtime::spawn_blocking(session::midi_ports)
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(session::midi_ports).await?
 }
 
 /// Send MIDI clock to the output called `name`, or stop when there is none.
 #[tauri::command]
 async fn clock_out(state: State<'_, AppState>, name: Option<String>) -> Result<(), String> {
     let shared = state.shared.clone();
-    tauri::async_runtime::spawn_blocking(move || session::set_clock_out(&shared, name.as_deref()))
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(move || session::set_clock_out(&shared, name.as_deref())).await?
 }
 
 /// Follow the MIDI clock of the input called `name`, or stop when there is none.
 #[tauri::command]
 async fn clock_in(state: State<'_, AppState>, name: Option<String>) -> Result<(), String> {
     let shared = state.shared.clone();
-    tauri::async_runtime::spawn_blocking(move || session::set_clock_in(&shared, name.as_deref()))
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(move || session::set_clock_in(&shared, name.as_deref())).await?
 }
 
 #[tauri::command]
 async fn disconnect(state: State<'_, AppState>) -> Result<(), String> {
     let shared = state.shared.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        session::disconnect(&shared);
-    })
-    .await
-    .map_err(|e| e.to_string())
+    blocking(move || session::disconnect(&shared)).await
 }
 
 #[tauri::command]
 async fn snapshot(state: State<'_, AppState>) -> Result<Snapshot, String> {
     let shared = state.shared.clone();
-    tauri::async_runtime::spawn_blocking(move || session::snapshot(&shared))
-        .await
-        .map_err(|e| e.to_string())
+    blocking(move || session::snapshot(&shared)).await
 }
 
 #[tauri::command]
@@ -95,17 +77,10 @@ async fn eval(
     origin: Option<u64>,
 ) -> Result<EvalOutcome, String> {
     let shared = state.shared.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        session::eval(
-            &shared,
-            &source,
-            quantize.as_deref(),
-            dir.as_deref().map(std::path::Path::new),
-            origin.unwrap_or(0),
-        )
+    blocking(move || {
+        session::eval(&shared, &source, quantize.as_deref(), dir.as_deref().map(Path::new), origin.unwrap_or(0))
     })
-    .await
-    .map_err(|e| e.to_string())?
+    .await?
 }
 
 /// Start, stop, mute and solo clips and scenes by name, as the sidebar's buttons do.
@@ -119,9 +94,7 @@ async fn perform(
 ) -> Result<EvalOutcome, String> {
     if action == "panic" {
         let shared = state.shared.clone();
-        tauri::async_runtime::spawn_blocking(move || session::panic(&shared))
-            .await
-            .map_err(|e| e.to_string())??;
+        blocking(move || session::panic(&shared)).await??;
         return Ok(EvalOutcome {
             accepted: None,
             problems: Vec::new(),
@@ -139,67 +112,46 @@ async fn perform(
             return Err(format!("`{action}` needs a clip or scene to act on"));
         }
     };
-    eval(state, source, sidebar_quantize(&action, quantize), None, None).await
-}
-
-/// When a sidebar button lands. Starting, stopping and changing a clip wait for the same moment as the
-/// same words typed in the code would (the session's default, or the clip's or scene's own `quantize`),
-/// unless the land box says otherwise. Only hush is immediate, since it is for stopping things now.
-fn sidebar_quantize(action: &str, quantize: Option<String>) -> Option<String> {
-    match action {
-        "hush" => quantize.or_else(|| Some("now".into())),
-        _ => quantize,
-    }
+    // Buttons land when the same words typed in the code would, unless the land box says otherwise.
+    // Only hush is immediate, since it is for stopping things now.
+    let quantize = if action == "hush" { quantize.or_else(|| Some("now".into())) } else { quantize };
+    eval(state, source, quantize, None, None).await
 }
 
 #[tauri::command]
 async fn cancel(state: State<'_, AppState>, id: Option<u64>) -> Result<usize, String> {
     let shared = state.shared.clone();
-    tauri::async_runtime::spawn_blocking(move || session::cancel(&shared, id))
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(move || session::cancel(&shared, id)).await?
 }
 
-/// A `.nml` file the window opened, and where its samples and modules are found.
+/// A `.nml` file the window opened.
 #[derive(Serialize)]
 struct OpenedFile {
     path: String,
-    dir: String,
     source: String,
+}
+
+impl OpenedFile {
+    fn read(path: &Path) -> Result<OpenedFile, String> {
+        Ok(OpenedFile {
+            path: path.to_string_lossy().into_owned(),
+            source: std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?,
+        })
+    }
 }
 
 #[tauri::command]
 async fn open_file() -> Result<Option<OpenedFile>, String> {
-    let Some(file) = rfd::AsyncFileDialog::new()
-        .add_filter("niminal", &["nml"])
-        .pick_file()
-        .await
-    else {
-        return Ok(None);
-    };
-    let path = file.path().to_path_buf();
-    let source = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    Ok(Some(OpenedFile {
-        path: path.to_string_lossy().into_owned(),
-        dir: path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_string_lossy()
-            .into_owned(),
-        source,
-    }))
+    match rfd::AsyncFileDialog::new().add_filter("niminal", &["nml"]).pick_file().await {
+        Some(file) => OpenedFile::read(file.path()).map(Some),
+        None => Ok(None),
+    }
 }
 
 /// A `.nml` file chosen in the file browse panel.
 #[tauri::command]
 async fn open_path(path: String) -> Result<OpenedFile, String> {
-    let path = PathBuf::from(path);
-    let source = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(OpenedFile {
-        dir: path.parent().unwrap_or_else(|| Path::new(".")).to_string_lossy().into_owned(),
-        path: path.to_string_lossy().into_owned(),
-        source,
-    })
+    OpenedFile::read(Path::new(&path))
 }
 
 /// A folder of `.nml` files: what to open as tabs, and the file to evaluate to play them.
@@ -220,16 +172,7 @@ async fn open_project() -> Result<Option<OpenedProject>, String> {
     if paths.is_empty() {
         return Err("no .nml files in that folder".into());
     }
-    let files = paths
-        .iter()
-        .map(|path| {
-            Ok(OpenedFile {
-                path: path.to_string_lossy().into_owned(),
-                dir: path.parent().unwrap_or(&dir).to_string_lossy().into_owned(),
-                source: std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?,
-            })
-        })
-        .collect::<Result<_, String>>()?;
+    let files = paths.iter().map(|path| OpenedFile::read(path)).collect::<Result<_, String>>()?;
     Ok(Some(OpenedProject {
         dir: dir.to_string_lossy().into_owned(),
         entry: entry.map(|p| p.to_string_lossy().into_owned()),
@@ -242,19 +185,24 @@ async fn save_file(path: String, source: String) -> Result<(), String> {
     std::fs::write(path, source).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-async fn save_file_as(source: String) -> Result<Option<String>, String> {
-    let Some(file) = rfd::AsyncFileDialog::new()
-        .add_filter("niminal", &["nml"])
-        .set_file_name("piece.nml")
-        .save_file()
-        .await
-    else {
+/// Ask where to save a file, with `name` suggested; None if the dialog was closed.
+async fn ask_save_path(filter: &str, extension: &str, name: &str) -> Option<PathBuf> {
+    let file = rfd::AsyncFileDialog::new().add_filter(filter, &[extension]).set_file_name(name).save_file().await?;
+    Some(file.path().to_path_buf())
+}
+
+/// Ask where to save `text` as a `.nml` file and write it there; the path, or None if the dialog was closed.
+async fn save_nml_as(text: String, name: &str) -> Result<Option<String>, String> {
+    let Some(path) = ask_save_path("niminal", "nml", name).await else {
         return Ok(None);
     };
-    let path = file.path().to_path_buf();
-    std::fs::write(&path, source).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text).map_err(|e| e.to_string())?;
     Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+async fn save_file_as(source: String) -> Result<Option<String>, String> {
+    save_nml_as(source, "piece.nml").await
 }
 
 /// Save what was evaluated during a take as a script, for reading or for pasting back into a piece.
@@ -264,52 +212,34 @@ async fn save_transcript(state: State<'_, AppState>, from: u64, to: u64) -> Resu
     if text.is_empty() {
         return Err("Nothing was evaluated during that take.".into());
     }
-    let Some(file) = rfd::AsyncFileDialog::new()
-        .add_filter("niminal", &["nml"])
-        .set_file_name("take.nml")
-        .save_file()
-        .await
-    else {
-        return Ok(None);
-    };
-    let path = file.path().to_path_buf();
-    std::fs::write(&path, text).map_err(|e| e.to_string())?;
-    Ok(Some(path.to_string_lossy().into_owned()))
+    save_nml_as(text, "take.nml").await
 }
 
 /// Render a take to audio by replaying the engine's session log over its stretch.
 #[tauri::command]
 async fn render_take(state: State<'_, AppState>, from: u64, to: u64) -> Result<Option<String>, String> {
-    let Some(file) = rfd::AsyncFileDialog::new()
-        .add_filter("WAV audio", &["wav"])
-        .set_file_name("take.wav")
-        .save_file()
-        .await
-    else {
+    let Some(path) = ask_save_path("WAV audio", "wav", "take.wav").await else {
         return Ok(None);
     };
-    let (shared, path) = (state.shared.clone(), file.path().to_path_buf());
-    tauri::async_runtime::spawn_blocking(move || session::render_take(&shared, from, to, &path))
-        .await
-        .map_err(|e| e.to_string())?
-        .map(Some)
+    let shared = state.shared.clone();
+    blocking(move || session::render_take(&shared, from, to, &path)).await?.map(Some)
 }
 
 /// The piece and audio files under a folder, for the file browse panel.
 #[tauri::command]
-async fn list_files(dir: String) -> Result<Vec<browse::BrowseFile>, String> {
-    tauri::async_runtime::spawn_blocking(move || browse::list(Path::new(&dir)))
-        .await
-        .map_err(|e| e.to_string())
+async fn list_files(dir: String) -> Result<Vec<String>, String> {
+    blocking(move || {
+        niminal_lang::files_under(Path::new(&dir), |path| {
+            niminal_lang::is_audio(path) || path.extension().is_some_and(|e| e == "nml")
+        })
+    })
+    .await
 }
 
 /// An audio file as WAV bytes, sent as they are rather than as a list of numbers.
 #[tauri::command]
 async fn read_sample(path: String) -> Result<tauri::ipc::Response, String> {
-    tauri::async_runtime::spawn_blocking(move || browse::read(Path::new(&path)))
-        .await
-        .map_err(|e| e.to_string())?
-        .map(tauri::ipc::Response::new)
+    blocking(move || niminal_lang::audition_wav(Path::new(&path))).await?.map(tauri::ipc::Response::new)
 }
 
 /// Ask for a folder; its path, or nothing if the dialog was closed.
@@ -329,12 +259,7 @@ async fn lsp_message(
     state: State<'_, AppState>,
 ) -> Result<Vec<Value>, String> {
     let server = state.lsp.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut server = server.0.lock().map_err(|e| e.to_string())?;
-        Ok(server.handle(&message))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    blocking(move || Ok(server.lock().map_err(|e| e.to_string())?.handle(&message))).await?
 }
 
 /// The menu bar. Items send their id to the page as a `menu` event, which runs what its button or key
@@ -401,7 +326,7 @@ fn main() {
         })
         .manage(AppState {
             shared: shared.clone(),
-            lsp: LanguageServer::default(),
+            lsp: Arc::default(),
         })
         .invoke_handler(tauri::generate_handler![
             connect,
@@ -429,17 +354,4 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("the stage starts")
         .run(|_, _| {});
-}
-
-#[cfg(test)]
-mod tests {
-    use super::sidebar_quantize;
-
-    #[test]
-    fn sidebar_buttons_wait_for_the_default_except_hush() {
-        assert_eq!(sidebar_quantize("start", None), None);
-        assert_eq!(sidebar_quantize("edit", None), None);
-        assert_eq!(sidebar_quantize("start", Some("next bar".into())), Some("next bar".into()));
-        assert_eq!(sidebar_quantize("hush", None), Some("now".into()));
-    }
 }

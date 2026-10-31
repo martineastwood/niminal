@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 // snapshot shows up as the window going offline or stopping.
 const snapshot = {
   connected: true,
-  revision: 1,
   transport: { sample: 96000, seconds: 2, bar: 2, beat: 1.5, bpm: 128, voices: 1, pending: 1 },
   beats_per_bar: 4,
   meter: [4, 4],
@@ -53,7 +52,6 @@ const snapshot = {
   pending: [{ id: 3, lands_at: 144000, in_samples: 48000, position: { bar: 3, beat: 1 }, changes: ['beat.reverse'] }],
   landed: [{ id: 2, at: 90000, position: { bar: 2, beat: 1 }, changes: ['beat.start'] }],
   notices: ['a notice'],
-  error: null,
 };
 
 const calls: string[] = [];

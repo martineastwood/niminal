@@ -2,7 +2,6 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -17,8 +16,6 @@ use serde::Serialize;
 /// The stage's one sequencer, shared by the worker that advances it and the window that asks about it.
 pub struct Shared {
     session: Mutex<Option<LiveServer>>,
-    /// Changes whenever the project does, so the window can redraw only when it needs to.
-    revision: AtomicU64,
     /// The engine's last health reading and when it was taken: asking is a full status request.
     health: Mutex<Option<(Instant, Option<Health>)>>,
     /// The MIDI inputs that are open, and the last message that came in on them.
@@ -46,20 +43,27 @@ impl Shared {
     pub fn new() -> Shared {
         Shared {
             session: Mutex::new(None),
-            revision: AtomicU64::new(0),
             health: Mutex::new(None),
             midi: Mutex::new(Midi::default()),
             clock: Mutex::new(Clock::default()),
         }
     }
-
-    pub fn bump(&self) {
-        self.revision.fetch_add(1, Ordering::Relaxed);
-    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Run `f` on the live sequencer, or fail when there is no engine.
+fn with_live<T>(shared: &Shared, f: impl FnOnce(&mut Live) -> T) -> Result<T, String> {
+    let mut guard = lock(&shared.session);
+    let session = guard.as_mut().ok_or("the stage is not connected to an engine")?;
+    Ok(f(session.live_mut()))
+}
+
+/// The user's home folder.
+fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from)
 }
 
 /// Keep the sequencer a little ahead of the engine's clock. Every 25ms is what `niminal-live live` uses.
@@ -86,8 +90,8 @@ fn find_binary() -> Option<PathBuf> {
     let mut folders: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|path| std::env::split_paths(&path).collect())
         .unwrap_or_default();
-    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-        folders.push(PathBuf::from(home).join(".cargo").join("bin"));
+    if let Some(home) = home() {
+        folders.push(home.join(".cargo").join("bin"));
     }
     folders.extend(
         std::env::current_exe()
@@ -120,14 +124,12 @@ pub fn connect(shared: &Shared, port: u16, token: Option<&str>) -> Result<(), St
         .with_clock_sync(Duration::from_millis(100));
     live.set_metering(true);
     *lock(&shared.session) = Some(LiveServer::new(live));
-    shared.bump();
     Ok(())
 }
 
 /// Close the session. The engine keeps running.
 pub fn disconnect(shared: &Shared) {
     drop(lock(&shared.session).take());
-    shared.bump();
 }
 
 /// Open the MIDI inputs whose names contain `filter` (all of them when it is empty), in place of any that
@@ -174,42 +176,42 @@ pub fn midi_ports() -> Result<MidiPorts, String> {
 
 /// Send MIDI clock to the output called `name` (making one of that name if there is none), or stop sending.
 pub fn set_clock_out(shared: &Shared, name: Option<&str>) -> Result<(), String> {
-    let mut session = lock(&shared.session);
-    let live = session.as_mut().ok_or("the stage is not connected to an engine")?.live_mut();
-    let mut clock = lock(&shared.clock);
-    match name {
-        None => {
-            live.set_clock_out(false);
-            if let Some(out) = &clock.out {
-                niminal_live_cli::clock::pump_clock_out(live, out);
+    with_live(shared, |live| {
+        let mut clock = lock(&shared.clock);
+        match name {
+            None => {
+                live.set_clock_out(false);
+                if let Some(out) = &clock.out {
+                    niminal_live_cli::clock::pump_clock_out(live, out);
+                }
+                clock.out = None;
             }
-            clock.out = None;
+            Some(name) => {
+                clock.out = Some(niminal_live_cli::clock::ClockOutput::open(name)?);
+                live.set_clock_out(true);
+            }
         }
-        Some(name) => {
-            clock.out = Some(niminal_live_cli::clock::ClockOutput::open(name)?);
-            live.set_clock_out(true);
-        }
-    }
-    Ok(())
+        Ok(())
+    })?
 }
 
 /// Follow the MIDI clock of the input called `name`, or stop following.
 pub fn set_clock_in(shared: &Arc<Shared>, name: Option<&str>) -> Result<(), String> {
-    let mut session = lock(&shared.session);
-    let live = session.as_mut().ok_or("the stage is not connected to an engine")?.live_mut();
-    let mut clock = lock(&shared.clock);
-    clock._input.clear();
-    live.set_clock_in(false);
-    let Some(name) = name else { return Ok(()) };
-    let target = shared.clone();
-    let (connections, _) = niminal_live_cli::input::open_clock_in(name, move |message, arrived| {
-        if let Some(server) = lock(&target.session).as_mut() {
-            server.live_mut().midi_clock(message, arrived);
-        }
-    })?;
-    live.set_clock_in(true);
-    clock._input = connections;
-    Ok(())
+    with_live(shared, |live| {
+        let mut clock = lock(&shared.clock);
+        clock._input.clear();
+        live.set_clock_in(false);
+        let Some(name) = name else { return Ok(()) };
+        let target = shared.clone();
+        let (connections, _) = niminal_live_cli::input::open_clock_in(name, move |message, arrived| {
+            if let Some(server) = lock(&target.session).as_mut() {
+                server.live_mut().midi_clock(message, arrived);
+            }
+        })?;
+        live.set_clock_in(true);
+        clock._input = connections;
+        Ok(())
+    })?
 }
 
 fn describe(signal: &niminal_live::ControlSignal) -> Option<String> {
@@ -223,15 +225,12 @@ fn describe(signal: &niminal_live::ControlSignal) -> Option<String> {
 
 /// What was evaluated between engine samples `from` and `to`, as a script.
 pub fn transcript(shared: &Shared, from: u64, to: u64) -> Result<String, String> {
-    let mut guard = lock(&shared.session);
-    let session = guard.as_mut().ok_or("the stage is not connected to an engine")?;
-    Ok(session.live_mut().transcript(from, to))
+    with_live(shared, |live| live.transcript(from, to))
 }
 
 /// The newest session log the engine wrote: every server records what it is sent in `~/.niminal/sessions`.
 fn newest_session_log() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    std::fs::read_dir(PathBuf::from(home).join(".niminal").join("sessions"))
+    std::fs::read_dir(home()?.join(".niminal").join("sessions"))
         .ok()?
         .filter_map(Result::ok)
         .filter(|entry| entry.path().extension().is_some_and(|e| e == "log"))
@@ -242,12 +241,7 @@ fn newest_session_log() -> Option<PathBuf> {
 
 /// Render engine samples `from` to `to` of the session to a WAV file by replaying the engine's own log.
 pub fn render_take(shared: &Shared, from: u64, to: u64, out: &Path) -> Result<String, String> {
-    let (rate, channels) = {
-        let mut guard = lock(&shared.session);
-        let session = guard.as_mut().ok_or("the stage is not connected to an engine")?;
-        let live = session.live_mut();
-        (live.sample_rate(), live.channels())
-    };
+    let (rate, channels) = with_live(shared, |live| (live.sample_rate(), live.channels()))?;
     let log = newest_session_log().ok_or(
         "There is no session log to render from. The engine writes one to ~/.niminal/sessions unless it was started with --no-log.",
     )?;
@@ -299,8 +293,6 @@ pub struct Health {
     pub deadline_misses: u64,
     /// Voices or events dropped because the engine was full.
     pub capacity_drops: u64,
-    /// The longest a block took to make, in microseconds.
-    pub max_render_micros: u64,
 }
 
 fn health_from(status: &serde_json::Value) -> Option<Health> {
@@ -311,18 +303,13 @@ fn health_from(status: &serde_json::Value) -> Option<Health> {
         starved_frames: count("starved_frames"),
         deadline_misses: count("deadline_misses"),
         capacity_drops: count("capacity_drops"),
-        max_render_micros: count("max_render_micros"),
     })
 }
 
 pub fn snapshot(shared: &Shared) -> Snapshot {
     let mut guard = lock(&shared.session);
     let Some(session) = guard.as_mut() else {
-        return Snapshot {
-            connected: false,
-            revision: shared.revision.load(Ordering::Relaxed),
-            ..Default::default()
-        };
+        return Snapshot::default();
     };
     let live = session.live_mut();
     let tempo = live.tempo();
@@ -335,12 +322,7 @@ pub fn snapshot(shared: &Shared) -> Snapshot {
                 *last = None;
                 drop(last);
                 *guard = None;
-                shared.bump();
-                return Snapshot {
-                    connected: false,
-                    revision: shared.revision.load(Ordering::Relaxed),
-                    ..Default::default()
-                };
+                return Snapshot::default();
             };
             *last = Some((Instant::now(), health_from(&status)));
         }
@@ -348,7 +330,6 @@ pub fn snapshot(shared: &Shared) -> Snapshot {
     };
     Snapshot {
         connected: true,
-        revision: shared.revision.load(Ordering::Relaxed),
         transport: Some(live.transport()),
         beats_per_bar: tempo.beats_per_bar,
         meter: tempo.meter(),
@@ -375,7 +356,6 @@ pub fn snapshot(shared: &Shared) -> Snapshot {
                 last,
             }
         },
-        error: None,
     }
 }
 
@@ -420,13 +400,10 @@ pub fn eval(
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
     // Compiling can take a while, so it happens without the session lock: the worker keeps playing.
-    let begin = {
-        let mut guard = lock(&shared.session);
-        let session = guard.as_mut().ok_or("the stage is not connected to an engine")?;
-        let live = session.live_mut();
+    let begin = with_live(shared, |live| {
         live.set_sample_dir(&dir);
         live.begin_parsed(ParsedEval::new(source, quantize).with_origin(origin))
-    };
+    })?;
     let result = match begin {
         Begin::Done(result) => result,
         Begin::Job(mut job) => loop {
@@ -449,7 +426,6 @@ pub fn eval(
             break result.expect("a finished evaluation has a result");
         },
     };
-    shared.bump();
     Ok(match result {
         Ok(accepted) => EvalOutcome {
             accepted: Some(accepted),
@@ -463,25 +439,16 @@ pub fn eval(
 }
 
 pub fn cancel(shared: &Shared, id: Option<u64>) -> Result<usize, String> {
-    let mut guard = lock(&shared.session);
-    let session = guard.as_mut().ok_or("the stage is not connected to an engine")?;
-    let cancelled = session.live_mut().cancel(id);
-    shared.bump();
-    Ok(cancelled)
+    with_live(shared, |live| live.cancel(id))
 }
 
 pub fn panic(shared: &Shared) -> Result<(), String> {
-    let mut guard = lock(&shared.session);
-    let session = guard.as_mut().ok_or("the stage is not connected to an engine")?;
-    session.live_mut().panic();
-    shared.bump();
-    Ok(())
+    with_live(shared, |live| live.panic())
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Snapshot {
     pub connected: bool,
-    pub revision: u64,
     pub transport: Option<Transport>,
     pub beats_per_bar: f64,
     pub meter: (u32, u32),
@@ -498,9 +465,7 @@ pub struct Snapshot {
     pub levels: Levels,
     /// How the engine is coping, if it plays in real time.
     pub health: Option<Health>,
-    /// Every control: `name`, `value`, `unit`, `range`, `log`, `source` and `kind`, as the engine reports them.
     /// Controls that took a MIDI control change since the last snapshot, to be written into the code.
     pub learned: Vec<Learned>,
     pub midi: MidiStatus,
-    pub error: Option<String>,
 }

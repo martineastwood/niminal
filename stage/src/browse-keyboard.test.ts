@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 it('navigates and auditions samples after clicking a file', async () => {
-  const files = ['kick.wav', 'snare.wav'].map(name => ({ path: `/set/${name}`, bytes: 1 }));
+  const files = ['kick.wav', 'snare.wav'].map(name => `/set/${name}`);
   vi.mocked(invoke).mockImplementation(async command => command === 'list_files' ? files : new ArrayBuffer(0));
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
   vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
@@ -47,9 +47,9 @@ it('navigates and auditions samples after clicking a file', async () => {
 
 it('enters expanded folders with Right and returns to parents with Left', async () => {
   vi.mocked(invoke).mockResolvedValue([
-    { path: '/set/drums/hats/open.nml', bytes: 1 },
-    { path: '/set/drums/kick.nml', bytes: 1 },
-    { path: '/set/main.nml', bytes: 1 },
+    '/set/drums/hats/open.nml',
+    '/set/drums/kick.nml',
+    '/set/main.nml',
   ]);
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
   vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
@@ -79,8 +79,8 @@ it('browses above the chosen root with Left and the Up button', async () => {
   vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
   vi.mocked(invoke).mockImplementation(async (_command, args) => {
     const dir = (args as { dir: string }).dir;
-    return dir === '/music/set' ? [{ path: '/music/set/main.nml', bytes: 1 }]
-      : dir === '/music' ? [{ path: '/music/set/main.nml', bytes: 1 }, { path: '/music/other/beat.nml', bytes: 1 }]
+    return dir === '/music/set' ? ['/music/set/main.nml']
+      : dir === '/music' ? ['/music/set/main.nml', '/music/other/beat.nml']
       : [];
   });
   const browser = new FileBrowse({ fileDir: () => '/music/set', insert: vi.fn(), openPiece: vi.fn(), status: vi.fn() });

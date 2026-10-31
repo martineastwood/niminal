@@ -163,3 +163,93 @@ fn invalid_sizes_and_tracking_capacities_are_rejected() {
         );
     }
 }
+
+#[test]
+fn partial_morph_moves_a_tone_across_an_octave_without_overlapping_fft_bins() {
+    for (blend, expected) in [(0.0, 997.0), (0.5, 997.0 * 2.0_f64.sqrt()), (1.0, 1994.0)] {
+        let out = render(
+            &format!(
+                "partial_morph(osc(sine,997hz)*0.2,osc(sine,1994hz)*0.1,magnitude: 0.5,frequency: {blend},count: 1,size: 1024)"
+            ),
+            64,
+        );
+        let actual = frequency(&out[8192..]);
+        assert!(
+            (actual - expected).abs() < 8.0,
+            "blend {blend}: {actual}, expected {expected}"
+        );
+        assert!((rms(&out[8192..]) - 0.15 / 2.0_f64.sqrt()).abs() < 0.02);
+    }
+}
+#[test]
+fn partial_morph_preserves_unmatched_sources_and_handles_silence() {
+    for (a, b, blend, expected) in [
+        ("osc(sine,997hz)*0.2", "0", 0, 997.0),
+        ("0", "osc(sine,1994hz)*0.2", 1, 1994.0),
+    ] {
+        let out = render(
+            &format!("partial_morph({a},{b},magnitude: {blend},count: 1,size: 1024)"),
+            64,
+        );
+        assert!((frequency(&out[8192..]) - expected).abs() < 8.0);
+        assert!(rms(&out[8192..]) > 0.1);
+    }
+    let out = render("partial_morph(0,0,size: 512)", 64);
+    assert!(out.iter().all(|x| *x == 0.0));
+}
+#[test]
+fn partial_morph_freezes_both_banks_but_keeps_blends_live() {
+    let out = render(
+        "gate=env[1 180ms 1 20ms 0]\n left=osc(sine,997hz)*0.2*gate\n right=osc(sine,1994hz)*0.1*gate\n partial_morph(left,right,freeze: env[0 150ms 0 1ms 1],frequency: env[0 250ms 0 100ms 1],magnitude: 0.5,count: 1,size: 1024)",
+        64,
+    );
+    assert!((frequency(&out[18000..]) - 1994.0).abs() < 10.0);
+    assert!(rms(&out[18000..]) > 0.08);
+}
+#[test]
+fn partial_morph_is_chunk_independent_and_validates_storage_settings() {
+    let body = "left=osc(saw,220hz)*0.1\n right=osc(tri,330hz)*0.1\n partial_morph(left,right,magnitude: phasor(2hz),frequency: phasor(3hz),freeze: phasor(8hz)>0.5,count: 8,size: 512)";
+    assert_eq!(render(body, 64), render(body, 37));
+    for args in [
+        "max_tracks: 0",
+        "max_tracks: 1.5",
+        "max_tracks: 257",
+        "size: 100",
+        "overlap: 3",
+    ] {
+        assert!(
+            compile(&format!(
+                "instr a() {{ partial_morph(noise(),noise(),{args}) }}"
+            ))
+            .is_err(),
+            "{args}"
+        );
+    }
+}
+
+#[test]
+fn partial_morph_matches_a_harmonic_stack_despite_reversed_loudness_order() {
+    let out = render(
+        "left=osc(sine,997hz)*0.2+osc(sine,1994hz)*0.1+osc(sine,2991hz)*0.05\n right=osc(sine,1495.5hz)*0.1+osc(sine,2991hz)*0.2+osc(sine,4486.5hz)*0.1\n partial_morph(left,right,magnitude: 0.5,frequency: 0.5,count: 3,size: 2048)",
+        64,
+    );
+    let root = 997.0 * 1.5_f64.sqrt();
+    for (harmonic, minimum) in [(1.0, 0.1), (2.0, 0.1), (3.0, 0.04)] {
+        let actual = amplitude(&out[8192..], root * harmonic);
+        assert!(actual > minimum, "harmonic {harmonic}: amplitude {actual}");
+    }
+}
+
+#[test]
+fn partial_morph_can_take_one_sources_pitch_and_the_others_strength() {
+    for (magnitude, blend, expected, level) in [(0, 1, 1994.0, 0.2), (1, 0, 997.0, 0.1)] {
+        let out = render(
+            &format!(
+                "partial_morph(osc(sine,997hz)*0.2,osc(sine,1994hz)*0.1,magnitude: {magnitude},frequency: {blend},count: 1,size: 1024)"
+            ),
+            64,
+        );
+        assert!((frequency(&out[8192..]) - expected).abs() < 8.0);
+        assert!((rms(&out[8192..]) - level / 2.0_f64.sqrt()).abs() < 0.02);
+    }
+}

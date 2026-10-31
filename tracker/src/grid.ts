@@ -2,7 +2,7 @@ import { maxLanes, patternTiming, patternSeconds, patternRow, patternSwing } fro
 import { targetKey } from './automation';
 import { describeAnyCommand } from './describe';
 import { columnCommands, commandProblem, commandValue, glideRetriggers, maxFxColumns, maxTrackCommandColumns, trackCommandProblem, trackCommandValue, keyboardNote, noteAt, noteNumber, transposeNote, blankColumn, subColumns, maxNoteColumns, columnCount, columnStrip, columnLanes, type FxTarget, type Project, type Song, type Pattern, type Track, type SubColumn } from './project';
-import { NoteHistory, parseNotes, type NoteEdit } from './history';
+import { parseNotes, type NoteEdit } from './history';
 import { draggable, dropTarget } from './drag';
 import { openMenu, type MenuEntry } from './menu';
 
@@ -56,12 +56,11 @@ export function subValue(kind: Exclude<Kind, 'note'>, text: string, project: Pro
 const expression = (kind: Kind) => kind === 'fx' || kind === 'cmd';
 
 export class PatternGrid {
-  projectUndo: ((redo: boolean) => void) | undefined;
+  /** Set by the owner: undo (or with `true`, redo) the last change to the project. */
+  projectUndo: (redo: boolean) => void = () => {};
   private row = 0;
   private column = 0;
   private anchor = { row: 0, column: 0 };
-  private histories = new Map<string, NoteHistory>();
-  private targetSignatures = new Map<string, string>();
   private playing: number | null = null;
   /** The space above the first row and below the last, which lets the cursor row stay at one height while the grid scrolls under it. */
   private pad = { top: 0, bottom: 0 };
@@ -224,29 +223,20 @@ export class PatternGrid {
   private get barRows() { const t = patternTiming(this.project(), this.pattern()); return Math.max(1, Math.round(t.rows_per_beat * 4 / t.beat_unit * t.beats_per_bar)); }
   get cursorRow() { return this.row; }
   get activeTrack() { return this.lanes[this.column]?.track ?? 0; }
-  private get history() {
-    const pattern = this.pattern(), id = pattern.id;
-    const signature = JSON.stringify([[...pattern.fx, ...pattern.return_fx, pattern.master_fx].map(lanes => lanes.map(lane => lane.target)), pattern.notes.map(columns => columns.length), this.project().tracks.map(t => t.show)]);
-    if (this.targetSignatures.get(id) !== signature) this.histories.delete(id);
-    this.targetSignatures.set(id, signature);
-    if (!this.histories.has(id)) this.histories.set(id, new NoteHistory());
-    return this.histories.get(id)!;
-  }
   /** Called when a track header is dragged onto another: the track at `from` should take the place of the one at `to`. */
   onMoveTrack: (from: number, to: number) => void = () => {};
   /** Set by the owner: what the right-click menu of a track header adds for the track already selected, such as duplicating or deleting it. */
   trackMenu: () => MenuEntry[] = () => [];
-  resetHistory() { this.histories.clear(); this.anchor = { row: this.row, column: this.column }; }
-  undo() { if (this.projectUndo) { this.projectUndo(false); return; } if (this.history.undo(this.values)) { this.render(); this.edited(); } }
-  redo() { if (this.projectUndo) { this.projectUndo(true); return; } if (this.history.redo(this.values)) { this.render(); this.edited(); } }
+  /** Puts the selection's anchor back on the cursor, as after a change that moved cells around. */
+  resetSelection() { this.anchor = { row: this.row, column: this.column }; }
+  undo() { this.projectUndo(false); }
+  redo() { this.projectUndo(true); }
   private apply(edits: NoteEdit[]) {
-    if (this.projectUndo) {
-      const changed = edits.filter(e => e.before !== e.after);
-      if (!changed.length) return;
-      const values = this.values;
-      for (const edit of changed) values[edit.track][edit.row] = edit.after;
-      this.render(); this.edited();
-    } else if (this.history.apply(this.values, edits)) { this.render(); this.edited(); }
+    const changed = edits.filter(e => e.before !== e.after);
+    if (!changed.length) return;
+    const values = this.values;
+    for (const edit of changed) values[edit.track][edit.row] = edit.after;
+    this.render(); this.edited();
   }
 
   selectTrack(track: number, render = true) {
@@ -372,7 +362,7 @@ export class PatternGrid {
           cell.id = this.id(row, lane); cell.textContent = value === null ? lane.kind === 'note' ? held ? '│' : '···' : '··' : this.text(lane, value);
           if (held) cell.classList.add('held');
           if (lane.kind === 'note') { if (value === null) { /* unchanged */ } else if (value === 'OFF' || value === 'CUT') sounding.delete(c); else sounding.add(c); }
-          if (value !== null && (lane.kind === 'fx' || lane.kind === 'cmd')) cell.title = `${value} ${this.explain(lane.kind, value, lane.track)}`;
+          if (value !== null && (lane.kind === 'fx' || lane.kind === 'cmd')) cell.title = `${value} ${this.explain(value, lane.track)}`;
           cell.onclick = event => {
             if (!this.recording) return;
             if (!event.shiftKey) this.anchor = { row, column: c };
@@ -462,7 +452,7 @@ export class PatternGrid {
     const { element, close } = this.popup(anchor, 'column-choices');
     const project = this.project(), track = columnStrip(project, index), isTrack = index < project.tracks.length;
     const changed = () => {
-      this.resetHistory(); this.edited(); this.render(); close();
+      this.resetSelection(); this.edited(); this.render(); close();
       const again = this.parent.querySelector<HTMLElement>(`.track-header[data-track="${index}"] .track-more`); if (again) this.pickColumns(index, again);
     };
     const count = isTrack ? this.pattern().notes[index].length : 0;
@@ -522,7 +512,7 @@ export class PatternGrid {
     }
   }
   /** A command in words, for its cell's tooltip and the status line. */
-  private explain(kind: 'fx' | 'cmd', text: string, track: number) {
+  private explain(text: string, track: number) {
     return describeAnyCommand(text, this.project(), columnStrip(this.project(), track));
   }
   /** Edits a sub-column cell in place, like a parameter lane: type a number, Enter to save and move down. */
@@ -543,13 +533,13 @@ export class PatternGrid {
       if (commit && !blank && value === null) { this.feedback(kind === 'inst' ? 'No instrument has that number.' : kind === 'fx' ? commandProblem(input.value.trim().toUpperCase()) ?? 'Not a command.' : kind === 'cmd' ? trackCommandProblem(input.value.trim().toUpperCase()) ?? 'Not a track command.' : `Enter ${subRange[kind]}.`); if (advance) { input.focus(); return; } commit = false; }
       finished = true; this.keepView = !advance;
       if (commit) this.apply([{ row, track: column, before: lane.values[row], after: value }]);
-      if (commit && value && (kind === 'fx' || kind === 'cmd')) this.feedback(`${value} ${this.explain(kind, value, lane.track)}`);
+      if (commit && value && (kind === 'fx' || kind === 'cmd')) this.feedback(`${value} ${this.explain(value, lane.track)}`);
       if (commit && kind === 'fx' && value && 'SBR'.includes(value[0])) this.previewCommand(row, lane, value);
       if (advance && commit) this.advance(); this.render(); this.keepView = false; if (advance) this.parent.focus();
     };
     input.onkeydown = event => { event.stopPropagation(); if (event.key === 'Enter' || event.key === 'Escape' || event.key === 'Tab') { event.preventDefault(); finish(event.key !== 'Escape', true); } };
     if (kind === 'fx' || kind === 'cmd') {
-      const explainTyped = () => { const text = input.value.trim().toUpperCase(); if ((kind === 'fx' ? commandProblem(text) : trackCommandProblem(text)) === null) this.feedback(`${text} ${this.explain(kind, text, lane.track)}`); };
+      const explainTyped = () => { const text = input.value.trim().toUpperCase(); if ((kind === 'fx' ? commandProblem(text) : trackCommandProblem(text)) === null) this.feedback(`${text} ${this.explain(text, lane.track)}`); };
       input.oninput = explainTyped;
     }
     input.onblur = () => finish(true, false);
@@ -793,7 +783,7 @@ export class PatternGrid {
     envelope.enabled = true;
     const row = this.row, point = envelope.points.find(p => p.row === row);
     if (point) point.value = value; else { envelope.points.push({ row, value }); envelope.points.sort((a, b) => a.row - b.row); }
-    this.resetHistory(); this.edited(); this.advance(); this.render(); this.parent.focus();
+    this.resetSelection(); this.edited(); this.advance(); this.render(); this.parent.focus();
     this.feedback(`Recorded at row ${row} of this pattern: see the Automation tab`);
   }
   /** MIDI uses absolute pitch and hardware velocity, even when the cursor is on a sub-column or lane. */

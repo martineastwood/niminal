@@ -203,6 +203,84 @@ impl Samples {
 
 pub use niminal_engine::{AUDIO_EXTENSIONS, is_audio};
 
+/// The full paths of the files under `dir` that `keep` accepts, sorted. Hidden files and folders and build
+/// output are skipped, and the walk stops 8 folders down or at 5000 files, so a stray choice of `/` ends.
+pub fn files_under(dir: &Path, keep: impl Fn(&Path) -> bool) -> Vec<String> {
+    fn walk(dir: &Path, depth: usize, keep: &dyn Fn(&Path) -> bool, found: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            if found.len() >= 5000 {
+                return;
+            }
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                if depth < 8 && name != "node_modules" && name != "target" {
+                    walk(&path, depth + 1, keep, found);
+                }
+            } else if keep(&path) {
+                found.push(path.to_string_lossy().into_owned());
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(dir, 0, &keep, &mut found);
+    found.sort_by_key(|f| f.to_lowercase());
+    found
+}
+
+/// The biggest file `audition_wav` hands over, in bytes.
+const AUDITION_LIMIT: u64 = 96 * 1024 * 1024;
+
+/// An audio file as WAV bytes, for a window to audition. Formats a browser may not play (FLAC, Ogg, AIFF…)
+/// are decoded by the same code that loads them into a piece, so what is heard is what loads.
+pub fn audition_wav(path: &Path) -> Result<Vec<u8>, String> {
+    if !is_audio(path) {
+        return Err("that is not an audio file".into());
+    }
+    let size = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+    if size > AUDITION_LIMIT {
+        return Err(format!("{} is too big to audition", path.display()));
+    }
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("wav"))
+    {
+        return std::fs::read(path).map_err(|e| format!("can't read {}: {e}", path.display()));
+    }
+    let tables =
+        Samples::new(path.parent().unwrap_or(Path::new("."))).load(&path.to_string_lossy())?;
+    let frames = tables.iter().map(|t| t.len()).max().unwrap_or(0);
+    let rate = tables
+        .first()
+        .map_or(48_000.0, |t| t.sample_rate_or(48_000.0));
+    let spec = hound::WavSpec {
+        channels: tables.len() as u16,
+        sample_rate: rate.round() as u32,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut out = std::io::Cursor::new(Vec::new());
+    let mut writer = hound::WavWriter::new(&mut out, spec).map_err(|e| e.to_string())?;
+    for frame in 0..frames {
+        for table in &tables {
+            writer
+                .write_sample(table.get(frame))
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    writer.finalize().map_err(|e| e.to_string())?;
+    Ok(out.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,5 +371,39 @@ mod tests {
         let first = samples.load("a.wav").unwrap();
         assert!(Arc::ptr_eq(&first[0], &samples.load("a.wav").unwrap()[0]));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn files_under_skips_hidden_and_build_folders_and_auditions_only_audio() {
+        let root = std::env::temp_dir().join(format!("niminal-files-under-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for dir in ["drums", ".hidden", "target"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        for file in [
+            "kick.wav",
+            "drums/Snare.flac",
+            "main.nml",
+            "notes.txt",
+            ".hidden/x.wav",
+            ".secret.wav",
+            "target/y.wav",
+        ] {
+            std::fs::write(root.join(file), b"x").unwrap();
+        }
+        let names: Vec<_> = files_under(&root, is_audio)
+            .iter()
+            .map(|p| {
+                Path::new(p)
+                    .strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert_eq!(names, ["drums/Snare.flac", "kick.wav"]);
+        assert!(audition_wav(&root.join("notes.txt")).is_err());
+        assert_eq!(audition_wav(&root.join("kick.wav")).unwrap(), b"x");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

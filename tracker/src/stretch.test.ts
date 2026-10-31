@@ -1,25 +1,12 @@
 import { expect, it } from 'vitest';
-import { readFit, sourceTempo, withFit, withStretch, estimateBeats } from './stretch';
+import { readFit, sourceTempo, withFit, estimateBeats } from './stretch';
 import { samplerSource } from './instruments';
 
-const older = samplerSource('hit', 'samples/hit.wav').replace(/,\s+stretch: 0\.25\.\.4 = 1,\s+stretch_mode: 0\.\.2 = 0,\s+from_bpm: 0\.\.400 = 0/, '').replace(', stretch: stretch, stretch_mode: stretch_mode', '');
-
-it('gives a sampler written before stretching the parameters it needs, once', () => {
-  expect(older).not.toContain('stretch');
-  const upgraded = withStretch(older);
-  expect(upgraded).toContain('rate: -4..4 = 1, stretch: 0.25..4 = 1, stretch_mode: 0..2 = 0,');
-  expect(upgraded).toContain('hit_sample(freq: freq, begin: begin, rate: rate, stretch: stretch, stretch_mode: stretch_mode)');
-  expect(withStretch(upgraded)).toBe(upgraded);
-  expect(withStretch(samplerSource('hit', 'samples/hit.wav'))).toBe(samplerSource('hit', 'samples/hit.wav'));
-});
-
-it('sets and reads the tempo a sample is fitted from, adding the parameter to older code', () => {
+it('sets and reads the tempo a sample is fitted from', () => {
   const fresh = samplerSource('hit', 'samples/hit.wav');
   expect(readFit(fresh)).toBe(0);
   expect(readFit(withFit(fresh, 136.5))).toBe(136.5); expect(withFit(fresh, 136.5)).toContain('from_bpm: 0..400 = 136.5');
   expect(readFit(withFit(withFit(fresh, 136.5), 0))).toBe(0);
-  const upgraded = withFit(older, 90);
-  expect(readFit(upgraded)).toBe(90); expect(upgraded).toContain('stretch_mode: 0..2 = 0, from_bpm: 0..400 = 90'); expect(upgraded.match(/from_bpm/g)).toHaveLength(1);
   expect(readFit('instr x(freq: hz) { 0 }')).toBe(0);
 });
 

@@ -130,7 +130,7 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
         const link = driver < 0 ? undefined : macros[driver].links.find(link => link.device === device.id && link.parameter === parameter.name);
         const pick = document.createElement('select'); pick.className = 'macro-link'; pick.setAttribute('aria-label', `${parameter.name} macro`);
         pick.title = macros.length ? 'The macro that moves this parameter' : 'Add a macro to drive this parameter from';
-        pick.add(new Option('—', '')); macros.forEach((knob, i) => pick.add(new Option(String(i + 1), String(i)))); pick.value = driver < 0 ? '' : String(driver); pick.disabled = !macros.length;
+        pick.add(new Option('—', '')); macros.forEach((_, i) => pick.add(new Option(String(i + 1), String(i)))); pick.value = driver < 0 ? '' : String(driver); pick.disabled = !macros.length;
         pick.onchange = () => { linkParameter(project, activeTrack, device.id, parameter.name, pick.value === '' ? null : Number(pick.value)); edited(); refresh(); };
         const extras = document.createElement('span'); extras.className = 'row-extras'; extras.append(toggle, pick);
         const change = (value: number) => { device.values[parameter.name] = value; edited(); };
@@ -145,7 +145,7 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
         } else if (lfo) card.append(lfoControls(device, parameter, lfo, edited));
       });
     }
-    reorderable(pick, card, effects, () => position, to => fx.move(device.id, to - position));
+    reorderable(pick, card, effects, to => fx.move(device.id, to - position));
     // a click on the card's own space (not a control) picks it
     card.addEventListener('click', event => { if (device.id !== fx.selected && !(event.target as Element).closest('input, select, button, label')) fx.select(device.id); });
     effects.append(card);
@@ -178,7 +178,7 @@ function wheelAlong(chain: HTMLElement, event: WheelEvent) {
 }
 
 /** Dragging an effect's name along the chain: the card under the pointer is marked, and letting go moves the effect to its place. */
-function reorderable(handle: HTMLElement, card: HTMLElement, chain: HTMLElement, position: () => number, move: (to: number) => void) {
+function reorderable(handle: HTMLElement, card: HTMLElement, chain: HTMLElement, move: (to: number) => void) {
   handle.addEventListener('pointerdown', down => {
     if (down.button !== 0) return;
     let moved = false, over: HTMLElement | null = null;
