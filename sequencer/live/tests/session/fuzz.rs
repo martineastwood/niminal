@@ -8,7 +8,8 @@
 //! - an evaluation that is refused changes nothing;
 //! - a clip that was running and is not any more is named in a notice;
 //! - the project is always one that compiles on its own, and sounds like it: a new session given
-//!   only the project's text, with the same clips started, is silent exactly when the live one is;
+//!   only the project's text, with the same clips started, is silent exactly when the live one is
+//!   (unless a notice said that a clip keeps its old version because the new one does not work);
 //! - the same run twice gives the same project and the same sound.
 
 use crate::common::*;
@@ -18,6 +19,7 @@ const SETUP: &str = "tempo 120bpm
 const mult = 1
 const wave = harmonics([1.0], size: 512)
 fn double(x) { x * 2 }
+ctl cut = 1khz
 bus sb
 fx fb { out = sb.reverb(room: 0.5, damp: 0.5) }
 instr lo(freq: hz = 100hz) { osc(sine, freq) * env[1 | 10ms 0] }
@@ -25,11 +27,15 @@ instr hi(freq: hz = 1khz) { osc(sine, freq) * env[1 | 10ms 0] }
 k1 = kit { kick: lo\n hat: hi }
 pat = [a3 c4]
 hits = grid {\n kick: x...\n hat: ..x.\n}
+k2 = kit { kick: lo\n clap: hi\n snare: hi\n hat: hi\n open: hi\n perc: lo }
 instr i1(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }
 instr i2(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }
 instr i3(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }
 clip c1 { instrument: i1\n notes: pat }
 clip c2 { instrument: k1\n notes: hits }
+clip c3 { instrument: i2\n notes: [a2] }
+scene s1 { c1, c2 }
+scene s2 { c3 }
 c1.start
 c2.start
 ";
@@ -58,7 +64,7 @@ fn snippet(r: &mut Rng) -> String {
     let instr = |r: &mut Rng| r.pick(&["i1", "i2", "i3", "lo", "hi"]);
     let clip = |r: &mut Rng| r.pick(&["c1", "c2", "c3", "i1", "lo"]);
     let body = "env[1 | 10ms 0]";
-    match r.below(26) {
+    match r.below(38) {
         0 => format!("instr {}(freq: hz) {{ osc(sine, freq) * {body} }}", instr(r)),
         1 => format!(
             "instr {}(freq: hz, k: 0..1 = 0.5) {{ osc(sine, freq) * (0.5 + k * 0.4) * {body} }}",
@@ -135,6 +141,64 @@ fn snippet(r: &mut Rng) -> String {
             clip(r),
             instr(r)
         ),
+        26 => format!(
+            "clip {} {{ instrument: k2\n notes: drum_grid(theme: {}, density: {}, chaos: {}, seed: {}) }}",
+            clip(r),
+            r.pick(&["techno", "house", "two_step", "halftime", "breaks", "boom_bap", "trap", "dnb"]),
+            r.pick(&["0.3", "0.7", "1"]),
+            r.pick(&["0", "0.4"]),
+            r.below(5)
+        ),
+        27 => format!(
+            "k2 = kit {{ {} }}",
+            r.pick(&[
+                "kick: lo\n clap: hi\n snare: hi\n hat: hi\n open: hi\n perc: lo",
+                "kick: lo\n hat: hi",
+                "kick: hi\n clap: lo\n snare: lo\n hat: lo\n open: lo\n perc: hi",
+            ])
+        ),
+        28 => format!("ctl cut = {}", r.pick(&["1khz", "500hz", "2khz.smooth(10ms)"])),
+        29 => format!(
+            "instr {}(freq: hz) {{ osc(saw, freq).lpf(cutoff: cut) * {body} }}",
+            instr(r)
+        ),
+        30 => r
+            .pick(&[
+                "macro mc {\n input: midi.cc(1)\n cut: 200hz..4khz\n}",
+                "macro mc {\n input: midi.cc(2)\n cut: 4khz..200hz\n smooth: 20ms\n}",
+                "ctl cut2 = midi.cc(21).range(200hz..4khz)",
+            ])
+            .to_string(),
+        31 => format!("scene {} {{ {}, {} }}", r.pick(&["s1", "s2"]), clip(r), clip(r)),
+        32 => format!("{}.{}", r.pick(&["s1", "s2"]), r.pick(&["start", "stop", "mute", "unmute"])),
+        33 => format!(
+            "{}.{}",
+            clip(r),
+            r.pick(&[
+                "reverse",
+                "transpose(+5st)",
+                "drop(25%)",
+                "undo",
+                "clear",
+                "mute",
+                "unmute",
+                "solo",
+                "unsolo",
+                "set(k: 0.5)"
+            ])
+        ),
+        34 => format!(
+            "instr {}(freq: hz = 220hz) {{ osc(saw, freq).lpf(cutoff: synced_lfo({}).unipolar.range(300hz..3khz), res: 0.3) * {body} }}",
+            instr(r),
+            r.pick(&["1/2", "4", "1"])
+        ),
+        35 => format!("on midi.note({}) {}.start", r.pick(&["36", "38"]), clip(r)),
+        36 => format!(
+            "clip {} {{ instrument: {}\n notes: [a3 c4]\n cut: [500hz 2khz] }}",
+            clip(r),
+            instr(r)
+        ),
+        37 => format!("bus {}", r.pick(&["cut", "s1", "mc", "pat"])),
         _ => format!("tempo {}bpm", r.pick(&["120", "90", "140"])),
     }
 }
@@ -170,6 +234,9 @@ fn one_run(seed: u64, log: &mut Vec<String>) -> Result<String, String> {
     s.eval(SETUP, Some("now")).map_err(|p| format!("setup: {p:?}"))?;
     let mut heard = Vec::new();
     let mut left_out_said = false;
+    let mut kept_said = false;
+    // mute, solo and live edits change what sounds without changing the project text
+    let mut edited = false;
     for step in 0..10 {
         let src = (0..1 + r.below(3))
             .map(|_| snippet(&mut r))
@@ -181,6 +248,10 @@ fn one_run(seed: u64, log: &mut Vec<String>) -> Result<String, String> {
         let result = s.eval(&src, Some("now"));
         let notices = s.take_notices();
         left_out_said |= notices.iter().any(|n| n.contains("left out"));
+        edited |= ["reverse", "transpose", "drop(", ".mute", ".solo", ".set("]
+            .iter()
+            .any(|w| src.contains(w));
+        kept_said |= notices.iter().any(|n| n.contains("keeps playing as it was"));
         match result {
             Err(p) => {
                 log.push(format!("refused: {:?}", p.iter().map(|p| &p.message).collect::<Vec<_>>()));
@@ -194,7 +265,8 @@ fn one_run(seed: u64, log: &mut Vec<String>) -> Result<String, String> {
                 // a redefined clip keeps its place and stays running; a new `.stop` ends one on purpose
                 let now = running(&mut s);
                 for gone in was_running.difference(&now) {
-                    let stopped = src.contains(&format!("{gone}.stop"));
+                    let stopped = src.contains(&format!("{gone}.stop"))
+                        || ["s1", "s2"].iter().any(|s| src.contains(&format!("{s}.start")) || src.contains(&format!("{s}.stop")));
                     let said = notices.iter().any(|n| n.contains(&format!("`{gone}`")));
                     if !stopped && !said {
                         return Err(format!("clip `{gone}` stopped running without a notice"));
@@ -216,7 +288,9 @@ fn one_run(seed: u64, log: &mut Vec<String>) -> Result<String, String> {
             Ok(_) => {
                 // only clips that are running in both can be compared: `started` leaves out the keyboard
                 let other = sounds(&mut fresh);
-                if live != other && !running(&mut s).is_empty() {
+                // a clip that kept its old version, as it said, no longer sounds as the text says
+                if live != other && !kept_said && !edited && !running(&mut s).is_empty() {
+
                     return Err(format!(
                         "live session {} but the project on its own {}\n{}",
                         if live { "sounds" } else { "is silent" },

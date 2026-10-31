@@ -8,6 +8,7 @@ drums.nml: 2x488426
 envelope_transfer.nml: 2x440457
 functions.nml: 2x293633
 fx.nml: 2x583652
+generated_drums.nml: 2x391561
 gestures.nml: 2x353001
 glitch.nml: 2x353001
 grain_cello.nml: 2x739197

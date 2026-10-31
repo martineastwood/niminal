@@ -301,6 +301,7 @@ op_enum! {
         Svf(ops::Svf),
         Delay(ops::Delay),
         Reverb(ops::Reverb),
+        Mverb(ops::Mverb),
         Fdn(ops::Fdn),
         Chorus(ops::Chorus),
         Custom(ops::Custom),

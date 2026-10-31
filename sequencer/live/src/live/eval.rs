@@ -384,7 +384,6 @@ pub(super) fn prepare_pending(
         .entries
         .iter()
         .filter(|e| !project.entries.iter().any(|p| p.key == e.key))
-        .filter(|e| !delta.iter().any(|d| d.key == e.key))
         .filter_map(|e| {
             let (kind, name) = e.key.split_once(':')?;
             Some(format!(
@@ -496,6 +495,7 @@ pub(super) fn prepare_pending(
     // Clips that carry on from a pattern or clip this change redefines take the new version, in place, unless
     // the commands here start (from stopped) or change them anyway.
     let mut replays = Vec::new();
+    let mut kept = Vec::new();
     for (node, now) in playing.clone().into_iter().filter(|(_, p)| p.running()) {
         let started = actions.iter().any(|a| {
             a.program.performance.iter().any(|s| {
@@ -523,8 +523,12 @@ pub(super) fn prepare_pending(
             origin: Origin::Snippet { offset: 0 },
         };
         // If the new version no longer works for the clip, leave it playing as it was.
-        if let Ok(program) = check(&project, &[piece]) {
-            replays.push(Compiled { statement, program });
+        match check(&project, &[piece]) {
+            Ok(program) => replays.push(Compiled { statement, program }),
+            Err(problems) => kept.push(format!(
+                "`{node}` keeps playing as it was: its new version doesn't work ({})",
+                problems.first().map_or("", |p| p.message.as_str())
+            )),
         }
     }
 
@@ -537,6 +541,7 @@ pub(super) fn prepare_pending(
         summary: statements.iter().map(|s| first_line(&s.text)).collect(),
         removed: if clears { Vec::new() } else { removed },
         left_out: left_out.into_inner(),
+        kept,
         statements,
         project,
         program: has_definitions.then(|| Arc::new(program)),
@@ -611,7 +616,10 @@ impl Live {
             }),
             Ok((mut statements, fallback)) => match self.expand_ramp(&mut statements) {
                 Ok(ramp) => {
-                    let statements = self.expand_scenes(statements, fallback);
+                    let (statements, notes) = self.expand_scenes(statements, fallback);
+                    for note in notes {
+                        self.notify(note);
+                    }
                     return Begin::Job(
                         self.job(source, uses, quantize, fallback, statements, ramp),
                     );
@@ -813,6 +821,7 @@ impl Live {
         pending.id = id;
         let removed = pending.removed.clone();
         let left_out = pending.left_out.clone();
+        let kept = pending.kept.clone();
         self.next_id += 1;
         let first_at = pending.lands_at;
         let accepted = Accepted {
@@ -865,6 +874,9 @@ impl Live {
                 "took out {}: the name was taken, or something it used was",
                 removed.join(", ")
             ));
+        }
+        for note in kept {
+            self.notify(note);
         }
         let new: Vec<String> = left_out
             .iter()

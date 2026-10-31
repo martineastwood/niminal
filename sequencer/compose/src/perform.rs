@@ -756,6 +756,9 @@ impl Perform<'_> {
                 if let Some(PerfValue::Def(def)) = self.bindings.get(&name.name) {
                     return self.call_def(def.clone(), args, e.span, it);
                 }
+                if name.name == "drum_grid" && !args.first().is_some_and(|a| a.receiver) {
+                    return self.drum_grid(args, e.span).map(PerfValue::Pattern);
+                }
                 self.op(name, args, e.span, it)
             }
             ExprKind::ClipBlock(block) => self.clip(block).map(PerfValue::Clip),
@@ -1049,7 +1052,49 @@ impl Perform<'_> {
     /// and the rows play together. A row can name a part to send its hits there, take
     /// parameters (`snare(pan: 10deg): ...`), and use mini-notation (`hat: [x*2 x]`).
     fn rows(&self, raw: &str, span: Span) -> Res<Pattern<Step>> {
-        let base = span.end - 1 - raw.len();
+        self.rows_from(raw, span.end - 1 - raw.len(), span, true)
+    }
+
+    /// `drum_grid(theme: house, density: 0.8, chaos: 0.3, seed: 4, hat: 0.6)`: a grid made to order, the
+    /// same each time for the same choices. A drum named as an argument is made busier or sparser than the
+    /// rest. It plays exactly as the `grid { ... }` that `niminal-live drums` prints.
+    fn drum_grid(&self, args: &[Arg], span: Span) -> Res<Pattern<Step>> {
+        let number = |e: &Expr| self.plain(e).map(|r| r.to_f64());
+        let mut request = crate::drums::Request::default();
+        let mut theme = None;
+        let mut per_drum = Vec::new();
+        for a in args {
+            match a.name.as_ref().map(|n| n.name.as_str()) {
+                None | Some("theme") => {
+                    let ExprKind::Name(word) = &a.value.kind else {
+                        return Err(Diagnostic::new("expected the name of a theme", a.value.span)
+                            .with_help(format!("the themes are {}", crate::drums::themes().join(", "))));
+                    };
+                    theme = Some(word.clone());
+                }
+                Some("density") => request.density = number(&a.value)?,
+                Some("chaos") => request.chaos = number(&a.value)?,
+                Some("seed") => request.seed = number(&a.value)?.max(0.0) as u64,
+                Some(drum) => per_drum.push((drum.to_string(), number(&a.value)?)),
+            }
+        }
+        if let Some(theme) = &theme {
+            request.theme = theme;
+        }
+        request.per_drum = &per_drum;
+        let rows = crate::drums::generate(&request).map_err(|m| Diagnostic::new(m, span))?;
+        let text = crate::drums::grid_text(&rows);
+        let inner = text
+            .strip_prefix("grid {\n")
+            .and_then(|t| t.strip_suffix("\n}"))
+            .unwrap_or(&text);
+        self.rows_from(inner, 0, span, false)
+    }
+
+    /// The rows of a grid written at `base` in the source. Rows that were made rather than written have
+    /// no place in the source: they report problems at the `span` of what made them, and highlight nothing.
+    fn rows_from(&self, raw: &str, base: usize, span: Span, written: bool) -> Res<Pattern<Step>> {
+        let sent = |from: usize, to: usize| if written { self.sent(from, to) } else { None };
         let mut layers = Vec::new();
         let mut line_start = 0;
         for line in raw.split('\n') {
@@ -1060,6 +1105,9 @@ impl Perform<'_> {
                 continue;
             }
             let here = |offset: usize, message: String| {
+                if !written {
+                    return Diagnostic::new(message, span);
+                }
                 Diagnostic::new(
                     message,
                     Span::new(at + offset, (at + offset + 1).min(span.end)),
@@ -1102,7 +1150,11 @@ impl Perform<'_> {
                 self.cx.skipped.borrow_mut().push(crate::compile::Skipped {
                     what: format!("drum `{}`", row.name),
                     name: row.name.to_string(),
-                    span: Span::new(at + row.name_offset, at + row.name_offset + 1),
+                    span: if written {
+                        Span::new(at + row.name_offset, at + row.name_offset + 1)
+                    } else {
+                        span
+                    },
                     typo_when_new: true,
                 });
                 continue;
@@ -1129,14 +1181,14 @@ impl Perform<'_> {
                     let start = at + row.body_offset + offset;
                     Ok(Hit {
                         strength,
-                        src: self.sent(start, start + atom.len()),
+                        src: sent(start, start + atom.len()),
                     })
                 })
                 .map_err(|e| here(row.body_offset + e.offset, e.message))?
             } else {
                 grid_at(row.body, &|from, to| {
                     let base = at + row.body_offset;
-                    self.sent(base + from, base + to)
+                    sent(base + from, base + to)
                 })
                 .map_err(|e| here(row.body_offset + e.offset, e.message))?
             };

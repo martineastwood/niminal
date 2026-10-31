@@ -104,3 +104,29 @@ pub(crate) fn build_args<S>(
     }
     Ok(build)
 }
+
+/// The stereo tank consumes one or two audio channels, with scalar controls.
+pub(crate) fn mverb_args<S: Clone>(
+    vals: &[Option<ArgVal<S>>],
+) -> Result<Vec<Option<ArgVal<S>>>, &'static str> {
+    let mut vals = vals.to_vec();
+    if let Some(ArgVal::Array(channels)) = &vals[0] {
+        if !(1..=2).contains(&channels.len())
+            || !channels.iter().all(|v| matches!(v, ArgVal::Sig(_)))
+        {
+            return Err("`mverb` takes mono or stereo audio");
+        }
+        if channels.len() == 2 && vals[1].is_some() {
+            return Err("`mverb` takes either stereo `x` or a separate `right`, not both");
+        }
+        let channels = channels.clone();
+        vals[0] = Some(channels[0].clone());
+        if channels.len() == 2 {
+            vals[1] = Some(channels[1].clone());
+        }
+    }
+    if vals.iter().any(|v| matches!(v, Some(ArgVal::Array(_)))) {
+        return Err("`mverb` controls must be scalar");
+    }
+    Ok(vals)
+}

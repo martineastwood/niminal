@@ -75,6 +75,10 @@ Frequencies and times move in even ratios, and levels in db. Double-click a fade
 
 The **Gallery** tab makes many versions of one sample. Choose a sample, tick the families you want, pick how many (few, enough or lots) and press **Make**. Each version is a tile coloured by family: click it to hear it, click again to stop, and press **Open** to put its code in a tab. **Remix** makes a new set from the same sample. The versions are written to `~/.niminal/gallery/<sample name>`, and need the `niminal-live` program installed (see [the command line](/reference/niminal-live/cli/#gallery)).
 
+### Drums
+
+The **Drums** tab makes a drum grid from a theme. Pick a theme, move **density** (how busy) and **chaos** (how far it wanders), and press **Another** for a new grid with the same settings. Each drum has its own small slider to make it busier or sparser than the rest. **Hear** plays it through the shelf's drums, and changes you make while it plays are heard as you make them; press **Stop** to end it. **Insert call** puts `drum_grid(theme: …, seed: …)` in the editor at the cursor, for a clip's `notes:`, and **Insert grid** puts the grid in as text to edit by hand. See [generated grids](/reference/language/patterns/#generated-grids).
+
 ## Views and files
 
 | Key | Does |

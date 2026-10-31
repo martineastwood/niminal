@@ -5,6 +5,7 @@
 mod analysis;
 mod ast;
 mod compile;
+pub mod drums;
 mod dsp;
 mod ide;
 mod lexer;

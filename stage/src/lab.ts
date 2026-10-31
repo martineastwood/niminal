@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { Drums } from './drums';
 import { Gallery } from './gallery';
 
 /** An instrument parameter as the engine reports it: db as linear gain, times in seconds. */
@@ -65,8 +66,11 @@ export const pianoKeys: Record<string, number> = {
 export const auditionClip = (instrument: string) =>
   `clip __lab {\n  instrument: ${instrument}\n  keys: midi.keys(channel: 1)\n}\n__lab.start`;
 
+type View = 'play' | 'gallery' | 'drums';
+
 type Options = {
   evaluate: (source: string) => Promise<void>;
+  insert: (text: string) => void;
   openPiece: (path: string) => void;
   status: (message: string) => void;
 };
@@ -81,13 +85,14 @@ export class Lab {
   private instruments: LabInstrument[] = [];
   private loaded = '';
   private gallery: Gallery;
-  private view: 'play' | 'gallery' = 'play';
+  private drums: Drums;
+  private view: View = 'play';
 
   constructor(private options: Options) {
     this.element = document.createElement('aside');
     this.element.id = 'lab';
     this.element.innerHTML = `
-      <div class="lab-tabs"><button class="lab-tab on" data-view="play" title="Play one instrument and move its parameters">Play</button><button class="lab-tab" data-view="gallery" title="Make many versions of a sample and hear them">Gallery</button></div>
+      <div class="lab-tabs"><button class="lab-tab on" data-view="play" title="Play one instrument and move its parameters">Play</button><button class="lab-tab" data-view="gallery" title="Make many versions of a sample and hear them">Gallery</button><button class="lab-tab" data-view="drums" title="Make a drum grid from a theme">Drums</button></div>
       <div class="lab-play">
       <div class="lab-head">
         <strong>lab</strong>
@@ -104,8 +109,11 @@ export class Lab {
     this.gallery = new Gallery({ openPiece: options.openPiece, status: options.status });
     this.gallery.element.hidden = true;
     this.element.append(this.gallery.element);
+    this.drums = new Drums({ evaluate: options.evaluate, insert: options.insert, status: options.status });
+    this.drums.element.hidden = true;
+    this.element.append(this.drums.element);
     for (const tab of this.element.querySelectorAll<HTMLElement>('.lab-tab')) {
-      tab.addEventListener('click', () => this.switchTo(tab.dataset.view as 'play' | 'gallery'));
+      tab.addEventListener('click', () => this.switchTo(tab.dataset.view as View));
     }
     this.select.addEventListener('change', () => void this.choose());
     find('.lab-refresh').addEventListener('click', () => void this.refresh());
@@ -140,14 +148,19 @@ export class Lab {
     if (!this.open) {
       this.releaseAll();
       this.gallery.stop();
+      this.drums.stop();
     }
     else if (this.view === 'play') await this.refresh();
+    else if (this.view === 'drums') await this.drums.open();
   }
 
-  private switchTo(view: 'play' | 'gallery') {
+  private switchTo(view: View) {
     this.view = view;
     this.releaseAll();
     this.gallery.stop();
+    this.drums.stop();
+    this.drums.element.hidden = view !== 'drums';
+    if (view === 'drums') void this.drums.open();
     this.element.querySelector<HTMLElement>('.lab-play')!.hidden = view !== 'play';
     this.gallery.element.hidden = view !== 'gallery';
     for (const tab of this.element.querySelectorAll<HTMLElement>('.lab-tab')) {

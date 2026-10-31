@@ -170,6 +170,23 @@ fx room_reverb(
   out = in.crossfade(in.reverb(room: room, damp: damp), mix)
 }
 
+/// A stereo space with a dense, smooth tail. `size` sets the tank size and `decay` its feedback;
+/// changing size clears the tank. `damp` darkens the tail, `bandwidth` softens the input, and
+/// `density` shapes diffusion. `early_mix` moves from early reflections to the late tail.
+fx studio_reverb(
+  size: 0..1 = 0.5,
+  decay: 0..1 = 0.5,
+  density: 0..1 = 0.5,
+  damp: 0..1 = 0.2,
+  bandwidth: 0..1 = 1,
+  predelay: 0ms..200ms = 20ms,
+  early_mix: 0..1 = 0.75,
+  mix: 0..1 = 0.3
+) {
+  out = in.mverb(size: size, decay: decay, density: density, damp: damp,
+    bandwidth: bandwidth, predelay: predelay, early_mix: early_mix, mix: mix)
+}
+
 // folder: modulation
 
 /// Gently widen the signal with a modulated delay chorus.

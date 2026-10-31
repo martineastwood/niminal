@@ -48,6 +48,23 @@ Writes a `.nml` and a rendered `.wav` for each version into `--out`, and a `gall
 
 A version that fails to render is reported and skipped; the rest carry on. The recipes are the files in `sequencer/live-cli/gallery/`: a comment header gives the family and each setting's range (`// density: 8..120 log`, with `int` for whole numbers), and `{density}`, `{seed}` and `{sample}` are filled in.
 
+## Drums
+
+`niminal-live drums` prints a drum `grid { ... }` made from a theme, as code to paste into a piece and edit. The same choices always make the same grid.
+
+```sh
+niminal-live drums --theme house --density 0.8 --chaos 0.3 --seed 4 --drum hat=0.6 --name beat
+```
+
+- `--theme`: `techno`, `house`, `two_step`, `halftime`, `breaks`, `boom_bap`, `trap` or `dnb`.
+- `--density`: how busy it is, 0 to 1. Thinning takes the ghost notes out first and the anchors of the groove last.
+- `--chaos`: how far it wanders from the theme, 0 to 1. With 0 the seed makes no difference.
+- `--drum hat=0.6`: make one drum sparser (below 1) or busier (above 1) than the rest. Repeat it for more drums.
+- `--seed`: another number makes another wander.
+- `--name beat`: writes `beat = grid { ... }`.
+
+The rows are named `kick`, `snare` or `clap`, `hat`, `open` and `perc`, depending on the theme. Map them to instruments in a `kit`, as `examples/generated_drums.nml` does.
+
 ## Live, send and the REPL
 
 `niminal-live live [FILE]` loads a project and reloads it on save. Add `--midi` and/or `--osc-port` to play from a keyboard or another program; see `examples/midi_osc.nml`. `--clock-in NAME` follows another device's MIDI clock and `--clock-out NAME` sends one; see [Live coding](/guide/live-coding/).

@@ -3740,6 +3740,13 @@ impl Kb<'_> {
         spec: &opcodes::OpSpec,
         vals: &[Option<ArgVal<Value>>],
     ) -> Res<KVal> {
+        let stereo_vals;
+        let vals = if spec.name == "mverb" {
+            stereo_vals = call::mverb_args(vals).map_err(|m| Diagnostic::new(m, name.span))?;
+            &stereo_vals
+        } else {
+            vals
+        };
         if let Some(rows) = call::rows(vals).map_err(|m| Diagnostic::new(m, name.span))? {
             return Ok(KVal::Array(
                 rows.iter()

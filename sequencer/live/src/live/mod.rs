@@ -111,6 +111,8 @@ pub(crate) struct Pending {
     pub removed: Vec<String>,
     /// Drums a clip names that its kit no longer has: left out, the rest of the clip plays.
     pub left_out: Vec<String>,
+    /// Clips that go on playing their old version because the new one did not work, and why.
+    pub kept: Vec<String>,
     /// The project once this has landed.
     pub project: Project,
     /// The new program, if definitions changed.
@@ -878,6 +880,36 @@ impl Live {
             .collect()
     }
 
+    /// Clips kept from before a program changed name their drums and nodes by number, and the new program
+    /// may number them differently (a kit given its drums in another order): translate by name.
+    fn renumber_history(&mut self, before: &Composition) {
+        let (old, new) = (before, &self.program);
+        if old.sample_names == new.sample_names
+            && old.nodes.iter().map(|n| &n.name).eq(new.nodes.iter().map(|n| &n.name))
+        {
+            return;
+        }
+        let samples: Vec<Option<u32>> = old
+            .sample_names
+            .iter()
+            .map(|name| new.sample_names.iter().position(|n| n == name).map(|i| i as u32))
+            .collect();
+        let nodes: Vec<Option<usize>> = old
+            .nodes
+            .iter()
+            .map(|node| new.nodes.iter().position(|n| n.name == node.name))
+            .collect();
+        for h in &mut self.history {
+            if let NamedAction::Start { clip, .. } | NamedAction::Update { clip, .. } = &mut h.action {
+                let (samples, nodes) = (samples.clone(), nodes.clone());
+                clip.renumber(
+                    move |id| samples.get(id as usize).copied().flatten(),
+                    move |n| nodes.get(n).copied().flatten(),
+                );
+            }
+        }
+    }
+
     /// The text of the project's definitions, which evaluated on its own makes the same project.
     pub fn project_source(&self) -> String {
         let texts: Vec<&str> = self.project.entries.iter().map(|e| e.text.as_str()).collect();
@@ -1077,8 +1109,9 @@ impl Live {
             let mut pending = std::mem::take(&mut self.pending);
             rescale_pending(&mut pending, at, old, new, |p| self.landing_unit_is_bar(p));
             self.pending = pending;
-            self.program = program;
+            let before = std::mem::replace(&mut self.program, program);
             self.project = project;
+            self.renumber_history(&before);
             // what was done to a clip that is gone is not done again to a new clip of its name
             let program = &self.program;
             self.history.retain(|h| match &h.action {

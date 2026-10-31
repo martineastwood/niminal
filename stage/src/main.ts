@@ -1047,6 +1047,11 @@ $('workbench').prepend(files.element);
 const lab = new Lab({
   status,
   openPiece: path => void openPath(path),
+  insert: text => {
+    if (!view) return status('Open a file to put the code in');
+    view.dispatch(view.state.replaceSelection(text));
+    view.focus();
+  },
   evaluate: async source => {
     if (!(await ensureConnected())) return;
     showOutcome(await stage.evaluate(source, 'now', null, ++evaluations));

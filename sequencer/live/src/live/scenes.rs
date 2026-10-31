@@ -56,8 +56,9 @@ impl Live {
         &self,
         statements: Vec<Statement>,
         fallback: Option<Quantize>,
-    ) -> Vec<Statement> {
+    ) -> (Vec<Statement>, Vec<String>) {
         let (project, playing) = self.projected();
+        let mut notes = Vec::new();
         let before = scenes_of(&project);
         // what the scenes will be once this evaluation lands, for the starts it holds
         let mut after = before.clone();
@@ -100,6 +101,10 @@ impl Live {
                         }
                     }
                 }
+                if !stops.is_empty() {
+                    let names: Vec<String> = stops.iter().map(|c| format!("`{c}`")).collect();
+                    notes.push(format!("starting scene `{name}` stops {}", names.join(", ")));
+                }
                 for clip in stops {
                     out.extend(command(&format!("{clip}.stop"), &s, Some(quantum)));
                 }
@@ -135,6 +140,19 @@ impl Live {
                 old.iter().filter(|c| !new.contains(c)).collect(),
             );
             out.push(s.clone());
+            let running_removed: Vec<String> = removed
+                .iter()
+                .filter(|c| is_running(&playing, c))
+                .map(|c| format!("`{c}`"))
+                .collect();
+            if !added.is_empty() || !running_removed.is_empty() {
+                let started: Vec<String> = added.iter().map(|c| format!("`{c}`")).collect();
+                notes.push(format!(
+                    "scene `{name}` changed while it plays: started [{}], stopped [{}]",
+                    started.join(", "),
+                    running_removed.join(", ")
+                ));
+            }
             for clip in added {
                 out.extend(command(&format!("{clip}.start"), &s, Some(quantum)));
             }
@@ -144,6 +162,6 @@ impl Live {
                 }
             }
         }
-        out
+        (out, notes)
     }
 }

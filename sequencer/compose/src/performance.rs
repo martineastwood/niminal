@@ -96,6 +96,28 @@ pub struct Clip {
     pub fx_params: Vec<(String, niminal_lang::Unit, f64, f64)>,
 }
 
+impl Clip {
+    /// Renumber the kit samples and nodes its notes name, for a program that numbers them differently:
+    /// each function takes a number from the program the clip was made for and gives the new one (or
+    /// `None`, to leave the number as it is).
+    pub fn renumber(
+        &mut self,
+        sample: impl Fn(u32) -> Option<u32> + Clone + Send + Sync + 'static,
+        node: impl Fn(usize) -> Option<usize> + Clone + Send + Sync + 'static,
+    ) {
+        for (_, lane) in &mut self.lanes {
+            let (sample, node) = (sample.clone(), node.clone());
+            *lane = lane.map(move |mut step| {
+                if let Value::Sample(id) = step.value {
+                    step.value = Value::Sample(sample(id).unwrap_or(id));
+                }
+                step.node = step.node.map(|n| node(n).unwrap_or(n));
+                step
+            });
+        }
+    }
+}
+
 /// An `env[...]` in a lane: a run of glides between levels, from the start of the clip.
 #[derive(Clone, Debug)]
 pub struct EnvLane {

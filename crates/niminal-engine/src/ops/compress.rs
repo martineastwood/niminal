@@ -1,23 +1,23 @@
-//! Feed-forward compressor with an optional soft knee and sidechain.
+//! Feed-forward compressor with a dB-domain envelope, optional soft knee and sidechain.
 
 use crate::opcode::{Opcode, Port, ProcessCtx};
 
 /// A compressor. `threshold` and `makeup` are linear gains (the language
 /// converts db). `ratio` is how hard it squeezes above the threshold;
 /// `attack` and `release` are times in seconds. `sidechain` replaces the
-/// detector input when wired; leave it at 0 to key off the main signal. `knee` (a linear gain, so
+/// detector input when wired; omit it to key off the main signal. `knee` (a linear gain, so
 /// `6db` is a knee six decibels wide) rounds the corner at the threshold: the squeeze eases in over
 /// that many decibels centred on it. The default of 1 (0db) is a hard knee.
 #[derive(Clone)]
 pub struct Compressor {
-    envelope: f32,
+    envelope_db: f32,
     sample_rate: f32,
 }
 
 impl Default for Compressor {
     fn default() -> Self {
         Self {
-            envelope: 0.0,
+            envelope_db: 0.0,
             sample_rate: 48_000.0,
         }
     }
@@ -25,7 +25,7 @@ impl Default for Compressor {
 
 impl Opcode for Compressor {
     fn reset(&mut self) {
-        self.envelope = 0.0;
+        self.envelope_db = 0.0;
     }
 
     fn name(&self) -> &str {
@@ -58,7 +58,7 @@ impl Opcode for Compressor {
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {
         if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>() {
-            self.envelope = old.envelope;
+            self.envelope_db = old.envelope_db;
         }
     }
 
@@ -69,9 +69,8 @@ impl Opcode for Compressor {
         let sr = self.sample_rate.max(1.0);
         let attack_coeff = (-1.0 / (inputs[3][0].max(0.0) * sr).max(1.0)).exp();
         let release_coeff = (-1.0 / (inputs[4][0].max(0.0) * sr).max(1.0)).exp();
-        // the knee's width in decibels, and how far below the threshold the squeeze begins
+        // The knee is represented as a linear gain at the opcode boundary.
         let knee_db = 20.0 * inputs[7][0].max(1.0).log10();
-        let below_knee = 10f32.powf(-knee_db / 40.0);
         for (i, o) in out.iter_mut().enumerate() {
             let x = inputs[0][i];
             let threshold = inputs[1][i].abs().max(1e-8);
@@ -80,33 +79,26 @@ impl Opcode for Compressor {
             let side = inputs[6][i];
             let detect = if side.is_nan() { x } else { side }.abs();
 
-            let coeff = if detect > self.envelope {
+            // The detector smooths only the excess above threshold, in dB.
+            // The floor makes silence safe without adding a DC offset to the envelope.
+            let over_db = 20.0 * (detect.max(1e-20) / threshold).log10();
+            let target_db = if knee_db <= 0.0 {
+                over_db.max(0.0)
+            } else if over_db <= -knee_db / 2.0 {
+                0.0
+            } else if over_db >= knee_db / 2.0 {
+                over_db
+            } else {
+                (over_db + knee_db / 2.0).powi(2) / (2.0 * knee_db)
+            };
+            let coeff = if target_db > self.envelope_db {
                 attack_coeff
             } else {
                 release_coeff
             };
-            self.envelope = detect + coeff * (self.envelope - detect);
-
-            let gain = if knee_db <= 0.0 {
-                if self.envelope <= threshold {
-                    1.0
-                } else {
-                    (self.envelope / threshold).powf(1.0 / ratio - 1.0)
-                }
-            } else if self.envelope <= threshold * below_knee {
-                1.0
-            } else {
-                // work in decibels: past the knee the squeeze is a straight line, and inside it a
-                // curve that meets the line where the knee ends
-                let over = 20.0 * (self.envelope / threshold).log10();
-                let slope = 1.0 / ratio - 1.0;
-                let reduction = if over >= knee_db / 2.0 {
-                    slope * over
-                } else {
-                    slope * (over + knee_db / 2.0).powi(2) / (2.0 * knee_db)
-                };
-                10f32.powf(reduction / 20.0)
-            };
+            self.envelope_db = target_db + coeff * (self.envelope_db - target_db);
+            let reduction_db = self.envelope_db * (1.0 / ratio - 1.0);
+            let gain = 10f32.powf(reduction_db / 20.0);
             *o = x * gain * makeup;
         }
     }
@@ -115,6 +107,48 @@ impl Opcode for Compressor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn run_key(c: &mut Compressor, key: f32, n: usize) -> Vec<f32> {
+        let inputs = [1.0, 0.25, 4.0, 0.01, 0.1, 1.0, key, 1.0].map(|value| vec![value; n]);
+        let mut out = vec![0.0; n];
+        c.process(
+            &ProcessCtx::new(48_000.0, true),
+            &inputs.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            &mut out,
+        );
+        out
+    }
+
+    #[test]
+    fn attack_and_release_follow_db_time_constants() {
+        let mut c = Compressor::default();
+        c.prepare(48_000.0);
+        // A constant sidechain 12.04 dB above threshold asks for 9.03 dB reduction.
+        let target = 20.0 * 4.0f32.log10();
+        let attack = run_key(&mut c, 1.0, 480);
+        let expected = target * (1.0 - (-1.0f32).exp());
+        assert!((c.envelope_db - expected).abs() < 0.001);
+        assert!((20.0 * attack[479].log10() + expected * 0.75).abs() < 0.001);
+        // A silent wired sidechain releases even though the main input remains loud.
+        let released = run_key(&mut c, 0.0, 4800);
+        let expected = expected * (-1.0f32).exp();
+        assert!((c.envelope_db - expected).abs() < 0.002);
+        assert!((20.0 * released[4799].log10() + expected * 0.75).abs() < 0.002);
+    }
+
+    #[test]
+    fn detector_is_independent_of_block_boundaries_and_resets_cleanly() {
+        let mut whole = Compressor::default();
+        let expected = run_key(&mut whole, 1.0, 480);
+        let mut split = Compressor::default();
+        let actual: Vec<_> = (0..10).flat_map(|_| run_key(&mut split, 1.0, 48)).collect();
+        assert_eq!(actual, expected);
+        split.reset();
+        assert_eq!(run_key(&mut split, 1.0, 480), expected);
+        // Silence at startup must neither reduce gain nor produce NaN.
+        split.reset();
+        assert_eq!(run_key(&mut split, 0.0, 48), vec![1.0; 48]);
+    }
 
     /// The gain, in decibels, once the level has settled at `level` with the threshold at 0.25.
     fn settled_reduction(level: f32, knee: f32) -> f32 {

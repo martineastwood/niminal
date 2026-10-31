@@ -5178,6 +5178,21 @@ impl<'a> Lower<'a> {
         vals: &[Option<Val>],
         span: Span,
     ) -> Res<Datum> {
+        if spec.name == "mverb" {
+            let vals: Vec<_> = vals
+                .iter()
+                .map(|v| match v {
+                    Some(Val::Sig(sig)) if sig.count() > 1 => Some(Val::Array(
+                        (0..sig.count())
+                            .map(|i| Val::Sig(Self::element(sig, i)))
+                            .collect(),
+                    )),
+                    other => other.clone(),
+                })
+                .collect();
+            let vals = call::mverb_args(&vals).map_err(|m| Diagnostic::new(m, span))?;
+            return self.expand(spec, &vals, span).map(Datum::Sig);
+        }
         if !vals.iter().any(|v| matches!(v, Some(Val::Array(_)))) {
             let sig = self.dispatch(spec, vals, span)?;
             let monitor = spec.name == "granular"

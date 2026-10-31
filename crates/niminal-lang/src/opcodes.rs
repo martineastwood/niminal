@@ -11,8 +11,8 @@ use niminal_engine::ops::{
     Allpass, Biquad, BiquadMode, Bitcrush, Chorus, Clip, Comb, Compressor, Convolve, DcBlock,
     Delay, Distortion, Eq, EqMode, Fdn, FilterMode, FinishWhen, Fn1, Fold, Follow, Formant, Freeze,
     Func, GLITCH_MAX_SECONDS, Gain, Gate, Granular, Impulse, IrSpectrum, Ladder, Lag, Limiter,
-    Modal, Noise, NoiseColor, Osc, PartialMorph, Phaser, Phasor, PitchShift, RepeatLast, Resonator,
-    Reverb, RewindLast, SampleHold, Scatter, SlowDown, SpectralDelay, SpectralEdit,
+    Modal, Mverb, Noise, NoiseColor, Osc, PartialMorph, Phaser, Phasor, PitchShift, RepeatLast,
+    Resonator, Reverb, RewindLast, SampleHold, Scatter, SlowDown, SpectralDelay, SpectralEdit,
     SpectralEditKind, SpectralFreeze, SpectralMemory, SpectralMorph, SpectralPartials,
     SpectralWarp, Svf, Waveshape, Wavetable,
 };
@@ -408,6 +408,24 @@ impl Registry {
                 Build::Builtin(|a| Ok(Box::new(Reverb::for_channel(a.channel)))),
             ),
             OpSpec::new(
+                "mverb",
+                "Stereo figure-of-eight reverb. Takes mono or stereo `x` and returns stereo; `right:` can supply a separate right input. `size`, `decay`, `density`, `damp` and `bandwidth` run from 0 to 1; more `damp` darkens the tail. `predelay` is a time up to 200ms. `early_mix` blends early reflections (0) with the late tank (1, default 0.75). `mix` blends dry (0) with wet (1, the default), and `gain` sets output gain. Changing `size` clears the tank.",
+                vec![
+                    req("x", SIGNAL),
+                    opt("right", SIGNAL),
+                    opt("damp", SIGNAL),
+                    opt("density", SIGNAL),
+                    opt("bandwidth", SIGNAL),
+                    opt("decay", SIGNAL),
+                    opt("predelay", Kind::Signal(Unit::Time)),
+                    opt("size", SIGNAL),
+                    opt("gain", Kind::Gain),
+                    opt("mix", SIGNAL),
+                    opt("early_mix", SIGNAL),
+                ],
+                Build::Builtin(|_| Ok(Box::new(Mverb::default()))),
+            ),
+            OpSpec::new(
                 "fdn_reverb",
                 "A reverb from a feedback delay network of eight lines. `time` is how long the tail takes to fall by 60db, `damp` the cutoff of the low-pass in each line (highs die first, as in a room), and `size` stretches the lines (0.5 to 2). Wet only; the channels of a stereo signal are decorrelated.",
                 vec![
@@ -432,7 +450,7 @@ impl Registry {
             ),
             OpSpec::new(
                 "compress",
-                "A compressor. `threshold` and `makeup` take db or a plain factor; `ratio`, `attack` and `release` shape the envelope. `knee` rounds the corner at the threshold over that many db (`knee: 6db`; the default is a hard knee). Pass `sidechain:` to key off another signal (for ducking, or one shared level for both sides of a stereo sound).",
+                "A compressor. `threshold` and `makeup` take db or a plain factor; `ratio` sets the squeeze; `attack` and `release` smooth the level above threshold in db (one time constant reaches about 63% of the change). `knee` rounds the corner at the threshold over that many db (`knee: 6db`; the default is a hard knee). Pass `sidechain:` to key off another signal (for ducking, or one shared level for both sides of a stereo sound).",
                 vec![
                     req("x", SIGNAL),
                     opt("threshold", Kind::Gain),

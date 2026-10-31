@@ -548,8 +548,23 @@ body.lab #lab-toggle { background: var(--accent-bg); color: var(--accent-text); 
 .lab-tabs { display: flex; gap: 1px; }
 .lab-tabs .lab-tab { flex: 1; }
 .lab-tabs .lab-tab.on { background: var(--accent-bg); color: var(--accent-text); }
-.lab-play, .gallery { display: flex; flex-direction: column; gap: calc(8px * var(--z)); }
-.lab-play[hidden], .gallery[hidden] { display: none; }
+.lab-play, .gallery, .drums { display: flex; flex-direction: column; gap: calc(8px * var(--z)); }
+.lab-play[hidden], .gallery[hidden], .drums[hidden] { display: none; }
+.drums-head { display: flex; align-items: center; gap: calc(6px * var(--z)); }
+.drums-theme { flex: 1; }
+.drums-seed { flex: 1; color: var(--dim); font-family: var(--mono); }
+.drums-hear.on { background: var(--accent-bg); color: var(--accent-text); }
+.drums-sliders { display: flex; flex-direction: column; gap: calc(4px * var(--z)); }
+.drums-slider { display: grid; grid-template-columns: calc(56px * var(--z)) 1fr calc(34px * var(--z)); align-items: center; gap: calc(6px * var(--z)); color: var(--dim); }
+.drums-grid { display: flex; flex-direction: column; gap: calc(3px * var(--z)); }
+.drums-row { display: grid; grid-template-columns: calc(40px * var(--z)) 1fr calc(48px * var(--z)); align-items: center; gap: calc(6px * var(--z)); }
+.drums-name { color: var(--dim); font-family: var(--mono); font-size: calc(10px * var(--z)); }
+.drums-steps { display: grid; grid-template-columns: repeat(16, 1fr); gap: 1px; }
+.drums-steps i { height: calc(12px * var(--z)); background: var(--bg-ctl); border: 1px solid var(--edge); }
+.drums-steps i.beat { border-left-color: var(--dim); }
+.drums-steps i.hit { background: var(--accent); border-color: var(--accent); }
+.drums-steps i.ghost { background: var(--accent-bg); border-color: var(--accent); }
+.drums-scale { width: 100%; }
 .gallery-head { display: flex; align-items: center; gap: calc(6px * var(--z)); }
 .gallery-where { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
 .gallery-amount { flex: 1; }

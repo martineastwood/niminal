@@ -290,6 +290,34 @@ async fn gallery_make(sample: String, families: Vec<String>, amount: String, see
     blocking(move || session::gallery_make(Path::new(&sample), &families, &amount, seed)).await?
 }
 
+/// The themes of the Lab's drum generator.
+#[tauri::command]
+fn drums_themes() -> Vec<&'static str> {
+    niminal_compose::drums::themes()
+}
+
+#[derive(serde::Serialize)]
+struct DrumRow {
+    name: &'static str,
+    steps: String,
+}
+
+/// A drum grid for a theme and its settings, for the Lab to show and to write out as code.
+#[tauri::command]
+fn drums_make(theme: String, density: f64, chaos: f64, seed: u64, per_drum: Vec<(String, f64)>) -> Result<Vec<DrumRow>, String> {
+    let rows = niminal_compose::drums::generate(&niminal_compose::drums::Request {
+        theme: &theme,
+        density,
+        chaos,
+        seed,
+        per_drum: &per_drum,
+    })?;
+    Ok(rows
+        .into_iter()
+        .map(|r| DrumRow { name: r.name, steps: r.steps.iter().collect() })
+        .collect())
+}
+
 /// Ask for a folder; its path, or nothing if the dialog was closed.
 #[tauri::command]
 async fn pick_folder() -> Result<Option<String>, String> {
@@ -391,6 +419,8 @@ fn main() {
             confirm,
             pick_sample,
             gallery_make,
+            drums_themes,
+            drums_make,
             lab_instruments,
             lab_key,
             lab_param,

@@ -81,6 +81,35 @@ A row can also:
 
 Muting or stopping the host node does not silence rows routed to other nodes. Each drum node has its own mute and solo. Choke groups still apply only among notes that share a node and kit.
 
+### Generated grids
+
+`drum_grid(...)` makes a grid from a theme, so you can start from a groove instead of a blank page.
+
+```nml
+kit_house = kit {
+  kick: kick_deep
+  clap: clap
+  hat: hat_closed
+  open: hat_open
+  perc: rim
+}
+
+clip beat {
+  instrument: kit_house
+  notes: drum_grid(theme: house, density: 0.8, chaos: 0.3, seed: 4, hat: 0.6)
+}
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `theme` | `techno`, `house`, `two_step`, `halftime`, `breaks`, `boom_bap`, `trap` or `dnb` |
+| `density` | How busy it is, 0 to 1 (default 0.7). Thinning takes the ghost notes out first and the anchors last |
+| `chaos` | How far it wanders from the theme, 0 to 1 (default 0) |
+| `seed` | Another number wanders somewhere else. The same choices always make the same grid |
+| `hat: 0.6` | A drum's name sets how busy that drum is compared with the rest: below 1 sparser, above 1 busier |
+
+The rows are named `kick`, `snare` or `clap`, `hat`, `open` and `perc`, depending on the theme, so the kit needs members of those names. `niminal-live drums` prints the same choices as a written `grid { ... }` to paste and edit by hand.
+
 ## Lanes for an effect
 
 A clip can drive an effect's parameters, and draw the on/off ones as steps. Give the effect's name a block, one row for each parameter:

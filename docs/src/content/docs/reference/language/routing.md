@@ -59,6 +59,24 @@ Use the **`delay`** opcode. Beat times follow tempo. A changing `time` needs **`
 out = sig.delay(time: 3/16beat, feedback: 0.4)
 out = sig.delay(time: oscillated, feedback: 0.3, max: 2sec)   // changing time needs max:
 ```
+## Stereo reverb
+
+`mverb` accepts mono or stereo audio and returns stereo from one shared tank:
+
+```nml
+out = sig.mverb(size: 0.6, decay: 0.7, damp: 0.3, predelay: 20ms, mix: 0.25)
+```
+
+`size`, `decay`, `density`, `damp`, and `bandwidth` range from 0 to 1. `decay` controls feedback;
+`damp` darkens the tail and `bandwidth` filters the input. `predelay` ranges from 0ms to 200ms.
+`early_mix` blends early reflections (0) with the late tail (1); its default is 0.75.
+`mix` defaults to 1 for wet-only sends, and `gain` accepts a plain factor or decibels.
+Changing `size` clears the tank. Other controls preserve the tail. Mix, tone, predelay, decay, density, and gain use
+exponential smoothing with 60 dB convergence in 10ms, like `lag(time: 10ms)`. Use `right:` to supply a separate scalar right input.
+Controls are scalar; audio input can have one or two channels.
+
+The `studio_reverb` preset in `std/fx` exposes these controls with a 30% wet mix.
+
 ## Latency compensation
 
 Processing latency declared by DSP operations is propagated through the graph. Faster parallel paths receive exact sample delays before they combine. This includes nested effects, array outputs, instrument voices, fx instances and feed-forward bus sends. Conversion filters in `oversample` participate automatically.

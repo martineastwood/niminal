@@ -478,3 +478,66 @@ fn a_lane_the_instrument_does_not_have_yet_is_left_out_whichever_comes_first() {
     run(&mut s, 2 * BAR);
     assert!(s.take_notices().iter().all(|n| !n.contains("lane `k`")));
 }
+
+#[test]
+fn a_kit_given_its_drums_in_another_order_still_plays_each_drum() {
+    let mut s = session();
+    ok(
+        &mut s,
+        &format!("{DRUMS}clip d {{ instrument: kit_a\n notes: grid {{\n kick: x...\n}} }}\nd.start"),
+    );
+    run(&mut s, BAR);
+    let before = run(&mut s, BAR);
+    assert!(hz(&before[2000..BAR / 4]) < 300.0, "the kick is the low drum");
+    ok(&mut s, "kit_a = kit { hat: hi\n kick: lo }");
+    run(&mut s, BAR);
+    let after = run(&mut s, BAR);
+    assert!(rms(&after) > 0.02, "silent");
+    let f = hz(&after[2000..BAR / 4]);
+    assert!(f < 300.0, "the kick turned into another drum: {f}");
+}
+
+#[test]
+fn a_scene_redefined_while_it_plays_says_which_clips_it_started_and_stopped() {
+    let mut s = session();
+    ok(&mut s, &format!("{TONE}clip c1 {{ instrument: tone\n notes: [a3] }}\nclip c2 {{ instrument: tone\n notes: [a4] }}\nclip c3 {{ instrument: tone\n notes: [a2] }}\nscene s1 {{ c1, c2 }}\ns1.start"));
+    s.take_notices();
+    ok(&mut s, "scene s1 { c3, c1 }");
+    let notices = s.take_notices();
+    assert!(
+        notices.iter().any(|n| n.contains("scene `s1`") && n.contains("`c3`") && n.contains("`c2`")),
+        "{notices:?}"
+    );
+    assert_eq!(clips(&mut s), ["c1[tone]*", "c2[tone]", "c3[tone]*"]);
+}
+
+/// The code the Stage's Drums tab sends to let you hear a grid (`auditionDrums` in stage/src/drums.ts).
+fn lab_drums(density: &str) -> String {
+    format!(
+        "use std/drums.{{kick_deep, snare_tight, clap, hat_closed, hat_open, rim}}
+__lab_kit = kit {{ kick: kick_deep, snare: snare_tight, clap: clap, hat: hat_closed, open: hat_open, perc: rim }}
+clip __lab_drums {{
+  instrument: __lab_kit
+  notes: drum_grid(theme: techno, density: {density}, seed: 1)
+}}
+__lab_drums.start"
+    )
+}
+
+#[test]
+fn the_labs_drum_audition_plays_changes_while_it_sounds_and_stops() {
+    let mut s = session();
+    let send = |s: &mut Offline, src: &str| {
+        s.eval_parsed(niminal_live::ParsedEval::from_dir(src, &std::env::temp_dir(), Some("now")))
+            .unwrap_or_else(|p| panic!("refused: {:?}", p.iter().map(|p| &p.message).collect::<Vec<_>>()));
+    };
+    send(&mut s, &lab_drums("0.7"));
+    run(&mut s, BAR);
+    assert!(rms(&run(&mut s, BAR)) > 0.01, "silent");
+    send(&mut s, &lab_drums("0.3"));
+    run(&mut s, BAR);
+    assert!(rms(&run(&mut s, BAR)) > 0.01, "silent after a slider moved");
+    send(&mut s, "__lab_drums.stop");
+    run(&mut s, 2 * BAR);
+    assert!(rms(&run(&mut s, BAR)) < 0.001, "still sounding after stop");
+}

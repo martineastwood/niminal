@@ -3184,3 +3184,67 @@ fn musical_lengths_alone_become_seconds_at_the_tempo_and_meter() {
     // percentages and the clock are left for whoever plays it
     assert_eq!(resolve("x = 50%", 120.0, 4.0).unwrap(), "x = 50%");
 }
+
+#[test]
+fn a_generated_drum_grid_of_every_theme_is_a_grid_that_plays() {
+    for theme in crate::drums::themes() {
+        let rows = crate::drums::generate(&crate::drums::Request {
+            theme,
+            density: 0.8,
+            chaos: 0.4,
+            seed: 3,
+            ..Default::default()
+        })
+        .unwrap();
+        let grid = crate::drums::grid_text(&rows);
+        let names: Vec<&str> = rows.iter().map(|r| r.name).collect();
+        let members: String = names.iter().map(|n| format!("  {n}: tick\n")).collect();
+        let src = format!(
+            "tempo 120bpm\ninstr tick(freq: hz = 200hz) {{ osc(sine, freq) * env[1 | 10ms 0] }}\nkit_a = kit {{\n{members}}}\nclip d {{ instrument: kit_a\n notes: {grid} }}\nd.start"
+        );
+        ok(&src);
+    }
+}
+
+const DRUM_KIT: &str = "tempo 120bpm
+instr tick(freq: hz = 200hz) { osc(sine, freq) * env[1 | 10ms 0] }
+kit_a = kit { kick: tick\n clap: tick\n snare: tick\n hat: tick\n open: tick\n perc: tick }
+";
+
+#[test]
+fn drum_grid_plays_what_the_printed_grid_plays() {
+    let rows = crate::drums::generate(&crate::drums::Request {
+        theme: "house",
+        density: 0.8,
+        chaos: 0.3,
+        seed: 4,
+        per_drum: &[("hat".to_string(), 0.6)],
+    })
+    .unwrap();
+    let written = crate::drums::grid_text(&rows);
+    let play = |notes: &str| {
+        notes_of(&format!("{DRUM_KIT}lead.__update({notes})"), 1)
+    };
+    let made = play("drum_grid(theme: house, density: 0.8, chaos: 0.3, seed: 4, hat: 0.6)");
+    assert!(!made.is_empty());
+    assert_eq!(made, play(&written));
+}
+
+#[test]
+fn drum_grid_says_what_is_wrong_with_a_choice() {
+    let try_it = |notes: &str| {
+        msg(&format!("{DRUM_KIT}clip d {{ instrument: kit_a\n notes: {notes} }}\nd.start"))
+    };
+    assert!(try_it("drum_grid(theme: polka)").contains("techno"));
+    assert!(try_it("drum_grid(theme: house, tuba: 0.5)").contains("kick"));
+    assert!(try_it("drum_grid(theme: house, density: 2hz)").contains("plain number"));
+}
+
+#[test]
+fn drum_grid_needs_the_kit_to_have_the_drums() {
+    let m = msg("tempo 120bpm
+instr tick(freq: hz = 200hz) { osc(sine, freq) * env[1 | 10ms 0] }
+kit_a = kit { kick: tick }
+clip d { instrument: kit_a\n notes: drum_grid(theme: techno) }\nd.start");
+    assert!(m.contains("isn't a sample in a kit"), "{m}");
+}

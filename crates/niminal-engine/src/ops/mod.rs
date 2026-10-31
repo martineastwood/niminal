@@ -31,6 +31,7 @@ mod limiter;
 mod math;
 mod modal;
 mod multisample;
+mod mverb;
 mod noise;
 mod osc;
 mod pan;
@@ -86,6 +87,7 @@ pub use math::{
 };
 pub use modal::Modal;
 pub use multisample::{AmpEnv, MultiSampler, Region, RoundRobin};
+pub use mverb::Mverb;
 pub use noise::{Noise, NoiseColor};
 pub use osc::{Osc, Wave, Wavetable};
 pub use pan::{PanChannel, pan_gains};

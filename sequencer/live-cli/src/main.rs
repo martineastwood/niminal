@@ -62,6 +62,28 @@ struct RenderArgs {
 }
 
 #[derive(Args)]
+struct DrumsArgs {
+    /// The groove: techno, house, two_step, halftime, breaks, boom_bap, trap or dnb.
+    #[arg(long, default_value = "techno")]
+    theme: String,
+    /// How busy it is, 0 (nothing or only the anchors) to 1 (every step the theme wants).
+    #[arg(long, default_value_t = 0.7)]
+    density: f64,
+    /// How far it wanders from the theme, 0 to 1.
+    #[arg(long, default_value_t = 0.0)]
+    chaos: f64,
+    /// The same seed makes the same grid.
+    #[arg(long, default_value_t = 1)]
+    seed: u64,
+    /// Make a drum busier or sparser than the rest, as `hat=0.5` (below 1 sparser, above 1 busier).
+    #[arg(long = "drum", value_name = "NAME=SCALE")]
+    per_drum: Vec<String>,
+    /// Name the grid, to paste it as `name = grid { ... }`.
+    #[arg(long)]
+    name: Option<String>,
+}
+
+#[derive(Args)]
 struct GalleryArgs {
     /// The sample to make versions of.
     sample: PathBuf,
@@ -117,6 +139,8 @@ enum Command {
     Render(RenderArgs),
     /// Make many versions of a sample, each a short piece of code, and render them to listen to.
     Gallery(GalleryArgs),
+    /// Make a drum grid from a theme, as code to paste into a piece.
+    Drums(DrumsArgs),
     /// Run the live sequencer as a client of the niminal server.
     Live(LiveArgs),
     /// Send code to a running live sequencer.
@@ -153,6 +177,32 @@ enum Command {
         #[arg(long)]
         token: Option<String>,
     },
+}
+
+fn run_drums(args: DrumsArgs) -> Result<(), String> {
+    use niminal_compose::drums;
+    let mut per_drum = Vec::new();
+    for item in &args.per_drum {
+        let (name, scale) = item
+            .split_once('=')
+            .and_then(|(n, s)| Some((n.to_string(), s.parse::<f64>().ok()?)))
+            .ok_or_else(|| format!("error: `--drum {item}`: write it as `hat=0.5`"))?;
+        per_drum.push((name, scale));
+    }
+    let rows = drums::generate(&drums::Request {
+        theme: &args.theme,
+        density: args.density,
+        chaos: args.chaos,
+        seed: args.seed,
+        per_drum: &per_drum,
+    })
+    .map_err(|e| format!("error: {e}"))?;
+    let grid = drums::grid_text(&rows);
+    match args.name {
+        Some(name) => println!("{name} = {grid}"),
+        None => println!("{grid}"),
+    }
+    Ok(())
 }
 
 fn run_gallery(args: GalleryArgs) -> Result<(), String> {
@@ -239,6 +289,7 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Render(args) => run_render(args),
         Command::Gallery(args) => run_gallery(args),
+        Command::Drums(args) => run_drums(args),
         Command::Live(args) => run_live(args),
         Command::Explain { file, control_step } => run_explain(&file, control_step),
         Command::Lsp => {

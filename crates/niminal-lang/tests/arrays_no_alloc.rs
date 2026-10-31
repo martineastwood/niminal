@@ -258,3 +258,24 @@ fn spectral_edits_morphing_and_partial_tracking_do_not_allocate_on_audio_thread(
         assert!(output[0].iter().all(|v| v.is_finite()));
     }
 }
+
+#[test]
+fn stereo_reverb_controls_and_resets_do_not_allocate() {
+    for state in ["", "state unused = 0\n"] {
+        let source = format!(
+            "config {{ channels: stereo }}\nfn effect(x: [num]) {{ {state}reset_on(impulse(100hz)) {{ x.mverb(size: (phasor(20hz) > 0.5), predelay: (phasor(1hz) * 200).ms) }} }}\ninstr a() {{ effect([osc(saw, 110hz), osc(sine, 165hz)]) }}"
+        );
+        let program = niminal_lang::compile(&source).unwrap_or_else(|e| panic!("{e:?}"));
+        let mut voice = Voice::new(program.instruments[0].graph.clone(), 48_000.0);
+        let mut buses = Buses::new(&[]);
+        let mut output = vec![vec![0.0; block_size()]; 2];
+        ALLOCATIONS.with(|count| count.set(0));
+        NODE.with(|node| node.set(true));
+        for _ in 0..128 {
+            voice.process_blocks(&mut output, block_size(), &mut buses);
+        }
+        NODE.with(|node| node.set(false));
+        assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+        assert!(output.iter().flatten().all(|x| x.is_finite()));
+    }
+}
