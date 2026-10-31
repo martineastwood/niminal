@@ -1,0 +1,15 @@
+// family: replicators
+// The looped sample repeated into a train of fading, darkening echoes.
+// count: 2..8 int
+// spacing: 0.08..0.5 log
+// fade: 0.3..0.8
+// tone: 1500..8000 log
+use std/delays
+config { channels: stereo }
+tempo 100bpm
+src = sample("{sample}").loop(forward)
+instr voice() {
+  dry = src()
+  (dry + dry.echoes(count: {count}, spacing: {spacing}sec, fade: {fade}).lpf(cutoff: {tone}hz) * 0.8) * env[0 5ms 1 | 400ms 0] * 0.45
+}
+voice() for 2bars

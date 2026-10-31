@@ -1264,3 +1264,53 @@ fn a_switch_is_one_change_that_lands_together() {
     assert_eq!(changes, ["bass.stop", "lead.stop", "chorus.start"]);
     assert!(r["result"]["id"].is_u64(), "{r}");
 }
+
+#[test]
+fn key_and_param_set_play_an_instrument_and_status_lists_its_ranges() {
+    let (mut d, c) = ready();
+    call(
+        &mut d,
+        c,
+        2,
+        "eval",
+        json!({
+            "source": "instr tone(freq: hz, level: 0..1 = 0.1) { osc(sine, freq) * level }\nclip pad { instrument: tone\n  keys: midi.keys() }\npad.start",
+            "quantize": "now",
+        }),
+    );
+    d.process(1000);
+    let status = call(&mut d, c, 3, "status", json!({}));
+    let tone = status["result"]["instruments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["name"] == "tone")
+        .unwrap_or_else(|| panic!("no instrument: {status}"))
+        .clone();
+    let level = tone["params"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "level")
+        .unwrap()
+        .clone();
+    assert_eq!(level["range"], json!([0.0, 1.0]));
+    let reply = call(
+        &mut d,
+        c,
+        4,
+        "key",
+        json!({"channel": 1, "note": 69, "velocity": 100}),
+    );
+    assert_eq!(reply["result"], json!({"taken": 1}), "{reply}");
+    let reply = call(
+        &mut d,
+        c,
+        5,
+        "param.set",
+        json!({"name": "level", "value": 0.5}),
+    );
+    assert_eq!(reply["result"], json!({"moved": 1}), "{reply}");
+    let reply = call(&mut d, c, 6, "key", json!({"channel": 1, "note": 69}));
+    assert!(reply["error"].is_object(), "{reply}");
+}

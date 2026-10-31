@@ -378,6 +378,35 @@ impl Live {
         }
     }
 
+    /// Set an instrument parameter from outside, to `value` in the parameter's own unit (hz, db, seconds,
+    /// degrees, semitones or a plain number). Every note a key holds whose instrument has it moves now, and
+    /// keys struck later start with it. Returns how many held notes took it.
+    pub fn param_input(&mut self, name: &str, value: f64) -> usize {
+        self.lab_params.insert(name.to_string(), value);
+        let mut ops = Vec::new();
+        for (&id, instrument) in &self.held {
+            let unit = self
+                .program
+                .instruments
+                .iter()
+                .find(|i| i.name == *instrument)
+                .and_then(|i| i.params.iter().find(|p| p.name == name))
+                .map(|p| p.unit);
+            if let Some(unit) = unit {
+                ops.push(Op::Set {
+                    id,
+                    at: At::Now,
+                    args: [(name.to_string(), param_value(unit, value))].into(),
+                    glide: None,
+                    tag: None,
+                });
+            }
+        }
+        let moved = ops.len();
+        self.send(ops);
+        moved
+    }
+
     fn key_event(&mut self, channel: u8, note: u8, velocity: u8) -> usize {
         let mut ops = Vec::new();
         if velocity == 0 {
@@ -401,13 +430,9 @@ impl Live {
             })
             .collect();
         let mut keys = Vec::new();
-        for mut event in events {
-            let plan = match self.program.plan(&event) {
-                Ok(plan) => plan,
-                Err(e) => {
-                    self.notify(format!("key for `{}` could not play: {e}", event.target));
-                    continue;
-                }
+        for event in events {
+            let Some((mut event, plan)) = self.playable("key", &event) else {
+                continue;
             };
             // a note starts with the bend and pressure the channel is at
             let instrument = &self.program.instruments[plan.instrument];
@@ -423,6 +448,13 @@ impl Live {
                             Value::Num(level)
                         },
                     );
+                }
+            }
+            for (name, value) in &self.lab_params {
+                if let Some(param) = instrument.params.iter().find(|p| p.name == *name) {
+                    event
+                        .args
+                        .insert(name.clone(), param_value(param.unit, *value));
                 }
             }
             let instrument = instrument.name.clone();
@@ -532,5 +564,18 @@ impl Live {
     /// Stop every clip, leaving what is sounding to ring out.
     pub fn hush(&mut self) -> Result<Accepted, Vec<Problem>> {
         self.eval("hush", Some("now"))
+    }
+}
+
+/// A number in a parameter's own unit, as the value the engine is given.
+fn param_value(unit: niminal_lang::Unit, value: f64) -> Value {
+    use niminal_lang::Unit;
+    match unit {
+        Unit::Num => Value::Num(value),
+        Unit::Hz => Value::Hz(value),
+        Unit::Db => Value::Db(value),
+        Unit::Time => Value::Seconds(value),
+        Unit::Angle => Value::Degrees(value),
+        Unit::Semitones => Value::Semitones(value),
     }
 }

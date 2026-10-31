@@ -275,9 +275,12 @@ impl Names {
     }
 
     /// Like [`Names::check_local`]. Inside a function only the names its body could read are taken:
-    /// buses, controls, functions and constants.
+    /// buses, controls, functions and constants. Instruments, nodes and effects are never taken.
     pub(crate) fn check_local_in(&self, name: &Ident, in_fn: bool) -> Res<()> {
+        // an instrument, node or effect is only ever reached by calling it, so a local of that name is its own
+        // and clashes with nothing; the other names can be read as plain names, so a local may not hide them
         if let Some(kind) = self.kind_of(&name.name)
+            && !matches!(kind, "instrument" | "node" | "fx")
             && (!in_fn || matches!(kind, "bus" | "control" | "function" | "constant"))
         {
             let article = if kind.starts_with(['a', 'e', 'i', 'o', 'u']) {

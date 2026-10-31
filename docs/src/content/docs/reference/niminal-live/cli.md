@@ -1,6 +1,6 @@
 ---
 title: Command line
-description: Every niminal-live subcommand and flag — render, live, repl, send, explain, lsp.
+description: Every niminal-live subcommand and flag — render, gallery, live, repl, send, explain, lsp.
 ---
 
 **Read by niminal-live.** This page is the sequencer client: it reads tempo, clips, scenes and patterns, turns them into notes with times, and sends those to the [server](/reference/server/cli/), which makes the sound. It also holds the language server the editor extension uses.
@@ -19,6 +19,7 @@ cargo install --path sequencer/live-cli    # niminal-live
 | Command | What it does |
 | --- | --- |
 | `niminal-live render` | Render a `.nml` file (or an `arrangement` in it) to WAV; optional `--score`, `--from` / `--to`, `--stems` (one file per node and bus into the `--out` folder). |
+| `niminal-live gallery SAMPLE` | Make many versions of a sample, each a short piece of code, and render them to listen to. See [Gallery](#gallery). |
 | `niminal-live live [FILE]` | Live sequencer client: clips, scenes, quantized edits, file watch, `--midi`, `--osc-port`, `--clock-in`, `--clock-out`. Connects to `--engine-port` (7401); the live-control API on `--port` (7400). |
 | `niminal-live repl` | REPL connected to a running server (`--port`, `--quantize`, `--token`). |
 | `niminal-live send` | One-shot eval to the server (code argument, `--file`, or stdin). |
@@ -30,6 +31,22 @@ cargo install --path sequencer/live-cli    # niminal-live
 `--out` is required. Live pieces without a fixed end use `--bars` or `--seconds`. Offline renders can use `--no-limiter`. `niminal-live render file.nml --score events.nms --out out.wav` plays a [score](/reference/score-model/) against the file's instruments, and `--input take.wav` plays a WAV file into the file's fx, for as long as the file lasts unless you say otherwise with `--bars` or `--seconds`.
 
 Pass the same `--block-size` and `--control-step` the server runs with when you want a render to match what you hear — both are fixed at server start-up and not recorded in session logs.
+
+## Gallery
+
+```sh
+niminal-live gallery break.wav --out gallery/ --families players,manglers --amount enough
+```
+
+Writes a `.nml` and a rendered `.wav` for each version into `--out`, and a `gallery.json` that lists them with the settings each was made from. Every version is ordinary code you can open, edit and keep: a recipe with its settings picked at random inside their ranges.
+
+| Flag | Meaning |
+| --- | --- |
+| `--families` | Only these kinds of recipe, comma separated: `players` (grains and clouds of the sample), `manglers` (fragments, reversed debris, held spectra), `glitch` (stutters, rewinds, tape stops, shuffles and crushes of the sample, in time with the tempo), `synthesis` (the sample played as a waveform), `modifiers` (pitch shifts and filter sweeps) and `replicators` (echo trains). All of them without it. |
+| `--amount` | `few` (1 version of each recipe), `enough` (3, the default) or `lots` (6). |
+| `--seed` | The same seed makes the same versions. Change it for a new set. |
+
+A version that fails to render is reported and skipped; the rest carry on. The recipes are the files in `sequencer/live-cli/gallery/`: a comment header gives the family and each setting's range (`// density: 8..120 log`, with `int` for whole numbers), and `{density}`, `{seed}` and `{sample}` are filled in.
 
 ## Live, send and the REPL
 

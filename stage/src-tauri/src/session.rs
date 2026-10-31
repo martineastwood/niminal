@@ -84,9 +84,9 @@ pub fn start_worker(shared: Arc<Shared>) {
         .expect("the stage worker starts");
 }
 
-/// The `niminal` program: on the search path, in cargo's install folder, or beside the stage.
-fn find_binary() -> Option<PathBuf> {
-    let name = if cfg!(windows) { "niminal.exe" } else { "niminal" };
+/// A program of ours (`niminal`, `niminal-live`): on the search path, in cargo's install folder, or beside the stage.
+fn find_binary(program: &str) -> Option<PathBuf> {
+    let name = if cfg!(windows) { format!("{program}.exe") } else { program.to_string() };
     let mut folders: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|path| std::env::split_paths(&path).collect())
         .unwrap_or_default();
@@ -100,7 +100,7 @@ fn find_binary() -> Option<PathBuf> {
     );
     folders
         .into_iter()
-        .map(|folder| folder.join(name))
+        .map(|folder| folder.join(&name))
         .find(|path| path.is_file())
 }
 
@@ -245,7 +245,7 @@ pub fn render_take(shared: &Shared, from: u64, to: u64, out: &Path) -> Result<St
     let log = newest_session_log().ok_or(
         "There is no session log to render from. The engine writes one to ~/.niminal/sessions unless it was started with --no-log.",
     )?;
-    let binary = find_binary().ok_or("Could not find the niminal program to replay the log with.")?;
+    let binary = find_binary("niminal").ok_or("Could not find the niminal program to replay the log with.")?;
     let seconds = |sample: u64| (sample as f64 / f64::from(rate)).to_string();
     let output = Command::new(binary)
         .arg("replay")
@@ -262,6 +262,33 @@ pub fn render_take(shared: &Shared, from: u64, to: u64, out: &Path) -> Result<St
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
+}
+
+/// The versions `niminal-live gallery` made, and the folder they are in.
+#[derive(Debug, Clone, Serialize)]
+pub struct GalleryMade {
+    pub dir: String,
+    /// Each as in `gallery.json`: `name`, `recipe`, `family` and `values`.
+    pub tiles: Vec<serde_json::Value>,
+}
+
+/// Make versions of `sample` with `niminal-live gallery`, into a folder of its name under `~/.niminal/gallery`.
+pub fn gallery_make(sample: &Path, families: &[String], amount: &str, seed: u64) -> Result<GalleryMade, String> {
+    let binary = find_binary("niminal-live").ok_or("Could not find the niminal-live program to make the gallery with.")?;
+    let stem = sample.file_stem().map_or_else(|| "sample".into(), |s| s.to_string_lossy().into_owned());
+    let dir = home().ok_or("There is no home folder to keep the gallery in.")?.join(".niminal").join("gallery").join(stem);
+    let mut command = Command::new(binary);
+    command.arg("gallery").arg(sample).arg("--out").arg(&dir).args(["--amount", amount, "--seed", &seed.to_string()]);
+    if !families.is_empty() {
+        command.args(["--families", &families.join(",")]);
+    }
+    let output = command.output().map_err(|e| format!("Could not run niminal-live gallery: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let list = std::fs::read_to_string(dir.join("gallery.json")).map_err(|e| format!("gallery.json: {e}"))?;
+    let tiles = serde_json::from_str(&list).map_err(|e| format!("gallery.json: {e}"))?;
+    Ok(GalleryMade { dir: dir.to_string_lossy().into_owned(), tiles })
 }
 
 /// How often to ask the engine how it is doing.
@@ -335,7 +362,8 @@ pub fn snapshot(shared: &Shared) -> Snapshot {
         meter: tempo.meter(),
         sample_rate: live.sample_rate(),
         channels: live.channels(),
-        clips: live.clips(),
+        // clips named `__…` are the app's own, like the Lab's
+        clips: live.clips().into_iter().filter(|c| !c.name.starts_with("__")).collect(),
         scenes: live.scenes(),
         pending: live.pending(),
         landed: live.take_landed(),
@@ -402,7 +430,7 @@ pub fn eval(
     // Compiling can take a while, so it happens without the session lock: the worker keeps playing.
     let begin = with_live(shared, |live| {
         live.set_sample_dir(&dir);
-        live.begin_parsed(ParsedEval::new(source, quantize).with_origin(origin))
+        live.begin_parsed(ParsedEval::from_dir(source, &dir, quantize).with_origin(origin))
     })?;
     let result = match begin {
         Begin::Done(result) => result,
@@ -440,6 +468,60 @@ pub fn eval(
 
 pub fn cancel(shared: &Shared, id: Option<u64>) -> Result<usize, String> {
     with_live(shared, |live| live.cancel(id))
+}
+
+/// An instrument's parameter, for a Lab fader.
+#[derive(Debug, Clone, Serialize)]
+pub struct LabParam {
+    pub name: String,
+    /// `hz`, `db`, `s`, `deg`, `st`, or empty for a plain number.
+    pub unit: String,
+    pub default: Option<f64>,
+    pub range: Option<(f64, f64)>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LabInstrument {
+    pub name: String,
+    pub params: Vec<LabParam>,
+}
+
+/// The instruments the engine has, and the parameters each could be played with.
+pub fn lab_instruments(shared: &Shared) -> Result<Vec<LabInstrument>, String> {
+    let status = with_live(shared, |live| live.engine_status())??;
+    let list = status["instruments"].as_array().cloned().unwrap_or_default();
+    Ok(list
+        .iter()
+        .map(|i| LabInstrument {
+            name: i["name"].as_str().unwrap_or_default().to_string(),
+            params: i["params"]
+                .as_array()
+                .map(|params| {
+                    params
+                        .iter()
+                        .map(|p| LabParam {
+                            name: p["name"].as_str().unwrap_or_default().to_string(),
+                            unit: p["unit"].as_str().unwrap_or_default().to_string(),
+                            default: p["default"].as_f64(),
+                            range: p["range"]
+                                .as_array()
+                                .and_then(|r| Some((r.first()?.as_f64()?, r.get(1)?.as_f64()?))),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        })
+        .collect())
+}
+
+/// A key on the Lab's keyboard (channel 1): `velocity` 0 lets go.
+pub fn lab_key(shared: &Shared, note: u8, velocity: u8) -> Result<usize, String> {
+    with_live(shared, |live| live.key_input(1, note, velocity))
+}
+
+/// A Lab fader: the parameter `name` to `value`, in its own unit.
+pub fn lab_param(shared: &Shared, name: &str, value: f64) -> Result<usize, String> {
+    with_live(shared, |live| live.param_input(name, value))
 }
 
 pub fn panic(shared: &Shared) -> Result<(), String> {

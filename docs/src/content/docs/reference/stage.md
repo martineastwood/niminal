@@ -59,13 +59,29 @@ Hold **Alt** and drag a number in the code sideways to change it; the block it i
 - **Render WAV** plays the server's session log over that stretch to a WAV file. It uses the `niminal` program, so it must be installed, and the server must have been writing a log (the default).
 - **Save script** writes everything you evaluated during the take, in order, with when.
 
+## Lab
+
+**Lab** (or Shift+Cmd/Ctrl+B) replaces the clips and scenes strip with a place to try one instrument. Evaluate the file, press **Refresh**, and pick an instrument that has a `freq` parameter. Hold the on-screen keys, or the computer keys A W S E D F T G Y H U J K (Z and X move the octave), and **Hold** keeps a note sounding while you work.
+
+Every parameter written with a range gets a fader, and it moves the sounding note as you drag:
+
+```nml
+instr cello(freq: hz, density: 5hz..80hz = 30hz, grain: 40ms..1sec = 500ms, room: 0..1 = 0.5) { ... }
+```
+
+Frequencies and times move in even ratios, and levels in db. Double-click a fader to return it to its default. `examples/grain_cello.nml` is a good one to start with. The Lab plays through a clip called `__lab`, which the clip list hides.
+
+### Gallery
+
+The **Gallery** tab makes many versions of one sample. Choose a sample, tick the families you want, pick how many (few, enough or lots) and press **Make**. Each version is a tile coloured by family: click it to hear it, click again to stop, and press **Open** to put its code in a tab. **Remix** makes a new set from the same sample. The versions are written to `~/.niminal/gallery/<sample name>`, and need the `niminal-live` program installed (see [the command line](/reference/niminal-live/cli/#gallery)).
+
 ## Views and files
 
 | Key | Does |
 | --- | --- |
 | Shift+Cmd/Ctrl+L | Browse files |
 | Cmd/Ctrl+B | Show or hide the sidebar |
-| Cmd/Ctrl+J | Show or hide the controls |
+| Shift+Cmd/Ctrl+B | The Lab: play an instrument and move its parameters |
 | Shift+Cmd/Ctrl+P | Performance mode: just the code and what is playing |
 | Cmd/Ctrl + and − | Text size (or pinch) |
 | Cmd/Ctrl+O, Cmd/Ctrl+S | Open and save a file |

@@ -379,17 +379,66 @@ pub(super) fn prepare_pending(
     project.drop_broken(&from_snippet, |_, full| {
         compile_with(full, &options(cfg.layout, &cfg.samples)).map(|_| ())
     });
+    // what this took out, to say so: a definition that was there, is gone, and was not sent again
+    let removed: Vec<String> = base
+        .entries
+        .iter()
+        .filter(|e| !project.entries.iter().any(|p| p.key == e.key))
+        .filter(|e| !delta.iter().any(|d| d.key == e.key))
+        .filter_map(|e| {
+            let (kind, name) = e.key.split_once(':')?;
+            Some(format!(
+                "{} `{name}`",
+                if kind == "instr" { "instrument" } else { kind }
+            ))
+        })
+        .collect();
+    let left_out = std::cell::RefCell::new(Vec::<String>::new());
     let check = |project: &Project, extra: &[Piece]| -> Result<Composition, Vec<Problem>> {
         let (full, map) = project.source(&from_snippet, extra);
         // notes remember where they were written, in the terms of the client that sent them
         let mut options = options(cfg.layout, &cfg.samples);
         options.origins = Some(project.origins());
-        compile_with(&full, &options).map_err(|diags| {
+        let program = compile_with(&full, &options).map_err(|diags| {
             diags
                 .iter()
                 .map(|d| Problem::from_diagnostic(d, snippet, map.locate(d.span)))
                 .collect::<Vec<_>>()
-        })
+        })?;
+        // a drum the kit lost is left out of a clip that was already there, and refused in one just sent
+        for skip in &program.skipped {
+            let mut left = left_out.borrow_mut();
+            match (skip.typo_when_new, map.locate(skip.span)) {
+                // a command typed now (`lead.set(wobble: 1)`) with a lane that is not there is a typo to refuse
+                (false, at) if extra.iter().any(|p| p.text.contains(&format!("{}:", skip.name))) => {
+                    let d = niminal_lang::Diagnostic::new(
+                        format!("{} has no such parameter", skip.what),
+                        skip.span,
+                    );
+                    return Err(vec![Problem::from_diagnostic(&d, snippet, at)]);
+                }
+                (false, _) => {
+                    if !left.contains(&skip.what) {
+                        left.push(skip.what.clone());
+                    }
+                }
+                (true, Located::Earlier(key)) => {
+                    let clip = key.split_once(':').map_or(key.as_str(), |(_, n)| n);
+                    let note = format!("{} in clip `{clip}`", skip.what);
+                    if !left.contains(&note) {
+                        left.push(note);
+                    }
+                }
+                (true, at) => {
+                    let d = niminal_lang::Diagnostic::new(
+                        format!("{} isn't a sample in a kit", skip.what),
+                        skip.span,
+                    );
+                    return Err(vec![Problem::from_diagnostic(&d, snippet, at)]);
+                }
+            }
+        }
+        Ok(program)
     };
 
     let program = check(&project, &[])?;
@@ -402,6 +451,12 @@ pub(super) fn prepare_pending(
 
     // The commands run in order, each seeing what the ones before it left playing.
     let mut playing = base_playing.clone();
+    // a clip that was taken out is not playing any more, and a new one of its name does not inherit that
+    for e in base.entries.iter().filter(|e| !project.entries.iter().any(|p| p.key == e.key)) {
+        if let Some((_, name)) = e.key.split_once(':').filter(|(k, _)| matches!(*k, "clip" | "bind" | "scene")) {
+            playing.remove(name);
+        }
+    }
     let mut actions = Vec::new();
     for s in statements
         .iter()
@@ -480,6 +535,8 @@ pub(super) fn prepare_pending(
         lands_at,
         snippet: snippet.to_string(),
         summary: statements.iter().map(|s| first_line(&s.text)).collect(),
+        removed: if clears { Vec::new() } else { removed },
+        left_out: left_out.into_inner(),
         statements,
         project,
         program: has_definitions.then(|| Arc::new(program)),
@@ -494,6 +551,7 @@ pub(super) fn options(layout: Layout, samples: &Samples) -> CompileOptions {
     CompileOptions {
         default_layout: layout,
         samples: samples.clone(),
+        lenient: true,
         ..Default::default()
     }
 }
@@ -753,6 +811,8 @@ impl Live {
         pending.lands_at = pending.lands_at.max(landing);
         let id = self.next_id;
         pending.id = id;
+        let removed = pending.removed.clone();
+        let left_out = pending.left_out.clone();
         self.next_id += 1;
         let first_at = pending.lands_at;
         let accepted = Accepted {
@@ -799,6 +859,24 @@ impl Live {
         }
         for notice in notices {
             self.notify(notice);
+        }
+        if !removed.is_empty() {
+            self.notify(format!(
+                "took out {}: the name was taken, or something it used was",
+                removed.join(", ")
+            ));
+        }
+        let new: Vec<String> = left_out
+            .iter()
+            .filter(|n| !self.left_out_said.contains(*n))
+            .cloned()
+            .collect();
+        self.left_out_said = left_out.into_iter().collect();
+        if !new.is_empty() {
+            self.notify(format!(
+                "left out {}: not there (a drum its kit lacks, or a parameter its instrument lacks): the rest plays",
+                new.join(", ")
+            ));
         }
         self.version += 1;
         self.advance();

@@ -434,6 +434,37 @@ impl LiveServer {
                     Err(problems) => Err(rejected(&problems)),
                 }
             }
+            "key" => {
+                let int = |name: &str, max: u64| {
+                    params
+                        .get(name)
+                        .and_then(Value::as_u64)
+                        .filter(|v| *v <= max)
+                        .ok_or_else(|| {
+                            RpcError::new(INVALID_PARAMS, &format!("`{name}` should be 0 to {max}"))
+                        })
+                };
+                let (channel, note, velocity) = (
+                    int("channel", 16)?,
+                    int("note", 127)?,
+                    int("velocity", 127)?,
+                );
+                let taken =
+                    self.live_of(client)
+                        .key_input(channel as u8, note as u8, velocity as u8);
+                Ok(json!({ "taken": taken }))
+            }
+            "param.set" => {
+                let name = params.get("name").and_then(Value::as_str).ok_or_else(|| {
+                    RpcError::new(INVALID_PARAMS, "`name` should be a parameter name")
+                })?;
+                let value = params
+                    .get("value")
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`value` should be a number"))?;
+                let moved = self.live_of(client).param_input(name, value);
+                Ok(json!({ "moved": moved }))
+            }
             "subscribe" | "unsubscribe" => self.subscribe(client, params, method == "subscribe"),
             "status" => Ok(status_json(self.live_of(client))),
             other => Err(RpcError::new(

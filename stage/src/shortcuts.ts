@@ -12,7 +12,7 @@ export const shortcuts: [keys: string, what: string][] = [
   [`⇧${mod}.`, 'panic: silence everything now, tails included'],
   [`⇧${mod}L`, 'browse files: open pieces, hear samples, write them into the code'],
   [`${mod}B`, 'show or hide the sidebar'],
-  [`${mod}J`, 'show or hide the controls'],
+  [`⇧${mod}B`, 'the Lab: play an instrument and move its parameters while it sounds'],
   [`⇧${mod}P`, 'performance mode'],
   [`${mod}+ ${mod}−`, 'text size (or pinch)'],
 ];

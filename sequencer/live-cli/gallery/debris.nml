@@ -1,0 +1,19 @@
+// family: manglers
+// Reverse grains that sweep downwards in pitch, with a second reader an octave lower.
+// density: 10..60 log
+// grain: 0.05..0.3 log
+// scatter: 0..24
+// sweep: -36..0
+// low: 0..0.6
+config { channels: stereo }
+tempo 100bpm
+src = sample("{sample}")
+instr voice() {
+  particles = granular(src.data, density: {density}hz, duration: {grain}sec,
+    position: phasor(-0.13hz), rate: -1, spray: 0.2sec,
+    pitch_scatter: {scatter}, jitter: 1, shape: 0.06, sweep: {sweep}, spread: 0.9,
+    source2: src.data, mix: {low}, position2: 0.61, pitch2: -12, rate2: -1,
+    gain: 2 / sqrt(max(1, {density} * {grain})), seed: {seed})
+  particles * env[0 10ms 1 | 300ms 0] * 0.45
+}
+voice() for 2bars

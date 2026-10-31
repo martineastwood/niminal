@@ -61,6 +61,24 @@ struct RenderArgs {
     to: Option<String>,
 }
 
+#[derive(Args)]
+struct GalleryArgs {
+    /// The sample to make versions of.
+    sample: PathBuf,
+    /// A folder for the versions: a `.nml` and a `.wav` for each, and `gallery.json` listing them.
+    #[arg(long)]
+    out: PathBuf,
+    /// Only these kinds of recipe, such as `players,manglers` (all of them without this).
+    #[arg(long, value_delimiter = ',')]
+    families: Vec<String>,
+    /// How many versions of each recipe to make.
+    #[arg(long, value_enum, default_value_t = niminal_live_cli::gallery::Amount::Enough)]
+    amount: niminal_live_cli::gallery::Amount,
+    /// The same seed makes the same versions.
+    #[arg(long, default_value_t = 1)]
+    seed: u64,
+}
+
 /// A live performance client of the generic server.
 #[derive(Args)]
 struct LiveArgs {
@@ -97,6 +115,8 @@ struct LiveArgs {
 enum Command {
     /// Render a piece to a WAV file.
     Render(RenderArgs),
+    /// Make many versions of a sample, each a short piece of code, and render them to listen to.
+    Gallery(GalleryArgs),
     /// Run the live sequencer as a client of the niminal server.
     Live(LiveArgs),
     /// Send code to a running live sequencer.
@@ -135,6 +155,63 @@ enum Command {
     },
 }
 
+fn run_gallery(args: GalleryArgs) -> Result<(), String> {
+    use niminal_live_cli::gallery;
+    let known = gallery::families();
+    if let Some(bad) = args.families.iter().find(|f| !known.contains(f)) {
+        return Err(format!(
+            "error: no family `{bad}`; the families are {}",
+            known.join(", ")
+        ));
+    }
+    let sample = args
+        .sample
+        .canonicalize()
+        .map_err(|e| format!("error: {}: {e}", args.sample.display()))?;
+    std::fs::create_dir_all(&args.out)
+        .map_err(|e| format!("error: {}: {e}", args.out.display()))?;
+    let versions = gallery::generate(
+        &sample.to_string_lossy(),
+        &args.families,
+        args.amount,
+        args.seed,
+    );
+    #[derive(Parser)]
+    struct Render {
+        #[command(flatten)]
+        args: RenderArgs,
+    }
+    let (mut made, mut index) = (0, Vec::new());
+    for version in &versions {
+        let file = args.out.join(format!("{}.nml", version.name));
+        let wav = args.out.join(format!("{}.wav", version.name));
+        std::fs::write(&file, &version.source)
+            .map_err(|e| format!("error: {}: {e}", file.display()))?;
+        let render = Render::parse_from([
+            "render".as_ref(),
+            file.as_os_str(),
+            "--out".as_ref(),
+            wav.as_os_str(),
+        ]);
+        match run_render(render.args) {
+            Ok(()) => {
+                made += 1;
+                index.push(version.json());
+            }
+            Err(message) => eprintln!("skipped {}: {message}", version.name),
+        }
+    }
+    let list = serde_json::to_string_pretty(&index).map_err(|e| e.to_string())?;
+    std::fs::write(args.out.join("gallery.json"), list)
+        .map_err(|e| format!("error: gallery.json: {e}"))?;
+    eprintln!(
+        "made {made} of {} versions in {}",
+        versions.len(),
+        args.out.display()
+    );
+    Ok(())
+}
+
 fn run_explain(file: &Path, control_step: usize) -> Result<(), String> {
     niminal_engine::set_control_step(control_step).map_err(|e| format!("error: {e}"))?;
     let source = read(file)?;
@@ -161,6 +238,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Render(args) => run_render(args),
+        Command::Gallery(args) => run_gallery(args),
         Command::Live(args) => run_live(args),
         Command::Explain { file, control_step } => run_explain(&file, control_step),
         Command::Lsp => {

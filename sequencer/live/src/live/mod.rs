@@ -107,6 +107,10 @@ pub(crate) struct Pending {
     pub snippet: String,
     pub statements: Vec<Statement>,
     pub summary: Vec<String>,
+    /// Definitions this took out: the name was taken for something else, or what they used was.
+    pub removed: Vec<String>,
+    /// Drums a clip names that its kit no longer has: left out, the rest of the clip plays.
+    pub left_out: Vec<String>,
     /// The project once this has landed.
     pub project: Project,
     /// The new program, if definitions changed.
@@ -249,6 +253,11 @@ pub struct Live {
     engine: Option<ClockInfo>,
     /// The notes held open by a keyboard, by the id the engine knows them by, and the instrument of each.
     held: HashMap<u64, String>,
+    /// What the last notice about things left out of clips named, so that it is said once.
+    left_out_said: std::collections::BTreeSet<String>,
+    /// Instrument parameters set from outside (a Lab fader), by name, in the parameter's own unit. Keys struck
+    /// later start with them.
+    lab_params: BTreeMap<String, f64>,
     keyboard: Keyboard,
     /// The control change each `midi.learn` control took, and what is waiting to be reported.
     learned: BTreeMap<String, u8>,
@@ -428,6 +437,8 @@ impl Live {
             synced: None,
             engine: None,
             held: HashMap::new(),
+            lab_params: BTreeMap::new(),
+            left_out_said: Default::default(),
             keyboard: Keyboard::default(),
             learned: BTreeMap::new(),
             learned_out: Vec::new(),
@@ -867,6 +878,12 @@ impl Live {
             .collect()
     }
 
+    /// The text of the project's definitions, which evaluated on its own makes the same project.
+    pub fn project_source(&self) -> String {
+        let texts: Vec<&str> = self.project.entries.iter().map(|e| e.text.as_str()).collect();
+        texts.join("\n")
+    }
+
     /// Changes that have landed since this was last called.
     pub fn take_landed(&mut self) -> Vec<Landed> {
         let clock = self.clock;
@@ -1062,6 +1079,19 @@ impl Live {
             self.pending = pending;
             self.program = program;
             self.project = project;
+            // what was done to a clip that is gone is not done again to a new clip of its name
+            let program = &self.program;
+            self.history.retain(|h| match &h.action {
+                NamedAction::Start { node, .. } | NamedAction::Update { node, .. } => {
+                    program.node_index(node).is_some()
+                }
+                NamedAction::Stop(t)
+                | NamedAction::Mute(t)
+                | NamedAction::Unmute(t)
+                | NamedAction::Solo(t) => program.node_index(t).is_some(),
+                NamedAction::Unsolo(t) => t.as_ref().is_none_or(|t| program.node_index(t).is_some()),
+                _ => true,
+            });
         }
         let mut captures = Vec::new();
         let mut ops = Vec::new();
@@ -1155,12 +1185,54 @@ impl Live {
         captures
     }
 
+    /// The event as it can play in the project as it is now, with its plan, or why it can't (said in a notice). A
+    /// lane for a parameter its instrument no longer has is left out, so redefining an instrument does not
+    /// silence the clips that play it.
+    pub(super) fn playable(
+        &mut self,
+        what: &str,
+        event: &Event,
+    ) -> Option<(Event, niminal_lang::NotePlan)> {
+        let mut event = event.clone();
+        let mut ignored = Vec::new();
+        let plan = loop {
+            match self.program.plan(&event) {
+                Ok(plan) => break plan,
+                Err(e) => match e.unknown_parameter().map(str::to_owned) {
+                    Some(name) if event.args.remove(&name).is_some() => ignored.push(name),
+                    _ => {
+                        let fix = e.missing_argument().map_or(String::new(), |name| {
+                            format!(
+                                " (give it a default in the instrument, as `{name}: ... = ...`, or set `{name}:` in the clip)"
+                            )
+                        });
+                        self.notify(format!(
+                            "{what} for `{}` could not play: {e}{fix}",
+                            event.target
+                        ));
+                        return None;
+                    }
+                },
+            }
+        };
+        if !ignored.is_empty() {
+            self.notify(format!(
+                "`{}` sets {}, which its instrument doesn't have any more: left out",
+                event.target,
+                ignored
+                    .iter()
+                    .map(|n| format!("`{n}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        Some((event, plan))
+    }
+
     /// A note for the engine, if it can play in the project as it is now.
     fn note_op(&mut self, event: &Event, start: u64, dur: u64, tag: &str) -> Option<Op> {
-        if let Err(e) = self.program.plan(event) {
-            self.notify(format!("note for `{}` could not play: {e}", event.target));
-            return None;
-        }
+        let (event, _) = self.playable("note", event)?;
+        let event = &event;
         Some(Op::Note {
             to: None,
             target: if self.program.node_index(&event.target).is_some() {

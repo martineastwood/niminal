@@ -1,0 +1,23 @@
+// family: glitch
+// A whole glitch chain: a stutter, a rewind, a tape stop, a shuffle and a crush one after another,
+// each switched on at its own point in the cycle.
+// every: 4..8 int
+// chaos: 0.1..0.35
+// piece: 0.125..0.5 log
+// slices: 4..16 int
+// bits: 3..8 int
+config { channels: stereo }
+tempo 100bpm
+src = sample("{sample}").loop(forward)
+instr voice() {
+  cycle = (1 / ({every}beats).num).hz
+  on = fn(offset) { phasor(cycle, phase: offset) > 1 - {chaos} }
+  chain = src()
+    .repeat_last(hold: on(0), length: {piece}beats, shrink: 0.85)
+    .rewind_last(hold: on(0.2), length: 0.5beats)
+    .slow_down(hold: on(0.4), time: 0.4sec)
+    .scatter(hold: on(0.6), length: 4beats, slices: {slices}, seed: {seed}, repeat: 0.3, drop: 0.15)
+    .apply(fn(s) { s.bitcrush(rate: 4000hz, bits: {bits}) }, when: on(0.8))
+  chain * env[0 5ms 1 | 300ms 0] * 0.6
+}
+voice() for 2bars

@@ -114,7 +114,25 @@ impl fmt::Display for ArgError {
 
 impl std::error::Error for ArgError {}
 
+/// What an error says when an instrument has no parameter of a name, so that [`ArgError::unknown_parameter`]
+/// can find the name again.
+const NO_PARAMETER: &str = "has no parameter";
+/// The same for a parameter with no default that a note did not give.
+const NEEDS_ARGUMENT: &str = "needs an argument";
+
 impl ArgError {
+    /// The parameter an instrument was given that it does not have, if that is what went wrong.
+    pub fn unknown_parameter(&self) -> Option<&str> {
+        let (_, rest) = self.message.split_once(&format!("{NO_PARAMETER} `"))?;
+        rest.strip_suffix('`')
+    }
+
+    /// The parameter a note did not give and its instrument has no default for, if that is what went wrong.
+    pub fn missing_argument(&self) -> Option<&str> {
+        let (_, rest) = self.message.split_once(&format!("{NEEDS_ARGUMENT} `"))?;
+        rest.strip_suffix('`')
+    }
+
     fn new(message: String) -> Self {
         ArgError {
             message,
@@ -592,7 +610,7 @@ impl Instrument {
         match self.params.iter().enumerate().find(|(_, p)| p.name == name) {
             Some(found) => Ok(found),
             None => Err(ArgError {
-                message: format!("`{}` has no parameter `{name}`", self.name),
+                message: format!("`{}` {NO_PARAMETER} `{name}`", self.name),
                 help: closest(name, self.params.iter().map(|p| p.name.as_str()))
                     .map(|c| format!("did you mean `{c}`?")),
             }),
@@ -640,7 +658,7 @@ impl Instrument {
         for param in self.params.iter().filter(|p| p.default.is_none()) {
             if !args.contains_key(&param.name) {
                 return Err(ArgError::new(format!(
-                    "`{}` needs an argument `{}`",
+                    "`{}` {NEEDS_ARGUMENT} `{}`",
                     self.name, param.name
                 )));
             }

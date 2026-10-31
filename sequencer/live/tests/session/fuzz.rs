@@ -1,0 +1,274 @@
+//! Evaluating again, live, in any order: random runs of definitions sent into a session that is playing,
+//! checking after every one what must hold whatever was sent. A failure prints its seed, and the whole
+//! run, so that it can be replayed:  `FUZZ_SEED=12 cargo test -p niminal-live --test session fuzz`.
+//! `FUZZ_RUNS=500 FUZZ_FROM=100` makes many more runs than the usual few.
+//!
+//! What must hold:
+//! - nothing panics;
+//! - an evaluation that is refused changes nothing;
+//! - a clip that was running and is not any more is named in a notice;
+//! - the project is always one that compiles on its own, and sounds like it: a new session given
+//!   only the project's text, with the same clips started, is silent exactly when the live one is;
+//! - the same run twice gives the same project and the same sound.
+
+use crate::common::*;
+use std::collections::BTreeSet;
+
+const SETUP: &str = "tempo 120bpm
+const mult = 1
+const wave = harmonics([1.0], size: 512)
+fn double(x) { x * 2 }
+bus sb
+fx fb { out = sb.reverb(room: 0.5, damp: 0.5) }
+instr lo(freq: hz = 100hz) { osc(sine, freq) * env[1 | 10ms 0] }
+instr hi(freq: hz = 1khz) { osc(sine, freq) * env[1 | 10ms 0] }
+k1 = kit { kick: lo\n hat: hi }
+pat = [a3 c4]
+hits = grid {\n kick: x...\n hat: ..x.\n}
+instr i1(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }
+instr i2(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }
+instr i3(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }
+clip c1 { instrument: i1\n notes: pat }
+clip c2 { instrument: k1\n notes: hits }
+c1.start
+c2.start
+";
+
+/// A small, fixed generator, so that a seed means the same run everywhere.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+    fn pick<'a>(&mut self, items: &[&'a str]) -> &'a str {
+        items[self.below(items.len())]
+    }
+}
+
+/// One thing a performer might send. Names come from small pools so that they often meet.
+fn snippet(r: &mut Rng) -> String {
+    let instr = |r: &mut Rng| r.pick(&["i1", "i2", "i3", "lo", "hi"]);
+    let clip = |r: &mut Rng| r.pick(&["c1", "c2", "c3", "i1", "lo"]);
+    let body = "env[1 | 10ms 0]";
+    match r.below(26) {
+        0 => format!("instr {}(freq: hz) {{ osc(sine, freq) * {body} }}", instr(r)),
+        1 => format!(
+            "instr {}(freq: hz, k: 0..1 = 0.5) {{ osc(sine, freq) * (0.5 + k * 0.4) * {body} }}",
+            instr(r)
+        ),
+        2 => format!(
+            "instr {}(freq: hz, k: hz) {{ osc(sine, freq + k * 0) * {body} }}",
+            instr(r)
+        ),
+        3 => format!(
+            "instr {}(freq: hz) {{ osc(wave, double(freq) * mult) * {body} }}",
+            instr(r)
+        ),
+        4 => format!(
+            "instr {}(freq: hz) {{ x = osc(sine, freq) * {body}\n out = x\n sb += x * 0.3 }}",
+            instr(r)
+        ),
+        5 => format!(
+            "instr {}(freq: hz) {{ i2 = osc(sine, freq)\n out = i2 * {body} }}",
+            instr(r)
+        ),
+        6 => format!("instr {}(freq: hz = 200hz) {{ osc(sine, freq) * {body} }}", instr(r)),
+        7 => format!("const mult = {}", r.pick(&["1", "2"])),
+        8 => format!(
+            "const wave = harmonics({}, size: 512)",
+            r.pick(&["[1.0]", "[0.0, 1.0]", "[1.0, 0.5]"])
+        ),
+        9 => format!("fn double(x) {{ x * {} }}", r.pick(&["2", "4"])),
+        10 => r.pick(&["bus mult", "const sb = 1", "bus sb", "fn pat(x) { x }"]).to_string(),
+        11 => format!(
+            "clip {} {{ instrument: {}\n notes: [a3 c4] }}",
+            clip(r),
+            instr(r)
+        ),
+        12 => format!(
+            "clip {} {{ instrument: {}\n notes: [a3 c4]\n k: [0.2 0.8] }}",
+            clip(r),
+            instr(r)
+        ),
+        13 => format!("clip {} {{ instrument: {}\n notes: pat }}", clip(r), instr(r)),
+        14 => format!("pat = {}", r.pick(&["[a3 ~ c4 ~]", "[a4 a4]", "[a2]"])),
+        15 => format!("clip {} {{ instrument: k1\n notes: hits }}", clip(r)),
+        16 => format!(
+            "hits = grid {{\n {}\n}}",
+            r.pick(&["kick: x...", "hat: ..x.", "kick: x...\n hat: ..x.", "kick: x.x."])
+        ),
+        17 => format!(
+            "k1 = kit {{ {} }}",
+            r.pick(&[
+                "kick: lo\n hat: hi",
+                "hat: hi",
+                "kick: hi\n hat: lo",
+                "kick: lo\n hat: hi\n snare: i1"
+            ])
+        ),
+        18 => format!(
+            "clip kb {{ instrument: {}\n keys: midi.keys(channel: 1) }}\nkb.start",
+            instr(r)
+        ),
+        19 => format!("{}.start", clip(r)),
+        20 => format!(
+            "clip {} {{ instrument: {}\n notes: [a3 c4] }}\n{0}.start",
+            clip(r),
+            instr(r)
+        ),
+        21 => format!(
+            "instr {}(freq: hz, amp: -40db..6db = -6db) {{ osc(sine, freq) * amp * {body} }}",
+            instr(r)
+        ),
+        22 => format!("{}.stop", clip(r)),
+        23 => format!("fx fb {{ out = sb.reverb(room: {}, damp: 0.5) }}", r.pick(&["0.2", "0.8"])),
+        24 => format!(
+            "clip {} {{ instrument: {}\n notes: [a3 c4]\n gain: [0.5 1] }}",
+            clip(r),
+            instr(r)
+        ),
+        _ => format!("tempo {}bpm", r.pick(&["120", "90", "140"])),
+    }
+}
+
+/// Everything about the session that an evaluation could change, as text.
+fn state(s: &mut Offline) -> String {
+    let clips: Vec<String> = s
+        .clips()
+        .iter()
+        .map(|c| format!("{}:{}:{}:{}", c.name, c.instrument, c.running, c.muted))
+        .collect();
+    format!("{}\n{:?}", s.project_source(), clips)
+}
+
+fn running(s: &mut Offline) -> BTreeSet<String> {
+    s.clips()
+        .iter()
+        .filter(|c| c.running)
+        .map(|c| c.name.clone())
+        .collect()
+}
+
+/// Whether anything sounds: a bar to settle, then one to listen to.
+fn sounds(s: &mut Offline) -> bool {
+    run(s, BAR);
+    rms(&run(s, BAR)) > 0.01
+}
+
+/// One run: every step's snippets and outcome are pushed to `log`, then the checks follow.
+fn one_run(seed: u64, log: &mut Vec<String>) -> Result<String, String> {
+    let mut r = Rng(seed);
+    let mut s = session();
+    s.eval(SETUP, Some("now")).map_err(|p| format!("setup: {p:?}"))?;
+    let mut heard = Vec::new();
+    let mut left_out_said = false;
+    for step in 0..10 {
+        let src = (0..1 + r.below(3))
+            .map(|_| snippet(&mut r))
+            .collect::<Vec<_>>()
+            .join("\n");
+        log.push(format!("--- step {step}\n{src}"));
+        let before = state(&mut s);
+        let was_running = running(&mut s);
+        let result = s.eval(&src, Some("now"));
+        let notices = s.take_notices();
+        left_out_said |= notices.iter().any(|n| n.contains("left out"));
+        match result {
+            Err(p) => {
+                log.push(format!("refused: {:?}", p.iter().map(|p| &p.message).collect::<Vec<_>>()));
+                let after = state(&mut s);
+                if after != before {
+                    return Err(format!("a refused evaluation changed the session:\n{before}\n=>\n{after}"));
+                }
+            }
+            Ok(_) => {
+                log.push(format!("ok; notices: {notices:?}"));
+                // a redefined clip keeps its place and stays running; a new `.stop` ends one on purpose
+                let now = running(&mut s);
+                for gone in was_running.difference(&now) {
+                    let stopped = src.contains(&format!("{gone}.stop"));
+                    let said = notices.iter().any(|n| n.contains(&format!("`{gone}`")));
+                    if !stopped && !said {
+                        return Err(format!("clip `{gone}` stopped running without a notice"));
+                    }
+                }
+            }
+        }
+        // the project on its own, with the same clips started, must sound as the live session does
+        let live = sounds(&mut s);
+        heard.push(live);
+        log.push(format!("running {:?}, sounds {live}, notices after {:?}", running(&mut s), s.take_notices()));
+        let mut fresh = session();
+        let started: String = running(&mut s)
+            .iter()
+            .filter(|c| c.as_str() != "kb")
+            .map(|c| format!("\n{c}.start"))
+            .collect();
+        match fresh.eval(&format!("{}{started}", s.project_source()), Some("now")) {
+            Ok(_) => {
+                // only clips that are running in both can be compared: `started` leaves out the keyboard
+                let other = sounds(&mut fresh);
+                if live != other && !running(&mut s).is_empty() {
+                    return Err(format!(
+                        "live session {} but the project on its own {}\n{}",
+                        if live { "sounds" } else { "is silent" },
+                        if other { "sounds" } else { "is silent" },
+                        s.project_source()
+                    ));
+                }
+            }
+            // a drum the kit lost is left out live, but refused in text sent all at once
+            Err(_) if left_out_said => {}
+            Err(p) => {
+                return Err(format!(
+                    "the project does not compile on its own: {:?}\n{}",
+                    p.iter().map(|p| &p.message).collect::<Vec<_>>(),
+                    s.project_source()
+                ));
+            }
+        }
+    }
+    Ok(format!("{}\n{heard:?}", state(&mut s)))
+}
+
+fn run_seed(seed: u64) {
+    let mut log = Vec::new();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| one_run(seed, &mut log)));
+    let report = |what: &str| {
+        panic!("seed {seed}: {what}\n{}", log.join("\n"));
+    };
+    match outcome {
+        Err(_) => report("panicked"),
+        Ok(Err(why)) => report(&why),
+        Ok(Ok(_)) if !seed.is_multiple_of(5) => {}
+        Ok(Ok(first)) => {
+            // the same run again must end in the same place, sounding the same
+            let again = one_run(seed, &mut Vec::new());
+            if again.as_ref() != Ok(&first) {
+                report(&format!("a second run differed:\n{first}\n!=\n{again:?}"));
+            }
+        }
+    }
+}
+
+#[test]
+fn any_order_of_definitions_keeps_the_session_sound() {
+    if let Ok(seed) = std::env::var("FUZZ_SEED") {
+        return run_seed(seed.parse().unwrap());
+    }
+    let number = |name: &str, default: u64| {
+        std::env::var(name).ok().and_then(|n| n.parse().ok()).unwrap_or(default)
+    };
+    let from = number("FUZZ_FROM", 0);
+    for seed in from..from + number("FUZZ_RUNS", 8) {
+        run_seed(seed);
+    }
+}

@@ -142,6 +142,22 @@ pub struct Composition {
     pub arrangements: Vec<Arrangement>,
     /// Every clip the source defines, by name, whether or not a command plays it.
     pub clips: std::collections::BTreeMap<String, crate::Clip>,
+    /// What was left out of clips (only with `lenient`).
+    pub skipped: Vec<Skipped>,
+}
+
+/// Something a clip names that is not there, left out so that the rest of the clip plays.
+#[derive(Debug, Clone)]
+pub struct Skipped {
+    /// What it was: `drum `kick``, or `lane `cutoff` of clip `bass``.
+    pub what: String,
+    /// The lane or drum name alone.
+    pub name: String,
+    /// Where it was written.
+    pub span: Span,
+    /// A mistake if the clip was only just sent, which is refused; it only needs saying if the clip was
+    /// already there and something else changed under it.
+    pub typo_when_new: bool,
 }
 
 impl Deref for Composition {
@@ -306,6 +322,8 @@ pub fn compile_with(
         sample_names: &program.sample_names,
         samples: &options.samples,
         origins: options.origins.as_deref(),
+        lenient: options.lenient,
+        skipped: Default::default(),
     };
     let quantize = quantize_config(&items).unwrap_or_else(|d| {
         errors.push(d);
@@ -347,7 +365,9 @@ pub fn compile_with(
     if !errors.is_empty() {
         return Err(errors);
     }
+    let skipped = cx.skipped.take();
     Ok(Composition {
+        skipped,
         program,
         source: source.to_string(),
         tempo,

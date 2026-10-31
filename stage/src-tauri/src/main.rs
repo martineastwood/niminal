@@ -124,6 +124,25 @@ async fn cancel(state: State<'_, AppState>, id: Option<u64>) -> Result<usize, St
     blocking(move || session::cancel(&shared, id)).await?
 }
 
+/// The instruments, with the parameters each takes, for the Lab's faders.
+#[tauri::command]
+async fn lab_instruments(state: State<'_, AppState>) -> Result<Vec<session::LabInstrument>, String> {
+    let shared = state.shared.clone();
+    blocking(move || session::lab_instruments(&shared)).await?
+}
+
+#[tauri::command]
+async fn lab_key(state: State<'_, AppState>, note: u8, velocity: u8) -> Result<usize, String> {
+    let shared = state.shared.clone();
+    blocking(move || session::lab_key(&shared, note, velocity)).await?
+}
+
+#[tauri::command]
+async fn lab_param(state: State<'_, AppState>, name: String, value: f64) -> Result<usize, String> {
+    let shared = state.shared.clone();
+    blocking(move || session::lab_param(&shared, &name, value)).await?
+}
+
 /// A `.nml` file the window opened.
 #[derive(Serialize)]
 struct OpenedFile {
@@ -242,6 +261,35 @@ async fn read_sample(path: String) -> Result<tauri::ipc::Response, String> {
     blocking(move || niminal_lang::audition_wav(Path::new(&path))).await?.map(tauri::ipc::Response::new)
 }
 
+/// Ask a yes or no question in a native dialog. The webview's own `confirm` does nothing here, so a tab with
+/// unsaved changes could not be closed.
+#[tauri::command]
+async fn confirm(message: String) -> bool {
+    rfd::AsyncMessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_description(message)
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        .await
+        == rfd::MessageDialogResult::Yes
+}
+
+/// Ask for an audio file; its path, or nothing if the dialog was closed.
+#[tauri::command]
+async fn pick_sample() -> Result<Option<String>, String> {
+    Ok(rfd::AsyncFileDialog::new()
+        .add_filter("Audio", &["wav", "flac", "mp3", "ogg", "aif", "aiff", "m4a", "aac"])
+        .pick_file()
+        .await
+        .map(|file| file.path().to_string_lossy().into_owned()))
+}
+
+/// Make versions of a sample for the Lab's gallery. This takes a few seconds.
+#[tauri::command]
+async fn gallery_make(sample: String, families: Vec<String>, amount: String, seed: u64) -> Result<session::GalleryMade, String> {
+    blocking(move || session::gallery_make(Path::new(&sample), &families, &amount, seed)).await?
+}
+
 /// Ask for a folder; its path, or nothing if the dialog was closed.
 #[tauri::command]
 async fn pick_folder() -> Result<Option<String>, String> {
@@ -295,6 +343,7 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let view = SubmenuBuilder::new(app, "View")
         .item(&item("browse", "Browse (⇧⌘L)", None)?)
         .item(&item("sidebar", "Sidebar (⌘B)", None)?)
+        .item(&item("lab", "Lab (⇧⌘B)", None)?)
         .item(&item("perform", "Performance Mode (⇧⌘P)", None)?)
         .separator()
         .item(&item("zoom-in", "Bigger Text (⌘+)", None)?)
@@ -339,6 +388,12 @@ fn main() {
             eval,
             perform,
             cancel,
+            confirm,
+            pick_sample,
+            gallery_make,
+            lab_instruments,
+            lab_key,
+            lab_param,
             open_file,
             open_project,
             save_file,

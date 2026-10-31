@@ -49,7 +49,26 @@ fn share_a_name(old: &Entry, old_kind: &str, new: &Entry, new_kind: &str, name: 
     let Some((_, after)) = node.text.split_once("instrument =") else {
         return false;
     };
-    leading_name(after) == name
+    // a client's names carry its prefix (`__client_1::bass`); the text inside a node does not
+    unprefixed(leading_name(after)) == unprefixed(name)
+}
+
+/// Does this clip play the instrument called `name`?
+fn clip_plays(clip: &Entry, name: &str) -> bool {
+    clip.text
+        .split_once("instrument:")
+        .is_some_and(|(_, after)| unprefixed(leading_name(after)) == unprefixed(name))
+}
+
+/// A name without the `__client_N::` prefix a server gives each client's definitions.
+fn unprefixed(name: &str) -> &str {
+    match name
+        .strip_prefix("__client_")
+        .and_then(|rest| rest.split_once("::"))
+    {
+        Some((_, name)) => name,
+        None => name,
+    }
 }
 
 /// The name a piece of text starts with, after any spaces.
@@ -104,7 +123,10 @@ impl Project {
                     x.key.split_once(':').is_none_or(|(k, n)| {
                         n != name
                             || k == kind
-                            || !SHARED.contains(&k)
+                            // a clip is its own kind of name: an instrument takes the name from a clip that
+                            // does not play it, the way a clip takes it from an instrument
+                            || (k == "clip" && !(matches!(kind, "instr" | "sample" | "kit") && !clip_plays(x, name)))
+                            || (k != "clip" && !SHARED.contains(&k))
                             || share_a_name(x, k, e, kind, name)
                     })
                 };
@@ -126,10 +148,7 @@ impl Project {
             }
             // a clip takes the name from an instrument it doesn't play
             if let Some(name) = e.key.strip_prefix("clip:") {
-                let plays = e
-                    .text
-                    .split_once("instrument:")
-                    .is_some_and(|(_, after)| leading_name(after) == name);
+                let plays = clip_plays(e, name);
                 let keeps = |x: &Entry| {
                     plays
                         || x.key.split_once(':').is_none_or(|(k, n)| {
@@ -323,6 +342,41 @@ mod tests {
             text: text.into(),
             origin: None,
         }
+    }
+
+    #[test]
+    fn a_clip_and_an_instrument_of_one_name_share_it_under_a_clients_prefix_too() {
+        let mut project = Project::default();
+        project.apply(&[
+            entry(
+                "instr:__client_1::bass",
+                "instr bass(freq: hz) { osc(sine, freq) }",
+            ),
+            entry("node:__client_1::bass", "node bass { instrument = bass }"),
+        ]);
+        let keys: Vec<&str> = project.entries.iter().map(|e| e.key.as_str()).collect();
+        assert_eq!(keys, ["instr:__client_1::bass", "node:__client_1::bass"]);
+        // a node that plays something else takes the name
+        project.apply(&[entry(
+            "node:__client_1::bass",
+            "node bass { instrument = other }",
+        )]);
+        let keys: Vec<&str> = project.entries.iter().map(|e| e.key.as_str()).collect();
+        assert_eq!(keys, ["node:__client_1::bass"]);
+    }
+
+    #[test]
+    fn an_instrument_takes_a_name_from_a_clip_that_does_not_play_it() {
+        let mut project = Project::default();
+        project.apply(&[entry("clip:pad", "clip pad { instrument: tone }")]);
+        project.apply(&[entry("instr:pad", "instr pad() { 0 }")]);
+        let keys: Vec<&str> = project.entries.iter().map(|e| e.key.as_str()).collect();
+        assert_eq!(keys, ["instr:pad"]);
+        // but a clip that plays it stays
+        let mut project = Project::default();
+        project.apply(&[entry("clip:pad", "clip pad { instrument: pad }")]);
+        project.apply(&[entry("instr:pad", "instr pad() { 0 }")]);
+        assert_eq!(project.entries.len(), 2);
     }
 
     #[test]

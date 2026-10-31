@@ -1,0 +1,31 @@
+// A bowed, cello-like voice made only from a cloud of long sawtooth grains.
+// Evaluate the whole file. Each + time is relative to this submission.
+// niminal-live render examples/grain_cello.nml --out /tmp/grain_cello.wav
+config { channels: stereo }
+tempo 72bpm
+
+const saw_cycle = harmonics((1..40).map(1 / it), size: 2048)
+
+// Every grain is one saw at the note's pitch, captured with its own small detune (±1%, about
+// ±17 cents), length (250..750ms) and level (0.16..1). Around fifteen grains overlap, so the
+// detuned saws drift in and out against each other like a bow on a string.
+instr cello(
+  freq: hz,
+  amp: -40db..6db = -2db,
+  density: 5hz..80hz = 33hz,
+  grain: 40ms..1sec = 500ms,
+  detune: 0..1 = 0.17,
+  room: 0..1 = 0.5
+) {
+  duration = grain * (1 + noise(seed: 1) * 0.5)
+  level = 0.16 + (noise(seed: 2) * 0.5 + 0.5) * 0.84
+  grains = granular(saw_cycle, freq: freq, density: density, duration: duration,
+    pitch_scatter: detune, gain: level / sqrt(density.num * 0.5), spread: 0.95, seed: 3)
+  out = (grains + grains.reverb(room: room, damp: 0.6) * 0.2).gain(amp) * env[0 150ms 1 | 400ms 0]
+}
+
+cello(freq: c3) for 4beats
+at +4beats cello(freq: g2) for 2beats
+at +6beats cello(freq: a2) for 2beats
+at +8beats cello(freq: e2, amp: 0db) for 4beats
+at +12beats cello(freq: c2) for 6beats

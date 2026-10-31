@@ -1,0 +1,22 @@
+// family: players
+// A single moment of the sample repeated as a slowly shifting cloud.
+// where: 0..1
+// density: 15..80 log
+// grain: 0.1..0.6 log
+// scatter: 0..4
+// blur: 0..0.15
+// shift: -12..12
+// room: 0..0.9
+config { channels: stereo }
+tempo 100bpm
+src = sample("{sample}")
+instr voice() {
+  particles = granular(src.data, density: {density}hz, duration: {grain}sec,
+    position: {where} + osc(sine, 0.1hz) * 0.01, spray: {blur}sec,
+    pitch: {shift}, pitch_scatter: {scatter}, jitter: 0.6, spread: 1,
+    window: window(blackman, size: 257),
+    gain: 2 / sqrt(max(1, {density} * {grain})), seed: {seed})
+  dry = particles.hpf(cutoff: 60hz)
+  (dry + dry.reverb(room: {room}, damp: 0.5) * 0.3) * env[0 400ms 1 | 600ms 0] * 0.9
+}
+voice() for 2bars

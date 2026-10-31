@@ -1,0 +1,17 @@
+// family: synthesis
+// The sample is treated as one cycle of a waveform and played as a pitched, detuned cloud.
+// pitch: 55..220 log
+// density: 15..60 log
+// grain: 0.1..0.8 log
+// detune: 0..0.5
+// bright: 800..6000 log
+config { channels: stereo }
+tempo 100bpm
+src = sample("{sample}")
+instr voice() {
+  particles = granular(src.data, freq: {pitch}hz, density: {density}hz, duration: {grain}sec,
+    pitch_scatter: {detune}, jitter: 0.4, spread: 0.8,
+    gain: 2 / sqrt(max(1, {density} * {grain})), seed: {seed})
+  particles.hpf(cutoff: 40hz).lpf(cutoff: {bright}hz) * env[0 200ms 1 | 400ms 0] * 1.2
+}
+voice() for 2bars

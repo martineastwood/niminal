@@ -151,6 +151,9 @@ pub(crate) struct Context<'a> {
     /// Where each definition was sent from, if the host wants notes to remember where they were
     /// written: (start, end) in the source, the evaluation that sent it, and where it began there.
     pub origins: Option<&'a [(usize, usize, u64, usize)]>,
+    /// Leave out a grid row whose drum the kit lacks, noting it in `skipped`, instead of refusing it.
+    pub lenient: bool,
+    pub skipped: std::cell::RefCell<Vec<crate::compile::Skipped>>,
 }
 
 struct Perform<'a> {
@@ -1095,6 +1098,15 @@ impl Perform<'_> {
                             })
                     })
                 });
+            if id.is_none() && node.is_none() && self.cx.lenient {
+                self.cx.skipped.borrow_mut().push(crate::compile::Skipped {
+                    what: format!("drum `{}`", row.name),
+                    name: row.name.to_string(),
+                    span: Span::new(at + row.name_offset, at + row.name_offset + 1),
+                    typo_when_new: true,
+                });
+                continue;
+            }
             let Some(id) = id else {
                 let mut message = format!("`{}` isn't a sample in a kit", row.name);
                 if node.is_some() {
@@ -3617,6 +3629,15 @@ impl Perform<'_> {
                 ),
                 span,
             );
+            if self.cx.lenient {
+                self.cx.skipped.borrow_mut().push(crate::compile::Skipped {
+                    what: format!("lane `{}` of clip `{}`", crate::compile::written(lane), clip.name),
+                    name: crate::compile::written(lane).to_string(),
+                    span,
+                    typo_when_new: false,
+                });
+                continue;
+            }
             if let Some(c) = closest(lane, known) {
                 d = d.with_help(format!("did you mean `{c}`?"));
             }

@@ -1,0 +1,19 @@
+// family: manglers
+// A steady clock fires short pieces of the sample, some missing, some accented.
+// rate: 3..20 log
+// piece: 0.02..0.12 log
+// miss: 0..0.6
+// scan: 0.05..0.5 log
+// scatter: 0..7
+config { channels: stereo }
+tempo 100bpm
+src = sample("{sample}")
+instr voice() {
+  particles = granular(src.data, density: 0hz, trigger: impulse({rate}hz),
+    duration: {piece}sec, position: phasor({scan}hz), spray: 0.03sec,
+    pitch_scatter: {scatter}, shape: 0.08, probability: 1 - {miss},
+    gain: 0.35 + 0.85 * (phasor(1.5hz) < 0.25),
+    pan: osc(sine, 0.3hz) * 0.7, spread: 0.3, seed: {seed})
+  particles * env[0 5ms 1 | 80ms 0] * 0.8
+}
+voice() for 2bars

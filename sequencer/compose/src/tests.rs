@@ -761,10 +761,9 @@ fn locals_cannot_shadow_top_level_names() {
         msg(&with("instr a(f: hz) { space = 1\nosc(saw, f) }")),
         "`space` is already the name of a bus, so it can't be used for a local"
     );
-    assert_eq!(
-        msg(&with("instr a(other: hz) { osc(saw, other) }")),
-        "`other` is already the name of an instrument, so it can't be used for a local"
-    );
+    // an instrument is only reached by calling it, so a parameter or local of its name is its own
+    ok(&with("instr a(other: hz) { osc(saw, other) }"));
+    ok(&with("instr a(f: hz) { other = osc(saw, f)\nother * 0.5 }"));
     assert_eq!(
         msg(&with("instr a(f: hz) { space = 1 }")),
         "`space` is already the name of a bus, so it can't be used for a local"

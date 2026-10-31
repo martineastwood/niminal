@@ -1,0 +1,13 @@
+// family: glitch
+// The break winds down to a stop like a tape machine switched off, then comes back live.
+// every: 2..6 int
+// duty: 0.3..0.7
+// stop: 0.15..1.2 log
+config { channels: stereo }
+tempo 100bpm
+src = sample("{sample}").loop(forward)
+instr voice() {
+  hold = phasor((1 / ({every}beats).num).hz) > 1 - {duty}
+  src().slow_down(hold: hold, time: {stop}sec) * env[0 5ms 1 | 300ms 0] * 0.6
+}
+voice() for 2bars

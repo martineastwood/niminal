@@ -103,3 +103,46 @@ fn expression_replays_to_the_same_audio() {
         niminal_server::Session::replay(SR, Layout::Mono, &s.log(), original.len() as u64, false);
     assert_eq!(original, replayed[0]);
 }
+
+const FADER: &str = "\ntempo 120bpm\ninstr tone(freq: hz, level: 0..1 = 0.1) { osc(sine, freq) * level * env[1 | 10ms 0] }\nclip pad { instrument: tone\n  keys: midi.keys(channel: 1) }\npad.start\n";
+
+#[test]
+fn a_parameter_moves_the_held_note_and_the_next_one_starts_with_it() {
+    let mut s = session();
+    s.eval(FADER, Some("now")).unwrap();
+    s.key_input(1, 69, 127);
+    let quiet = peak(&run(&mut s, 9600)[2000..]);
+    assert_eq!(s.param_input("level", 0.6), 1);
+    let loud = peak(&run(&mut s, 9600)[2000..]);
+    assert!(loud > quiet * 3.0, "{loud} vs {quiet}");
+    s.key_input(1, 69, 0);
+    run(&mut s, 4800);
+    s.key_input(1, 60, 127);
+    let next = peak(&run(&mut s, 9600)[2000..]);
+    assert!(next > quiet * 3.0, "the next key starts at 0.6: {next}");
+    assert_eq!(
+        s.param_input("nonsense", 1.0),
+        0,
+        "a parameter no held note has moves nothing"
+    );
+}
+
+#[test]
+fn parameter_moves_replay_to_the_same_audio() {
+    let mut s = session();
+    s.eval(FADER, Some("now")).unwrap();
+    let mut original = run(&mut s, 1000);
+    s.param_input("level", 0.2);
+    s.key_input(1, 69, 100);
+    original.extend(run(&mut s, 3000));
+    s.param_input("level", 0.7);
+    original.extend(run(&mut s, 3000));
+    s.key_input(1, 69, 0);
+    original.extend(run(&mut s, 5000));
+    s.key_input(1, 60, 100);
+    original.extend(run(&mut s, 3000));
+    let replayed =
+        niminal_server::Session::replay(SR, Layout::Mono, &s.log(), original.len() as u64, false);
+    assert!(peak(&original) > 0.1);
+    assert_eq!(original, replayed[0]);
+}

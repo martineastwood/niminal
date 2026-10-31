@@ -45,6 +45,11 @@ pub struct CompileOptions {
     /// Where each definition in the source was sent from (`Project::origins`), so that a note can
     /// remember where it was written in what the client sent. `None` keeps positions as they are.
     pub origins: Option<Vec<(usize, usize, u64, usize)>>,
+    /// Leave out what a clip names that is not there (a grid row for a drum its kit does not have, a lane
+    /// for a parameter its instrument does not have) and report it in `Composition::skipped`, instead of
+    /// refusing the clip. For live hosts, where definitions arrive in any order and change under clips
+    /// that are playing.
+    pub lenient: bool,
 }
 
 impl Default for CompileOptions {
@@ -61,6 +66,7 @@ impl Default for CompileOptions {
             samples: Samples::default(),
             buffers: HashMap::new(),
             origins: None,
+            lenient: false,
         }
     }
 }
@@ -512,6 +518,10 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
             // a node may play the instrument of its own name, and share it
             Some("instrument" | "sample" | "kit") if matches!(item, Item::Node(t) if plays_its_namesake(t)) =>
                 {}
+            // and whichever is written first
+            Some("node") if matches!(kind, "instrument" | "sample" | "kit") && items.iter().any(
+                |other| matches!(other, Item::Node(t) if t.name.name == ident.name && plays_its_namesake(t)),
+            ) => {}
             Some(existing) if existing != kind => {
                 errors.push(Diagnostic::new(
                     format!(
@@ -3165,10 +3175,10 @@ mod tests {
             msg(&with("instr a(f: hz) { space = 1\nosc(saw, f) }")),
             "`space` is already the name of a bus, so it can't be used for a local"
         );
-        assert_eq!(
-            msg(&with("instr a(other: hz) { osc(saw, other) }")),
-            "`other` is already the name of an instrument, so it can't be used for a local"
-        );
+        // an instrument is only reached by calling it, so a parameter or local of its name is its own
+        ok(&with("instr a(other: hz) { osc(saw, other) }"));
+        ok(&with("instr a(f: hz) { other = osc(saw, f)\nother * 0.5 }"));
+        ok(&with("instr a(f: hz) { other = other(f: f)\nother * 0.5 }"));
         assert_eq!(
             msg(&with("instr a(f: hz) { space = 1 }")),
             "`space` is already the name of a bus, so it can't be used for a local"
@@ -3176,6 +3186,19 @@ mod tests {
         assert_eq!(
             msg("bus x\ninstr x(f: hz) { osc(saw, f) }"),
             "`x` is already the name of a bus"
+        );
+    }
+
+    #[test]
+    fn a_node_shares_the_name_of_its_instrument_whichever_comes_first() {
+        let instr = "instr bass(freq: hz) { osc(sine, freq) }";
+        let node = "node bass { instrument = bass }";
+        ok(&format!("{instr}\n{node}"));
+        ok(&format!("{node}\n{instr}"));
+        // a node that plays something else does not share it
+        assert!(
+            msg(&format!("{instr}\ninstr other(freq: hz) {{ osc(saw, freq) }}\nnode bass {{ instrument = other }}"))
+                .contains("`bass` is already the name of an instrument")
         );
     }
 

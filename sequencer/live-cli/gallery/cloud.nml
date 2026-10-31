@@ -1,0 +1,19 @@
+// family: players
+// Grains of the sample scattered around a slowly moving playhead.
+// density: 8..120 log
+// grain: 0.03..0.4 log
+// spray: 0..0.3
+// scatter: 0..12
+// speed: 0.25..1.5 log
+// drift: 0.01..0.2 log
+config { channels: stereo }
+tempo 100bpm
+src = sample("{sample}")
+instr voice() {
+  particles = granular(src.data, density: {density}hz, duration: {grain}sec,
+    position: phasor({drift}hz), rate: {speed}, spray: {spray}sec,
+    pitch_scatter: {scatter}, jitter: 0.5, spread: 0.8,
+    gain: 2 / sqrt(max(1, {density} * {grain})), seed: {seed})
+  particles.hpf(cutoff: 70hz) * env[0 40ms 1 | 300ms 0] * 0.5
+}
+voice() for 2bars

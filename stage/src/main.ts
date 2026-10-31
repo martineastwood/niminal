@@ -1,7 +1,7 @@
 import { EditorState } from '@codemirror/state';
 import { redo, undo } from '@codemirror/commands';
 import { EditorView } from '@codemirror/view';
-import { isTauri } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { demoSource } from './demo';
 import { Scope, connectLanguageServer, niminalEditor } from './editor';
@@ -13,6 +13,7 @@ import { sceneCommand, sceneStates } from './scenes';
 import { HealthWatch } from './health';
 import { learnedRange } from './learn';
 import { FileBrowse } from './browse';
+import { Lab } from './lab';
 import { divider } from './divider';
 import { Bar, loudest } from './meters';
 import { Action, EvalOutcome, OpenedFile, Problem, Queued, Scene, Snapshot, beatsUntil, queuedStates, stage } from './live';
@@ -50,6 +51,7 @@ app.innerHTML = `
         <input id="token" type="password" placeholder="token" aria-label="engine token" />
         <button id="reconnect" title="Connect to the engine">Connect</button>
       </span>
+      <button id="lab-toggle" title="Lab: play an instrument and move its parameters while it sounds (Cmd/Ctrl+Shift+B)">Lab</button>
       <button id="perform" title="Performance mode: just the code and what is playing (Cmd/Ctrl+Shift+P)">Perform</button>
       <button id="hush" title="Stop every clip, letting what sounds ring out">Hush</button>
       <button id="panic" class="danger" title="Stop everything now">Panic</button>
@@ -206,9 +208,13 @@ function addTab(source: string, path: string | null, title: string) {
   show(tab);
 }
 
-function closeTab(tab: Tab) {
+/** A yes or no question in a native dialog: the webview's own `confirm` does nothing here. */
+const ask = (message: string) => invoke<boolean>('confirm', { message }).catch(() => false);
+
+async function closeTab(tab: Tab) {
+  if (isDirty(tab) && !(await ask(`${tab.title} has changes that are not saved. Close it anyway?`))) return;
   const index = tabs.indexOf(tab);
-  if (isDirty(tab) && !confirm(`${tab.title} has changes that are not saved. Close it anyway?`)) return;
+  if (index < 0) return;
   tabs.splice(index, 1);
   if (tabs.length === 0) tabs.push(makeTab('', null, 'untitled'));
   if (tab === current) show(tabs[Math.max(0, index - 1)]);
@@ -1036,6 +1042,23 @@ const files = new FileBrowse({
   },
 });
 $('workbench').prepend(files.element);
+
+/** The Lab: holds notes on one instrument and moves its parameters while they sound. */
+const lab = new Lab({
+  status,
+  openPiece: path => void openPath(path),
+  evaluate: async source => {
+    if (!(await ensureConnected())) return;
+    showOutcome(await stage.evaluate(source, 'now', null, ++evaluations));
+  },
+});
+$('stage').prepend(lab.element);
+/** The Lab lives in the sidebar, so opening it brings the sidebar back. */
+function toggleLab() {
+  if (!lab.open) setMode('no-rail', false);
+  void lab.toggle();
+}
+$('lab-toggle').addEventListener('click', toggleLab);
 $('browse-toggle').addEventListener('click', () => files.toggle());
 
 $('evaluate').addEventListener('click', () => void evaluate());
@@ -1124,6 +1147,9 @@ window.addEventListener('keydown', event => {
   } else if (event.key.toLowerCase() === 'p' && event.shiftKey) {
     event.preventDefault();
     $('perform').click();
+  } else if (event.key.toLowerCase() === 'b' && event.shiftKey) {
+    event.preventDefault();
+    toggleLab();
   } else if (event.key.toLowerCase() === 'l' && event.shiftKey) {
     event.preventDefault();
     files.toggle();
@@ -1168,11 +1194,12 @@ const menuActions: Record<string, () => void> = {
   'open-project': () => void openProject(),
   save: () => void saveFile(),
   'save-all': () => void saveAll(),
-  'close-tab': () => closeTab(current),
+  'close-tab': () => void closeTab(current),
   undo: () => view && undo(view),
   redo: () => view && redo(view),
   browse: () => files.toggle(),
   sidebar: () => toggleRail(),
+  lab: () => toggleLab(),
   perform: () => $('perform').click(),
   'zoom-in': () => stepZoom(1),
   'zoom-out': () => stepZoom(-1),
