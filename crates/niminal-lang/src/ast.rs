@@ -70,11 +70,13 @@ pub enum SampleSource {
     Path(String),
     /// `amen.slices(16)`: a kit of equal pieces of a sample declared earlier.
     /// `amen.slices(16)` cuts equal pieces; `amen.slices([0, 0.25, 0.6])` starts a piece at each share of the length.
-    /// `count` is the number of pieces either way.
+    /// `amen.slices(detect: 16)` cuts at the hits it finds: `sensitivity` is set and `count` is the most pieces.
+    /// Otherwise `count` is the number of pieces.
     Slices {
         sample: Ident,
         count: f64,
         at: Vec<f64>,
+        sensitivity: Option<f64>,
     },
     /// A const table (or expression that yields one): `pad = sample(organ)`.
     Table(Expr),

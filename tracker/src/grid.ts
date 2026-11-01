@@ -5,7 +5,7 @@ import { columnCommands, commandProblem, commandValue, glideRetriggers, maxFxCol
 import { parseNotes, type NoteEdit } from './history';
 import { draggable, dropTarget } from './drag';
 import { openMenu, type MenuEntry } from './menu';
-import { pieceKey, readCuts } from './slices';
+import { pieceKey, readCuts, readDetect } from './slices';
 
 /** What the grid asks of the sequence: move between steps, insert or remove one, or point the step at another pattern. */
 export type SequenceAction = 'previous' | 'next' | 'first' | 'last' | 'new' | 'remove';
@@ -197,19 +197,21 @@ export class PatternGrid {
     const edit = (run: () => void) => () => { if (!this.recording) { this.feedback('Turn on record mode (Esc) to edit.'); return; } run(); this.parent.focus(); };
     openMenu(anchor, [
       { text: 'Copy', run: () => { void navigator.clipboard?.writeText(this.selectionText()).catch(() => this.feedback('Could not reach the clipboard.')); this.parent.focus(); } },
-      { text: 'Paste', run: edit(() => { void navigator.clipboard?.readText().then(text => this.paste(text), () => this.feedback('Could not reach the clipboard.')); }) },
-      { text: 'Clear  ⌫', run: edit(() => this.clearSelection()) },
+      { text: 'Paste', run: edit(() => { void navigator.clipboard?.readText().then(text => this.paste(text), () => this.feedback('Could not reach the clipboard.')); }), disabled: !this.recording },
+      { text: 'Clear  ⌫', run: edit(() => this.clearSelection()), disabled: !this.recording },
       { heading: 'Selection' },
-      { text: `Transpose up a semitone  ${mod}${alt}↑`, run: edit(() => this.transpose(1)) },
-      { text: `Transpose down a semitone  ${mod}${alt}↓`, run: edit(() => this.transpose(-1)) },
-      { text: `Transpose up an octave  ${mod}⇧↑`, run: edit(() => this.transpose(12)) },
-      { text: `Transpose down an octave  ${mod}⇧↓`, run: edit(() => this.transpose(-12)) },
-      { text: `Interpolate  ${mod}I`, run: edit(() => this.interpolate()) },
-      { text: `Repeat below  ${mod}D`, run: edit(() => this.duplicate()) },
-      { text: 'Reverse', run: () => this.reverseSelection() },
-      { text: 'Randomize', run: () => this.randomizeSelection() },
-      { text: 'Shuffle notes', run: () => this.shuffleSelection() },
-      { text: 'Fill with slices', run: () => this.fillSlices() },
+      { text: `Transpose up a semitone  ${mod}${alt}↑`, run: edit(() => this.transpose(1)), disabled: !this.recording },
+      { text: `Transpose down a semitone  ${mod}${alt}↓`, run: edit(() => this.transpose(-1)), disabled: !this.recording },
+      { text: `Transpose up an octave  ${mod}⇧↑`, run: edit(() => this.transpose(12)), disabled: !this.recording },
+      { text: `Transpose down an octave  ${mod}⇧↓`, run: edit(() => this.transpose(-12)), disabled: !this.recording },
+      { text: `Interpolate  ${mod}I`, run: edit(() => this.interpolate()), disabled: !this.recording },
+      { text: `Repeat below  ${mod}D`, run: edit(() => this.duplicate()), disabled: !this.recording },
+      { text: 'Reverse', run: () => this.reverseSelection(), disabled: !this.recording },
+      { text: 'Randomize', run: () => this.randomizeSelection(), disabled: !this.recording },
+      { text: 'Shuffle notes', run: () => this.shuffleSelection(), disabled: !this.recording },
+      { text: 'Fill with slices', run: () => this.fillSlices(), disabled: !this.recording },
+      { text: 'Space notes evenly', run: () => this.spaceEvenly(), disabled: !this.recording },
+      { text: 'Use selected instrument', run: () => this.useSelectedInstrument(), disabled: !this.recording },
     ]);
   }
 
@@ -673,12 +675,46 @@ export class PatternGrid {
     if (lane.kind !== 'note') { this.feedback('Put the cursor in a note column to fill it with slices.'); return; }
     const column = this.pattern().notes[lane.track][lane.col];
     const id = this.currentInstrument() ?? instrumentAt(column.inst, top);
-    const cuts = readCuts(this.project().definitions.find(definition => definition.id === id)?.source ?? '');
+    const source = this.project().definitions.find(definition => definition.id === id)?.source ?? '';
+    const cuts = readCuts(source);
+    if (!cuts && readDetect(source)) { this.feedback('This sample is cut where the code finds hits, so how many pieces there are is not known here. Move a cut in the sample view to fix them first.'); return; }
     if (!cuts) { this.feedback('The instrument here is not a sliced sample.'); return; }
     const edits: NoteEdit[] = [];
     for (let row = top; row <= bottom; row++) edits.push({ row, track: this.column, before: lane.values[row], after: pieceKey((row - top) % cuts.points.length) });
     const inst = this.lanes.findIndex(other => other.track === lane.track && other.col === lane.col && other.kind === 'inst');
     if (inst >= 0 && id && instrumentAt(column.inst, top) !== id) edits.push({ row: top, track: inst, before: column.inst[top], after: id });
+    this.apply(edits);
+  }
+  /** Moves the selected notes to rows spread evenly down the selection, keeping their order. */
+  spaceEvenly() {
+    if (!this.recording) { this.feedback('Turn on record mode to edit the selection.'); return; }
+    const { top, bottom, left, right } = this.bounds, height = bottom - top + 1, edits: NoteEdit[] = [];
+    for (let column = left; column <= right; column++) {
+      const lane = this.lanes[column]; if (lane.kind !== 'note') continue;
+      const notes = Array.from({ length: height }, (_, i) => lane.values[top + i]).filter(value => value !== null);
+      if (!notes.length) continue;
+      const after: (string | null)[] = Array(height).fill(null);
+      notes.forEach((note, i) => { after[Math.floor(i * height / notes.length)] = note; });
+      after.forEach((value, i) => { if (value !== lane.values[top + i]) edits.push({ row: top + i, track: column, before: lane.values[top + i], after: value }); });
+    }
+    if (!edits.length) { this.feedback('The notes are already evenly spaced, or there are none selected.'); return; }
+    this.apply(edits);
+  }
+  /** Plays the selected rows with the instrument chosen in the sidebar: it is set on the first row and replaces any other instrument set within the selection. */
+  useSelectedInstrument() {
+    if (!this.recording) { this.feedback('Turn on record mode to edit the selection.'); return; }
+    const id = this.currentInstrument();
+    if (!id) { this.feedback('Choose an instrument in the sidebar first.'); return; }
+    const { top, bottom, left, right } = this.bounds, lanes = this.lanes, edits: NoteEdit[] = [], done = new Set<string>();
+    for (let column = left; column <= right; column++) {
+      const { track, col } = lanes[column], key = `${track}.${col}`; if (done.has(key)) continue; done.add(key);
+      const inst = lanes.findIndex(lane => lane.track === track && lane.col === col && lane.kind === 'inst'); if (inst < 0) continue;
+      for (let row = top; row <= bottom; row++) {
+        const before = lanes[inst].values[row], after = row === top || before ? id : before;
+        if (after !== before) edits.push({ row, track: inst, before, after });
+      }
+    }
+    if (!edits.length) { this.feedback('Those rows already use this instrument.'); return; }
     this.apply(edits);
   }
   /** Where Cmd/Ctrl+`key` takes the cursor, as in a spreadsheet: along a run of filled cells to its end, or from a gap to the next filled cell, else to the edge. Sideways it goes to the edge of the track, then the next. */

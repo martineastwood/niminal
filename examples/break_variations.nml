@@ -1,0 +1,43 @@
+// Remixing a break with pattern operations. The one-bar loop in break.wav is cut into 16 slices (s0..s15),
+// and each clip below is the same straight break with a different operation on it. Each plays
+// twice, one after the other, from the `at` lines at the end.
+// Render with:  niminal-live render examples/break_variations.nml --out break_variations.wav --bars 16
+config { channels: stereo }
+tempo 130bpm
+
+brk = sample("break.wav").beats(4)
+chops = brk.slices(16)
+straight = [s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12 s13 s14 s15]
+
+// the break as recorded
+clip original { instrument: chops, notes: straight, times: 2 }
+
+// `shuffle(4)` cuts the bar into 4 parts (beats) and plays them in a new order each bar, each once; the same seed always gives the same order
+clip reordered { instrument: chops, notes: straight.shuffle(4), times: 2 }
+
+// `pick_random(16)` cuts the bar into 16 parts and fills each of the 16 slots with a randomly chosen part
+clip random_fill { instrument: chops, notes: straight.pick_random(16), times: 2 }
+
+// `repeat_each(2)` plays every slice twice, each at twice the speed: a stutter. `sometimes(25%, ...)` does it to a quarter of the slices only
+clip stutter { instrument: chops, notes: straight.sometimes(25%, repeat_each(2)), times: 2 }
+
+// `every(2, chop(4))` changes every 2nd cycle (a cycle is a bar here): `chop(4)` cuts each slice into 4 pieces, each playing the next part of the slice. `gain` alternates the loudness of the slices
+clip rolled { instrument: chops, notes: straight.every(2, chop(4)).gain([0db -6db]), times: 2 }
+
+// `start_later(4)` splits the bar into 4 parts and starts one part later each bar, so the break turns around itself. `slow(2)` plays it at half speed
+clip half_time { instrument: chops, notes: straight.start_later(4).slow(2), times: 2 }
+
+// `back_and_forth` plays the bar forwards, then backwards. `echo(2, 1/16beat, fade: -9db)` adds 2 repeats of each slice, a sixteenth of a beat apart, each 9db quieter
+clip backwards { instrument: chops, notes: straight.back_and_forth.echo(2, 1/16beat, fade: -9db), times: 2 }
+
+// `drop(30%)` removes a random 30% of the slices, and `keep_where` silences the ones where the grid rests
+clip thinned { instrument: chops, notes: straight.drop(30%).keep_where(grid[x.xx x.x. xx.x x.x.]), times: 2 }
+
+original.start
+at +2bars reordered.start
+at +4bars random_fill.start
+at +6bars stutter.start
+at +8bars rolled.start
+at +10bars half_time.start
+at +12bars backwards.start
+at +14bars thinned.start

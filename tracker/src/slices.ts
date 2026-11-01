@@ -3,7 +3,7 @@ import { noteAt } from './project';
 /** Where the pieces of a sliced sampler start, as shares of its sample (0 up to 1), read from its code. */
 export interface Cuts { points: number[] }
 
-const slicesCall = /(\.slices\()(\d+(?:\.\d+)?|\[[^\]]*\])(\))/;
+const slicesCall = /(\.slices\()(\d+(?:\.\d+)?|\[[^\]]*\]|detect:[^)]*)(\))/;
 
 /** The pieces `source` cuts its sample into: `.slices(16)` as sixteen equal ones, `.slices([0, 0.25])` as listed; null when it cuts none. */
 export function readCuts(source: string): Cuts | null {
@@ -15,6 +15,12 @@ export function readCuts(source: string): Cuts | null {
   }
   const points = argument.slice(1, -1).split(',').map(part => part.trim()).filter(Boolean).map(Number);
   return points.length && points.every(Number.isFinite) ? { points } : null;
+}
+
+/** What `.slices(detect: 16, sensitivity: 0.7)` asks for: at most `max` pieces, cut at the hits the language finds. Null when the code cuts some other way. */
+export function readDetect(source: string): { max: number; sensitivity: number } | null {
+  const found = /\.slices\(\s*detect:\s*(\d+)(?:\s*,\s*sensitivity:\s*(\d*\.?\d+))?\s*\)/.exec(source);
+  return found ? { max: Number(found[1]), sensitivity: found[2] === undefined ? 0.5 : Number(found[2]) } : null;
 }
 
 /** `source` with its `.slices(...)` call changed to start pieces at `points`, and the count in its first comment kept right. */
@@ -67,7 +73,7 @@ export const pieceKey = (index: number) => noteAt(48 + index) ?? '?';
  * `.interp(sinc)`, move to the sample's), and the instrument plays the sample by pitch instead of by piece. Null when it is not cut.
  */
 export function unslice(source: string): string | null {
-  const cut = /^(\w+)\s*=\s*(\w+)\.slices\((?:\d+(?:\.\d+)?|\[[^\]]*\])\)([^\n]*?)(?=[ \t]*\/\/|$)[^\n]*\n/m.exec(source);
+  const cut = /^(\w+)\s*=\s*(\w+)\.slices\((?:\d+(?:\.\d+)?|\[[^\]]*\]|detect:[^)]*)\)([^\n]*?)(?=[ \t]*\/\/|$)[^\n]*\n/m.exec(source);
   if (!cut) return null;
   const [line, slices, base, settings] = cut;
   let text = source.replace(line, '');

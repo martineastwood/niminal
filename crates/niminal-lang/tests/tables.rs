@@ -117,3 +117,58 @@ fn a_sample_can_be_cut_at_places_in_it() {
             .is_err()
     );
 }
+
+/// A one second 16-bit mono file with a short decaying noise burst starting at each of `starts` (in seconds).
+fn write_hits(dir: &std::path::Path, starts: &[f32]) {
+    let rate = 48_000usize;
+    let mut audio = vec![0i16; rate];
+    let mut noise = 12345u32;
+    for &start in starts {
+        for n in 0..rate / 5 {
+            noise = noise.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let hiss = (noise >> 16) as f32 / 32768.0 - 1.0;
+            let at = (start * rate as f32) as usize + n;
+            audio[at] += (hiss * (-(n as f32) / rate as f32 * 25.0).exp() * 16000.0) as i16;
+        }
+    }
+    let mut wav = Vec::new();
+    wav.extend(b"RIFF");
+    wav.extend((36u32 + audio.len() as u32 * 2).to_le_bytes());
+    wav.extend(b"WAVEfmt ");
+    wav.extend(16u32.to_le_bytes());
+    wav.extend([1, 0, 1, 0]);
+    wav.extend((rate as u32).to_le_bytes());
+    wav.extend((rate as u32 * 2).to_le_bytes());
+    wav.extend([2, 0, 16, 0]);
+    wav.extend(b"data");
+    wav.extend((audio.len() as u32 * 2).to_le_bytes());
+    wav.extend(audio.iter().flat_map(|v| v.to_le_bytes()));
+    std::fs::write(dir.join("hits.wav"), wav).unwrap();
+}
+
+#[test]
+fn a_sample_can_be_cut_at_the_hits_found_in_it() {
+    let dir = std::env::temp_dir().join(format!("niminal-detect-slices-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    write_hits(&dir, &[0.0, 0.3, 0.6]);
+    let members = |args: &str| {
+        let options = niminal_lang::CompileOptions {
+            samples: niminal_lang::Samples::new(&dir),
+            ..Default::default()
+        };
+        let source = format!("hits = sample(\"hits.wav\")\nchops = hits.slices({args})\n");
+        let program = niminal_lang::compile_with(&source, &options).unwrap();
+        program.instruments.iter().find(|i| i.name == "chops").unwrap().members.clone()
+    };
+    // three hits are found out of up to sixteen, and the names run from s0 for as many as there are
+    assert_eq!(members("detect: 16"), ["s0", "s1", "s2"]);
+    assert_eq!(members("detect: 16, sensitivity: 0.7"), ["s0", "s1", "s2"]);
+    // never more than asked for
+    assert_eq!(members("detect: 2"), ["s0", "s1"]);
+    for bad in ["detect: 16, sensitivity: 2", "detect: x", "detect: 4, 8", "detect: 4, other: 1"] {
+        let source = format!("hits = sample(\"hits.wav\")\nchops = hits.slices({bad})\n");
+        let options = niminal_lang::CompileOptions { samples: niminal_lang::Samples::new(&dir), ..Default::default() };
+        assert!(niminal_lang::compile_with(&source, &options).is_err(), "{bad}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

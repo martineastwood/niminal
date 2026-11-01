@@ -4,7 +4,7 @@ import { sampleFile } from './instruments';
 import { readPlayback, writePlayback, playbackNames, playbackHints, type Playback } from './playback';
 import { withFit, readFit, readFitMode, withFitMode, sourceTempo, estimateBeats, type FitMode } from './stretch';
 import { noteName, readRoot, writeRoot, readRelease, writeRelease, readInterpolation, writeInterpolation, type Interpolation } from './sampleprops';
-import { unslice, addCut, cutNear, moveCut, pieceAt, pieceKey, readCuts, removeCut, writeCuts } from './slices';
+import { unslice, addCut, cutNear, moveCut, pieceAt, pieceKey, readCuts, readDetect, removeCut, writeCuts } from './slices';
 
 /** A sample's waveform: its length, and the lowest and highest value of each of equal stretches of it (two numbers a stretch). */
 export interface Peaks { frames: number; rate: number; peaks: number[] }
@@ -185,8 +185,8 @@ export class SamplePanel {
     if (definition !== this.definition) { this.beatDraft = null; this.beats.value = '4'; }
     this.definition = definition;
     this.loop = readLoop(definition?.source ?? '');
-    const wholeSample = !!file && !readCuts(definition?.source ?? '') && /begin: 0\.\.1 = 0/.test(definition?.source ?? '') && !!definition?.source.includes('begin: begin');
-    this.canLoop = wholeSample; this.cutUp = !!file && !!readCuts(definition?.source ?? ''); this.showCutTools(); this.playback = definition ? readPlayback(definition.source) : null;
+    const wholeSample = !!file && !readCuts(definition?.source ?? '') && !readDetect(definition?.source ?? '') && /begin: 0\.\.1 = 0/.test(definition?.source ?? '') && !!definition?.source.includes('begin: begin');
+    this.canLoop = wholeSample; this.cutUp = !!file && !!(readCuts(definition?.source ?? '') || readDetect(definition?.source ?? '')); this.showCutTools(); this.playback = definition ? readPlayback(definition.source) : null;
     this.showProps(definition?.source ?? '');
     this.showLoop();
     this.stretch.value = /stretch: 0\.25\.\.4 = ([\d.]+)/.exec(definition?.source ?? '')?.[1] ?? '1';
@@ -199,7 +199,11 @@ export class SamplePanel {
     try { if (!peaks) { peaks = await this.actions.loadPeaks(file); this.cache.set(file, peaks); } }
     catch (error) { if (revision === this.revision) { this.peaks = null; this.hint.textContent = `Could not read ${file}: ${error}`; this.draw(); } return; }
     if (revision !== this.revision) return;
-    this.peaks = peaks; this.points = readCuts(definition.source)?.points ?? []; this.showFit(definition.source);
+    const detect = readDetect(definition.source);
+    let found: number[] | null = null;
+    // code that cuts at the hits it finds shows those cuts; moving one writes them all into the code as fixed places
+    if (detect) { try { found = await this.actions.detect(file, detect.max, detect.sensitivity); } catch { found = null; } if (revision !== this.revision) return; }
+    this.peaks = peaks; this.points = readCuts(definition.source)?.points ?? found ?? []; this.showFit(definition.source);
     if (this.selected >= this.points.length) this.selected = -1;
     this.title.textContent = `${definition.name} · ${(peaks.frames / peaks.rate).toFixed(2)} s${this.points.length ? ` · ${this.points.length} pieces` : ''}`;
     this.hint.textContent = this.points.length
@@ -399,7 +403,7 @@ export class SamplePanel {
   private setPoints(points: number[]) {
     if (points === this.points || !this.definition || !this.peaks) return;
     // a sampler that is not cut yet stays as it is: the pieces go to a new instrument of their own
-    if (!readCuts(this.definition.source)) { this.hint.textContent = `Cut into ${points.length} pieces: made a new instrument.`; this.actions.cut(this.definition, points); return; }
+    if (!readCuts(this.definition.source) && !readDetect(this.definition.source)) { this.hint.textContent = `Cut into ${points.length} pieces: made a new instrument.`; this.actions.cut(this.definition, points); return; }
     this.points = points; this.commit();
   }
   private commit() {

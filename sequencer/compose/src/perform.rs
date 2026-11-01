@@ -358,7 +358,20 @@ fn atom_value(atom: &str, sample_names: &[String]) -> Result<Value, String> {
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') =>
             {
                 let mut message = format!("`{atom}` isn't a note, a value, or a sample in a kit");
-                if let Some(c) = closest(member, sample_names.iter().map(String::as_str)) {
+                let slices = sample_names
+                    .iter()
+                    .filter(|n| n.strip_prefix('s').is_some_and(|d| d.parse::<u32>().is_ok()))
+                    .count();
+                let is_slice = member
+                    .strip_prefix('s')
+                    .is_some_and(|d| d.parse::<u32>().is_ok());
+                if is_slice && slices > 0 {
+                    // a slice past the end, such as `s7` of a sample cut at the 6 hits `detect:` found
+                    message.push_str(&format!(
+                        " (the sliced sample has {slices} pieces, `s0` to `s{}`)",
+                        slices - 1
+                    ));
+                } else if let Some(c) = closest(member, sample_names.iter().map(String::as_str)) {
                     message.push_str(&format!(" (did you mean `{c}`?)"));
                 }
                 Err(message)

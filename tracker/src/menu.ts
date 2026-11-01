@@ -1,5 +1,5 @@
 /** A line of a menu: an item, a heading, or a number to choose with a button to use it. */
-export type MenuEntry = { text: string; checked?: boolean; run: () => void } | { heading: string } | { number: string; value: number; min: number; max: number; run: (value: number) => void };
+export type MenuEntry = { text: string; checked?: boolean; disabled?: boolean; run: () => void } | { heading: string } | { number: string; value: number; min: number; max: number; run: (value: number) => void };
 
 /**
  * A menu under `anchor`. It closes when an item is chosen, on a click elsewhere, or on Escape (which
@@ -22,13 +22,13 @@ export function openMenu(anchor: HTMLElement, entries: MenuEntry[]): () => void 
     }
     if ('heading' in entry) { const heading = document.createElement('div'); heading.className = 'menu-heading'; heading.textContent = entry.heading; menu.append(heading); continue; }
     const button = document.createElement('button'); button.textContent = entry.text; button.setAttribute('role', 'menuitemradio'); button.setAttribute('aria-checked', String(!!entry.checked));
-    button.onclick = () => { close(); entry.run(); }; menu.append(button);
+    button.disabled = !!entry.disabled; button.onclick = () => { close(); entry.run(); }; menu.append(button);
   }
   document.body.append(menu);
   const box = anchor.getBoundingClientRect();
   menu.style.left = `${Math.max(4, Math.min(box.left, innerWidth - menu.offsetWidth - 4))}px`;
   menu.style.top = `${box.bottom + menu.offsetHeight + 4 > innerHeight ? Math.max(4, box.top - menu.offsetHeight) : box.bottom}px`;
   document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', escape, true);
-  (menu.querySelector<HTMLElement>('[aria-checked=true]') ?? menu.querySelector<HTMLElement>('button'))?.focus();
+  (menu.querySelector<HTMLElement>('[aria-checked=true]') ?? menu.querySelector<HTMLElement>('button:not(:disabled)'))?.focus();
   return close;
 }

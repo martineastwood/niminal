@@ -2568,73 +2568,104 @@ fn sample_decl(name: Ident, value: Expr) -> Res<Item> {
         if call.name == "slices" {
             let usage = || {
                 Diagnostic::new(
-                    "`slices` cuts a sample into equal pieces, as in `amen.slices(16)`, or at places in it, as in `amen.slices([0, 0.25, 0.6])`",
+                    "`slices` cuts a sample into equal pieces, as in `amen.slices(16)`, at places in it, as in `amen.slices([0, 0.25, 0.6])`, or at the hits it finds, as in `amen.slices(detect: 16)`",
                     at,
                 )
             };
             let ExprKind::Name(sample) = &receiver.kind else {
                 return Err(usage());
             };
-            let (count, places) = match args.as_slice() {
-                [
-                    Arg {
-                        name: None,
-                        value:
-                            Expr {
-                                kind:
-                                    ExprKind::Num {
-                                        value: count,
-                                        unit: None,
-                                    },
-                                ..
-                            },
-                        ..
-                    },
-                ] => (*count, Vec::new()),
-                [
-                    Arg {
-                        name: None,
-                        value:
-                            Expr {
-                                kind: ExprKind::Array(items),
-                                ..
-                            },
-                        ..
-                    },
-                ] if !items.is_empty() => {
-                    let mut places = Vec::new();
-                    for item in items {
-                        let ExprKind::Num { value, unit: None } = &item.kind else {
-                            return Err(usage());
-                        };
-                        places.push(*value);
-                    }
-                    (places.len() as f64, places)
+            let number = |value: &Expr| match &value.kind {
+                ExprKind::Num { value, unit: None } => Some(*value),
+                _ => None,
+            };
+            let named = |name: &str| {
+                args.iter()
+                    .find(|a| a.name.as_ref().is_some_and(|n| n.name == name))
+            };
+            let mut sensitivity = None;
+            let (count, places) = if let Some(detect) = named("detect") {
+                if args.iter().any(|a| {
+                    a.name
+                        .as_ref()
+                        .is_none_or(|n| n.name != "detect" && n.name != "sensitivity")
+                }) {
+                    return Err(usage());
                 }
-                // outside an instrument's body the lexer keeps a bracketed list as raw pattern text
-                [
-                    Arg {
-                        name: None,
-                        value:
-                            Expr {
-                                kind: ExprKind::Pattern(raw),
-                                ..
-                            },
-                        ..
-                    },
-                ] => {
-                    let places: Option<Vec<f64>> = raw
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|word| !word.is_empty())
-                        .map(|word| word.parse().ok())
-                        .collect();
-                    match places {
-                        Some(places) if !places.is_empty() => (places.len() as f64, places),
-                        _ => return Err(usage()),
+                let Some(most) = number(&detect.value) else {
+                    return Err(usage());
+                };
+                sensitivity = Some(match named("sensitivity") {
+                    Some(s) => number(&s.value)
+                        .filter(|v| (0.0..=1.0).contains(v))
+                        .ok_or_else(|| {
+                            Diagnostic::new("`sensitivity` is a number from 0 to 1", s.value.span)
+                        })?,
+                    None => 0.5,
+                });
+                (most, Vec::new())
+            } else {
+                match args.as_slice() {
+                    [
+                        Arg {
+                            name: None,
+                            value:
+                                Expr {
+                                    kind:
+                                        ExprKind::Num {
+                                            value: count,
+                                            unit: None,
+                                        },
+                                    ..
+                                },
+                            ..
+                        },
+                    ] => (*count, Vec::new()),
+                    [
+                        Arg {
+                            name: None,
+                            value:
+                                Expr {
+                                    kind: ExprKind::Array(items),
+                                    ..
+                                },
+                            ..
+                        },
+                    ] if !items.is_empty() => {
+                        let mut places = Vec::new();
+                        for item in items {
+                            let ExprKind::Num { value, unit: None } = &item.kind else {
+                                return Err(usage());
+                            };
+                            places.push(*value);
+                        }
+                        (places.len() as f64, places)
                     }
+                    // outside an instrument's body the lexer keeps a bracketed list as raw pattern text
+                    [
+                        Arg {
+                            name: None,
+                            value:
+                                Expr {
+                                    kind: ExprKind::Pattern(raw),
+                                    ..
+                                },
+                            ..
+                        },
+                    ] => {
+                        let places: Option<Vec<f64>> = raw
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|word| !word.is_empty())
+                            .map(|word| word.parse().ok())
+                            .collect();
+                        match places {
+                            Some(places) if !places.is_empty() => (places.len() as f64, places),
+                            _ => return Err(usage()),
+                        }
+                    }
+                    _ => return Err(usage()),
                 }
-                _ => return Err(usage()),
             };
             let sample = Ident {
                 name: sample.clone(),
@@ -2646,6 +2677,7 @@ fn sample_decl(name: Ident, value: Expr) -> Res<Item> {
                     sample,
                     count,
                     at: places,
+                    sensitivity,
                 },
                 at,
             );

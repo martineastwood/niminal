@@ -857,6 +857,8 @@ it('fills the selection with the pieces of a sliced sampler, in order and starti
   grid.fillSlices();
   expect(project.patterns[0].notes[0][0].notes.slice(0, 5)).toEqual(['C-4', 'C#4', 'D-4', 'C-4', 'C#4']);
   expect(project.patterns[0].notes[0][0].inst[0]).toBe('tone');
+  project.definitions[0].source = 'hit = sample("break.wav").slices(detect: 8)\n'; grid.fillSlices();
+  expect(feedback).toHaveBeenCalledWith(expect.stringContaining('where the code finds hits'));
   project.definitions[0].source = 'tone = osc(saw)\n'; grid.fillSlices();
   expect(feedback).toHaveBeenCalledWith(expect.stringContaining('not a sliced'));
 });
@@ -870,4 +872,34 @@ it('repeats a pasted block to fill a larger selection, and pastes once at a sing
   expect(notes.slice(0, 11)).toEqual(['C-4', 'D-4', 'E-4', 'C-4', 'D-4', 'E-4', 'C-4', 'D-4', 'E-4', 'C-4', null]);
   click(12, 0); clipboard(parent, 'paste', 'G-4'); expect(notes.slice(12, 14)).toEqual(['G-4', null]);
   grid.render();
+});
+
+it('spaces the selected notes evenly down the selection', () => {
+  const { project, grid, key, click, baseline } = setup();
+  const notes = project.patterns[0].notes[0][0].notes;
+  notes.splice(0, 8, 'C-4', 'D-4', 'E-4', 'F-4', null, null, null, null); baseline();
+  click(0, 0); for (let i = 0; i < 7; i++) key('ArrowDown', { shiftKey: true });
+  grid.spaceEvenly();
+  expect(notes.slice(0, 8)).toEqual(['C-4', null, 'D-4', null, 'E-4', null, 'F-4', null]);
+  key('z', { ctrlKey: true }); expect(notes.slice(0, 4)).toEqual(['C-4', 'D-4', 'E-4', 'F-4']);
+});
+
+it('puts the chosen instrument on the selected rows, replacing others set within them', () => {
+  let chosen: string | null = 'kick';
+  const { project, grid, key, click, feedback, baseline } = setup(vi.fn(), () => chosen);
+  const inst = project.patterns[0].notes[0][0].inst;
+  inst.splice(0, 5, 'tone', null, 'snare', null, 'tone'); baseline();
+  click(0, 0); for (let i = 0; i < 3; i++) key('ArrowDown', { shiftKey: true });
+  grid.useSelectedInstrument();
+  expect(inst.slice(0, 5)).toEqual(['kick', null, 'kick', null, 'tone']);
+  chosen = null; grid.useSelectedInstrument(); expect(feedback).toHaveBeenCalledWith(expect.stringContaining('Choose an instrument'));
+});
+
+it('greys out the editing items of the right-click menu while record mode is off', () => {
+  const { parent, grid } = setup();
+  grid.setRecording(false);
+  parent.querySelector<HTMLElement>('[data-note-row="2"][data-column="0"]')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  const item = (text: string) => [...document.querySelectorAll<HTMLButtonElement>('.menu button')].find(b => b.textContent!.startsWith(text))!;
+  for (const text of ['Paste', 'Clear', 'Shuffle notes', 'Fill with slices', 'Space notes evenly', 'Use selected instrument']) expect(item(text).disabled).toBe(true);
+  expect(item('Copy').disabled).toBe(false);
 });

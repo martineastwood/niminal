@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { addCut, cutNear, minGap, moveCut, pieceAt, pieceKey, readCuts, removeCut, writeCuts } from './slices';
+import { addCut, cutNear, minGap, moveCut, pieceAt, pieceKey, readCuts, readDetect, removeCut, writeCuts } from './slices';
 import { slicedSource } from './instruments';
 
 it('reads equal and listed cuts from the code, and nothing from code that cuts none', () => {
@@ -46,4 +46,13 @@ it('writes a sliced sampler as one that plays its whole sample, keeping its sett
   const tuned = slicedSource('amen', 'samples/amen.wav', 8).replace('.slices(8)', '.slices(8).interp(sinc)');
   expect(unslice(tuned)).toContain('amen_sample = sample("samples/amen.wav").root(c4).interp(sinc)');
   expect(unslice(samplerSource('kick', 'samples/kick.wav'))).toBeNull();
+});
+
+it('reads code that cuts at the hits it finds, and fixes the cuts once they are moved', () => {
+  const source = 'chops = brk.slices(detect: 16, sensitivity: 0.7)\n';
+  expect(readDetect(source)).toEqual({ max: 16, sensitivity: 0.7 });
+  expect(readDetect('chops = brk.slices(detect: 8)')).toEqual({ max: 8, sensitivity: 0.5 });
+  expect(readDetect('chops = brk.slices(16)')).toBeNull();
+  expect(readCuts(source)).toBeNull();
+  expect(writeCuts(source, [0, 0.25, 0.6])).toBe('chops = brk.slices([0, 0.25, 0.6])\n');
 });

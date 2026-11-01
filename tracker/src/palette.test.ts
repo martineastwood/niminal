@@ -38,3 +38,11 @@ it('lists the shortcuts', () => {
   press(document.querySelector('.shortcuts-body')!, 'Escape');
   expect(document.querySelector('.shortcuts')).toBeNull();
 });
+
+it('lists a disabled command greyed out and does not run it', () => {
+  const run = vi.fn();
+  openPalette([{ label: 'Shuffle', disabled: () => true, run }]);
+  const row = document.querySelector<HTMLButtonElement>('.palette-list button')!;
+  expect(row.getAttribute('aria-disabled')).toBe('true');
+  row.click(); expect(run).not.toHaveBeenCalled();
+});

@@ -13,7 +13,7 @@ description: WAV samples, kits, slices, SFZ multisamples, and playing them from 
 | `kit(...)` | A folder of WAVs by name |
 | `kit { name: instrument, ... }` | Named sample or synth instruments in one kit |
 | `sfz(...)` | An SFZ multisample: many recordings spread across the keys and velocities |
-| `.slices(n)` | The slices of a sample, as a kit: `n` equal pieces, or `.slices([0, 0.18, 0.43])` for pieces that start at those shares of its length (0 up to 1, each later than the one before) and run to the next |
+| `.slices(n)` | The slices of a sample, as a kit: `n` equal pieces, or `.slices([0, 0.18, 0.43])` for pieces that start at those shares of its length (0 up to 1, each later than the one before) and run to the next, or `.slices(detect: 16)` to cut where the sample's hits begin (see below) |
 
 ```nml
 kick = sample("drums/kick.wav")
@@ -21,7 +21,10 @@ amen = sample("breaks/amen.wav").beats(4)
 drums = kit("drums/808")
 chops = amen.slices(16)                // s0 .. s15
 hits = amen.slices([0, 0.18, 0.43])   // s0 .. s2, starting at those shares of the sample
+found = amen.slices(detect: 16)       // cut where hits begin: s0 .. s(n-1), n of at most 16
 ```
+
+`detect: n` looks for the places in the sample where a hit starts, keeps at most the `n` strongest, and cuts there. The pieces are named `s0`, `s1`, ... for as many hits as it finds, which can be fewer than `n`, and a pattern that names a piece that was not found is an error. `sensitivity` from 0 to 1 (0.5 by default) sets how soft a hit may be: higher finds softer hits and more of them, `amen.slices(detect: 16, sensitivity: 0.8)`. Hits are at least 60 ms apart. A sound with no clear hits, such as a pad, gives one piece. Detection runs whenever the file is evaluated, so the cuts follow the audio; to keep them fixed, write the places with `[...]`.
 
 Paths are resolved relative to the file that declares them (and the project when the server evaluates).
 

@@ -1436,6 +1436,7 @@ fn slice_members(
     sample: &Ident,
     count: f64,
     at: &[f64],
+    sensitivity: Option<f64>,
     state: &SampleState,
 ) -> Res<Vec<Member>> {
     let Some(loaded) = state.loaded.get(&sample.name) else {
@@ -1458,9 +1459,20 @@ fn slice_members(
             decl.source_span,
         ));
     }
-    let count = count as usize;
-    // where each piece starts: equal shares of the sample, or the places the code gives as shares of its length
-    let starts: Vec<usize> = if at.is_empty() {
+    let mut count = count as usize;
+    // where each piece starts: the hits found in the sample, equal shares of it, or the places the code gives as shares of its length
+    let starts: Vec<usize> = if let Some(sensitivity) = sensitivity {
+        let mixed: Vec<f32> = (0..frames)
+            .map(|i| data.iter().map(|c| c.get(i)).sum::<f32>() / data.len() as f32)
+            .collect();
+        let rate = data
+            .first()
+            .map_or(48_000.0, |c| c.sample_rate_or(48_000.0));
+        let found =
+            niminal_engine::ops::detect_transients_at(&mixed, rate, count, sensitivity as f32);
+        count = found.len();
+        found
+    } else if at.is_empty() {
         (0..count).map(|i| i * (frames / count)).collect()
     } else {
         if at.iter().any(|p| !(0.0..1.0).contains(p)) || at.windows(2).any(|w| w[1] <= w[0]) {
@@ -1616,8 +1628,16 @@ fn compile_sample(
                 interp: niminal_engine::ops::SampleInterp::Cubic,
             }]
         }
-        (SampleSource::Slices { sample, count, at }, _) => {
-            let mut members = slice_members(decl, sample, *count, at, state)?;
+        (
+            SampleSource::Slices {
+                sample,
+                count,
+                at,
+                sensitivity,
+            },
+            _,
+        ) => {
+            let mut members = slice_members(decl, sample, *count, at, *sensitivity, state)?;
             let mode = loop_mode_of(&decl.options)?;
             for m in &mut members {
                 m.loop_mode = mode;

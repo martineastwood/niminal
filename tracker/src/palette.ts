@@ -1,5 +1,5 @@
 /** Something the command palette can run; `keys` is only shown, as a reminder. */
-export interface Command { label: string; keys?: string; run: () => void }
+export interface Command { label: string; keys?: string; /** True while it cannot run; it is listed greyed out. */ disabled?: () => boolean; run: () => void }
 export interface ShortcutSection { title: string; rows: [keys: string, what: string][] }
 
 /** The commands whose label holds every word of `query`, in their order. */
@@ -29,12 +29,12 @@ export function openPalette(commands: Command[]) {
   const list = document.createElement('div'); list.className = 'palette-list'; list.setAttribute('role', 'listbox');
   box.append(input, list);
   let shown: Command[] = [], at = 0;
-  const run = (command: Command | undefined) => { if (!command) return; close(); command.run(); };
+  const run = (command: Command | undefined) => { if (!command || command.disabled?.()) return; close(); command.run(); };
   const render = () => {
     shown = filterCommands(commands, input.value); at = Math.min(at, Math.max(0, shown.length - 1)); list.replaceChildren();
     if (!shown.length) { const none = document.createElement('div'); none.className = 'palette-none'; none.textContent = 'No matching command'; list.append(none); return; }
     for (const [i, command] of shown.entries()) {
-      const row = document.createElement('button'); row.setAttribute('role', 'option'); row.setAttribute('aria-selected', String(i === at)); row.tabIndex = -1;
+      const row = document.createElement('button'); row.setAttribute('role', 'option'); row.setAttribute('aria-selected', String(i === at)); row.tabIndex = -1; row.setAttribute('aria-disabled', String(!!command.disabled?.()));
       const name = document.createElement('span'); name.textContent = command.label; row.append(name);
       if (command.keys) { const keys = document.createElement('kbd'); keys.textContent = command.keys; row.append(keys); }
       row.onclick = () => run(command);
