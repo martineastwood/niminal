@@ -8,17 +8,36 @@ use niminal_ws::Client;
 
 /// The server, `niminal`, built from the engine workspace the first time it is needed.
 fn niminal() -> Command {
-    static BUILT: std::sync::Once = std::sync::Once::new();
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    BUILT.call_once(|| {
-        let status = Command::new("cargo")
-            .args(["build", "-q", "-p", "niminal-cli", "--manifest-path"])
+    static BINARY: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    let binary = BINARY.get_or_init(|| {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let output = Command::new("cargo")
+            .args([
+                "build",
+                "-q",
+                "-p",
+                "niminal-cli",
+                "--message-format=json",
+                "--manifest-path",
+            ])
             .arg(root.join("Cargo.toml"))
-            .status()
+            .stderr(Stdio::inherit())
+            .output()
             .unwrap();
-        assert!(status.success(), "the niminal server would not build");
+        assert!(output.status.success(), "the niminal server would not build");
+        // Cargo reports the actual path, including any custom target directory or target triple.
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .find_map(|message| {
+                (message["reason"] == "compiler-artifact" && message["target"]["name"] == "niminal")
+                    .then(|| message["executable"].as_str().map(PathBuf::from))
+                    .flatten()
+            })
+            .expect("cargo did not report the niminal executable")
     });
-    Command::new(root.join("target/debug/niminal"))
+    Command::new(binary)
 }
 
 fn live_cli() -> Command {
