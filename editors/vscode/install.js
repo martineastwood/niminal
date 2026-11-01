@@ -31,6 +31,7 @@ for (const entry of [
   "panel.js",
   "learn.js",
   "live.js",
+  "binaries.js",
   "live-client.js",
   "language-configuration.json",
   "score-language-configuration.json",

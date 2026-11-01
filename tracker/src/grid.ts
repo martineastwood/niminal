@@ -6,6 +6,7 @@ import { parseNotes, type NoteEdit } from './history';
 import { draggable, dropTarget } from './drag';
 import { openMenu, type MenuEntry } from './menu';
 import { pieceKey, readCuts, readDetect } from './slices';
+import { chordNotes, chords, scales, snapToScale } from './harmony';
 
 /** What the grid asks of the sequence: move between steps, insert or remove one, or point the step at another pattern. */
 export type SequenceAction = 'previous' | 'next' | 'first' | 'last' | 'new' | 'remove';
@@ -715,6 +716,52 @@ export class PatternGrid {
       }
     }
     if (!edits.length) { this.feedback('Those rows already use this instrument.'); return; }
+    this.apply(edits);
+  }
+  /** Asks for a root and then a scale, and moves the selected notes to the nearest note of it. */
+  snapToScalePicker(anchor: HTMLElement = this.parent) {
+    if (!this.recording) { this.feedback('Turn on record mode to edit the selection.'); return; }
+    const roots = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    openMenu(anchor, [{ heading: 'Scale root' }, ...roots.map((text, root) => ({
+      text,
+      run: () => openMenu(anchor, [{ heading: `Snap to ${text} …` }, ...scales.map(([name, steps]) => ({ text: name.replace(/_/g, ' '), run: () => this.snapToScale(root, steps, `${text} ${name.replace(/_/g, ' ')}`) }))]),
+    }))]);
+  }
+  /** Moves the selected notes to the nearest note of the scale on `root` (0 for C). */
+  snapToScale(root: number, steps: number[], name = 'the scale') {
+    if (!this.recording) { this.feedback('Turn on record mode to edit the selection.'); return; }
+    const { top, bottom, left, right } = this.bounds, lanes = this.lanes, edits: NoteEdit[] = [];
+    for (let column = left; column <= right; column++) {
+      if (lanes[column].kind !== 'note') continue;
+      for (let row = top; row <= bottom; row++) {
+        const before = lanes[column].values[row], after = before === null ? null : snapToScale(before, root, steps);
+        if (after && after !== before) edits.push({ row, track: column, before, after });
+      }
+    }
+    if (!edits.length) { this.feedback(`The selected notes are already in ${name}.`); return; }
+    this.apply(edits);
+  }
+  /** Asks for a kind of chord, and builds it on each note of the first selected column. */
+  makeChordPicker(anchor: HTMLElement = this.parent) {
+    if (!this.recording) { this.feedback('Turn on record mode to edit the selection.'); return; }
+    openMenu(anchor, [{ heading: 'Chord on each selected note' }, ...chords.map(([name, steps]) => ({ text: name.replace(/_/g, ' '), run: () => this.makeChord(steps) }))]);
+  }
+  /** Turns each note in the first selected column into a chord: the root stays, and the rest go in the note columns to its right on the same track, which they replace. */
+  makeChord(steps: number[]) {
+    if (!this.recording) { this.feedback('Turn on record mode to edit the selection.'); return; }
+    const { top, bottom, left } = this.bounds, lanes = this.lanes, lane = lanes[left];
+    if (lane.kind !== 'note') { this.feedback('Put the cursor in a note column to make chords.'); return; }
+    const beside = lanes.map((other, column) => ({ other, column })).filter(({ other }) => other.track === lane.track && other.kind === 'note' && other.col > lane.col).sort((a, b) => a.other.col - b.other.col);
+    const edits: NoteEdit[] = [];
+    let needed = 1;
+    for (let row = top; row <= bottom; row++) {
+      const root = lane.values[row], notes = root === null ? null : chordNotes(root, steps);
+      if (!notes) continue;
+      needed = Math.max(needed, notes.length);
+      notes.slice(1).forEach((note, i) => { const target = beside[i]; if (target) edits.push({ row, track: target.column, before: target.other.values[row], after: note }); });
+    }
+    if (needed - 1 > beside.length) { this.feedback(`This chord needs ${needed} note columns on the track from here; it has ${beside.length + 1}. Add columns in the track settings.`); return; }
+    if (!edits.length) { this.feedback('Select notes to make chords from.'); return; }
     this.apply(edits);
   }
   /** Where Cmd/Ctrl+`key` takes the cursor, as in a spreadsheet: along a run of filled cells to its end, or from a gap to the next filled cell, else to the edge. Sideways it goes to the edge of the track, then the next. */

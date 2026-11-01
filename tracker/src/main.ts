@@ -1251,6 +1251,8 @@ const menuActions: Record<string, () => void> = {
   'reverse-selection': () => { element('grid').focus(); grid.reverseSelection(); },
   'randomize-selection': () => { element('grid').focus(); grid.randomizeSelection(); },
   'shuffle-selection': () => { element('grid').focus(); grid.shuffleSelection(); },
+  'snap-scale': () => { element('grid').focus(); grid.snapToScalePicker(); },
+  'make-chord': () => { element('grid').focus(); grid.makeChordPicker(); },
   'space-evenly': () => { element('grid').focus(); grid.spaceEvenly(); },
   'use-instrument': () => { element('grid').focus(); grid.useSelectedInstrument(); },
   'fill-slices': () => { element('grid').focus(); grid.fillSlices(); },
@@ -1280,13 +1282,13 @@ const menuActions: Record<string, () => void> = {
   palette: () => openPalette(commands),
 };
 /** The actions that edit the pattern, which only work in record mode. */
-const needsRecord = new Set(['reverse-selection', 'randomize-selection', 'shuffle-selection', 'fill-slices', 'space-evenly', 'use-instrument']);
+const needsRecord = new Set(['reverse-selection', 'randomize-selection', 'shuffle-selection', 'fill-slices', 'space-evenly', 'use-instrument', 'snap-scale', 'make-chord']);
 /** Everything the palette lists: the menu's actions by name, and the key that also runs each. */
 const commands: Command[] = ([
   ['Play pattern', 'play-pattern', 'Space'], ['Play song', 'play-song', 'F5'], ['Stop', 'stop', 'F8'], ['Record mode on or off', 'record', 'Esc'],
   ['Undo', 'undo', 'Cmd/Ctrl+Z'], ['Redo', 'redo', 'Cmd/Ctrl+Shift+Z'],
   ['Add track', 'add-track'], ['Duplicate track', 'duplicate-track'], ['Select track', 'select-track', 'Cmd/Ctrl+Shift+A'], ['Cut track', 'cut-track'],
-  ['Reverse selection', 'reverse-selection'], ['Randomize selection', 'randomize-selection'], ['Shuffle notes in selection', 'shuffle-selection'], ['Fill selection with slices', 'fill-slices'], ['Space notes evenly in selection', 'space-evenly'], ['Use selected instrument in selection', 'use-instrument'], ['New pattern', 'new-pattern'],
+  ['Reverse selection', 'reverse-selection'], ['Randomize selection', 'randomize-selection'], ['Shuffle notes in selection', 'shuffle-selection'], ['Fill selection with slices', 'fill-slices'], ['Snap selection to scale', 'snap-scale'], ['Make chords from selection', 'make-chord'], ['Space notes evenly in selection', 'space-evenly'], ['Use selected instrument in selection', 'use-instrument'], ['New pattern', 'new-pattern'],
   ['New instrument', 'new-instrument'], ['New effect', 'new-effect'], ['Apply and audition', 'apply', 'Cmd/Ctrl+Enter'],
   ['Show code', 'code', 'F6'], ['Show mixer', 'mixer'], ['Show sample', 'sample'], ['Show automation', 'automation'],
   ['Sound browser', 'browser', 'Cmd/Ctrl+B'],

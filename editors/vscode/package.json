@@ -2,7 +2,7 @@
   "name": "niminal",
   "displayName": "niminal",
   "description": "Live-code niminal: syntax highlighting and evaluation against a running niminal server.",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "niminal",
   "license": "MIT",
   "engines": {

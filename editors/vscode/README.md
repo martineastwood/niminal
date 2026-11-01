@@ -4,6 +4,15 @@ Highlighting for `.nml` files and `.nms` score files (JSON with units, note name
 
 Full user docs: [niminal.dev](https://niminal.dev) · [Editor and LSP](https://niminal.dev/reference/editor/)
 
+## macOS alpha download
+
+Choose **Extensions: Install from VSIX...**, select `niminal-vscode.vsix` from the
+Niminal download, then reload the editor. The default executable settings find
+`/Applications/Niminal/bin` without requiring VS Code to inherit your terminal's
+PATH. Explicit `niminal.path` and `niminal.livePath` settings override discovery.
+Editing support only requires `niminal-live`; audio playback also needs a running
+`niminal server`. The **Start Server in a Terminal** command can start it for you.
+
 ## Try it
 
 From the repo root:

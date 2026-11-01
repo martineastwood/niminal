@@ -1868,6 +1868,16 @@ fn composition_tools() {
         values_of("lead.__update([-1].in_scale(major, root: c4))", 1),
         [midi(59)]
     );
+    // notes outside the scale move to the nearest one in it, a tie going down; notes in it stay
+    assert_eq!(
+        values_of("lead.__update([c#4 d#4 f4 b3 c5].snap_to(major, root: c4))", 1),
+        [midi(60), midi(62), midi(65), midi(59), midi(72)]
+    );
+    assert_eq!(
+        values_of("lead.__update([f3 c2 d#3].snap_to(minor_pentatonic, root: a2))", 1),
+        [midi(52), midi(36), midi(50)]
+    );
+    assert!(msg(&stage("lead.__update([c4].snap_to(nonsense))")).contains("isn't a scale"));
     let chord = notes_of("lead.__update([c4].chord(minor7))", 1);
     assert_eq!(chord.iter().map(|e| e.1).collect::<Vec<_>>().len(), 4);
     assert!(chord.iter().all(|e| e.0 == r(0, 1)));

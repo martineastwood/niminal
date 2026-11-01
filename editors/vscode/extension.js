@@ -3,6 +3,7 @@ const net = require("node:net");
 const { LanguageClient } = require("vscode-languageclient/node");
 const { LiveClient: Client } = require("./live-client");
 const { startLive } = require("./live");
+const { findBinary, serverCommand } = require("./binaries");
 const { blockAround } = require("./blocks");
 const { clipDescription, sceneDescription, silencers } = require("./panel");
 const { rewriteLearned } = require("./learn");
@@ -34,7 +35,7 @@ const flash = vscode.window.createTextEditorDecorationType({
 
 function settings() {
   const c = vscode.workspace.getConfiguration("niminal");
-  return { port: c.get("port"), token: c.get("token"), quantize: c.get("quantize"), path: c.get("path"), livePath: c.get("livePath"), midi: c.get("midi"), oscPort: c.get("oscPort") };
+  return { port: c.get("port"), token: c.get("token"), quantize: c.get("quantize"), path: findBinary("niminal", c.get("path")), livePath: findBinary("niminal-live", c.get("livePath")), midi: c.get("midi"), oscPort: c.get("oscPort") };
 }
 
 const METER_BLOCKS = " ▁▂▃▄▅▆▇█";
@@ -338,7 +339,7 @@ async function startServer() {
     vscode.window.showInformationMessage(`niminal: a server is already listening on port ${port}`);
   } else {
     const terminal = vscode.window.createTerminal("niminal server");
-    terminal.sendText(`${path} server --port ${port}${token ? ` --token ${token}` : ""}`);
+    terminal.sendText(serverCommand(path, port, token));
     terminal.show(true);
     channel.appendLine(`starting the server on port ${port}`);
     try {

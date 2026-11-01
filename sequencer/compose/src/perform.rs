@@ -412,6 +412,15 @@ const SCALES: [(&str, &[i32]); 14] = [
     ("chromatic", &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
 ];
 
+/// The note of the scale (rooted at `root`, in any octave) nearest to `note`; a note halfway between two goes down.
+fn snap_to_scale(note: i32, root: i32, scale: &[i32]) -> i32 {
+    let octave = (note - root).div_euclid(12);
+    (octave - 1..=octave + 1)
+        .flat_map(|o| scale.iter().map(move |degree| root + 12 * o + degree))
+        .min_by_key(|candidate| ((candidate - note).abs(), *candidate))
+        .unwrap_or(note)
+}
+
 /// Chords as semitones above the root.
 const CHORDS: [(&str, &[i32]); 16] = [
     ("major", &[0, 4, 7]),
@@ -1495,6 +1504,21 @@ impl Perform<'_> {
                     other => other,
                 }))
             }
+            "snap_to" => {
+                let scale: &[i32] =
+                    self.word(self.arg(name, rest, "scale", span)?, "scale", &SCALES)?;
+                let root = match self.find(name, rest, "root") {
+                    Some(e) => match self.constant(e, it)? {
+                        Value::Note(m) => m,
+                        _ => return Err(Diagnostic::new("`root` is a note, such as `c3`", e.span)),
+                    },
+                    None => 60,
+                };
+                p.map(on_value(move |v| match v {
+                    Value::Note(m) => Value::Note(snap_to_scale(m, root, scale)),
+                    other => other,
+                }))
+            }
             "chord" => {
                 let shape: &[i32] =
                     self.word(self.arg(name, rest, "kind", span)?, "chord", &CHORDS)?;
@@ -1833,6 +1857,7 @@ impl Perform<'_> {
                 | "drop"
                 | "sometimes"
                 | "in_scale"
+                | "snap_to"
                 | "chord"
                 | "arpeggiate"
                 | "voice_lead"
@@ -2451,7 +2476,7 @@ impl Perform<'_> {
             "begin" => &["share"],
             "stereo_copy" => &["change", "angle"],
             "chop" | "interleave_chops" => &["pieces"],
-            "in_scale" => &["scale", "root"],
+            "in_scale" | "snap_to" => &["scale", "root"],
             "chord" => &["kind"],
             "arpeggiate" => &["order"],
             "invert_melody" => &["around"],

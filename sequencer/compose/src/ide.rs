@@ -457,6 +457,11 @@ pub fn pattern_ops() -> Vec<OpInfo> {
         op("invert", "On a grid: hit where it rests, rest where it hits.", &[]),
         op("range", "Scale a 0 to 1 signal or pattern to a range: `sine.range(300hz, 3khz)`.", &[("from", "value", true), ("to", "value", true)]),
         op(
+            "snap_to",
+            "Move each note to the nearest note of a scale: `snap_to(minor, root: c3)`. A note halfway between two goes down.",
+            &[("scale", "scale", true), ("root", "note", false)],
+        ),
+        op(
             "in_scale",
             "Turn scale degrees (0, 1, 2...) into notes: `in_scale(minor, root: c3)`. Scales: major, minor, dorian, blues...",
             &[("scale", "scale", true), ("root", "note", false)],

@@ -12,3 +12,7 @@ TODO.md
 goals.md
 design/
 /tracker/EXPRESSION_SPEC.md
+
+/releases/
+*.vsix
+__pycache__/

@@ -317,6 +317,7 @@ These work on note patterns. All randomness is **seeded per cycle**, so live and
 | Operation | What it does |
 | --- | --- |
 | `in_scale(minor, root: c3)` | Turn scale degrees (`0 1 2`, negatives and values past the octave too) into notes. Scales: `major`, `minor`, `harmonic_minor`, `melodic_minor`, `dorian`, `phrygian`, `lydian`, `mixolydian`, `locrian`, `major_pentatonic`, `minor_pentatonic`, `blues`, `whole_tone`, `chromatic` |
+| `snap_to(minor, root: c3)` | Move each note to the nearest note of a scale (a note halfway between two goes down); notes already in it stay. The scales are those of `in_scale` |
 | `chord(minor7)` | Turn each note into a chord: `major`, `minor`, `dim`, `aug`, `sus2`, `sus4`, `power`, `major6`, `minor6`, `major7`, `minor7`, `dom7`, `dim7`, `half_dim7`, `major9`, `minor9` |
 | `arpeggiate(up)` | Play a chord one note at a time over its length: `up`, `down`, `updown`, `downup`, `converge`, `diverge` |
 | `voice_lead` | Move each chord by octaves to sit as close as possible to the one before |

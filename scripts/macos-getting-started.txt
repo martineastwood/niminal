@@ -1,0 +1,93 @@
+Niminal macOS alpha — Getting Started
+
+This experimental build is for Apple Silicon Macs running macOS 13 or newer.
+APIs, syntax and project formats may change. Keep backups of work you want to keep.
+BUILD.json identifies this download's version, source commit and build OS.
+
+1. Install
+
+Unzip the download and copy the entire Niminal folder into Applications:
+
+  /Applications/Niminal/
+    Niminal Tracker.app
+    Niminal Stage.app
+    bin/niminal
+    bin/niminal-live
+    niminal-vscode.vsix
+    Examples/
+
+Keep the folder together. Rust, Node.js, Homebrew and an installer are not needed.
+
+This alpha is ad-hoc signed and is NOT notarized by Apple. macOS may block the
+apps and command-line tools on first use. After attempting to open a blocked
+item, use System Settings > Privacy & Security > Open Anyway to approve that
+specific item if you trust this download. You may need to approve each app and
+CLI tool separately. Do not disable Gatekeeper globally.
+
+2. Make the commands available
+
+Open Terminal and run:
+
+  export PATH="/Applications/Niminal/bin:$PATH"
+
+Add that same line once to ~/.zprofile to keep it for future Terminal windows.
+You can also run a tool by its full path without changing PATH:
+
+  /Applications/Niminal/bin/niminal --version
+  /Applications/Niminal/bin/niminal-live --version
+
+3. Start the audio server
+
+In Terminal, run:
+
+  niminal server
+
+Leave this terminal running while using a client. Ctrl+C stops the server.
+The default engine port is 7401. Audio/MIDI device options are in:
+
+  niminal server --help
+
+4. Choose a client
+
+Tracker: open Niminal Tracker.app and connect to the engine. Create a project,
+choose an instrument and enter notes in the grid.
+
+Stage: open Niminal Stage.app, open a .nml file and connect to the engine.
+Stage finds the tools in the enclosing Niminal/bin folder, including when opened
+from Finder. Replay and sample-gallery features also use these tools.
+
+VS Code / Cursor (optional): choose "Extensions: Install from VSIX..." in the
+command palette, select niminal-vscode.vsix and reload the editor. The extension
+finds tools in /Applications/Niminal/bin automatically. If you install elsewhere,
+set niminal.path and niminal.livePath to the full paths of the two binaries.
+Editing diagnostics, completion and hover need niminal-live but no running
+server. Live playback needs the server. "niminal: Start Server in a Terminal"
+can start it from the editor. Cmd+Enter evaluates a block; Cmd+. hushes playback.
+
+5. Try an example or render offline
+
+Copy Examples into a writable project folder, for example ~/Music/Niminal.
+Keep projects and samples outside /Applications/Niminal so replacing the
+application folder during an upgrade does not overwrite your work.
+
+From your copied Examples folder:
+
+  niminal-live render saw_lead.nml --out saw_lead.wav
+
+Offline rendering works without a running server. groove.nml is a larger live
+coding example. Some examples demonstrate optional MIDI/OSC hardware features.
+
+6. Upgrade / uninstall
+
+Stop the server and close both apps before replacing the Niminal folder with a
+new download. Update the VSIX too, then reload the editor. Keep tools and apps
+from the same release together. There is no automatic updater.
+
+To uninstall, remove /Applications/Niminal, the PATH line from ~/.zprofile, and
+the optional editor extension. This does not delete projects, local app state
+or session logs. The server normally records sessions under ~/.niminal/sessions.
+
+Documentation: https://niminal.dev
+Issues: https://github.com/martineastwood/niminal/issues
+Include BUILD.json, your macOS version, which client you used, and a small
+reproduction. This alpha is intended for experimentation, not irreplaceable work.

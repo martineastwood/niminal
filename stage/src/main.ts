@@ -325,8 +325,11 @@ async function ensureConnected() {
     return true;
   } catch (error) {
     setConnection(false);
-    status(String(error));
-    editorStatus.textContent = String(error);
+    const message = String(error).includes("can't reach the server")
+      ? `No engine on port ${port}: run niminal server, then click Connect`
+      : String(error);
+    status(message);
+    editorStatus.textContent = message;
     return false;
   }
 }

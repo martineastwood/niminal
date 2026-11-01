@@ -19,6 +19,16 @@ The server's crates never depend on `sequencer/`; it is a separate Cargo workspa
 
 ## Install
 
+The macOS alpha download is designed as one `Niminal` folder containing Tracker,
+Stage, both command-line tools, the optional VS Code extension, and examples.
+Copy the folder to `/Applications/Niminal` and follow its `Getting Started.txt`.
+The apps are ad-hoc signed and not notarized; macOS may require approval under
+Privacy & Security on first use. See the [packaging and release guide](docs/releasing-macos.md)
+for building and validating this download. Packaged builds will be listed under
+[GitHub Releases](https://github.com/martineastwood/niminal/releases).
+
+### From source
+
 You need a recent [Rust toolchain](https://rustup.rs/).
 
 From a clone of this repo, install the audio server and the live sequencer:

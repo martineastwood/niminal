@@ -16,7 +16,7 @@ use niminal_ws::{Client, Server, ServerConfig, lock};
 use serde_json::json;
 
 #[derive(Parser)]
-#[command(name = "niminal-live", version)]
+#[command(name = "niminal-live", version = option_env!("NIMINAL_RELEASE_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")))]
 struct Cli {
     #[command(subcommand)]
     command: Command,

@@ -13,7 +13,7 @@ use niminal_server::{EngineServer, Session, from_lines, to_lines};
 use niminal_ws::{Server, ServerConfig};
 
 #[derive(Parser)]
-#[command(name = "niminal", version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("NIMINAL_BUILD"), ")"))]
+#[command(name = "niminal", version = option_env!("NIMINAL_RELEASE_VERSION").unwrap_or(concat!(env!("CARGO_PKG_VERSION"), " (", env!("NIMINAL_BUILD"), ")")))]
 struct Cli {
     #[command(subcommand)]
     command: Command,

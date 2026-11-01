@@ -903,3 +903,32 @@ it('greys out the editing items of the right-click menu while record mode is off
   for (const text of ['Paste', 'Clear', 'Shuffle notes', 'Fill with slices', 'Space notes evenly', 'Use selected instrument']) expect(item(text).disabled).toBe(true);
   expect(item('Copy').disabled).toBe(false);
 });
+
+it('snaps the selected notes to a scale in one undo step', () => {
+  const { project, grid, key, click, feedback, baseline } = setup();
+  const notes = project.patterns[0].notes[0][0].notes;
+  notes.splice(0, 5, 'C#4', 'D#4', 'F-4', null, 'OFF'); baseline();
+  click(0, 0); for (let i = 0; i < 4; i++) key('ArrowDown', { shiftKey: true });
+  grid.snapToScale(0, [0, 2, 4, 5, 7, 9, 11], 'C major');
+  expect(notes.slice(0, 5)).toEqual(['C-4', 'D-4', 'F-4', null, 'OFF']);
+  key('z', { ctrlKey: true }); expect(notes.slice(0, 3)).toEqual(['C#4', 'D#4', 'F-4']);
+  grid.snapToScale(0, [0, 2, 4, 5, 7, 9, 11]); grid.snapToScale(0, [0, 2, 4, 5, 7, 9, 11], 'C major');
+  expect(feedback).toHaveBeenCalledWith('The selected notes are already in C major.');
+  grid.recording = false; feedback.mockClear(); grid.snapToScale(0, [0]); expect(feedback).toHaveBeenCalledWith(expect.stringContaining('record mode'));
+});
+
+it('builds chords from the first selected column into the note columns to its right, if there are enough', () => {
+  const { project, grid, key, click, feedback, baseline } = setup();
+  const columns = project.patterns[0].notes[0];
+  columns[0].notes.splice(0, 3, 'C-4', null, 'F-4'); baseline();
+  click(0, 0); for (let i = 0; i < 2; i++) key('ArrowDown', { shiftKey: true });
+  // a track with one column has nowhere to put the other notes
+  grid.makeChord([0, 4, 7]); expect(feedback).toHaveBeenCalledWith(expect.stringContaining('needs 3 note columns'));
+  expect(columns[0].notes.slice(0, 3)).toEqual(['C-4', null, 'F-4']);
+  columns.push(blankColumn(32), blankColumn(32)); grid.render();
+  grid.makeChord([0, 4, 7]);
+  expect(columns[1].notes.slice(0, 3)).toEqual(['E-4', null, 'A-4']);
+  expect(columns[2].notes.slice(0, 3)).toEqual(['G-4', null, 'C-5']);
+  // the undo goes back to before the columns were added, taking the chord with them
+  key('z', { ctrlKey: true }); expect(project.patterns[0].notes[0][0].notes.slice(0, 3)).toEqual(['C-4', null, 'F-4']);
+});
