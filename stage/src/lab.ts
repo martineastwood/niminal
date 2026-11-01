@@ -83,7 +83,6 @@ export class Lab {
   private octave = 4;
   private down = new Set<number>();
   private instruments: LabInstrument[] = [];
-  private loaded = '';
   private gallery: Gallery;
   private drums: Drums;
   private view: View = 'play';
@@ -95,7 +94,7 @@ export class Lab {
       <div class="lab-tabs"><button class="lab-tab on" data-view="play" title="Play one instrument and move its parameters">Play</button><button class="lab-tab" data-view="gallery" title="Make many versions of a sample and hear them">Gallery</button><button class="lab-tab" data-view="drums" title="Make a drum grid from a theme">Drums</button></div>
       <div class="lab-play">
       <div class="lab-head">
-        <strong>lab</strong>
+        <strong>Instrument</strong>
         <select class="lab-instrument" title="The instrument to play"></select>
         <button class="lab-refresh" title="Read the instruments again, after evaluating new ones">Refresh</button>
       </div>
@@ -125,9 +124,14 @@ export class Lab {
       this.key(this.root() - 12, on);
     });
     const keys = find('.lab-keys');
+    // white keys sit side by side; each black key straddles the edge between its two neighbours
+    let whites = 0;
     for (let semitone = 0; semitone <= 12; semitone++) {
       const button = document.createElement('button');
-      button.className = [1, 3, 6, 8, 10].includes(semitone) ? 'black' : 'white';
+      const black = [1, 3, 6, 8, 10].includes(semitone);
+      button.className = black ? 'black' : 'white';
+      if (black) button.style.left = `calc(6px + (100% - 12px) * ${whites / 8})`;
+      else whites++;
       button.addEventListener('pointerdown', () => this.key(this.root() + semitone, true));
       for (const end of ['pointerup', 'pointerleave', 'pointercancel']) {
         button.addEventListener(end, () => this.key(this.root() + semitone, false));
@@ -220,7 +224,6 @@ export class Lab {
       }),
     );
     if (this.instruments.some(i => i.name === chosen)) this.select.value = chosen;
-    this.loaded = '';
     await this.choose();
   }
 
@@ -233,10 +236,7 @@ export class Lab {
       this.faders.textContent = 'No instrument with a freq parameter. Evaluate one, then press Refresh.';
       return;
     }
-    if (this.loaded !== instrument.name) {
-      this.loaded = instrument.name;
-      await this.options.evaluate(auditionClip(instrument.name));
-    }
+    await this.options.evaluate(auditionClip(instrument.name));
     for (const fader of instrument.params.map(faderFor).filter((f): f is Fader => f !== null)) {
       this.faders.append(this.row(fader));
     }

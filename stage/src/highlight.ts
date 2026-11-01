@@ -304,7 +304,13 @@ export class Highlighter {
   private light() {
     const view = this.view();
     const snapshot = this.snapshot;
-    if (!view || !snapshot?.transport) return;
+    if (!view || !snapshot) return;
+    if (!snapshot.transport) {
+      this.mark(view, snapshot);
+      if (this.shown) view.dispatch({ effects: lit.of(Decoration.none) });
+      this.shown = '';
+      return;
+    }
     this.mark(view, snapshot);
     const beats = snapshot.beats_per_bar || 4;
     const secondsPerCycle = (60 / snapshot.transport.bpm) * beats;

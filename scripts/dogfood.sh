@@ -5,6 +5,8 @@
 set -e
 cd "$(dirname "$0")/.."
 scripts/check.sh "$@"
-cargo install --path crates/niminal-cli
-cargo install --path sequencer/live-cli
+# The checks above have already downloaded the locked dependencies. Reuse them
+# instead of resolving newer versions and updating the index on every install.
+cargo install --locked --offline --path crates/niminal-cli
+cargo install --locked --offline --path sequencer/live-cli
 echo "installed niminal and niminal-live; restart any running niminal server or niminal-live (they keep the old build until you do)"

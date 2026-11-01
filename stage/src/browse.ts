@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { divider } from './divider';
+import { SamplePlayer } from './player';
 
 const slashes = (path: string) => path.replace(/\\/g, '/');
 
@@ -44,7 +45,6 @@ export function snippetFor(lineBefore: string, lineAfter: string, path: string) 
 
 const listing = (dir: string) => invoke<string[]>('list_files', { dir });
 const pickFolder = () => invoke<string | null>('pick_folder');
-const bytesOf = (path: string) => invoke<ArrayBuffer>('read_sample', { path });
 
 /** One column of a waveform per pixel: the quietest and loudest sample in it. */
 export function peaksOf(channel: Float32Array, columns: number) {
@@ -116,9 +116,7 @@ export class FileBrowse {
   private rows: Row[] = [];
   private opened = new Set<string>();
   private selected = -1;
-  private context: AudioContext | null = null;
-  private playing: AudioBufferSourceNode | null = null;
-  private heard = 0;
+  private player = new SamplePlayer();
   private list: HTMLElement;
   private filter: HTMLInputElement;
   private where: HTMLElement;
@@ -334,37 +332,17 @@ export class FileBrowse {
   }
 
   private stop() {
-    this.heard++;
-    try {
-      this.playing?.stop();
-    } catch {
-      // already finished
-    }
-    this.playing = null;
+    this.player.stop();
   }
 
-  private async audition(file: string) {
-    this.stop();
-    const heard = this.heard;
-    try {
-      this.context ??= new AudioContext();
-      const data = await bytesOf(file);
-      const buffer = await this.context.decodeAudioData(data);
-      // another sample was chosen while this one loaded
-      if (heard !== this.heard) return;
-      const source = this.context.createBufferSource();
-      source.buffer = buffer;
-      source.connect(this.context.destination);
-      source.start();
-      this.playing = source;
+  private audition(file: string) {
+    return this.player.play(file, buffer => {
       this.draw(buffer.getChannelData(0));
       this.detail.textContent = `${buffer.duration.toFixed(2)}s · ${buffer.numberOfChannels === 1 ? 'mono' : `${buffer.numberOfChannels} channels`} · ${Math.round(buffer.sampleRate)} Hz · ↩ inserts it`;
-    } catch (error) {
-      if (heard === this.heard) {
-        this.clearWave();
-        this.detail.textContent = `can't play that: ${error}`;
-      }
-    }
+    }, () => {}, error => {
+      this.clearWave();
+      this.detail.textContent = `can't play that: ${error}`;
+    });
   }
 
   private clearWave() {

@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { SamplePlayer } from './player';
 
 /** One version a gallery made, as `gallery.json` lists it. */
 export type Tile = { name: string; recipe: string; family: string; values: Record<string, number> };
@@ -23,8 +24,8 @@ export class Gallery {
   private seed = 1;
   private made: Made | null = null;
   private busy = false;
-  private context: AudioContext | null = null;
-  private playing: { source: AudioBufferSourceNode; name: string } | null = null;
+  private player = new SamplePlayer();
+  private playing: string | null = null;
   private where: HTMLElement;
   private grid: HTMLElement;
   private make: HTMLButtonElement;
@@ -64,6 +65,7 @@ export class Gallery {
     try {
       const path = await invoke<string | null>('pick_sample');
       if (!path) return;
+      this.stop();
       this.sample = path;
       localStorage.setItem('niminal-stage:gallery-sample', path);
       this.made = null;
@@ -120,40 +122,28 @@ export class Gallery {
     open.title = 'Open its code in a tab';
     open.addEventListener('click', () => this.options.openPiece(`${this.made!.dir}/${tile.name}.nml`));
     element.append(play, open);
-    if (this.playing?.name === tile.name) element.classList.add('playing');
+    if (this.playing === tile.name) element.classList.add('playing');
     return element;
   }
 
   stop() {
-    try {
-      this.playing?.source.stop();
-    } catch {
-      // already ended
-    }
+    this.player.stop();
     this.playing = null;
     this.grid.querySelectorAll('.playing').forEach(e => e.classList.remove('playing'));
   }
 
   private async play(tile: Tile) {
-    const again = this.playing?.name === tile.name;
+    const again = this.playing === tile.name;
     this.stop();
     if (again || !this.made) return;
-    try {
-      this.context ??= new AudioContext();
-      const data = await invoke<ArrayBuffer>('read_sample', { path: `${this.made.dir}/${tile.name}.wav` });
-      const buffer = await this.context.decodeAudioData(data);
-      const source = this.context.createBufferSource();
-      source.buffer = buffer;
-      source.connect(this.context.destination);
-      source.onended = () => {
-        if (this.playing?.source === source) this.stop();
-      };
-      source.start();
-      this.playing = { source, name: tile.name };
-      const index = this.made.tiles.findIndex(t => t.name === tile.name);
+    const made = this.made;
+    this.playing = tile.name;
+    await this.player.play(`${made.dir}/${tile.name}.wav`, () => {
+      const index = made.tiles.indexOf(tile);
       this.grid.children[index]?.classList.add('playing');
-    } catch (error) {
+    }, () => this.stop(), error => {
+      this.stop();
       this.options.status(String(error));
-    }
+    });
   }
 }

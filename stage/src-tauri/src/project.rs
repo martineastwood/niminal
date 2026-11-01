@@ -2,23 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-/// The module names a source file `use`s, ignoring aliases and comments.
-fn used_modules(text: &str) -> Vec<String> {
-    text.lines()
-        .filter_map(|line| {
-            let name = line.trim_start().strip_prefix("use")?.strip_prefix(char::is_whitespace)?;
-            let name: String = name
-                .trim_start()
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '/')
-                .collect();
-            (!name.is_empty()).then_some(name)
-        })
-        .collect()
-}
-
 /// The files of the project in `dir`, and the entry that plays it. With a `main.nml` that is the file
-/// and every module it reaches through `use` (found next to the file using it, or in `lib`); without
+/// and every module the language resolves through `use`; broken imports still open main. Without
 /// one, every `.nml` in the folder, by name, and no entry.
 pub fn files(dir: &Path) -> std::io::Result<(Option<PathBuf>, Vec<PathBuf>)> {
     let main = dir.join("main.nml");
@@ -30,27 +15,13 @@ pub fn files(dir: &Path) -> std::io::Result<(Option<PathBuf>, Vec<PathBuf>)> {
         files.sort();
         return Ok((None, files));
     }
-    let mut files = Vec::new();
-    visit(dir, &main, &mut files)?;
+    let source = std::fs::read_to_string(&main)?;
+    let mut files = vec![main.clone()];
+    // A broken import must not prevent opening main to fix it.
+    if let Ok(expanded) = niminal_compose::expand(&source, dir) {
+        files.extend(expanded.files().map(Path::to_path_buf));
+    }
     Ok((Some(main), files))
-}
-
-fn visit(dir: &Path, file: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    if files.iter().any(|f| f == file) {
-        return Ok(());
-    }
-    files.push(file.to_path_buf());
-    let beside = file.parent().unwrap_or(dir);
-    for name in used_modules(&std::fs::read_to_string(file)?) {
-        let file_name = format!("{name}.nml");
-        if let Some(found) = [beside.join(&file_name), dir.join("lib").join(&file_name)]
-            .into_iter()
-            .find(|p| p.exists())
-        {
-            visit(dir, &found, files)?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -70,7 +41,7 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, text).unwrap();
         }
-        dir
+        dir.canonicalize().unwrap()
     }
 
     fn names(dir: &Path, files: &[PathBuf]) -> Vec<String> {
@@ -81,14 +52,17 @@ mod tests {
     }
 
     #[test]
-    fn use_lines_give_module_names() {
-        assert_eq!(used_modules("use a\n  use score/b as x\n// use c\nlet user = 1\nuse"), ["a", "score/b"]);
+    fn broken_imports_still_open_main() {
+        let dir = folder(&[("main.nml", "use missing\n")]);
+        let (entry, files) = files(&dir).unwrap();
+        assert_eq!(entry, Some(dir.join("main.nml")));
+        assert_eq!(names(&dir, &files), ["main.nml"]);
     }
 
     #[test]
     fn main_leads_and_its_modules_follow_once_each() {
         let dir = folder(&[
-            ("main.nml", "use drums\nuse std/filters\nuse bass\nuse pads\n"),
+            ("main.nml", "use drums\nuse bass\nuse pads\n"),
             ("drums.nml", "use bass\n"),
             ("bass.nml", ""),
             ("lib/pads.nml", ""),
@@ -96,7 +70,7 @@ mod tests {
         ]);
         let (entry, files) = files(&dir).unwrap();
         assert_eq!(entry, Some(dir.join("main.nml")));
-        assert_eq!(names(&dir, &files), ["main.nml", "drums.nml", "bass.nml", "lib/pads.nml"]);
+        assert_eq!(names(&dir, &files), ["main.nml", "bass.nml", "drums.nml", "lib/pads.nml"]);
     }
 
     #[test]

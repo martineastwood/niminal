@@ -6,6 +6,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 // snapshot shows up as the window going offline or stopping.
 const snapshot = {
   connected: true,
+  master: [],
+  levels: { nodes: {}, buses: {} },
+  health: null,
+  learned: [],
+  midi: { inputs: [], last: null },
   transport: { sample: 96000, seconds: 2, bar: 2, beat: 1.5, bpm: 128, voices: 1, pending: 1 },
   beats_per_bar: 4,
   meter: [4, 4],
@@ -79,7 +84,7 @@ describe('the stage app', () => {
     expect(calls.filter(c => c === 'snapshot').length).toBeGreaterThan(3);
     // it connects, but sends nothing until the player asks
     expect(calls).not.toContain('eval');
-    console.log(document.getElementById('footer-status')!.textContent, document.getElementById('editor-status')!.textContent);
+    expect(document.getElementById('editor-status')!.textContent).not.toContain('drawing');
   });
 
   it('changes the text size, remembers it, and keeps the mode controls working', async () => {
@@ -142,4 +147,15 @@ describe('the stage app', () => {
     items()[0].dispatchEvent(Object.assign(new Event('drop', { bubbles: true, cancelable: true }), { clientX: 10 }));
     expect(names()).toEqual([before[last], ...before.slice(0, last)]);
   });
+  it('clears the playing panels when the engine disconnects', async () => {
+    snapshot.connected = false;
+    await vi.waitFor(() => expect(document.getElementById('eval-state')!.textContent).toBe('offline'));
+    expect(document.getElementById('bar')!.textContent).toBe('1');
+    expect(document.getElementById('bpm')!.textContent).toBe('—');
+    expect(document.querySelectorAll('.scene')).toHaveLength(0);
+    expect(document.querySelectorAll('.pending-row')).toHaveLength(0);
+    expect(document.querySelectorAll('.clip')).toHaveLength(0);
+    snapshot.connected = true;
+  });
+
 });

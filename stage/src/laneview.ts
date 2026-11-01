@@ -93,23 +93,10 @@ export class LaneView {
       snapshot.connected,
       Object.keys(snapshot.levels.buses),
       snapshot.scenes.map(scene => scene.name),
-      snapshot.clips.map(clip => [
-        clip.name,
-        clip.instrument,
-        clip.running,
-        clip.muted,
-        clip.soloed,
+      snapshot.clips.map(({ cycles: _cycles, lanes, ...clip }) => [
+        clip,
         this.queued.get(clip.name)?.kind,
-        clip.edits,
-        clip.length,
-        clip.endless,
-        this.open.has(clip.name)
-          ? clip.lanes.map(lane => [
-              lane.name,
-              lane.truncated,
-              lane.events.map(event => [event.start, event.dur, event.value, event.gain, event.pan]),
-            ])
-          : null,
+        this.open.has(clip.name) ? lanes : null,
       ]),
     ]);
     if (signature !== this.signature) {
@@ -234,7 +221,7 @@ export class LaneView {
     head.addEventListener('click', () => {
       if (this.open.has(clip.name)) this.open.delete(clip.name);
       else this.open.add(clip.name);
-      if (this.snapshot) this.rebuild(this.snapshot);
+      if (this.snapshot) this.update(this.snapshot);
     });
     article.append(head);
 

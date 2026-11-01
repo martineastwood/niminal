@@ -176,8 +176,14 @@ function setConnection(ok: boolean) {
 function makeTab(source: string, path: string | null, title: string, saved = source): Tab {
   const id = ++tabCount;
   const uri = uriFor(path ?? `/niminal-stage/${title}-${id}.nml`);
-  const state = niminalEditor(source, uri, scope => void evaluate(scope), () => changed(id));
-  return { id, path, title: tabTitle(path, title), state, saved };
+  const tab: Tab = {
+    id, path, title: tabTitle(path, title), saved,
+    state: niminalEditor(source, uri, scope => void evaluate(scope), (state, docChanged) => {
+      tab.state = state;
+      if (docChanged) changed(id);
+    }),
+  };
+  return tab;
 }
 
 /** The directory `use` and samples are found from: the folder of the file in the current tab. */
@@ -185,13 +191,7 @@ function fileDir() {
   return current.path ? current.path.replace(/[\\/][^\\/]*$/, '') : null;
 }
 
-/** Keep the current tab's state with the tab, as the editor is about to show another. */
-function sync() {
-  if (view) current.state = view.state;
-}
-
 function show(tab: Tab) {
-  sync();
   current = tab;
   if (view) view.setState(tab.state);
   else view = new EditorView({ state: tab.state, parent: $('editor') });
@@ -229,7 +229,7 @@ function step(direction: 1 | -1) {
 }
 
 function isDirty(tab: Tab) {
-  return (tab === current && view ? view.state.doc.toString() : tab.state.doc.toString()) !== tab.saved;
+  return tab.state.doc.toString() !== tab.saved;
 }
 
 let dragging: Tab | null = null;
@@ -305,7 +305,6 @@ function changed(id: number) {
 }
 
 function persist() {
-  sync();
   const stored: StoredTabs = {
     tabs: tabs.map(tab => ({ path: tab.path, title: tab.title, text: tab.state.doc.toString(), saved: tab.saved })),
     active: tabs.indexOf(current),
@@ -392,7 +391,7 @@ function updateScenes(snapshot: Snapshot) {
   const list = snapshot.scenes;
   sceneList = list;
   const queued = queuedStates(snapshot);
-  const signature = JSON.stringify(list.map(scene => [scene.name, scene.running, scene.clips, queued.get(scene.name)?.kind]));
+  const signature = JSON.stringify(list.map(scene => [scene, queued.get(scene.name)]));
   if (signature === lastSceneSignature) return;
   lastSceneSignature = signature;
   const shown = sceneStates(list);
@@ -431,7 +430,7 @@ function updatePending(snapshot: Snapshot) {
     return;
   }
   pending.classList.remove('empty');
-  const signature = JSON.stringify(snapshot.pending.map(change => [change.id, change.changes]));
+  const signature = JSON.stringify(snapshot.pending.map(change => [change.id, change.changes, change.lands_at]));
   if (signature !== pendingSignature) {
     pendingSignature = signature;
     pending.replaceChildren();
@@ -524,7 +523,7 @@ function updateMidi(snapshot: Snapshot) {
 
 function writeLearned(control: string, source: string) {
   for (const tab of tabs) {
-    const doc = tab === current && view ? view.state.doc.toString() : tab.state.doc.toString();
+    const doc = tab.state.doc.toString();
     const range = learnedRange(doc, control);
     if (!range) continue;
     const changes = { from: range.from, to: range.to, insert: source };
@@ -637,6 +636,8 @@ function updateTransport(snapshot: Snapshot) {
     voices.textContent = '0';
     waiting.textContent = '0';
     $('waiting-readout').hidden = true;
+    meter.textContent = snapshot.meter.join('/');
+    $('beats').replaceChildren();
     return;
   }
   bar.textContent = String(t.bar);
@@ -816,7 +817,7 @@ async function openProject() {
 
 async function saveFile(tab = current) {
   if (!view) return;
-  const text = tab === current ? view.state.doc.toString() : tab.state.doc.toString();
+  const text = tab.state.doc.toString();
   try {
     if (!tab.path) {
       const path = await stage.saveFileAs(text);
@@ -872,12 +873,6 @@ function offline(): Snapshot {
   };
 }
 
-function drawOffline() {
-  const snapshot = offline();
-  laneView.update(snapshot);
-  updateEvalState(snapshot);
-}
-
 async function refresh() {
   let snapshot: Snapshot;
   try {
@@ -885,12 +880,12 @@ async function refresh() {
   } catch (error) {
     setConnection(false);
     status(String(error));
-    drawOffline();
+    draw(offline());
     return;
   }
   setConnection(snapshot.connected);
   if (!snapshot.connected) {
-    drawOffline();
+    draw(offline());
     // the engine went away or never answered: look for it again now and then, without sending anything
     if (connectedOnce && !linkLost) {
       linkLost = true;
@@ -900,6 +895,10 @@ async function refresh() {
   }
   linkLost = false;
   connectedOnce = true;
+  draw(snapshot);
+}
+
+function draw(snapshot: Snapshot) {
   // a mistake in drawing one part of the window must not stop the others, or the polling
   const parts: [string, () => void][] = [
     ['transport', () => updateTransport(snapshot)],
@@ -1003,7 +1002,8 @@ function setMode(name: 'perform' | 'no-rail', on: boolean) {
 for (const name of (localStorage.getItem(modeKey) ?? '').split(',')) {
   if (name === 'perform' || name === 'no-rail') document.body.classList.add(name);
 }
-$('perform').addEventListener('click', () => setMode('perform', !document.body.classList.contains('perform')));
+const togglePerform = () => setMode('perform', !document.body.classList.contains('perform'));
+$('perform').addEventListener('click', togglePerform);
 const toggleRail = () => setMode('no-rail', !document.body.classList.contains('no-rail'));
 
 // The divider between the code and the sidebar: drag it, or use the arrow keys, to give either more room.
@@ -1025,7 +1025,7 @@ divider($('divider'), -1, () => $('stage').getBoundingClientRect().width, setRai
 
 const highlighter = new Highlighter(() => view ?? undefined);
 const laneView = new LaneView($('lanes'), (action, target, change) => {
-  if (action === 'connect') $('reconnect').click();
+  if (action === 'connect') void reconnect();
   else void act({ action, target, change });
 });
 
@@ -1071,7 +1071,8 @@ $('browse-toggle').addEventListener('click', () => files.toggle());
 
 $('evaluate').addEventListener('click', () => void evaluate());
 $('evaluate-file').addEventListener('click', () => void evaluate('file'));
-$('new').addEventListener('click', () => addTab('', null, 'untitled'));
+const newTab = () => addTab('', null, 'untitled');
+$('new').addEventListener('click', newTab);
 $('evaluate-all').addEventListener('click', () => void evaluateAll());
 $('open').addEventListener('click', () => void openFile());
 $('open-project').addEventListener('click', () => void openProject());
@@ -1125,7 +1126,7 @@ clockMenu('clock-in', name => stage.clockIn(name));
 clockMenu('clock-out', name => stage.clockOut(name));
 $('hush').addEventListener('click', () => void act({ action: 'hush' }));
 $('panic').addEventListener('click', () => void act({ action: 'panic' }));
-$('reconnect').addEventListener('click', async () => {
+async function reconnect() {
   try {
     await stage.disconnect();
     setConnection(false);
@@ -1135,7 +1136,8 @@ $('reconnect').addEventListener('click', async () => {
   } catch (error) {
     status(String(error));
   }
-});
+}
+$('reconnect').addEventListener('click', () => void reconnect());
 
 window.addEventListener('keydown', event => {
   const mod = event.metaKey || event.ctrlKey;
@@ -1154,7 +1156,7 @@ window.addEventListener('keydown', event => {
     setZoom(1);
   } else if (event.key.toLowerCase() === 'p' && event.shiftKey) {
     event.preventDefault();
-    $('perform').click();
+    togglePerform();
   } else if (event.key.toLowerCase() === 'b' && event.shiftKey) {
     event.preventDefault();
     toggleLab();
@@ -1163,7 +1165,7 @@ window.addEventListener('keydown', event => {
     files.toggle();
   } else if (event.key.toLowerCase() === 't' && !event.shiftKey) {
     event.preventDefault();
-    $('new').click();
+    newTab();
   } else if (event.shiftKey && (event.key === '[' || event.key === '{')) {
     event.preventDefault();
     step(-1);
@@ -1197,7 +1199,7 @@ window.addEventListener('keydown', event => {
 
 /** The menu bar: each item runs what its button or key already does. */
 const menuActions: Record<string, () => void> = {
-  new: () => $('new').click(),
+  new: newTab,
   open: () => void openFile(),
   'open-project': () => void openProject(),
   save: () => void saveFile(),
@@ -1206,9 +1208,9 @@ const menuActions: Record<string, () => void> = {
   undo: () => view && undo(view),
   redo: () => view && redo(view),
   browse: () => files.toggle(),
-  sidebar: () => toggleRail(),
-  lab: () => toggleLab(),
-  perform: () => $('perform').click(),
+  sidebar: toggleRail,
+  lab: toggleLab,
+  perform: togglePerform,
   'zoom-in': () => stepZoom(1),
   'zoom-out': () => stepZoom(-1),
   'zoom-reset': () => setZoom(1),

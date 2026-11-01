@@ -31,11 +31,36 @@ export function gridCode(rows: DrumRow[]) {
   return `grid {\n${lines.join('\n')}\n}`;
 }
 
+/** The perc row's voice: a high conga-like tom, a round tuned knock with a quick pitch drop and a soft click. */
+const percVoice = `instr __lab_perc(freq: hz = c3, gain: db = 0db) {
+  drum(
+    freq: 320hz * (freq / c3),
+    attack: 0.3ms,
+    decay: 150ms,
+    mod_amount: 7,
+    mod_rate: 60hz,
+    noise_freq: 2khz,
+    noise_q: 0.4,
+    noise_attack: 0.3ms,
+    noise_decay: 12ms,
+    mix: 0.15,
+    drive: 0.15,
+    eq_freq: 1.2khz,
+    eq_gain: 3db,
+    amp: -7db,
+    vel: 1 * gain,
+    osc_vel: 0.5,
+    noise_vel: 0.5,
+    mod_vel: 0.1
+  )
+}`;
+
 /** What the Lab plays to let you hear the grid: the shelf's drums in a kit of the generator's row names. */
 export function auditionDrums(r: DrumRequest) {
   return [
-    'use std/drums.{kick_deep, snare_tight, clap, hat_closed, hat_open, rim}',
-    '__lab_kit = kit { kick: kick_deep, snare: snare_tight, clap: clap, hat: hat_closed, open: hat_open, perc: rim }',
+    'use std/drums.{kick_deep, snare_tight, clap, hat_closed, hat_open}',
+    percVoice,
+    '__lab_kit = kit { kick: kick_deep, snare: snare_tight, clap: clap, hat: hat_closed, open: hat_open, perc: __lab_perc }',
     `clip __lab_drums {\n  instrument: __lab_kit\n  notes: ${drumCall(r)}\n}`,
     '__lab_drums.start',
   ].join('\n');
@@ -59,7 +84,6 @@ export class Drums {
   private grid: HTMLElement;
   private hear: HTMLButtonElement;
   private seed: HTMLElement;
-  private readouts = new Map<string, HTMLOutputElement>();
   private timer: number | undefined;
 
   constructor(private options: Options) {
@@ -118,7 +142,6 @@ export class Drums {
     input.value = String(Math.round(value * 100));
     const readout = document.createElement('output');
     readout.textContent = num(value);
-    this.readouts.set(label, readout);
     input.addEventListener('input', () => {
       const v = Number(input.value) / 100;
       readout.textContent = num(v);

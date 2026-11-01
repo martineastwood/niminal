@@ -442,22 +442,15 @@ pub fn eval(
         Begin::Done(result) => result,
         Begin::Job(mut job) => loop {
             let done = job.compile();
-            let (retry, result) = {
-                let mut guard = lock(&shared.session);
-                let session = guard
-                    .as_mut()
-                    .ok_or("the stage disconnected while the code was compiling")?;
-                let live = session.live_mut();
-                match live.retry_eval(&done) {
-                    Some(job) => (Some(job), None),
-                    None => (None, Some(live.finish_eval(done))),
-                }
-            };
-            if let Some(next) = retry {
-                job = next;
-                continue;
+            let mut guard = lock(&shared.session);
+            let session = guard
+                .as_mut()
+                .ok_or("the stage disconnected while the code was compiling")?;
+            let live = session.live_mut();
+            match live.retry_eval(&done) {
+                Some(next) => job = next,
+                None => break live.finish_eval(done),
             }
-            break result.expect("a finished evaluation has a result");
         },
     };
     Ok(match result {

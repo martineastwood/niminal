@@ -27,7 +27,7 @@ const theme = editorTheme('calc(14px * var(--z))');
 /** What an evaluation sends: the selection or the block around the cursor, or the whole file. */
 export type Scope = 'chunk' | 'file';
 
-export function niminalEditor(source: string, uri: string, apply: (scope: Scope) => void, changed?: () => void) {
+export function niminalEditor(source: string, uri: string, apply: (scope: Scope) => void, changed?: (state: EditorState, docChanged: boolean) => void) {
   return EditorState.create({
     doc: source,
     extensions: [
@@ -61,7 +61,7 @@ export function niminalEditor(source: string, uri: string, apply: (scope: Scope)
       keymap.of([{ key: 'Tab', run: acceptCompletion }, indentWithTab]),
       lsp.plugin(uri, 'niminal'),
       EditorView.updateListener.of(update => {
-        if (update.docChanged) changed?.();
+        changed?.(update.state, update.docChanged);
       }),
     ],
   });
