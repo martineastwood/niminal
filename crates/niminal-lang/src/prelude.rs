@@ -15,6 +15,9 @@ fn unipolar(x) { x * 0.5 + 0.5 }
 control fn random_steps(rate: hz, seed: num = 0) {
   noise(seed: seed).sample_hold(impulse(rate))
 }
+fn random_between(lo, hi, seed: num = 0) {
+  lo + note_random(seed: seed) * (hi - lo)
+}
 control fn random_glide(rate: hz, glide: sec = 200ms, seed: num = 0) {
   noise(seed: seed).sample_hold(impulse(rate)).lag(glide)
 }
@@ -96,7 +99,7 @@ control fn snap_division(length: sec) {
 ";
 
 /// What each prelude function is for, for completion and the opcode reference.
-pub const DOCS: [(&str, &str); 8] = [
+pub const DOCS: [(&str, &str); 9] = [
     (
         "lfo",
         "A low-frequency oscillator from -1 to 1, run once per block: `lfo(2hz)`, or `lfo(0.3hz, shape: tri)` (sine, tri, saw or square). Move it to 0..1 with `.unipolar`, scale it with `.range(300hz..3khz)` and smooth it where a step would be heard: `lfo(2hz).smooth`.",
@@ -112,6 +115,10 @@ pub const DOCS: [(&str, &str); 8] = [
     (
         "random_steps",
         "Random values from -1 to 1, a new one at `rate`, held between: `random_steps(4hz)`. `seed:` makes a different sequence. Runs once per block.",
+    ),
+    (
+        "random_between",
+        "A random number from `lo` to `hi`, picked when the note starts: `cutoff + random_between(-100hz, 100hz)`. Each call and each note picks its own, the same on every run; `seed:` makes a different run of picks.",
     ),
     (
         "random_glide",

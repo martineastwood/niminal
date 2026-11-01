@@ -11,10 +11,10 @@ use niminal_engine::ops::{
     Allpass, Biquad, BiquadMode, Bitcrush, Chorus, Clip, Comb, Compressor, Convolve, DcBlock,
     Delay, Distortion, Eq, EqMode, Fdn, FilterMode, FinishWhen, Fn1, Fold, Follow, Formant, Freeze,
     Func, GLITCH_MAX_SECONDS, Gain, Gate, Granular, Impulse, IrSpectrum, Ladder, Lag, Limiter,
-    Modal, Mverb, Noise, NoiseColor, Osc, PartialMorph, Phaser, Phasor, PitchShift, RepeatLast,
-    Resonator, Reverb, RewindLast, SampleHold, Scatter, SlowDown, SpectralDelay, SpectralEdit,
-    SpectralEditKind, SpectralFreeze, SpectralMemory, SpectralMorph, SpectralPartials,
-    SpectralWarp, Svf, Waveshape, Wavetable,
+    Modal, Mverb, Noise, NoiseColor, NoteRandom, Osc, PartialMorph, Phaser, Phasor, PitchShift,
+    RepeatLast, Resonator, Reverb, RewindLast, SampleHold, Scatter, SlowDown, SpectralDelay,
+    SpectralEdit, SpectralEditKind, SpectralFreeze, SpectralMemory, SpectralMorph,
+    SpectralPartials, SpectralWarp, Svf, Waveshape, Wavetable,
 };
 
 use crate::unit::Unit;
@@ -441,6 +441,12 @@ impl Registry {
                 "White noise in -1..1: `noise()`, or `noise() * env[1 5ms 0]` for a click. Each source and each note has its own noise, the same on every run; `seed:` makes it the same for every note.",
                 vec![setting("seed", SIGNAL)],
                 Build::Builtin(|a| Ok(Box::new(Noise::new(NoiseColor::White, seed_of(a), a.salt)))),
+            ),
+            OpSpec::new(
+                "note_random",
+                "A random number from 0 to 1, picked when the note starts and held. Each call and each note picks its own, the same on every run; `seed:` makes a different run of picks. `random_between` maps it onto a range.",
+                vec![setting("seed", SIGNAL)],
+                Build::Builtin(|a| Ok(Box::new(NoteRandom::new(seed_of(a), a.salt)))),
             ),
             OpSpec::new(
                 "pinknoise",

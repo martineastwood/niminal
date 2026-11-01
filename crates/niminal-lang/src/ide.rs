@@ -336,6 +336,7 @@ pub fn builtin_ops() -> Vec<OpInfo> {
                 "lfo" => &[("rate", "hz", true), ("shape", "sine, tri, saw or square", false)],
                 "synced_lfo" => &[("beats", "number", false), ("shape", "sine, tri, saw or square", false), ("phase", "number", false)],                "unipolar" => &[("x", "number", true)],
                 "random_steps" => &[("rate", "hz", true), ("seed", "number", false)],
+                "random_between" => &[("lo", "number", true), ("hi", "number", true), ("seed", "number", false)],
                 _ => &[("rate", "hz", true), ("glide", "time", false), ("seed", "number", false)],
             };
             ops.push(op_info(name, doc, false, params));

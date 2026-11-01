@@ -291,6 +291,7 @@ op_enum! {
         TableRead(ops::TableRead),
         SampleHold(ops::SampleHold),
         Impulse(ops::Impulse),
+        NoteRandom(ops::NoteRandom),
         DcBlock(ops::DcBlock),
         Distortion(ops::Distortion),
     }
