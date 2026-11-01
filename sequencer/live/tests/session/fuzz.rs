@@ -22,6 +22,7 @@ fn double(x) { x * 2 }
 ctl cut = 1khz
 bus sb
 fx fb { out = sb.reverb(room: 0.5, damp: 0.5) }
+fx gt(hold: 0..1 = 0, depth: 0..1 = 0.5) { out = sb.gain(1 - hold * depth) }
 instr lo(freq: hz = 100hz) { osc(sine, freq) * env[1 | 10ms 0] }
 instr hi(freq: hz = 1khz) { osc(sine, freq) * env[1 | 10ms 0] }
 k1 = kit { kick: lo\n hat: hi }
@@ -64,7 +65,7 @@ fn snippet(r: &mut Rng) -> String {
     let instr = |r: &mut Rng| r.pick(&["i1", "i2", "i3", "lo", "hi"]);
     let clip = |r: &mut Rng| r.pick(&["c1", "c2", "c3", "i1", "lo"]);
     let body = "env[1 | 10ms 0]";
-    match r.below(44) {
+    match r.below(58) {
         0 => format!("instr {}(freq: hz) {{ osc(sine, freq) * {body} }}", instr(r)),
         1 => format!(
             "instr {}(freq: hz, k: 0..1 = 0.5) {{ osc(sine, freq) * (0.5 + k * 0.4) * {body} }}",
@@ -231,8 +232,100 @@ fn snippet(r: &mut Rng) -> String {
             instr(r),
             r.pick(&["0.5", "3"])
         ),
+        44 => format!(
+            "clip {} {{ length: 1bar\n times: 1\n quantize: 1/4beat\n {}gt {{\n hold: {}\n depth: {}\n }} }}",
+            r.pick(&["g1", "g2", "g3"]),
+            r.pick(&["", "launch: midi.note(36)\n ", "launch: midi.note(37)\n "]),
+            r.pick(&["xxxx ....", ".... xxxx", "xx.. xx..", "x", "[0 1 0 1]", "env[0 1/2bar 1 1/2bar 0]"]),
+            r.pick(&["0.8", "[0.2 0.9]", "1"])
+        ),
+        45 => format!("{}.{}", r.pick(&["g1", "g2", "g3"]), r.pick(&["start", "start", "stop"])),
+        46 => r
+            .pick(&[
+                "macro mt {\n input: midi.cc(1)\n gt {\n depth: 0..0.6\n }\n}",
+                "macro mt {\n input: midi.cc(1)\n gt {\n depth: (0..0.8).curve(2)\n hold: 0..1\n }\n}",
+                "macro mt {\n input: midi.cc(3)\n quantize: 1/4beat\n gt {\n depth: 1..0\n }\n}",
+            ])
+            .to_string(),
+        47 => format!(
+            "clip {} {{ length: 1bar\n times: 1\n {}: {} }}",
+            r.pick(&["g1", "g2", "g3"]),
+            r.pick(&["mt", "mc", "cut"]),
+            r.pick(&["env[0 3/4bar 1 1/4bar 0]", "[0 1]", "0.5"])
+        ),
+        48 => r
+            .pick(&[
+                "ctl held = midi.note(39).quantize(1/8beat)",
+                "ctl held = midi.note(39)",
+                "ctl held = 0",
+            ])
+            .to_string(),
+        49 => r
+            .pick(&[
+                "fx gt(hold: 0..1 = 0, depth: 0..1 = 0.5) { out = sb.gain(1 - hold * depth) }",
+                "fx gt(hold: 0..1 = 0, depth: 0..1 = 0.5) { out = sb.gain(1 - (hold + held) * depth) }",
+                "fx gt(hold: 0..1 = 0) { out = sb }",
+            ])
+            .to_string(),
+        50 => format!(
+            "instr {}(freq: hz = 110hz) {{ sweep = control {{ lfo({}hz).unipolar.range(300hz..3khz) }}\n osc(saw, freq).lpf(cutoff: sweep.smooth, res: 0.3) * {body} }}",
+            instr(r),
+            r.pick(&["0.3", "2"])
+        ),
+        51 => format!(
+            "control fn cw(rate: hz) {{ osc(sine, rate) }}\ninstr {}(freq: hz) {{ osc(saw, freq * (1 + cw({}hz) * 0.01)).lpf(cutoff: 2khz) * {body} }}",
+            instr(r),
+            r.pick(&["3", "7"])
+        ),
+        52 => format!(
+            "tempo {}bpm @ {} over {}",
+            r.pick(&["80", "160", "120"]),
+            r.pick(&["now", "next bar"]),
+            r.pick(&["1bar", "2beats", "4bars"])
+        ),
+        53 => format!(
+            "ctl vol = osc_in(\"/fx/vol\").range(-30db..0db)\ninstr {}(freq: hz) {{ osc(sine, freq).gain(vol) * {body} }}",
+            instr(r)
+        ),
+        54 => format!(
+            "clip kb2 {{ instrument: {}\n keys: midi.keys(channel: 2) }}\nkb2.start",
+            instr(r)
+        ),
+        55 => r
+            .pick(&[
+                "ctl cut = midi.learn.range(200hz..4khz)",
+                "ctl cut = midi.cc(21).range(200hz..4khz).smooth(10ms)",
+                "on midi.cc(5) s1.start",
+            ])
+            .to_string(),
+        56 => format!("scene {} {{ {}, {} }}", r.pick(&["s1", "s2"]), r.pick(&["g1", "g2", "g3"]), clip(r)),
+        57 => format!(
+            "clip {} {{ instrument: {}\n notes: [a3 c4]\n quantize: {}\n launch: midi.note({}) }}",
+            clip(r),
+            instr(r),
+            r.pick(&["1/4beat", "1bar", "now"]),
+            r.pick(&["40", "41"])
+        ),
         _ => format!("tempo {}bpm", r.pick(&["120", "90", "140"])),
     }
+}
+
+/// Something arriving from a controller or an OSC sender, as it might between evaluations.
+fn signal(r: &mut Rng, s: &mut Offline) {
+    use niminal_live::ControlSignal::*;
+    let channel = 1 + r.below(2) as u8;
+    match r.below(6) {
+        0 => s.control_input(&MidiNote { note: [36, 37, 38, 39, 40, 41][r.below(6)], channel, velocity: [0, 100][r.below(2)] }),
+        1 => s.control_input(&MidiCc { cc: [1, 2, 3, 5, 21][r.below(5)], channel, value: r.below(128) as u8 }),
+        2 => s.control_input(&MidiBend { channel, value: r.below(16384) as u16 }),
+        3 => s.control_input(&MidiPressure { channel, note: None, value: r.below(128) as u8 }),
+        4 => s.control_input(&Osc { address: "/fx/vol", value: r.below(100) as f64 / 99.0 }),
+        _ => {
+            let (note, velocity) = (48 + r.below(24) as u8, [0, 90][r.below(2)]);
+            s.key_input(channel, note, velocity);
+            0
+        }
+    };
 }
 
 /// Everything about the session that an evaluation could change, as text.
@@ -256,7 +349,9 @@ fn running(s: &mut Offline) -> BTreeSet<String> {
 /// Whether anything sounds: a bar to settle, then one to listen to.
 fn sounds(s: &mut Offline) -> bool {
     run(s, BAR);
-    rms(&run(s, BAR)) > 0.01
+    let heard = run(s, BAR);
+    assert!(heard.iter().all(|v| v.is_finite()), "the output is not finite");
+    rms(&heard) > 0.01
 }
 
 /// One run: every step's snippets and outcome are pushed to `log`, then the checks follow.
@@ -275,6 +370,13 @@ fn one_run(seed: u64, log: &mut Vec<String>) -> Result<String, String> {
             .collect::<Vec<_>>()
             .join("\n");
         log.push(format!("--- step {step}\n{src}"));
+        // a controller moves between evaluations: what is held changes the sound without changing the text
+        if r.below(3) == 0 {
+            for _ in 0..1 + r.below(3) {
+                signal(&mut r, &mut s);
+            }
+            edited = true;
+        }
         let before = state(&mut s);
         let was_running = running(&mut s);
         let result = s.eval(&src, Some("now"));
