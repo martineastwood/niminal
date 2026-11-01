@@ -900,7 +900,7 @@ it('greys out the editing items of the right-click menu while record mode is off
   grid.setRecording(false);
   parent.querySelector<HTMLElement>('[data-note-row="2"][data-column="0"]')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
   const item = (text: string) => [...document.querySelectorAll<HTMLButtonElement>('.menu button')].find(b => b.textContent!.startsWith(text))!;
-  for (const text of ['Paste', 'Clear', 'Shuffle notes', 'Fill with slices', 'Space notes evenly', 'Use selected instrument']) expect(item(text).disabled).toBe(true);
+  for (const text of ['Paste', 'Clear', 'Shuffle notes', 'Fill with slices', 'Snap to scale…', 'Make chord…', 'Space notes evenly', 'Use selected instrument']) expect(item(text).disabled).toBe(true);
   expect(item('Copy').disabled).toBe(false);
 });
 
@@ -931,4 +931,21 @@ it('builds chords from the first selected column into the note columns to its ri
   expect(columns[2].notes.slice(0, 3)).toEqual(['G-4', null, 'C-5']);
   // the undo goes back to before the columns were added, taking the chord with them
   key('z', { ctrlKey: true }); expect(project.patterns[0].notes[0][0].notes.slice(0, 3)).toEqual(['C-4', null, 'F-4']);
+});
+
+it('opens a root menu and then a scale menu from Snap to scale, and a chord menu from Make chord', () => {
+  const { project, parent, grid, key, click } = setup();
+  const notes = project.patterns[0].notes[0][0].notes;
+  notes.splice(0, 2, 'C#4', 'D#4');
+  click(0, 0); key('ArrowDown', { shiftKey: true });
+  const menu = () => [...document.querySelectorAll<HTMLButtonElement>('.menu button')];
+  const choose = (text: string) => { menu().find(b => b.textContent === text)!.click(); };
+  parent.querySelector<HTMLElement>('[data-note-row="0"][data-column="0"]')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  choose('Snap to scale…');
+  choose('C'); choose('major');
+  expect(notes.slice(0, 2)).toEqual(['C-4', 'D-4']);
+  parent.querySelector<HTMLElement>('[data-note-row="0"][data-column="0"]')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  choose('Make chord…');
+  expect(menu().map(b => b.textContent)).toContain('minor7');
+  grid.render();
 });

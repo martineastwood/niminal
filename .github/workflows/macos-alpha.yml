@@ -13,6 +13,11 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/macos-alpha
+  RUSTFLAGS: '-C target-cpu=apple-m1'
+  MACOSX_DEPLOYMENT_TARGET: '13.0'
+
 jobs:
   package:
     runs-on: macos-15

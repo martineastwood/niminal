@@ -211,6 +211,8 @@ export class PatternGrid {
       { text: 'Randomize', run: () => this.randomizeSelection(), disabled: !this.recording },
       { text: 'Shuffle notes', run: () => this.shuffleSelection(), disabled: !this.recording },
       { text: 'Fill with slices', run: () => this.fillSlices(), disabled: !this.recording },
+      { text: 'Snap to scale…', run: () => this.snapToScalePicker(anchor), disabled: !this.recording },
+      { text: 'Make chord…', run: () => this.makeChordPicker(anchor), disabled: !this.recording },
       { text: 'Space notes evenly', run: () => this.spaceEvenly(), disabled: !this.recording },
       { text: 'Use selected instrument', run: () => this.useSelectedInstrument(), disabled: !this.recording },
     ]);

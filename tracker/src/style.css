@@ -322,7 +322,7 @@ footer input { height: 20px; font-size: var(--fs-2); }
 .matrix-cell:hover { background: color-mix(in srgb, var(--track-colour) 55%, #1c1f23); }
 .matrix-cell.pattern { background: color-mix(in srgb, var(--accent) 30%, #1c1f23); color: var(--accent-text); border-color: #7a4a1a; }
 .matrix-cell.mute { background: #3a1f1f; color: #e08b8b; border-color: #5a2a2a; }
-.menu { position: fixed; z-index: 20; display: flex; flex-direction: column; min-width: 170px; max-height: 260px; overflow: auto; padding: 2px; background: var(--bg-bar); border: 1px solid var(--edge); box-shadow: 0 4px 14px #000a; }
+.menu { position: fixed; z-index: 20; display: flex; flex-direction: column; min-width: 170px; max-height: min(80vh, 560px); overflow: auto; padding: 2px; background: var(--bg-bar); border: 1px solid var(--edge); box-shadow: 0 4px 14px #000a; }
 .menu button { height: 20px; border-color: transparent; background: transparent; text-align: left; }
 .menu button:hover, .menu button:focus-visible { background: var(--bg-ctl-hover); }
 .menu button:disabled, .palette-list button[aria-disabled=true] { opacity: .4; cursor: default; }
