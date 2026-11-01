@@ -28,3 +28,4 @@ clip drums {
 }
 
 drums.start
+at +4bars hush
