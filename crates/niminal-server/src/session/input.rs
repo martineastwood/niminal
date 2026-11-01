@@ -309,6 +309,7 @@ impl Session {
                     dir,
                     at,
                     edits,
+                    complete,
                     tag,
                 } => {
                     resolved[n] = Some(Op::Transaction {
@@ -316,13 +317,14 @@ impl Session {
                         dir: dir.clone(),
                         at: self.logged(*at),
                         edits: edits.clone(),
+                        complete: *complete,
                         tag: tag.clone(),
                     });
                     (
                         source.clone(),
                         dir.as_deref(),
                         self.resolve(*at),
-                        What::Definitions,
+                        if *complete { What::Complete } else { What::Definitions },
                         in_seconds(edits, client, &clock_state, &mut linked),
                         tag.clone(),
                     )

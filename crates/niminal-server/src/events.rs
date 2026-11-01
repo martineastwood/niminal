@@ -53,6 +53,10 @@ pub enum Op {
         dir: Option<String>,
         #[serde(default)]
         edits: Vec<crate::RoutingEdit>,
+        /// `source` is all of this connection's definitions: any it defined before and does not send now is
+        /// dropped. Without it, `source` adds to or replaces what is there.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        complete: bool,
         #[serde(default)]
         tag: Option<String>,
     },

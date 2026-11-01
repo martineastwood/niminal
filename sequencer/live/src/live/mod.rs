@@ -1563,6 +1563,7 @@ impl Live {
                 source,
                 dir,
                 edits,
+                complete: true,
                 tag: None,
             });
         }

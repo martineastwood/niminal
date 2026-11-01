@@ -256,3 +256,83 @@ fn a_quantized_macro_moves_what_it_drives_on_its_boundary() {
         "opens on the half beat: {on}"
     );
 }
+
+/// How many times the level of `out` swells and fades, counted by upward crossings of its middle in windows of 10ms.
+fn level_cycles(out: &[f32]) -> usize {
+    let levels: Vec<f32> = out
+        .chunks(480)
+        .map(|w| (w.iter().map(|v| v * v).sum::<f32>() / w.len() as f32).sqrt())
+        .collect();
+    let (low, high) = levels
+        .iter()
+        .fold((f32::MAX, 0.0f32), |(l, h), v| (l.min(*v), h.max(*v)));
+    let middle = (low + high) / 2.0;
+    levels
+        .windows(2)
+        .filter(|w| w[0] < middle && w[1] >= middle)
+        .count()
+}
+
+/// A shelf effect from `std/fx` reading the bus `src` where it reads `in`, with some of its defaults replaced.
+fn shelf_insert(name: &str, defaults: &[(&str, &str)]) -> String {
+    let shelf = include_str!("../../../crates/niminal-lang/std/fx.nml");
+    let start = shelf.find(&format!("fx {name}(")).unwrap();
+    let end = start + shelf[start..].find("\n}\n").unwrap() + 3;
+    let mut text = shelf[start..end].replace(" in\n", " src\n").replace("in.", "src.").replace("in *", "src *");
+    for (from, to) in defaults {
+        assert!(text.contains(from), "{name} has no `{from}`");
+        text = text.replacen(from, to, 1);
+    }
+    text
+}
+
+#[test]
+fn the_shelf_effects_that_sweep_keep_to_the_beat_as_the_tempo_changes() {
+    // two seconds of a note through each effect with one cycle a beat: four cycles at 120 bpm, two at 60
+    let cycles = |insert: &str, input: &str, tempo: &str| {
+        let source = format!(
+            "{tempo}\nbus src: stereo\ninstr drone(freq: hz) {{\n  src += {input}\n}}\n{insert}\nclip c {{\n  instrument: drone\n  length: 8bars\n  notes: [c4]\n  dur: 8bars\n}}\n"
+        );
+        let mut session = Offline::new(48_000.0, Layout::Stereo);
+        session.eval(&source, Some("now")).unwrap();
+        session.process(480);
+        session.eval("c.start", Some("now")).unwrap();
+        session.process(48_000);
+        level_cycles(&session.process(96_000).remove(0))
+    };
+    for (insert, input) in [
+        (
+            shelf_insert("tremolo", &[("beats: 0.0625..16 = 0.25", "beats: 0.0625..16 = 1"), ("depth: 0..1 = 0.5", "depth: 0..1 = 1")]),
+            "osc(sine, 1khz)",
+        ),
+        (
+            shelf_insert("lowpass", &[("sweep_beats: 0.25..64 = 8", "sweep_beats: 0.25..64 = 1"), ("sweep_depth: 0..4 = 0", "sweep_depth: 0..4 = 3"), ("2400hz", "300hz")]),
+            "osc(saw, 220hz)",
+        ),
+    ] {
+        let (fast, slow) = (
+            cycles(&insert, input, "tempo 120bpm"),
+            cycles(&insert, input, "tempo 60bpm"),
+        );
+        assert!((3..=5).contains(&fast), "{insert} at 120 bpm: {fast}");
+        assert!((1..=3).contains(&slow), "{insert} at 60 bpm: {slow}");
+    }
+}
+
+#[test]
+fn the_shelf_chorus_phaser_and_glitch_play_at_any_tempo() {
+    for name in ["ensemble", "swirl", "glitch"] {
+        for tempo in ["tempo 60bpm", "tempo 170bpm"] {
+            let source = format!(
+                "{tempo}\nbus src: stereo\ninstr drone(freq: hz) {{\n  src += osc(saw, freq) * 0.3\n}}\n{}\nclip c {{\n  instrument: drone\n  length: 8bars\n  notes: [c3]\n  dur: 8bars\n}}\n",
+                shelf_insert(name, &[])
+            );
+            let mut session = Offline::new(48_000.0, Layout::Stereo);
+            session.eval(&source, Some("now")).unwrap();
+            session.eval("c.start", Some("now")).unwrap();
+            let out = session.process(96_000).remove(0);
+            assert!(out.iter().all(|v| v.is_finite()), "{name} at {tempo}");
+            assert!(peak(&out) > 0.01, "{name} at {tempo} is silent");
+        }
+    }
+}

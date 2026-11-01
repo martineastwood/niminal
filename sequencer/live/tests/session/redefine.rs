@@ -480,6 +480,18 @@ fn a_lane_the_instrument_does_not_have_yet_is_left_out_whichever_comes_first() {
 }
 
 #[test]
+fn an_effect_lane_naming_an_effect_that_does_not_exist_is_left_out_and_the_project_still_compiles() {
+    let mut s = session();
+    ok(&mut s, &format!("{TONE}clip c {{ instrument: tone\n notes: [a3]\n echo {{ length: 1/4beat }} }}\nc.start"));
+    let notices = s.take_notices();
+    assert!(notices.iter().any(|n| n.contains("echo.length") && n.contains("left out")), "{notices:?}");
+    assert!((pitch_after_two_bars(&mut s) - 220.0).abs() < 8.0);
+    // what the project holds is text that loads on its own
+    let mut fresh = session();
+    ok(&mut fresh, &format!("{}\nc.start", s.project_source()));
+}
+
+#[test]
 fn a_kit_given_its_drums_in_another_order_still_plays_each_drum() {
     let mut s = session();
     ok(

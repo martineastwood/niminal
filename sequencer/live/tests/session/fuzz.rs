@@ -64,7 +64,7 @@ fn snippet(r: &mut Rng) -> String {
     let instr = |r: &mut Rng| r.pick(&["i1", "i2", "i3", "lo", "hi"]);
     let clip = |r: &mut Rng| r.pick(&["c1", "c2", "c3", "i1", "lo"]);
     let body = "env[1 | 10ms 0]";
-    match r.below(38) {
+    match r.below(44) {
         0 => format!("instr {}(freq: hz) {{ osc(sine, freq) * {body} }}", instr(r)),
         1 => format!(
             "instr {}(freq: hz, k: 0..1 = 0.5) {{ osc(sine, freq) * (0.5 + k * 0.4) * {body} }}",
@@ -199,6 +199,38 @@ fn snippet(r: &mut Rng) -> String {
             instr(r)
         ),
         37 => format!("bus {}", r.pick(&["cut", "s1", "mc", "pat"])),
+        38 => format!(
+            "fx {} {{ out = sb.delay(time: clock.beat_length * {}, max: 2sec) }}",
+            r.pick(&["tf1", "tf2", "fb"]),
+            r.pick(&["1/2", "1", "2"])
+        ),
+        39 => format!(
+            "fx {}(length: division = {}) {{ out = sb.delay(time: length, max: 2sec) }}",
+            r.pick(&["tf1", "tf2", "fb"]),
+            r.pick(&["1/2beat", "3/16beat", "1bar", "0.2sec"])
+        ),
+        40 => format!(
+            "clip {} {{ instrument: {}\n notes: [a3 c4]\n {} {{ length: {} }} }}",
+            clip(r),
+            instr(r),
+            r.pick(&["tf1", "tf2", "fb"]),
+            r.pick(&["1/4beat", "1/3sec", "2beats"])
+        ),
+        41 => format!(
+            "instr {}(freq: hz, beats: 0.25..16 = {}) {{ osc(sine, freq) * (0.7 + 0.3 * synced_lfo(beats)) * {body} }}",
+            instr(r),
+            r.pick(&["1", "4"])
+        ),
+        42 => format!(
+            "fx {}(beats: 0.5..64 = {}) {{ out = sb.phaser(rate: 1hz / (beats * clock.beat_length / 1sec), depth: 0.5, center: 800hz, feedback: 0.3, mix: 0.5) }}",
+            r.pick(&["tf1", "tf2", "fb"]),
+            r.pick(&["2", "8"])
+        ),
+        43 => format!(
+            "control fn wob(rate: hz) {{ osc(sine, rate) }}\ninstr {}(freq: hz) {{ osc(sine, freq) * (1 + wob({}hz) * 0.2).smooth(5ms) * {body} }}",
+            instr(r),
+            r.pick(&["0.5", "3"])
+        ),
         _ => format!("tempo {}bpm", r.pick(&["120", "90", "140"])),
     }
 }
@@ -345,4 +377,27 @@ fn any_order_of_definitions_keeps_the_session_sound() {
     for seed in from..from + number("FUZZ_RUNS", 8) {
         run_seed(seed);
     }
+}
+
+/// Found by seed 207: definitions the client took out of the project (a clip took the name of an instrument, and
+/// what depended on it went too) were still in the engine, and sounded again when a name they used became a constant.
+#[test]
+fn a_definition_taken_out_does_not_come_back_in_the_engine() {
+    let mut s = session();
+    s.eval(SETUP, Some("now")).unwrap();
+    let steps = [
+        "on midi.note(38) c1.start\ns1.start\nclip i1 { instrument: lo\n notes: [a3 c4] }",
+        "fx tf2(beats: 0.5..64 = 8) { out = sb.phaser(rate: 1hz / (beats * clock.beat_length / 1sec), depth: 0.5, center: 800hz, feedback: 0.3, mix: 0.5) }\ninstr i3(freq: hz) { x = osc(sine, freq) * env[1 | 10ms 0]\n out = x\n sb += x * 0.3 }",
+        "instr i2(freq: hz, k: hz) { osc(sine, freq + k * 0) * env[1 | 10ms 0] }",
+        "bus mult\ninstr lo(freq: hz, k: hz) { osc(sine, freq + k * 0) * env[1 | 10ms 0] }\npat = [a3 ~ c4 ~]",
+        "hits = grid {\n kick: x.x.\n}\nclip i1 { instrument: i2\n notes: pat }",
+    ];
+    for step in steps {
+        let _ = s.eval(step, Some("now"));
+        run(&mut s, BAR);
+    }
+    assert!(!s.project_source().contains("fx fb"), "{}", s.project_source());
+    s.eval("const sb = 1", Some("now")).unwrap();
+    run(&mut s, BAR);
+    assert!(rms(&run(&mut s, BAR)) < 0.01, "a definition that was taken out is sounding");
 }

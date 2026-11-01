@@ -344,7 +344,7 @@ Use `routing` edits containing only `set` and `gain` for continuous controls. Th
 
 ### Definition and routing transactions
 
-Use one `transaction` operation for coordinated definition and topology changes at a sample. Its optional `source` and `dir` work like `define`; `edits` work like `routing`. Definitions are compiled first and the final graph is validated and materialized once. Intermediate routing states need not be valid. A rejected transaction leaves the running graph and previously accepted future changes intact. Independent operations in `events.send` retain their own tags and cancellation boundaries; use `transaction` to combine them into one graph change.
+Use one `transaction` operation for coordinated definition and topology changes at a sample. Its optional `source` and `dir` work like `define`; `edits` work like `routing`. With `"complete": true`, `source` is all of the connection's definitions: any it sent before and leaves out now is dropped, which is how a client takes a definition back without `forget` clearing the rest. An empty `source` with `complete` drops all of them and leaves the connection's routing as it is. Definitions are compiled first and the final graph is validated and materialized once. Intermediate routing states need not be valid. A rejected transaction leaves the running graph and previously accepted future changes intact. Independent operations in `events.send` retain their own tags and cancellation boundaries; use `transaction` to combine them into one graph change.
 
 ```json
 { "op": "transaction", "at": 96000, "tag": "edit-42",

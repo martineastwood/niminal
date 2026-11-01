@@ -13,6 +13,8 @@ pub(super) enum What {
     Definitions,
     /// `new`.
     Forget,
+    /// DSP definitions that are all the client has: what it defined before and does not send now is dropped.
+    Complete,
 }
 
 /// Who sent a change, and what it was told.
@@ -30,8 +32,8 @@ pub(super) struct Pending {
     /// What was sent, with the modules it uses joined in, so that it can be compiled again.
     pub snippet: String,
     pub statements: Vec<Statement>,
-    /// This change starts the client's definitions over (`forget`).
-    pub clears: bool,
+    /// Whether this change starts the client's definitions over (`forget`) or is all of them (`complete`).
+    pub what: What,
     /// The project once this has landed.
     pub project: Project,
     pub definitions: Arc<Program>,
@@ -52,7 +54,7 @@ impl Pending {
             lands_at: self.lands_at,
             snippet: self.snippet.clone(),
             statements: self.statements.clone(),
-            clears: self.clears,
+            what: self.what,
             project: self.project.clone(),
             definitions: self.definitions.clone(),
             routing: self.routing.clone(),
@@ -134,7 +136,7 @@ impl Session {
                 at,
                 snippet,
                 statements,
-                clears,
+                what,
                 &base,
                 &definitions,
                 &routing,
@@ -293,14 +295,15 @@ impl Session {
         lands_at: u64,
         snippet: String,
         statements: Vec<Statement>,
-        clears: bool,
+        what: What,
         base: &Project,
         base_definitions: &Arc<Program>,
         routing: &crate::routing::Routing,
         edits: Vec<crate::RoutingEdit>,
         meta: Meta,
     ) -> Result<Pending, Vec<Problem>> {
-        let (project, definitions) = if statements.is_empty() && !clears {
+        let clears = what == What::Forget;
+        let (project, definitions) = if statements.is_empty() && !clears && what != What::Complete {
             (base.clone(), base_definitions.clone())
         } else {
             let definitions: Vec<&Statement> = statements.iter().collect();
@@ -327,7 +330,7 @@ impl Session {
                     .cloned()
                     .collect(),
             };
-            let base = if clears { &fresh } else { base };
+            let base = if clears || what == What::Complete { &fresh } else { base };
             let mut project = base.clone();
             project.apply(&delta);
 
@@ -467,7 +470,7 @@ impl Session {
             lands_at,
             snippet,
             statements,
-            clears,
+            what,
             project,
             definitions,
             routing,
@@ -499,7 +502,7 @@ impl Session {
                 lands_at,
                 snippet,
                 statements,
-                clears,
+                what,
                 meta,
                 edits,
                 applied,
@@ -510,7 +513,7 @@ impl Session {
                 lands_at,
                 snippet,
                 statements,
-                clears,
+                what,
                 &base,
                 &definitions,
                 &routing,

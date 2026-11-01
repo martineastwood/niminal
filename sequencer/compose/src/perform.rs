@@ -3703,6 +3703,15 @@ impl Perform<'_> {
                     ),
                     span,
                 );
+                if self.cx.lenient {
+                    self.cx.skipped.borrow_mut().push(crate::compile::Skipped {
+                        what: format!("lane `{fx}.{param}` of clip `{}`", clip.name),
+                        name: lane.clone(),
+                        span,
+                        typo_when_new: false,
+                    });
+                    continue;
+                }
                 if let Some(c) = closest(param, params) {
                     d = d.with_help(format!("did you mean `{c}`?"));
                 }
