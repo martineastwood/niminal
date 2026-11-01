@@ -46,11 +46,11 @@ The server (`niminal server`) does the sound: it compiles instruments, effects a
 
 | Piece | What it is | Needs |
 | --- | --- | --- |
-| `niminal` | The audio server and command-line tool | nothing |
-| [Stage](stage/) | Desktop app for live coding: editor, scenes, lanes that light up as clips play, meters, controls | the server |
-| [Tracker](tracker/) | Desktop app with a keyboard-driven pattern grid, instrument/effect editor, mixer and project files | the server |
-| [VS Code / Cursor extension](editors/vscode/) | Highlighting, diagnostics, hover, completion, evaluate-while-playing | the server for playback only |
-| `niminal-live` | The live sequencer and offline renderer | the server for live use only |
+| [`niminal`](https://niminal.dev/reference/server/cli/) | The audio server and command-line tool | nothing |
+| [Stage](https://niminal.dev/reference/stage/) | Desktop app for live coding: editor, scenes, lanes that light up as clips play, meters, controls | the server |
+| [Tracker](https://niminal.dev/reference/tracker/) | Desktop app with a keyboard-driven pattern grid, instrument/effect editor, mixer and project files | the server |
+| [VS Code / Cursor extension](https://niminal.dev/reference/editor/) | Highlighting, diagnostics, hover, completion, evaluate-while-playing | the server for playback only |
+| [`niminal-live`](https://niminal.dev/reference/niminal-live/cli/) | The live sequencer and offline renderer | the server for live use only |
 
 ## Install
 
