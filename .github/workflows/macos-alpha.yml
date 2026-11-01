@@ -44,6 +44,9 @@ jobs:
       - name: Check engine and sequencer
         run: scripts/check.sh --test
       - name: Test desktop frontends and editor extension
+        env:
+          NIMINAL_BIN: ${{ env.CARGO_TARGET_DIR }}/debug/niminal
+          NIMINAL_LIVE_BIN: ${{ env.CARGO_TARGET_DIR }}/debug/niminal-live
         run: |
           for app in tracker stage editors/vscode; do
             (cd "$app" && npm ci && npm test)

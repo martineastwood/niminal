@@ -79,6 +79,20 @@ fn connect(name: &str) -> Result<MidiOutputConnection, String> {
     }
 }
 
+/// Drain messages due at this clock reading. Timing decisions are independent of
+/// the MIDI device and OS thread scheduling, so they can be tested exactly.
+fn send_due(waiting: &mut VecDeque<(u64, Realtime)>, now: u64, mut send: impl FnMut(Realtime)) {
+    while let Some(&(due, message)) = waiting.front() {
+        if due > now {
+            break;
+        }
+        waiting.pop_front();
+        if message != Realtime::Tick || now - due <= LATE_MICROS {
+            send(message);
+        }
+    }
+}
+
 fn run(mut connection: MidiOutputConnection, rx: &Receiver<(u64, Realtime)>, stop: &AtomicBool) {
     let mut waiting: VecDeque<(u64, Realtime)> = VecDeque::new();
     while !stop.load(Ordering::Relaxed) {
@@ -90,15 +104,9 @@ fn run(mut connection: MidiOutputConnection, rx: &Receiver<(u64, Realtime)>, sto
             }
         }
         let now = now_micros();
-        while let Some(&(due, message)) = waiting.front() {
-            if due > now {
-                break;
-            }
-            waiting.pop_front();
-            if message != Realtime::Tick || now - due <= LATE_MICROS {
-                let _ = connection.send(&[message.byte()]);
-            }
-        }
+        send_due(&mut waiting, now, |message| {
+            let _ = connection.send(&[message.byte()]);
+        });
         match waiting.front() {
             Some(&(due, _)) if due - now > 2_000 => {
                 thread::sleep(Duration::from_micros((due - now - 1_000).min(5_000)));
@@ -121,6 +129,64 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[test]
+    fn messages_wait_until_their_scheduled_time_and_leave_once_in_order() {
+        let mut waiting = VecDeque::from([
+            (100, Realtime::Start),
+            (100, Realtime::Tick),
+            (200, Realtime::Tick),
+            (300, Realtime::Stop),
+        ]);
+        let mut sent = Vec::new();
+        send_due(&mut waiting, 99, |m| sent.push(m));
+        assert!(sent.is_empty());
+        assert_eq!(waiting.len(), 4);
+        send_due(&mut waiting, 100, |m| sent.push(m));
+        assert_eq!(sent, [Realtime::Start, Realtime::Tick]);
+        send_due(&mut waiting, 100, |m| sent.push(m));
+        assert_eq!(sent.len(), 2, "a message must only be sent once");
+        send_due(&mut waiting, 300, |m| sent.push(m));
+        assert_eq!(
+            sent,
+            [
+                Realtime::Start,
+                Realtime::Tick,
+                Realtime::Tick,
+                Realtime::Stop
+            ]
+        );
+        assert!(waiting.is_empty());
+    }
+
+    #[test]
+    fn stalled_clock_drops_stale_ticks_but_keeps_the_lateness_boundary() {
+        let now = 100_000;
+        let mut waiting = VecDeque::from([
+            (now - LATE_MICROS - 1, Realtime::Tick),
+            (now - LATE_MICROS, Realtime::Tick),
+            (now, Realtime::Tick),
+            (now + 1, Realtime::Tick),
+        ]);
+        let mut sent = Vec::new();
+        send_due(&mut waiting, now, |m| sent.push(m));
+        assert_eq!(sent, [Realtime::Tick, Realtime::Tick]);
+        assert_eq!(waiting, [(now + 1, Realtime::Tick)]);
+    }
+
+    #[test]
+    fn late_transport_messages_are_delivered_even_when_ticks_are_dropped() {
+        let mut waiting = VecDeque::from([
+            (0, Realtime::Start),
+            (0, Realtime::Tick),
+            (1, Realtime::Stop),
+        ]);
+        let mut sent = Vec::new();
+        send_due(&mut waiting, LATE_MICROS + 2, |m| sent.push(m));
+        assert_eq!(sent, [Realtime::Start, Realtime::Stop]);
+        assert!(waiting.is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires virtual MIDI and low OS scheduler jitter; run locally with --ignored"]
     fn messages_leave_when_their_time_comes() {
         let name = format!("niminal-clock-test-{}", std::process::id());
         let Ok(out) = ClockOutput::open(&name) else {

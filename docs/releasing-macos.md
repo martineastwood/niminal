@@ -44,6 +44,15 @@ It uploads the ZIP and checksum as workflow artifacts; it does not create a
 public release. Before the first release, exercise the workflow on the intended
 commit so its output comes from a clean runner.
 
+The MIDI clock's exact scheduling and stale-tick rules run as deterministic unit
+tests in CI. The virtual-MIDI arrival-time test needs an idle machine: shared
+runners cannot guarantee its 5ms scheduler tolerance. Run it explicitly when
+checking MIDI timing locally:
+
+```sh
+(cd sequencer && cargo test -p niminal-live-cli --lib clock::tests::messages_leave_when_their_time_comes -- --ignored)
+```
+
 ## Download contents
 
 ```text
