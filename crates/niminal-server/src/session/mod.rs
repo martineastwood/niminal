@@ -140,14 +140,18 @@ struct ChainMap {
 }
 impl ChainMap {
     fn node(&self) -> String {
-        format!("__routing_fx_{}_{}", self.client, self.node)
+        crate::routing::fx_name(self.client, &self.node)
     }
+}
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum BufferTarget {
+    Voice(u32),
+    Chain(String),
 }
 #[derive(Clone)]
 struct BufferBind {
     param: String,
-    target: Option<String>,
-    key: u32,
+    target: BufferTarget,
     resource: u64,
     bank: niminal_engine::BufferBank,
     count: usize,
@@ -186,7 +190,7 @@ mod transactions;
 use definitions::{Meta, Pending, What, options};
 
 /// Where the engine is in time, for a client that wants to schedule against it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct ClockInfo {
     /// The sample the output is at, as its audio callback last said; the render clock if it hasn't.
     pub sample: u64,

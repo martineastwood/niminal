@@ -61,12 +61,51 @@ struct Progress {
     frames: AtomicU64,
     result: Mutex<Option<Result<Vec<RenderedFile>, String>>>,
 }
+#[derive(Clone, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+enum JobState {
+    Running,
+    Completed { outputs: Vec<JobOutput> },
+    Cancelled { error: String },
+    Failed { error: String },
+}
+#[derive(Clone, PartialEq, Serialize)]
+struct JobOutput {
+    id: String,
+    file: String,
+    path: Option<String>,
+}
+enum JobKind {
+    Render,
+    Capture { stop: Arc<AtomicU64>, from: u64 },
+}
+#[derive(Clone, PartialEq, Serialize)]
+struct JobStatus {
+    id: u64,
+    #[serde(flatten)]
+    state: JobState,
+    frames: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    from: Option<u64>,
+}
 struct Job {
     progress: Arc<Progress>,
-    state: Value,
-    announced: Value,
-    stop: Option<Arc<AtomicU64>>,
-    from: u64,
+    state: JobState,
+    announced: Option<JobStatus>,
+    kind: JobKind,
+}
+impl Job {
+    fn status(&self, id: u64) -> JobStatus {
+        JobStatus {
+            id,
+            state: self.state.clone(),
+            frames: self.progress.frames.load(Ordering::Acquire),
+            from: match self.kind {
+                JobKind::Capture { from, .. } if self.state == JobState::Running => Some(from),
+                _ => None,
+            },
+        }
+    }
 }
 #[derive(Default)]
 pub(crate) struct Jobs {
@@ -78,7 +117,7 @@ impl Jobs {
         let completed = self
             .entries
             .iter()
-            .filter(|((c, _), j)| *c == client && j.state["state"] != "running")
+            .filter(|((c, _), j)| *c == client && j.state != JobState::Running)
             .map(|(key, _)| *key)
             .collect::<Vec<_>>();
         for key in completed.iter().take(completed.len().saturating_sub(63)) {
@@ -100,13 +139,13 @@ impl Jobs {
         if self
             .entries
             .iter()
-            .filter(|((c, _), j)| *c == client && j.state["state"] == "running")
+            .filter(|((c, _), j)| *c == client && j.state == JobState::Running)
             .count()
             >= 2
             || self
                 .entries
                 .values()
-                .filter(|j| j.state["state"] == "running")
+                .filter(|j| j.state == JobState::Running)
                 .count()
                 >= 4
         {
@@ -132,10 +171,9 @@ impl Jobs {
             (client, id),
             Job {
                 progress: progress.clone(),
-                state: json!({"id":id,"state":"running","frames":0}),
-                announced: Value::Null,
-                stop: None,
-                from: 0,
+                state: JobState::Running,
+                announced: None,
+                kind: JobKind::Render,
             },
         );
         std::thread::Builder::new()
@@ -168,7 +206,7 @@ impl Jobs {
         if self
             .entries
             .iter()
-            .filter(|((c, _), j)| *c == client && j.state["state"] == "running")
+            .filter(|((c, _), j)| *c == client && j.state == JobState::Running)
             .count()
             >= 2
         {
@@ -195,10 +233,12 @@ impl Jobs {
             (client, id),
             Job {
                 progress: progress.clone(),
-                state: json!({"id":id,"state":"running","from":from}),
-                announced: Value::Null,
-                stop: Some(stop.clone()),
-                from,
+                state: JobState::Running,
+                announced: None,
+                kind: JobKind::Capture {
+                    stop: stop.clone(),
+                    from,
+                },
             },
         );
         std::thread::spawn(move || {
@@ -268,8 +308,10 @@ impl Jobs {
     }
     pub fn stop_capture(&mut self, client: u64, id: u64, at: u64) -> Result<Value, String> {
         let job = self.entries.get(&(client, id)).ok_or("no such capture")?;
-        let stop = job.stop.as_ref().ok_or("job is not a live capture")?;
-        if at < job.from + job.progress.frames.load(Ordering::Acquire) {
+        let JobKind::Capture { stop, from } = &job.kind else {
+            return Err("job is not a live capture".into());
+        };
+        if at < from + job.progress.frames.load(Ordering::Acquire) {
             return Err("capture stop precedes samples already written".into());
         }
         stop.store(at, Ordering::Release);
@@ -289,7 +331,7 @@ impl Jobs {
         self.poll(files);
         self.entries
             .get(&(client, id))
-            .map(|j| j.state.clone())
+            .map(|j| json!(j.status(id)))
             .ok_or_else(|| "no such job".into())
     }
     pub fn poll(&mut self, files: &mut crate::files::Files) -> Vec<(u64, Value)> {
@@ -302,20 +344,27 @@ impl Jobs {
                 .unwrap_or_else(|e| e.into_inner())
                 .take()
             {
-                match result {
-                    Ok(outputs) => {
-                        let outputs:Vec<_>=outputs.into_iter().map(|(name,path,temporary)|{let handle=files.register(*client,path.clone(),temporary);json!({"id":name,"file":handle,"path":(!temporary).then(||path.to_string_lossy().into_owned())})}).collect();
-                        job.state = json!({"id":id,"state":"completed","outputs":outputs});
+                job.state = match result {
+                    Ok(outputs) => JobState::Completed {
+                        outputs: outputs
+                            .into_iter()
+                            .map(|(id, path, temporary)| JobOutput {
+                                id,
+                                file: files.register(*client, path.clone(), temporary),
+                                path: (!temporary).then(|| path.to_string_lossy().into_owned()),
+                            })
+                            .collect(),
+                    },
+                    Err(error) if job.progress.cancel.load(Ordering::Acquire) => {
+                        JobState::Cancelled { error }
                     }
-                    Err(error) => {
-                        job.state = json!({"id":id,"state":if job.progress.cancel.load(Ordering::Acquire){"cancelled"}else{"failed"},"error":error});
-                    }
-                }
+                    Err(error) => JobState::Failed { error },
+                };
             }
-            job.state["frames"] = json!(job.progress.frames.load(Ordering::Acquire));
-            if job.state != job.announced {
-                job.announced = job.state.clone();
-                updates.push((*client, job.state.clone()));
+            let status = job.status(*id);
+            if job.announced.as_ref() != Some(&status) {
+                updates.push((*client, json!(status)));
+                job.announced = Some(status);
             }
         }
         updates
@@ -346,14 +395,12 @@ fn render(
         session = session.without_limiter();
     }
     for resource in spec.resources {
-        crate::resources::request(
+        crate::resources::load_buffer(
             &mut session,
             0,
-            crate::EngineRequest::BuffersLoad {
-                name: resource.name,
-                path: resource.path,
-                channel: resource.channel,
-            },
+            &resource.name,
+            &resource.path,
+            resource.channel,
         )
         .map_err(|e| e.to_string())?;
     }
@@ -371,24 +418,17 @@ fn render(
             )
             .map_err(|p| p[0].message.clone())?;
     }
-    for event in &spec.events {
-        let at = match serde_json::to_value(event).map_err(|e| e.to_string())?["at"].clone() {
-            Value::Number(n) => n.as_u64().ok_or("invalid event sample")?,
-            _ => 0,
+    let mut events = Vec::with_capacity(spec.events.len());
+    for event in spec.events {
+        let at = match event.at() {
+            At::Sample(at) => at,
+            At::Now => 0,
         };
         if at >= spec.frames {
             return Err("render events must precede the requested end".into());
         }
+        events.push((at, event));
     }
-    let mut events = spec
-        .events
-        .into_iter()
-        .map(|event| {
-            let value = serde_json::to_value(&event).expect("event");
-            let at = value["at"].as_u64().unwrap_or(0);
-            (at, event)
-        })
-        .collect::<Vec<_>>();
     events.sort_by_key(|(at, _)| *at);
     let mut events = std::collections::VecDeque::from(events);
     let mut initial = Vec::new();
@@ -527,6 +567,58 @@ impl Drop for Progress {
                     let _ = std::fs::remove_file(path);
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn job_notifications_follow_progress_and_terminal_state_without_repeating() {
+        let mut jobs = Jobs::default();
+        let mut files = crate::files::Files::default();
+        for (id, cancelled) in [(1, false), (2, true)] {
+            let progress = Arc::new(Progress {
+                cancel: AtomicBool::new(false),
+                frames: AtomicU64::new(0),
+                result: Mutex::new(None),
+            });
+            jobs.entries.insert(
+                (7, id),
+                Job {
+                    progress: progress.clone(),
+                    state: JobState::Running,
+                    announced: None,
+                    kind: JobKind::Capture {
+                        stop: Arc::new(AtomicU64::new(u64::MAX)),
+                        from: 17,
+                    },
+                },
+            );
+            assert_eq!(
+                jobs.poll(&mut files),
+                vec![(
+                    7,
+                    json!({"id": id, "state": "running", "frames": 0, "from": 17})
+                )]
+            );
+            assert!(jobs.poll(&mut files).is_empty());
+            progress.frames.store(8, Ordering::Release);
+            assert_eq!(
+                jobs.poll(&mut files),
+                vec![(
+                    7,
+                    json!({"id": id, "state": "running", "frames": 8, "from": 17})
+                )]
+            );
+            progress.cancel.store(cancelled, Ordering::Release);
+            *progress.result.lock().unwrap() = Some(Err("stopped".into()));
+            let terminal = json!({"id": id, "state": if cancelled { "cancelled" } else { "failed" }, "frames": 8, "error": "stopped"});
+            assert_eq!(jobs.poll(&mut files), vec![(7, terminal.clone())]);
+            assert_eq!(jobs.status(7, id, &mut files).unwrap(), terminal);
+            assert!(jobs.poll(&mut files).is_empty());
         }
     }
 }

@@ -286,40 +286,45 @@ pub fn problem_json(p: &Problem) -> Value {
 impl EngineReply {
     /// Read the reply to `request` from the result a server sent, for a client across a wire.
     pub fn from_json(request: &EngineRequest, result: &Value) -> Result<EngineReply, String> {
-        let number = |key: &str| result[key].as_u64().unwrap_or(0);
+        fn decode<T: serde::de::DeserializeOwned>(value: &Value) -> Result<T, String> {
+            serde_json::from_value(value.clone()).map_err(|e| format!("invalid engine reply: {e}"))
+        }
         Ok(match request {
-            EngineRequest::Hello { .. } => EngineReply::Hello {
-                client_id: number("client_id"),
-                sample_rate: result["sample_rate"].as_f64().unwrap_or(48_000.0) as f32,
-                channels: number("channels") as usize,
-            },
-            EngineRequest::Subscribe { .. } | EngineRequest::Unsubscribe { .. } => {
-                EngineReply::Subscribed(
-                    result["topics"]
-                        .as_array()
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(|t| t.as_str().map(str::to_string))
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                )
+            EngineRequest::Hello { .. } => {
+                #[derive(Deserialize)]
+                struct Hello {
+                    client_id: ClientId,
+                    sample_rate: f32,
+                    channels: usize,
+                }
+                let reply: Hello = decode(result)?;
+                EngineReply::Hello {
+                    client_id: reply.client_id,
+                    sample_rate: reply.sample_rate,
+                    channels: reply.channels,
+                }
             }
-            EngineRequest::EventsSend { .. } => EngineReply::Sent {
-                sent: Sent {
-                    notes: serde_json::from_value(result["notes"].clone()).unwrap_or_default(),
-                    transactions: serde_json::from_value(result["transactions"].clone())
-                        .unwrap_or_default(),
-                    accepted: number("accepted") as usize,
-                    late: number("late") as usize,
-                    first: result["first"].as_u64(),
-                },
-                horizon: number("horizon"),
-            },
-            EngineRequest::EventsCancel { .. } => EngineReply::Cancelled(Cancelled {
-                cancelled: number("cancelled") as usize,
-                released: number("released") as usize,
-            }),
+            EngineRequest::Subscribe { .. } | EngineRequest::Unsubscribe { .. } => {
+                #[derive(Deserialize)]
+                struct Subscribed {
+                    topics: Vec<String>,
+                }
+                EngineReply::Subscribed(decode::<Subscribed>(result)?.topics)
+            }
+            EngineRequest::EventsSend { .. } => {
+                #[derive(Deserialize)]
+                struct SentReply {
+                    #[serde(flatten)]
+                    sent: Sent,
+                    horizon: u64,
+                }
+                let reply: SentReply = decode(result)?;
+                EngineReply::Sent {
+                    sent: reply.sent,
+                    horizon: reply.horizon,
+                }
+            }
+            EngineRequest::EventsCancel { .. } => EngineReply::Cancelled(decode(result)?),
             EngineRequest::Panic {} | EngineRequest::EnginePanic {} => EngineReply::Panicked,
             EngineRequest::BuffersList {}
             | EngineRequest::BuffersRead { .. }
@@ -342,15 +347,7 @@ impl EngineReply {
             | EngineRequest::FilesRemove { .. }
             | EngineRequest::ScopesCreate { .. }
             | EngineRequest::ScopesRemove { .. } => EngineReply::Status(result.clone()),
-            EngineRequest::Clock {} => EngineReply::Clock(ClockInfo {
-                sample: number("sample"),
-                sample_rate: result["sample_rate"].as_f64().unwrap_or(48_000.0) as f32,
-                prepared_until: number("prepared_until"),
-                lookahead: number("lookahead"),
-                output_latency: result["output_latency"].as_f64().unwrap_or(0.0),
-                wall_micros: result["wall_micros"].as_u64(),
-                voices: number("voices") as usize,
-            }),
+            EngineRequest::Clock {} => EngineReply::Clock(decode(result)?),
         })
     }
 

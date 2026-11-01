@@ -111,82 +111,7 @@ pub(crate) fn request(
             name,
             path,
             channel,
-        } => {
-            let resolved = session.sample_files_for(client).resolve_path(&path);
-            let header = hound::WavReader::open(&resolved).map_err(|e| bad(&e.to_string()))?;
-            let width = if channel == 0 {
-                header.spec().channels as usize
-            } else {
-                1
-            };
-            let frames = (header.duration() as f64 * f64::from(session.sample_rate())
-                / f64::from(header.spec().sample_rate))
-            .round() as usize;
-            let (budget, retained) = session.buffer_budget(client);
-            let additional = if buffer(session, client, &name).is_ok() {
-                0
-            } else {
-                frames.saturating_mul(width).saturating_mul(4)
-            };
-            if additional > budget.saturating_sub(retained) {
-                return Err(bad("buffer import exceeds client memory budget"));
-            }
-            let loaded = session
-                .sample_files_for(client)
-                .load(&path)
-                .map_err(|e| bad(&e))?;
-            let tables: Vec<_> = if channel == 0 {
-                loaded.iter().collect()
-            } else {
-                vec![
-                    loaded
-                        .get(channel - 1)
-                        .ok_or_else(|| bad("channel does not exist"))?,
-                ]
-            };
-            let width = tables.len();
-            if !(1..=16).contains(&width) {
-                return Err(bad("load 1–16 channels"));
-            }
-            let source_rate = tables[0].sample_rate_or(session.sample_rate());
-            let frames = (tables[0].len() as f64 * f64::from(session.sample_rate())
-                / f64::from(source_rate))
-            .round() as usize;
-            let tables: Vec<_> = tables.iter().map(|t| t.resample(frames)).collect();
-            let mut ops = Vec::new();
-            if let Ok(b) = buffer(session, client, &name) {
-                if b.len() != frames || b.channels() != width {
-                    return Err(bad(
-                        "buffer shape differs; free it before loading replacement",
-                    ));
-                }
-            } else {
-                ops.push(allocate(&name, frames, width)?);
-            }
-            let chunk = 65536 / width;
-            for offset in (0..frames).step_by(chunk) {
-                let mut values = Vec::new();
-                for frame in offset..(offset + chunk).min(frames) {
-                    for table in &tables {
-                        values.push(table.get(frame));
-                    }
-                }
-                ops.push(Op::BufferWrite {
-                    name: name.clone(),
-                    at: At::Now,
-                    offset,
-                    values,
-                    tag: None,
-                });
-            }
-            session
-                .send_events(client, ops)
-                .map_err(|p| EngineError::rejected(&p))?;
-            session.publish_buffer(&scoped(client, &name));
-            Ok(
-                json!({"name":name,"frames":frames,"channels":width,"source_sample_rate":source_rate,"sample_rate":session.sample_rate()}),
-            )
-        }
+        } => load_buffer(session, client, &name, &path, channel),
         EngineRequest::BuffersFree { name } => {
             buffer(session, client, &name)?;
             session.hide_buffer(scoped(client, &name));
@@ -213,4 +138,87 @@ pub(crate) fn request(
         }
         _ => unreachable!("buffer request dispatch"),
     }
+}
+
+pub(crate) fn load_buffer(
+    session: &mut Session,
+    client: ClientId,
+    name: &str,
+    path: &str,
+    channel: usize,
+) -> Result<Value, EngineError> {
+    let resolved = session.sample_files_for(client).resolve_path(path);
+    let header = hound::WavReader::open(&resolved).map_err(|e| bad(&e.to_string()))?;
+    let width = if channel == 0 {
+        header.spec().channels as usize
+    } else {
+        1
+    };
+    let frames = (header.duration() as f64 * f64::from(session.sample_rate())
+        / f64::from(header.spec().sample_rate))
+    .round() as usize;
+    let (budget, retained) = session.buffer_budget(client);
+    let additional = if buffer(session, client, name).is_ok() {
+        0
+    } else {
+        frames.saturating_mul(width).saturating_mul(4)
+    };
+    if additional > budget.saturating_sub(retained) {
+        return Err(bad("buffer import exceeds client memory budget"));
+    }
+    let loaded = session
+        .sample_files_for(client)
+        .load(path)
+        .map_err(|e| bad(&e))?;
+    let tables: Vec<_> = if channel == 0 {
+        loaded.iter().collect()
+    } else {
+        vec![
+            loaded
+                .get(channel - 1)
+                .ok_or_else(|| bad("channel does not exist"))?,
+        ]
+    };
+    let width = tables.len();
+    if !(1..=16).contains(&width) {
+        return Err(bad("load 1–16 channels"));
+    }
+    let source_rate = tables[0].sample_rate_or(session.sample_rate());
+    let frames = (tables[0].len() as f64 * f64::from(session.sample_rate())
+        / f64::from(source_rate))
+    .round() as usize;
+    let tables: Vec<_> = tables.iter().map(|t| t.resample(frames)).collect();
+    let mut ops = Vec::new();
+    if let Ok(b) = buffer(session, client, name) {
+        if b.len() != frames || b.channels() != width {
+            return Err(bad(
+                "buffer shape differs; free it before loading replacement",
+            ));
+        }
+    } else {
+        ops.push(allocate(name, frames, width)?);
+    }
+    let chunk = 65536 / width;
+    for offset in (0..frames).step_by(chunk) {
+        let mut values = Vec::new();
+        for frame in offset..(offset + chunk).min(frames) {
+            for table in &tables {
+                values.push(table.get(frame));
+            }
+        }
+        ops.push(Op::BufferWrite {
+            name: name.to_owned(),
+            at: At::Now,
+            offset,
+            values,
+            tag: None,
+        });
+    }
+    session
+        .send_events(client, ops)
+        .map_err(|p| EngineError::rejected(&p))?;
+    session.publish_buffer(&scoped(client, name));
+    Ok(
+        json!({"name":name,"frames":frames,"channels":width,"source_sample_rate":source_rate,"sample_rate":session.sample_rate()}),
+    )
 }

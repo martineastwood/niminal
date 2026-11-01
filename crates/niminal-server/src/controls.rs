@@ -17,8 +17,12 @@ pub(crate) struct Change {
     /// Which event of the batch in the log entry this came from.
     pub log_op: usize,
     pub applied: bool,
-    /// Not a change but the withdrawal of the waiting one with this `serial`.
-    pub retract: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ControlMessage {
+    Set(Change),
+    Retract { serial: u64 },
 }
 
 #[derive(Clone, Copy)]

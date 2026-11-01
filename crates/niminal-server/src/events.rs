@@ -195,8 +195,29 @@ pub enum Op {
     },
 }
 
+impl Op {
+    pub fn at(&self) -> At {
+        match *self {
+            Self::Transaction { at, .. }
+            | Self::Routing { at, .. }
+            | Self::Map { at, .. }
+            | Self::Array { at, .. }
+            | Self::BindBuffer { at, .. }
+            | Self::BufferWrite { at, .. }
+            | Self::Note { at, .. }
+            | Self::Set { at, .. }
+            | Self::Define { at, .. }
+            | Self::Panic { at, .. }
+            | Self::Forget { at, .. }
+            | Self::Off { at, .. }
+            | Self::Tempo { at, .. }
+            | Self::Control { at, .. } => at,
+        }
+    }
+}
+
 /// What came of a batch.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Sent {
     pub notes: Vec<NoteReceipt>,
     pub transactions: Vec<TransactionReceipt>,
@@ -208,7 +229,7 @@ pub struct Sent {
 }
 
 /// What a cancellation did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 pub struct Cancelled {
     /// Waiting events dropped.
     pub cancelled: usize,

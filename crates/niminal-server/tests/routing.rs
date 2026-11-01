@@ -872,3 +872,57 @@ fn an_fx_parameter_in_beats_follows_the_tempo_and_one_in_seconds_does_not() {
     assert!((out[4_000] - 0.6).abs() < 1e-3, "{}", out[4_000]);
     assert!((out[23_999] - 1.1).abs() < 1e-3, "{}", out[23_999]);
 }
+
+#[test]
+fn latest_fx_bindings_and_mappings_survive_graph_swaps_and_realtime_replanning() {
+    use serde_json::json;
+    let session = || {
+        let mut s = ready();
+        s.send_events(1, vec![
+            json_op(json!({"op":"define","at":0,"source":"const first = [0.25]\nconst second = [0.75]\nbuffer one = first\nbuffer two = second\nctl level = 0.5.smooth(0ms)"})),
+            json_op(json!({"op":"routing","at":0,"edits":[
+                {"op":"fx","name":"reader","source":"(source: buffer = one, amount: num = 1) { out = source[0] * amount }"},
+                {"op":"node","id":"audio_with_underscores","fx":"reader"},
+                {"op":"connect","id":"out","from":{"kind":"node","id":"audio_with_underscores"},"to":{"kind":"master"}}
+            ]})),
+        ]).unwrap();
+        s
+    };
+    let changes = vec![
+        json_op(json!({"op":"routing","at":8,"edits":[
+            {"op":"bind_buffer","id":"audio_with_underscores","param":"source","buffer":"two"},
+            {"op":"map","id":"audio_with_underscores","param":"amount","source":{"kind":"control","name":"level"}}
+        ]})),
+        json_op(json!({"op":"routing","at":16,"edits":[
+            {"op":"bind_buffer","id":"audio_with_underscores","param":"source","buffer":"one"}
+        ]})),
+        json_op(json!({"op":"routing","at":32,"edits":[
+            {"op":"bus","id":"unused","channels":1}
+        ]})),
+    ];
+    let mut offline = session();
+    offline.send_events(1, changes.clone()).unwrap();
+    let expected = offline.process(64).remove(0);
+    assert!(expected[..8].iter().all(|v| *v == 0.25));
+    assert!(expected[8..16].iter().all(|v| *v == 0.375));
+    assert!(expected[16..].iter().all(|v| *v == 0.125));
+    for inject in [false, true] {
+        let mut s = session();
+        if !inject {
+            s.send_events(1, changes.clone()).unwrap();
+        }
+        let mut renderer = s.start_realtime(niminal_server::RealtimeConfig::default());
+        s.prepare_realtime();
+        if inject {
+            s.send_events(1, changes.clone()).unwrap();
+            s.prepare_realtime();
+        }
+        let mut actual = Vec::new();
+        renderer.render(48, &mut |block, n| actual.extend_from_slice(&block[0][..n]));
+        s.sync_realtime();
+        s.restart_realtime();
+        s.prepare_realtime();
+        renderer.render(16, &mut |block, n| actual.extend_from_slice(&block[0][..n]));
+        assert_eq!(actual, expected, "injection: {inject}");
+    }
+}

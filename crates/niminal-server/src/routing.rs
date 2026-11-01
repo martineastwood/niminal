@@ -223,6 +223,10 @@ pub(crate) struct Routing {
     clients: BTreeMap<u64, Patch>,
 }
 
+pub(crate) fn fx_name(client: u64, id: &str) -> String {
+    format!("__routing_fx_{client}_{id}")
+}
+
 pub(crate) fn node_name(client: u64, id: &str) -> String {
     format!("__routing_node_{client}_{id}")
 }
@@ -1072,7 +1076,7 @@ impl Routing {
                     ..Default::default()
                 };
                 program.nodes.push(collector);
-                render_node.name = format!("__routing_fx_{owner}_{id}");
+                render_node.name = fx_name(owner, id);
                 render_node.instrument = None;
                 render_node.def.meter = Some(node.meter.clone());
                 render_node.def.transition = (node.generation, node.fade);

@@ -3,7 +3,7 @@
 //! their storage for destruction on the planning thread.
 
 use super::*;
-use crate::controls::{self, Applied, Change, State as ControlState};
+use crate::controls::{self, Applied, Change, ControlMessage, State as ControlState};
 use crate::sounding::Sounding;
 use niminal_engine::Voice;
 use rtrb::{Consumer, Producer, PushError, RingBuffer};
@@ -130,7 +130,8 @@ impl Command {
                 Kind::Release { .. }
                 | Kind::SetParam { .. }
                 | Kind::Map { .. }
-                | Kind::Bind { .. }
+                | Kind::BindVoice { .. }
+                | Kind::BindChain { .. }
                 | Kind::ChainMap { .. } => 3,
             },
         )
@@ -146,9 +147,13 @@ enum Kind {
         param: String,
         mapping: Option<Box<niminal_engine::ParamMapping>>,
     },
-    Bind {
-        node: Option<String>,
+    BindVoice {
         key: u32,
+        resource: u64,
+        banks: Vec<niminal_engine::BufferBank>,
+    },
+    BindChain {
+        node: String,
         resource: u64,
         banks: Vec<niminal_engine::BufferBank>,
     },
@@ -252,6 +257,23 @@ fn chain_map_command(program: &Program, map: &super::ChainMap, at: u64) -> Comma
         },
     }
 }
+fn bind_command(bind: &super::BufferBind, at: u64) -> Command {
+    let banks = bind.banks();
+    let kind = match &bind.target {
+        super::BufferTarget::Voice(key) => Kind::BindVoice {
+            key: *key,
+            resource: bind.resource,
+            banks,
+        },
+        super::BufferTarget::Chain(id) => Kind::BindChain {
+            node: crate::routing::fx_name(bind.client, id),
+            resource: bind.resource,
+            banks,
+        },
+    };
+    Command { at, kind }
+}
+
 fn map_command(program: &Program, set: &super::VoiceMap, at: u64) -> Command {
     Command {
         at,
@@ -341,7 +363,7 @@ impl Fresh {
 pub(super) struct Planner {
     ready: Producer<Box<Window>>,
     inject_tx: Producer<Box<Injected>>,
-    control_tx: Producer<Change>,
+    control_tx: Producer<ControlMessage>,
     control_applied: Consumer<Applied>,
     retired: Consumer<Retired>,
     pub(super) state: Arc<State>,
@@ -361,7 +383,7 @@ impl Planner {
         self.config.lookahead_frames
     }
 
-    pub(super) fn push_control(&mut self, change: Change) -> Result<(), ()> {
+    pub(super) fn push_control(&mut self, change: ControlMessage) -> Result<(), ()> {
         self.control_tx.push(change).map_err(|_| ())
     }
 }
@@ -375,7 +397,7 @@ pub struct RealtimeRenderer {
     /// Commands for stretches prepared already, in the order they run.
     #[allow(clippy::vec_box)] // moved to the retirement queue whole, without copying
     injected: Vec<Box<Injected>>,
-    control_rx: Consumer<Change>,
+    control_rx: Consumer<ControlMessage>,
     control_applied: Producer<Applied>,
     control_pending: Vec<Change>,
     controls: Vec<ControlState>,
@@ -861,15 +883,9 @@ impl Session {
                     &map,
                     map.mapping.at.max(self.clock),
                 )),
-                Fresh::Bind(set) => window.commands.push(Command {
-                    at: set.at.max(self.clock),
-                    kind: Kind::Bind {
-                        node: set.target.clone(),
-                        key: set.key,
-                        resource: set.resource,
-                        banks: set.banks(),
-                    },
-                }),
+                Fresh::Bind(set) => window
+                    .commands
+                    .push(bind_command(&set, set.at.max(self.clock))),
                 Fresh::Map(set) => window.commands.push(map_command(
                     self.program_at(set.at),
                     &set,
@@ -1077,32 +1093,14 @@ impl Session {
     }
 
     fn chain_buffer_restores(&self, at: u64) -> Vec<BufferRestore> {
-        let mut latest = std::collections::BTreeMap::new();
-        for bind in &self.buffer_binds {
-            if bind.at <= at && bind.target.is_some() {
-                let key = (bind.client, bind.target.clone(), bind.param.clone());
-                if latest
-                    .get(&key)
-                    .is_none_or(|old: &&super::BufferBind| old.at <= bind.at)
-                {
-                    latest.insert(key, bind);
-                }
-            }
-        }
-        latest
-            .values()
-            .filter_map(|bind| {
-                let render_node = bind.target.as_ref()?;
-                let node = render_node
-                    .strip_prefix("__routing_fx_")?
-                    .split_once('_')?
-                    .1;
+        super::parameters::latest_chain_binds(&self.buffer_binds, at)
+            .filter_map(|(id, bind)| {
                 let (key, count, _) = self
                     .routing_at(at)
-                    .buffer_binding(bind.client, node, &bind.param)
+                    .buffer_binding(bind.client, id, &bind.param)
                     .ok()?;
                 Some(BufferRestore {
-                    node: render_node.clone(),
+                    node: crate::routing::fx_name(bind.client, id),
                     key,
                     banks: vec![bind.bank.clone(); count],
                 })
@@ -1110,20 +1108,7 @@ impl Session {
             .collect()
     }
     fn chain_restores(&self, program: &Program, at: u64) -> Vec<ChainRestore> {
-        let mut latest = std::collections::BTreeMap::new();
-        for map in &self.chain_maps {
-            if map.mapping.at <= at {
-                let key = (map.client, map.node.clone(), map.param.clone());
-                if latest
-                    .get(&key)
-                    .is_none_or(|old: &&super::ChainMap| old.mapping.at <= map.mapping.at)
-                {
-                    latest.insert(key, map);
-                }
-            }
-        }
-        latest
-            .values()
+        super::parameters::latest_chain_maps(&self.chain_maps, at)
             .filter(|m| {
                 m.mapping.source.is_some() && program.controls.iter().any(|c| c.key == m.param)
             })
@@ -1209,15 +1194,7 @@ impl Session {
         }
         for set in &self.buffer_binds {
             if set.at >= from && set.at < to {
-                window.commands.push(Command {
-                    at: set.at,
-                    kind: Kind::Bind {
-                        node: set.target.clone(),
-                        key: set.key,
-                        resource: set.resource,
-                        banks: set.banks(),
-                    },
-                });
+                window.commands.push(bind_command(set, set.at));
             }
         }
         for set in &self.voice_maps {
@@ -1599,17 +1576,21 @@ impl RealtimeRenderer {
                     crate::controls::sync_mixer(&self.controls, &mut self.mixer, self.clock);
                 }
             }
-            Kind::Bind {
-                node: render_node,
+            Kind::BindChain {
+                node,
+                resource,
+                banks,
+            } => {
+                if let Some(index) = self.program.node_index(node) {
+                    self.mixer.swap_chain_buffers(index, *resource, banks);
+                }
+            }
+            Kind::BindVoice {
                 key,
                 resource,
                 banks,
             } => {
-                if let Some(render_node) = render_node {
-                    if let Some(index) = self.program.node_index(render_node) {
-                        self.mixer.swap_chain_buffers(index, *resource, banks);
-                    }
-                } else if let Some((_, id, _)) = self.sounding.held.iter().find(|h| h.2 == *key) {
+                if let Some((_, id, _)) = self.sounding.held.iter().find(|h| h.2 == *key) {
                     self.mixer.swap_voice_buffers(*id, *resource, banks);
                 }
             }
@@ -1758,10 +1739,11 @@ impl RealtimeRenderer {
                 let Ok(change) = self.control_rx.pop() else {
                     break;
                 };
-                if change.retract {
-                    self.control_pending.retain(|c| c.serial != change.serial);
-                } else {
-                    self.control_pending.push(change);
+                match change {
+                    ControlMessage::Set(change) => self.control_pending.push(change),
+                    ControlMessage::Retract { serial } => {
+                        self.control_pending.retain(|c| c.serial != serial);
+                    }
                 }
             }
             if self.control_pending.len() > waiting {

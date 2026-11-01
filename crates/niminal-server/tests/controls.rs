@@ -182,3 +182,33 @@ fn smoothing_between_finite_extremes_remains_finite() {
     assert!(out[1] < 0.0 && out[48] > 0.0);
     assert_eq!(s.take_silenced(), 0);
 }
+
+#[test]
+fn cancelling_a_control_already_queued_in_the_renderer_keeps_its_previous_value() {
+    use niminal_server::{At, Op, RealtimeConfig};
+    let mut s = held(SOURCE);
+    let mut renderer = s.start_realtime(RealtimeConfig::default());
+    s.send_events(
+        0,
+        vec![Op::Control {
+            name: "level".into(),
+            at: At::Sample(32),
+            value: 1.0,
+            unit: None,
+            glide: None,
+            tag: Some("withdraw".into()),
+        }],
+    )
+    .unwrap();
+    s.prepare_realtime();
+    renderer.render(16, &mut |_, _| {});
+    assert_eq!(
+        s.cancel_events(0, Some("withdraw"), At::Now, false)
+            .cancelled,
+        1
+    );
+    s.prepare_realtime();
+    let mut actual = Vec::new();
+    renderer.render(48, &mut |block, n| actual.extend_from_slice(&block[0][..n]));
+    assert_eq!(actual, vec![0.0; 48]);
+}

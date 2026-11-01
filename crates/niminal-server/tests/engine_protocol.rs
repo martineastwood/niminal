@@ -426,3 +426,67 @@ fn transaction_notifications_are_owned_and_report_cancellation_and_application()
     assert_eq!(message["params"]["status"], "applied");
     assert_eq!(message["params"]["applied_at"], 32);
 }
+
+#[test]
+fn typed_replies_round_trip_and_reject_malformed_fields() {
+    use niminal_server::{EngineReply, EngineRequest};
+    let (mut server, client) = ready();
+    let requests = [
+        EngineRequest::Hello {
+            protocol: PROTOCOL_VERSION,
+            client: None,
+            token: None,
+        },
+        EngineRequest::Subscribe {
+            topics: vec!["clock".into()],
+        },
+        EngineRequest::EventsSend { events: vec![] },
+        EngineRequest::EventsCancel {
+            tag: None,
+            from: None,
+            release: false,
+        },
+        EngineRequest::Clock {},
+    ];
+    for request in requests {
+        let reply = server.request(client, request.clone()).unwrap();
+        let wire = reply.to_json();
+        assert_eq!(EngineReply::from_json(&request, &wire).unwrap(), reply);
+        assert!(
+            EngineReply::from_json(&request, &json!({})).is_err(),
+            "{request:?}"
+        );
+        let invalid = match request {
+            EngineRequest::Hello { .. } => vec![
+                ("client_id", json!(-1)),
+                ("sample_rate", json!("48000")),
+                ("channels", Value::Null),
+            ],
+            EngineRequest::Subscribe { .. } => vec![("topics", json!(["clock", 2]))],
+            EngineRequest::EventsSend { .. } => vec![
+                ("notes", json!([{}])),
+                ("transactions", Value::Null),
+                ("accepted", json!(-1)),
+                ("first", json!("now")),
+                ("horizon", json!(0.5)),
+            ],
+            EngineRequest::EventsCancel { .. } => {
+                vec![("cancelled", json!(-1)), ("released", json!("0"))]
+            }
+            EngineRequest::Clock {} => vec![
+                ("sample", json!(-1)),
+                ("wall_micros", json!("now")),
+                ("voices", Value::Null),
+            ],
+            _ => unreachable!(),
+        };
+        for (field, value) in invalid {
+            let mut malformed = wire.clone();
+            malformed[field] = value;
+            assert!(
+                EngineReply::from_json(&request, &malformed).is_err(),
+                "{malformed}"
+            );
+        }
+    }
+}

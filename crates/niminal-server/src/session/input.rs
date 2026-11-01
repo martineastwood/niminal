@@ -80,11 +80,10 @@ impl Session {
             log_index: log.0,
             log_op: log.1,
             applied: !self.detached,
-            retract: false,
         };
         if let Some(planner) = &mut self.live {
             planner
-                .push_control(change)
+                .push_control(crate::controls::ControlMessage::Set(change))
                 .map_err(|_| "the control update queue is full")?;
         }
         self.next_control += 1;
@@ -1207,8 +1206,7 @@ impl Session {
                 } => {
                     let bind = BufferBind {
                         param,
-                        target: Some(format!("__routing_fx_{client}_{id}")),
-                        key: 0,
+                        target: BufferTarget::Chain(id),
                         resource,
                         bank,
                         count,
@@ -1247,8 +1245,7 @@ impl Session {
                     {
                         let bind = BufferBind {
                             param,
-                            target: None,
-                            key: entry.key,
+                            target: BufferTarget::Voice(entry.key),
                             resource,
                             bank,
                             count,
@@ -1712,20 +1709,7 @@ impl Session {
         for serial in withdrawn {
             self.control_changes.retain(|c| c.serial != serial);
             if let Some(planner) = &mut self.live {
-                let retract = crate::controls::Change {
-                    index: 0,
-                    unit: niminal_lang::Unit::Num,
-                    revision: 0,
-                    at: 0,
-                    value: 0.0,
-                    frames: 0,
-                    serial,
-                    log_index: 0,
-                    log_op: 0,
-                    applied: false,
-                    retract: true,
-                };
-                let _ = planner.push_control(retract);
+                let _ = planner.push_control(crate::controls::ControlMessage::Retract { serial });
             }
             done.cancelled += 1;
         }

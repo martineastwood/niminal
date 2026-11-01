@@ -131,15 +131,22 @@ impl Session {
     pub(super) fn apply_buffer_binds(&mut self) {
         for bind in &mut self.buffer_binds {
             if !bind.done && bind.at <= self.clock {
-                if let Some(node) = &bind.target {
-                    if let Some(index) = self.program.node_index(node) {
-                        self.mixer
-                            .swap_chain_buffers(index, bind.resource, &mut bind.banks());
+                match &bind.target {
+                    BufferTarget::Chain(id) => {
+                        if let Some(index) = self
+                            .program
+                            .node_index(&crate::routing::fx_name(bind.client, id))
+                        {
+                            self.mixer
+                                .swap_chain_buffers(index, bind.resource, &mut bind.banks());
+                        }
                     }
-                } else if let Some((_, id, _)) = self.sounding.held.iter().find(|h| h.2 == bind.key)
-                {
-                    self.mixer
-                        .swap_voice_buffers(*id, bind.resource, &mut bind.banks());
+                    BufferTarget::Voice(key) => {
+                        if let Some((_, id, _)) = self.sounding.held.iter().find(|h| h.2 == *key) {
+                            self.mixer
+                                .swap_voice_buffers(*id, bind.resource, &mut bind.banks());
+                        }
+                    }
                 }
                 bind.done = true;
             }
@@ -176,7 +183,7 @@ impl Session {
     pub(super) fn prune_buffer_binds(&mut self, stale: u64) {
         let mut latest = std::collections::BTreeMap::new();
         for (index, bind) in self.buffer_binds.iter().enumerate() {
-            if bind.done && bind.target.is_some() {
+            if bind.done && matches!(bind.target, BufferTarget::Chain(_)) {
                 let key = (bind.client, bind.target.clone(), bind.param.clone());
                 if latest
                     .get(&key)
@@ -188,14 +195,17 @@ impl Session {
         }
         let mut index = 0;
         self.buffer_binds.retain(|b| {
-            let target_exists = b
-                .target
-                .as_ref()
-                .is_none_or(|node| self.program.node_index(node).is_some());
+            let target_exists = match &b.target {
+                BufferTarget::Voice(_) => true,
+                BufferTarget::Chain(id) => self
+                    .program
+                    .node_index(&crate::routing::fx_name(b.client, id))
+                    .is_some(),
+            };
             let keep = !b.done
                 || (target_exists
                     && (b.at > stale
-                        || (b.target.is_some()
+                        || (matches!(b.target, BufferTarget::Chain(_))
                             && latest.get(&(b.client, b.target.clone(), b.param.clone()))
                                 == Some(&index))));
             index += 1;
@@ -226,19 +236,7 @@ impl Session {
         });
     }
     pub(super) fn restore_chain_bindings(&mut self) {
-        let mut latest = std::collections::BTreeMap::new();
-        for map in &self.chain_maps {
-            if map.mapping.at <= self.clock {
-                let key = (map.client, map.node.clone(), map.param.clone());
-                if latest
-                    .get(&key)
-                    .is_none_or(|old: &&super::ChainMap| old.mapping.at <= map.mapping.at)
-                {
-                    latest.insert(key, map);
-                }
-            }
-        }
-        for map in latest.values() {
+        for map in latest_chain_maps(&self.chain_maps, self.clock) {
             if map.mapping.source.is_some()
                 && let Some(node) = self.program.node_index(&map.node())
             {
@@ -247,31 +245,12 @@ impl Session {
                     .swap_chain_mapping(node, &map.param, &mut mapping);
             }
         }
-        let mut latest = std::collections::BTreeMap::new();
-        for bind in &self.buffer_binds {
-            if bind.at <= self.clock && bind.target.is_some() {
-                let key = (bind.client, bind.target.clone(), bind.param.clone());
-                if latest
-                    .get(&key)
-                    .is_none_or(|old: &&super::BufferBind| old.at <= bind.at)
-                {
-                    latest.insert(key, bind);
-                }
-            }
-        }
-        for bind in latest.values() {
-            let node = bind.target.as_ref().unwrap();
-            let Some(index) = self.program.node_index(node) else {
-                continue;
-            };
-            let Some(node) = node
-                .strip_prefix("__routing_fx_")
-                .and_then(|r| r.split_once('_'))
-                .map(|(_, id)| id)
-            else {
-                continue;
-            };
-            if let Ok((key, count, _)) = self.routing.buffer_binding(bind.client, node, &bind.param)
+        for (id, bind) in latest_chain_binds(&self.buffer_binds, self.clock) {
+            if let Some(index) = self
+                .program
+                .node_index(&crate::routing::fx_name(bind.client, id))
+                && let Ok((key, count, _)) =
+                    self.routing.buffer_binding(bind.client, id, &bind.param)
             {
                 self.mixer
                     .swap_chain_buffers(index, key, &mut vec![bind.bank.clone(); count]);
@@ -279,4 +258,41 @@ impl Session {
         }
         crate::controls::sync_mixer(&self.controls, &mut self.mixer, self.clock);
     }
+}
+
+pub(super) fn latest_chain_maps(maps: &[ChainMap], at: u64) -> impl Iterator<Item = &ChainMap> {
+    let mut latest = std::collections::BTreeMap::new();
+    for map in maps {
+        if map.mapping.at <= at {
+            let key = (map.client, map.node.as_str(), map.param.as_str());
+            if latest
+                .get(&key)
+                .is_none_or(|old: &&ChainMap| old.mapping.at <= map.mapping.at)
+            {
+                latest.insert(key, map);
+            }
+        }
+    }
+    latest.into_values()
+}
+
+pub(super) fn latest_chain_binds(
+    binds: &[BufferBind],
+    at: u64,
+) -> impl Iterator<Item = (&str, &BufferBind)> {
+    let mut latest = std::collections::BTreeMap::new();
+    for bind in binds {
+        if let BufferTarget::Chain(id) = &bind.target
+            && bind.at <= at
+        {
+            let key = (bind.client, id.as_str(), bind.param.as_str());
+            if latest
+                .get(&key)
+                .is_none_or(|old: &(&str, &BufferBind)| old.1.at <= bind.at)
+            {
+                latest.insert(key, (id.as_str(), bind));
+            }
+        }
+    }
+    latest.into_values()
 }
