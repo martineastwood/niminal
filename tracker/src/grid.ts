@@ -5,6 +5,7 @@ import { columnCommands, commandProblem, commandValue, glideRetriggers, maxFxCol
 import { parseNotes, type NoteEdit } from './history';
 import { draggable, dropTarget } from './drag';
 import { openMenu, type MenuEntry } from './menu';
+import { pieceKey, readCuts } from './slices';
 
 /** What the grid asks of the sequence: move between steps, insert or remove one, or point the step at another pattern. */
 export type SequenceAction = 'previous' | 'next' | 'first' | 'last' | 'new' | 'remove';
@@ -167,15 +168,19 @@ export class PatternGrid {
     });
   }
 
-  /** Writes clipboard text at the top left of the selection. */
+  /** Writes clipboard text at the top left of the selection; a selection larger than the clipboard repeats it to fill the area, as a spreadsheet does. */
   private paste(text: string) {
     const rows = parseNotes(text);
     if (!rows) { this.feedback('Clipboard needs notes or values, separated by tabs.'); return; }
-    const lanes = this.lanes, edits: NoteEdit[] = [], origin = { row: this.bounds.top, column: this.bounds.left };
-    for (const [r, values] of rows.entries()) for (const [c, raw] of values.entries()) {
+    const lanes = this.lanes, edits: NoteEdit[] = [], { top, bottom, left, right } = this.bounds, origin = { row: top, column: left };
+    const wide = Math.max(...rows.map(values => values.length));
+    const height = Math.max(rows.length, bottom - top + 1), width = Math.max(wide, right - left + 1);
+    for (let r = 0; r < height; r++) for (let c = 0; c < width; c++) {
+      const source = rows[r % rows.length], raw = source[c % wide];
+      if (raw === undefined) continue;
       const row = origin.row + r, column = origin.column + c;
       if (row >= this.pattern().rows || column >= lanes.length) continue;
-      let value = raw;
+      let value: string | null = raw;
       if (value !== null) {
         const lane = lanes[column];
         if (lane.kind === 'note') value = /^([A-G][#-][0-8]|OFF|CUT)$/.test(value) ? value : null;
@@ -203,6 +208,8 @@ export class PatternGrid {
       { text: `Repeat below  ${mod}D`, run: edit(() => this.duplicate()) },
       { text: 'Reverse', run: () => this.reverseSelection() },
       { text: 'Randomize', run: () => this.randomizeSelection() },
+      { text: 'Shuffle notes', run: () => this.shuffleSelection() },
+      { text: 'Fill with slices', run: () => this.fillSlices() },
     ]);
   }
 
@@ -643,6 +650,35 @@ export class PatternGrid {
       }
     }
     if (!edits.length) { this.feedback('Randomize needs two or more notes or values in a column, that differ.'); return; }
+    this.apply(edits);
+  }
+  /** Moves the selected notes to new rows within their column, so a sliced break plays its pieces in another order; rests, OFF and CUT stay where they are. */
+  shuffleSelection() {
+    if (!this.recording) { this.feedback('Turn on record mode to edit the selection.'); return; }
+    const { top, bottom, left, right } = this.bounds, edits: NoteEdit[] = [];
+    for (let column = left; column <= right; column++) {
+      const lane = this.lanes[column]; if (lane.kind !== 'note') continue;
+      const rows = Array.from({ length: bottom - top + 1 }, (_, i) => top + i).filter(row => noteNumber(lane.values[row] ?? '') !== null);
+      const notes = rows.map(row => lane.values[row]);
+      for (let i = notes.length - 1; i > 0; i--) { const j = Math.floor(this.random() * (i + 1)); [notes[i], notes[j]] = [notes[j], notes[i]]; }
+      rows.forEach((row, i) => { if (notes[i] !== lane.values[row]) edits.push({ row, track: column, before: lane.values[row], after: notes[i] }); });
+    }
+    if (!edits.length) { this.feedback('Shuffle needs two or more different notes in a column.'); return; }
+    this.apply(edits);
+  }
+  /** Writes the pieces of the cursor column's sliced sampler down the selected rows in order, starting over after the last piece. */
+  fillSlices() {
+    if (!this.recording) { this.feedback('Turn on record mode to edit the selection.'); return; }
+    const lane = this.lanes[this.column], { top, bottom } = this.bounds;
+    if (lane.kind !== 'note') { this.feedback('Put the cursor in a note column to fill it with slices.'); return; }
+    const column = this.pattern().notes[lane.track][lane.col];
+    const id = this.currentInstrument() ?? instrumentAt(column.inst, top);
+    const cuts = readCuts(this.project().definitions.find(definition => definition.id === id)?.source ?? '');
+    if (!cuts) { this.feedback('The instrument here is not a sliced sample.'); return; }
+    const edits: NoteEdit[] = [];
+    for (let row = top; row <= bottom; row++) edits.push({ row, track: this.column, before: lane.values[row], after: pieceKey((row - top) % cuts.points.length) });
+    const inst = this.lanes.findIndex(other => other.track === lane.track && other.col === lane.col && other.kind === 'inst');
+    if (inst >= 0 && id && instrumentAt(column.inst, top) !== id) edits.push({ row: top, track: inst, before: column.inst[top], after: id });
     this.apply(edits);
   }
   /** Where Cmd/Ctrl+`key` takes the cursor, as in a spreadsheet: along a run of filled cells to its end, or from a gap to the next filled cell, else to the edge. Sideways it goes to the edge of the track, then the next. */

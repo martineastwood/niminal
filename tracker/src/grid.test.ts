@@ -837,3 +837,37 @@ it('holds a note started from outside the grid too, and an entered note in recor
   grid.setRecording(true); audition.mockClear(); key('s', { code: 'KeyS' }); expect(audition).toHaveBeenLastCalledWith('tone', 'C#4', 0, { hold: 2097 });
   document.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyS' })); expect(release).toHaveBeenLastCalledWith(2097);
 });
+
+it('shuffles the selected notes among their rows, keeping rests and OFF in place', () => {
+  const { project, grid, key, click, feedback, baseline } = setup();
+  const notes = project.patterns[0].notes[0][0].notes;
+  notes.splice(0, 6, 'C-4', null, 'E-4', 'OFF', 'G-4', 'C-5'); baseline();
+  click(0, 0); for (let i = 0; i < 5; i++) key('ArrowDown', { shiftKey: true });
+  grid.random = () => 0; grid.shuffleSelection();
+  expect(notes.slice(0, 6)).toEqual(['E-4', null, 'G-4', 'OFF', 'C-5', 'C-4']);
+  key('z', { ctrlKey: true }); expect(notes.slice(0, 6)).toEqual(['C-4', null, 'E-4', 'OFF', 'G-4', 'C-5']);
+  grid.recording = false; grid.shuffleSelection(); expect(feedback).toHaveBeenCalledWith(expect.stringContaining('record mode'));
+});
+
+it('fills the selection with the pieces of a sliced sampler, in order and starting over', () => {
+  const { project, grid, key, click, feedback, baseline } = setup();
+  project.definitions[0].source = 'hit = sample("break.wav").slices(3)\n';
+  baseline();
+  click(0, 0); for (let i = 0; i < 4; i++) key('ArrowDown', { shiftKey: true });
+  grid.fillSlices();
+  expect(project.patterns[0].notes[0][0].notes.slice(0, 5)).toEqual(['C-4', 'C#4', 'D-4', 'C-4', 'C#4']);
+  expect(project.patterns[0].notes[0][0].inst[0]).toBe('tone');
+  project.definitions[0].source = 'tone = osc(saw)\n'; grid.fillSlices();
+  expect(feedback).toHaveBeenCalledWith(expect.stringContaining('not a sliced'));
+});
+
+it('repeats a pasted block to fill a larger selection, and pastes once at a single cell', () => {
+  const { project, parent, grid, key, click, baseline } = setup();
+  const notes = project.patterns[0].notes[0][0].notes;
+  baseline();
+  click(0, 0); for (let i = 0; i < 9; i++) key('ArrowDown', { shiftKey: true });
+  clipboard(parent, 'paste', 'C-4\nD-4\nE-4');
+  expect(notes.slice(0, 11)).toEqual(['C-4', 'D-4', 'E-4', 'C-4', 'D-4', 'E-4', 'C-4', 'D-4', 'E-4', 'C-4', null]);
+  click(12, 0); clipboard(parent, 'paste', 'G-4'); expect(notes.slice(12, 14)).toEqual(['G-4', null]);
+  grid.render();
+});
