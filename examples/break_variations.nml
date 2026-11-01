@@ -15,8 +15,9 @@ clip original { instrument: chops, notes: straight, times: 2 }
 // `shuffle(4)` cuts the bar into 4 parts (beats) and plays them in a new order each bar, each once; the same seed always gives the same order
 clip reordered { instrument: chops, notes: straight.shuffle(4), times: 2 }
 
-// `pick_random(16)` cuts the bar into 16 parts and fills each of the 16 slots with a randomly chosen part
-clip random_fill { instrument: chops, notes: straight.pick_random(16), times: 2 }
+// `pick_random(16)` cuts the bar into 16 parts and fills each of the 16 slots with a randomly chosen part, so some repeat and some are left out.
+// The same `seed` always gives the same fill: seed 0 happens to pick mostly quiet slices, so this uses seed 1. Try another for a different one
+clip random_fill { instrument: chops, notes: straight.pick_random(16, seed: 1), times: 2 }
 
 // `repeat_each(2)` plays every slice twice, each at twice the speed: a stutter. `sometimes(25%, ...)` does it to a quarter of the slices only
 clip stutter { instrument: chops, notes: straight.sometimes(25%, repeat_each(2)), times: 2 }

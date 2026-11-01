@@ -464,14 +464,17 @@ fn run_render(args: RenderArgs) -> Result<(), String> {
         input: audio.clone(),
     };
 
-    if !ramps.is_empty() {
+    // a clip's `then:` runs when its last pass ends, which only a session does
+    let hands_over = options.arrangement.is_none() && !program.schedule().finishes().is_empty();
+    if !ramps.is_empty() || hands_over {
+        let why = if ramps.is_empty() { "a `then:`" } else { "a tempo ramp" };
         if options.arrangement.is_some() || score.is_some() || from.is_some() || to.is_some() {
-            return Err("error: a file with a tempo ramp renders as it is played: --arrangement, --score, --from and --to aren't available for it".into());
+            return Err(format!("error: a file with {why} renders as it is played: --arrangement, --score, --from and --to aren't available for it"));
         }
         let end = match (bars, seconds) {
             (Some(b), _) if b > 0.0 => End::Bars(b),
             (_, Some(s)) if s > 0.0 => End::Seconds(s),
-            _ => return Err("error: a file with a tempo ramp renders by the clock: say how long with `--bars 16` or `--seconds 30`".into()),
+            _ => return Err(format!("error: a file with {why} renders by the clock: say how long with `--bars 16` or `--seconds 30`")),
         };
         let dir = file.parent().unwrap_or(Path::new("."));
         let rendered = render_session(

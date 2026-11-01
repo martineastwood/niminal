@@ -244,12 +244,18 @@
           "description": "The generic server events API port. The extension runs its own live sequencer."
         },
         "niminal.midi": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "default": null,
           "description": "MIDI input name filter for the editor's live sequencer. Empty listens to all inputs; null disables MIDI. Reload the editor after changing."
         },
         "niminal.oscPort": {
-          "type": ["number", "null"],
+          "type": [
+            "number",
+            "null"
+          ],
           "default": null,
           "minimum": 1,
           "maximum": 65535,
@@ -380,5 +386,8 @@
         }
       ]
     }
+  },
+  "devDependencies": {
+    "@vscode/vsce": "4.1.0"
   }
 }
