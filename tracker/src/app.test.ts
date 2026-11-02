@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterAll, expect, it, vi } from 'vitest';
 import type { AudioStatus } from './audio';
+import type { MidiMessage } from './midi';
 
 const backend = vi.hoisted(() => ({
   status: {
@@ -10,6 +11,7 @@ const backend = vi.hoisted(() => ({
     instruments: {}, effects: {}, instrument_parameters: {}, effect_parameters: {},
   } as AudioStatus,
   commands: [] as Record<string, any>[],
+  midi: null as ((message: MidiMessage) => void) | null,
   connect: null as (() => void) | null,
   menu: null as ((event: { payload: string }) => void) | null,
 }));
@@ -44,7 +46,7 @@ vi.mock('@tauri-apps/api/event', () => ({
   },
 }));
 vi.mock('@tauri-apps/api/webview', () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
-vi.mock('./midi', () => ({ mountMidi: async () => () => {} }));
+vi.mock('./midi', async importOriginal => ({ ...await importOriginal<typeof import('./midi')>(), mountMidi: async (_parent: HTMLElement, receive: (message: MidiMessage) => void) => { backend.midi = receive; return () => {}; } }));
 vi.mock('./editor', async importOriginal => ({
   ...await importOriginal<typeof import('./editor')>(), connectLanguageServer: async () => {},
 }));
@@ -153,4 +155,46 @@ it('applies an effect added while the engine was not connected as soon as it con
   await vi.waitFor(() => expect(backend.commands.filter(c => c.op === 'apply' && c.kind === 'fx').length).toBeGreaterThan(0));
   await vi.waitFor(() => expect(document.getElementById('fx-status')!.textContent).toBe('Applied'));
   expect(document.getElementById('mixer')!.textContent).toContain('mix');
+});
+
+
+it('holds MIDI preview under the pedal and Stop clears it before new input', async () => {
+  const record = document.getElementById('record')!;
+  if (record.getAttribute('aria-pressed') === 'true') record.click();
+  const send = backend.midi!;
+  send({ kind: 'reset' });
+  await vi.waitFor(() => expect(backend.commands.some(c => c.op === 'midi_off' && c.key === null)).toBe(true));
+  backend.commands.length = 0;
+  send({ kind: 'on', channel: 0, note: 60, velocity: 100 });
+  await vi.waitFor(() => expect(backend.commands.some(c => c.op === 'midi_on' && c.key === 60)).toBe(true));
+  send({ kind: 'sustain', channel: 0, down: true }); send({ kind: 'off', channel: 0, note: 60 });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  expect(backend.commands.some(c => c.op === 'midi_off' && c.key === 60)).toBe(false);
+  send({ kind: 'sustain', channel: 0, down: false });
+  await vi.waitFor(() => expect(backend.commands.some(c => c.op === 'midi_off' && c.key === 60)).toBe(true));
+  send({ kind: 'sustain', channel: 0, down: true });
+  send({ kind: 'on', channel: 0, note: 62, velocity: 100 }); send({ kind: 'off', channel: 0, note: 62 });
+  document.getElementById('stop')!.click();
+  await vi.waitFor(() => expect(backend.commands.some(c => c.op === 'stop')).toBe(true));
+  backend.commands.length = 0;
+  send({ kind: 'on', channel: 0, note: 64, velocity: 100 }); send({ kind: 'off', channel: 0, note: 64 });
+  await vi.waitFor(() => expect(backend.commands.some(c => c.op === 'midi_off' && c.key === 64)).toBe(true));
+});
+
+
+it('learns a hardware CC on an instrument slider, persists it, and sends its value to the engine', async () => {
+  document.querySelector<HTMLButtonElement>('[data-view="instrument"]')!.click();
+  const slider = document.querySelector<HTMLInputElement>('#instr-controls input[type=range]')!;
+  expect(slider).not.toBeNull();
+  const initial = slider.value;
+  document.querySelector<HTMLButtonElement>('#midi-learn button')!.click();
+  slider.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true }));
+  backend.midi!({ kind: 'control', channel: 2, controller: 74, value: 127 });
+  expect(slider.value).toBe(initial);
+  backend.commands.length = 0;
+  backend.midi!({ kind: 'control', channel: 2, controller: 74, value: 0 });
+  await vi.waitFor(() => expect(backend.commands.some(c => c.op === 'update' && Object.values(c.song.instrument_values).some(v => (v as Record<string, number>).level === 0))).toBe(true));
+  const saved = JSON.parse(localStorage.getItem('niminal-tracker-project-v12')!);
+  expect(saved.tracks.some((t: any) => t.midi?.some((b: any) => b.channel === 2 && b.controller === 74))).toBe(true);
+  expect(document.querySelector<HTMLInputElement>('#instr-controls input[type=range]')!.value).toBe('0');
 });

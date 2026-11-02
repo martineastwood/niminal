@@ -20,7 +20,9 @@ export interface MacroLink { device: string; parameter: string; min: number; max
 export interface Macro { name: string; value: number; links: MacroLink[] }
 /** Where a track's or return's signal goes: the master, a return (a return can only feed a later one), or nowhere, leaving only its sends. */
 export type Output = { kind: 'master' } | { kind: 'return'; index: number } | { kind: 'none' };
-export interface Track { macros?: Macro[]; output?: Output; solo?: boolean; colour?: string; show?: Partial<Record<SubColumn, boolean>>; name: string; fx: Device[]; muted: boolean; volume_db: number; pan: number }
+export type MidiTarget = Exclude<FxTarget, { kind: 'macro' }>;
+export interface MidiBinding { channel: number; controller: number; target: MidiTarget }
+export interface Track { midi?: MidiBinding[]; macros?: Macro[]; output?: Output; solo?: boolean; colour?: string; show?: Partial<Record<SubColumn, boolean>>; name: string; fx: Device[]; muted: boolean; volume_db: number; pan: number }
 export interface Parameter { name: string; min: number; max: number; default: number; unit: string | null; /** A length picked from the musical divisions, held in beats. */ division?: boolean }
 export type EffectParameters = Record<string, Parameter[]>;
 export type FxTarget = { kind: 'volume' } | { kind: 'pan' } | { kind: 'macro'; index: number } | { kind: 'effect'; device: string; parameter: string } | { kind: 'instrument'; instrument: string; parameter: string };
@@ -239,6 +241,8 @@ export function readProject(raw: string): Project {
       value.loop_range !== undefined && !(Number.isInteger(value.loop_range?.start) && Number.isInteger(value.loop_range.end) && value.loop_range.start >= 0 && value.loop_range.start <= value.loop_range.end && value.loop_range.end < value.sequence.length)) {
     throw new Error('Not a supported niminal tracker project (expected version 13)');
   }
+  const bindings: MidiBinding[] = [...value.tracks, ...value.returns, value.master].flatMap(t => t.midi ?? []);
+  if (new Set(bindings.map(b => `${b.channel}:${b.controller}`)).size !== bindings.length) throw new Error('A MIDI control can have only one mapping');
   return value;
 }
 
@@ -319,6 +323,7 @@ export function moveTrack(project: Project, from: number, to: number): boolean {
 export function duplicateTrack(project: Project, index: number): number | null {
   if (project.tracks.length >= 16 || index < 0 || index >= project.tracks.length) return null;
   const copy: Track = { ...structuredClone(project.tracks[index]), name: `${project.tracks[index].name} copy`, solo: false };
+  delete copy.midi;
   project.tracks.splice(index + 1, 0, copy);
   for (const pattern of project.patterns) {
     pattern.notes.splice(index + 1, 0, pattern.notes[index].map(cloneColumn));
@@ -337,6 +342,9 @@ export function duplicateTrack(project: Project, index: number): number | null {
 
 export function restoreTrack(project: Project, deleted: DeletedTrack): boolean {
   if (project.tracks.length >= 16) return false;
+  const used = new Set([...project.tracks, ...project.returns, project.master].flatMap(t => (t.midi ?? []).map(b => `${b.channel}:${b.controller}`)));
+  deleted.track.midi = deleted.track.midi?.filter(b => !used.has(`${b.channel}:${b.controller}`));
+  if (!deleted.track.midi?.length) delete deleted.track.midi;
   project.tracks.splice(deleted.index, 0, deleted.track);
   // Tracks after it move along in every step. Its own cells come back only if the sequence is as it was.
   const same = deleted.sequence.length === project.sequence.length && deleted.sequence.every((id, step) => id === project.sequence[step]);
@@ -381,6 +389,7 @@ function validTrack(t: Track, definitions: Definition[]): boolean {
     Array.isArray(t.fx) && t.fx.length <= maxDevices && t.fx.every((d, i) => !!d && validDeviceId(d.id) && t.fx.findIndex(other => other.id === d.id) === i && typeof d.bypass === 'boolean' && definitions.some((def: Definition) => def.id === d.definition && def.kind === 'fx') && !!d.values && Object.values(d.values).every(Number.isFinite) && !!d.modulations && Object.values(d.modulations).every(validLfo)) &&
     Number.isFinite(t.pan) && t.pan >= -1 && t.pan <= 1 &&
     (t.output === undefined || validOutput(t.output)) && t.fx.every(d => (d.target === undefined || Number.isInteger(d.target) && d.target >= 0 && d.target < maxReturns) && [d.pre, d.mute_source].every(flag => flag === undefined || typeof flag === 'boolean')) &&
+    (t.midi === undefined || Array.isArray(t.midi) && t.midi.length <= 128 && t.midi.every(b => !!b && Number.isInteger(b.channel) && b.channel >= 0 && b.channel < 16 && Number.isInteger(b.controller) && b.controller >= 0 && b.controller < 120 && b.controller !== 64 && !!b.target && ['volume', 'pan', 'instrument', 'effect'].includes(b.target.kind) && validTarget(b.target))) &&
     (t.macros === undefined || validMacros(t.macros)) &&
     (t.solo === undefined || typeof t.solo === 'boolean') && typeof t.muted === 'boolean' && Number.isFinite(t.volume_db) && t.volume_db >= -60 && t.volume_db <= 6
   );

@@ -327,3 +327,16 @@ it('swings pairs of rows without changing how long a pair lasts, and reads swing
   project.swing = 76; expect(() => readProject(JSON.stringify(project))).toThrow();
   project.swing = 50; project.patterns[0].swing = -1; expect(() => readProject(JSON.stringify(project))).toThrow();
 });
+
+
+it('validates project MIDI bindings, reserving sustain/channel-mode CCs and rejecting duplicate controls', () => {
+  const project = newProject();
+  project.tracks[0].midi = [{ channel: 0, controller: 7, target: { kind: 'volume' } }];
+  expect(readProject(JSON.stringify(project)).tracks[0].midi).toEqual(project.tracks[0].midi);
+  for (const bad of [{ channel: 16 }, { channel: -1 }, { controller: 64 }, { controller: 120 }, { controller: 1.5 }, { target: null }]) {
+    const copy = structuredClone(project); Object.assign(copy.tracks[0].midi![0], bad);
+    expect(() => readProject(JSON.stringify(copy))).toThrow();
+  }
+  project.master.midi = structuredClone(project.tracks[0].midi);
+  expect(() => readProject(JSON.stringify(project))).toThrow('only one mapping');
+});

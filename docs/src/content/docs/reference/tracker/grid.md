@@ -114,3 +114,23 @@ With record mode on, each key press writes its absolute pitch, instrument and ha
 Recording past a pattern boundary goes into the next song pattern, the start of the sequence's loop range, or the start of the current pattern when looping it. Events beyond the end of a non-looping song are not written. Releases never replace an existing note or end a later note in that column. Reused patterns share their recorded edits, as they do for other pattern changes.
 
 A sub-column or parameter lane targets its track's note column; returns and the master use the last musical track. Pitches C-0 through B-8 are supported. Device and channel changes, unplugging, window blur and Stop release previews and clear pending recording. Turning record mode off also clears pending recording. MIDI is off until an input is selected, and the input selection is separate from the saved song.
+
+
+### Sustain pedal
+
+A sustain pedal (MIDI CC64) holds released keys while it is down. Values 64–127 mean down; 0–63 mean up. Lifting the pedal releases only notes whose keys have already been released; keys still pressed keep sounding. Each MIDI channel has its own pedal state.
+
+During live recording, note ends are recorded when the pedal comes up, using the note's recording quantization setting. Re-pressing a sustained pitch ends its previous recorded note and starts a new one. In step entry, pedal-held notes stay together as a chord until released.
+
+Stop, engine disconnection, input or channel changes, unplugging and focus loss clear the pedals and release previews without adding recorded note-offs. MIDI All Sound Off/All Notes Off clears its channel; Reset All Controllers (CC121) lifts that channel's pedal while keeping physically pressed keys held. Sustain applies to MIDI keyboard input, separately from the computer keyboard.
+
+
+### MIDI Learn and hardware controls
+
+Select a MIDI input, click **MIDI Learn**, then click a volume fader, pan slider, instrument parameter or effect parameter and move a hardware knob. You can also focus the control and press Enter while learning. The first CC assigns it without changing the control's value; subsequent movements control it. **Escape** cancels learning.
+
+Bindings use the MIDI channel and controller number and are saved with the project on their track, return or master strip. They follow track reordering; duplicating a track leaves the copy unbound. Learning a new assignment replaces that knob's previous binding and the chosen control's old binding. **Mappings** lists assignments; choose one to remove it. Deleted or unavailable effects/parameters stay inactive until removed or available again.
+
+Controls use absolute 7-bit CC values (0–127), scaled across the control's range. Pan centres exactly at 64. Tempo-division controls snap to their available divisions. Relative encoders and 14-bit CC pairs are not supported. Sustain (CC64) and channel-mode messages are reserved. Disable an LFO or macro driving a parameter before controlling it with MIDI.
+
+With **Record** and **Follow** on during playback, knob movements write the mapped strip's automation envelope at their live positions, without advancing the cursor. **Quantize** applies the chosen row interval; with it off, points keep 1/256-row timing. Moving a knob while stopped, with Follow off or with Record off changes its value without adding automation. Continuous movements are grouped for Undo. Note previews and sustained keys are unaffected by ordinary CC movement.

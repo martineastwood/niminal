@@ -1,3 +1,4 @@
+import { midiControl } from './midi-mapping';
 import type { Output, Project, Track } from './project';
 import { stripOf, returnStrip, returnIndex } from './effects';
 import { maxReturns } from './project';
@@ -67,9 +68,11 @@ export class MixPanel {
       element.onclick = event => { if (!(event.target as HTMLElement).closest('button, input, .fader') ) this.actions.openFx(index); };
       const canvas = document.createElement('canvas'); canvas.className = 'mix-scope'; canvas.setAttribute('aria-label', `${track.name} scope`);
       const pan = document.createElement('input'); pan.type = 'range'; pan.min = '-1'; pan.max = '1'; pan.step = '0.01'; pan.value = String(track.pan); pan.className = 'mix-pan'; pan.setAttribute('aria-label', `${track.name} pan`);
+      midiControl(pan, track, { kind: 'pan' });
       pan.oninput = () => { track.pan = Number(pan.value); this.actions.edited(); }; pan.ondblclick = () => { pan.value = '0'; pan.oninput!(new Event('input')); };
       const readout = document.createElement('span'); readout.className = 'mix-db'; readout.textContent = dbText(track.volume_db);
       const level = fader(`${track.name} volume in dB`, track.volume_db, -60, 6, value => { track.volume_db = Math.round(value * 10) / 10; readout.textContent = dbText(track.volume_db); this.actions.edited(); });
+      midiControl(level, track, { kind: 'volume' });
       const meter = document.createElement('div'); meter.className = 'meter'; const fill = document.createElement('div'); fill.className = 'meter-fill'; meter.append(fill);
       const faders = document.createElement('div'); faders.className = 'mix-faders'; faders.append(level, meter);
       const buttons = document.createElement('div'); buttons.className = 'mix-buttons';

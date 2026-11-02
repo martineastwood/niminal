@@ -2359,3 +2359,30 @@ fn an_effect_can_be_applied_before_any_instrument() {
     assert!(worker.status.effects.contains_key("first"));
     assert!(!worker.status.effect_parameters["first"].is_empty());
 }
+
+
+#[test]
+fn instrument_controls_reach_held_midi_and_pattern_voices_without_a_lane_or_retrigger() {
+    let (engine, server, mut worker) = engine_worker();
+    worker.command(Command::Apply { id: "tone".into(), kind: Kind::Instr, dir: None,
+        source: "instr controlled(freq: hz, level: 0..0.5 = 0.2) { osc(sine, freq) * level }".into() }).unwrap();
+    let level = |samples: &[f32]| samples[samples.len()-2000..].iter().map(|s| s.abs()).sum::<f32>() / 2000.0;
+    for midi in [false, true] {
+        let mut song = one_column(32, if midi { &[] } else { &[(0, "C-4")] }, &[]);
+        worker.command(Command::Update { song: song.clone() }).unwrap();
+        if midi { worker.command(Command::MidiOn { key: 60, instrument: "tone".into(), note: "C-4".into(), track: 0, velocity: 127 }).unwrap(); }
+        else { play_song(&mut worker, song.clone()); }
+        let before = run(&engine, &mut worker, 14000);
+        song.instrument_values.insert("tone".into(), BTreeMap::from([("level".into(), 0.02)]));
+        worker.command(Command::Update { song: song.clone() }).unwrap();
+        let after = run(&engine, &mut worker, 6000);
+        assert!(level(&before) > 0.05, "initial held voice must sound");
+        assert!(level(&after) < level(&before) * 0.2 && level(&after) > 0.001, "MIDI={midi}: a held voice follows the control without another note");
+        song.instrument_values.clear();
+        worker.command(Command::Update { song }).unwrap();
+        let restored = run(&engine, &mut worker, 6000);
+        assert!(level(&restored) > level(&after) * 5.0, "removing the override restores the default");
+        worker.command(Command::Stop).unwrap();
+    }
+    worker.command(Command::Disconnect).unwrap(); server.stop();
+}

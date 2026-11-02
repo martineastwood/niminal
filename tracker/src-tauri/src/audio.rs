@@ -525,7 +525,7 @@ impl Worker {
                     let args = Value::Object(loop_args);
                     let now = self.clock()?;
                     if let Some(playback) = &self.playback {
-                        events.extend(playback.loop_edits(&id, &args, now));
+                        events.extend(playback.instrument_edits(&id, &args, now));
                     }
                     events.extend(self.midi_keys.values().filter(|(instrument, _)| instrument == &id)
                         .map(|(_, voice)| json!({"op":"set", "id":voice, "at":"now", "args":args})));
@@ -779,7 +779,7 @@ impl Worker {
     }
 
     fn set_mixer(&mut self, song: &Song) -> Result<(), String> {
-        let events = mixer::events(
+        let mut events = mixer::events(
             &song.tracks,
             &song.returns,
             &song.master,
@@ -792,6 +792,30 @@ impl Worker {
             song.rows_per_beat,
             self.mixer_timing != (song.bpm, song.rows_per_beat),
         )?;
+        let mut controls = BTreeMap::new();
+        for (instrument, parameters) in &self.status.instrument_parameters {
+            let mut args = serde_json::Map::new();
+            for parameter in parameters {
+                let old = self.instrument_values.get(instrument).and_then(|v| v.get(&parameter.name)).copied().unwrap_or(parameter.default);
+                let value = song.instrument_values.get(instrument).and_then(|v| v.get(&parameter.name)).copied().unwrap_or(parameter.default);
+                if value != old {
+                    args.insert(parameter.name.clone(), parameter.argument(value.clamp(parameter.min, parameter.max)));
+                }
+            }
+            if !args.is_empty() { controls.insert(instrument.clone(), Value::Object(args)); }
+        }
+        if !controls.is_empty() {
+            let now = self.clock()?;
+            for (instrument, args) in controls {
+                if let Some(playback) = &self.playback {
+                    let mut edits = playback.instrument_edits(&instrument, &args, now);
+                    for event in &mut edits { event["glide"] = json!("5ms"); }
+                    events.extend(edits);
+                }
+                events.extend(self.midi_keys.values().filter(|(name, _)| name == &instrument)
+                    .map(|(_, voice)| json!({"op":"set", "id":voice, "at":"now", "args":args, "glide":"5ms"})));
+            }
+        }
         self.send_events(events)?;
         self.instrument_values = song.instrument_values.clone();
         self.mixer = song.tracks.clone();

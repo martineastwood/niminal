@@ -1,12 +1,13 @@
 import { addMacro, master, linkParameter, removeMacro, returnIndex, stripOf } from './effects';
-import type { EffectParameters, Definition, Device, Lfo, MacroLink, Parameter, Project, FxTarget } from './project';
+import type { EffectParameters, Definition, Device, Lfo, MacroLink, Parameter, Project, FxTarget, Track } from './project';
+import { midiControl } from './midi-mapping';
 import { maxMacros } from './project';
 import { trackColour, masterColour, returnColour } from './grid';
 import { dropTarget } from './drag';
 import { divisions, nearestDivision } from './divisions';
 import { readLfos, setLfo, lfoShapes, modulatable, type SourceLfo } from './modulation';
 /** An instrument's parameters as sliders. Notes start with these values; lanes change them from a row on. */
-export function renderInstrument(parent: HTMLElement, definition: Definition, parameters: EffectParameters, edited: () => void, write: (target: FxTarget, value: number) => void, activeTrack: number, changeSource: (source: string) => void) {
+export function renderInstrument(parent: HTMLElement, definition: Definition, parameters: EffectParameters, edited: () => void, write: (target: FxTarget, value: number) => void, activeTrack: number, changeSource: (source: string) => void, midiStrip?: Track) {
   parent.replaceChildren();
   const card = document.createElement('section'); card.className = 'device-card instrument-card';
   const heading = document.createElement('div'); heading.className = 'device-heading';
@@ -14,7 +15,7 @@ export function renderInstrument(parent: HTMLElement, definition: Definition, pa
   const name = document.createElement('strong'); name.textContent = definition.name; heading.append(label, name); card.append(heading);
   const params = parameters[definition.id];
   const note = (text: string) => { const hint = document.createElement('p'); hint.className = 'device-note'; hint.textContent = text; card.append(hint); };
-  const refresh = () => renderInstrument(parent, definition, parameters, edited, write, activeTrack, changeSource);
+  const refresh = () => renderInstrument(parent, definition, parameters, edited, write, activeTrack, changeSource, midiStrip);
   const lfos = readLfos(definition.source);
   const hidden = new Set(definition.hidden ?? []);
   const setHidden = () => { if (hidden.size) definition.hidden = [...hidden]; else delete definition.hidden; edited(); refresh(); };
@@ -29,6 +30,7 @@ export function renderInstrument(parent: HTMLElement, definition: Definition, pa
         write({ kind: 'instrument', instrument: definition.id, parameter: parameter.name }, Math.min(parameter.max, Math.max(parameter.min, value)));
       }, hide);
       row.querySelector('input')!.setAttribute('aria-label', `${definition.name} ${parameter.name}`);
+      if (midiStrip && activeTrack >= 0) midiControl(row, midiStrip, { kind: 'instrument', instrument: definition.id, parameter: parameter.name });
       const record = row.querySelector<HTMLButtonElement>('button')!;
       record.disabled = activeTrack < 0; if (activeTrack < 0) record.title = 'Only a track has automation lanes';
       const lfo = lfos[parameter.name];
@@ -73,8 +75,10 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
   const heading = document.createElement('div'); heading.className = 'device-heading';
   const name = document.createElement('strong'); name.textContent = isMaster ? 'Master' : track.name; heading.append(name); output.append(heading);
   const volume = slider('Volume', track.volume_db, -60, 6, 'dB', value => { track.volume_db = value; edited(); }, () => write({ kind: 'volume' }, track.volume_db));
+  midiControl(volume, track, { kind: 'volume' });
   volume.querySelector('input')!.setAttribute('aria-label', `${track.name} volume in dB`); output.append(volume);
   const pan = slider('Pan', track.pan, -1, 1, '', value => { track.pan = value; edited(); }, () => write({ kind: 'pan' }, track.pan));
+  midiControl(pan, track, { kind: 'pan' });
   pan.querySelector('input')!.setAttribute('aria-label', `${track.name} pan`); output.append(pan);
   const channel = document.createElement('div'); channel.className = 'mixer-channel';
   channel.append(output, macrosCard(project, activeTrack, edited, write, refresh, fx.lanesRemoved)); parent.append(channel);
@@ -136,7 +140,7 @@ export function renderMixer(parent: HTMLElement, project: Project, activeTrack: 
         const change = (value: number) => { device.values[parameter.name] = value; edited(); };
         const record = () => write({ kind: 'effect', device: device.id, parameter: parameter.name }, Math.min(parameter.max, Math.max(parameter.min, device.values[parameter.name] ?? parameter.default)));
         const row = parameter.division ? divisionRow(parameter.name, value, change, record, extras) : slider(parameter.name, value, parameter.min, parameter.max, parameter.unit ?? '', change, record, extras);
-        row.querySelector('input, select')!.setAttribute('aria-label', `${track.name} FX ${parameter.name}`); row.classList.add('with-macro'); card.append(row);
+        row.querySelector('input, select')!.setAttribute('aria-label', `${track.name} FX ${parameter.name}`); row.classList.add('with-macro'); midiControl(row, track, { kind: 'effect', device: device.id, parameter: parameter.name }); card.append(row);
         if (link) {
           // the macro sets the parameter, so its own slider, lanes and LFO have nothing to say
           row.classList.add('driven'); row.querySelectorAll('input, select:not(.macro-link), button:not(.macro-link)').forEach(control => { if (control.parentElement !== extras) (control as HTMLInputElement).disabled = true; });

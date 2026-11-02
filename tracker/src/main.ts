@@ -1,6 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { EditorView } from '@codemirror/view';
-import { mountMidi, type MidiMessage } from './midi';
+import { MidiLearn } from './midi-mapping';
+import { mountMidi, MidiPerformance, type MidiNoteMessage } from './midi';
 import { ProjectHistory } from './history';
 import { patternTiming, validTiming, type Project } from './project';
 import { listen } from '@tauri-apps/api/event';
@@ -37,7 +38,7 @@ const codeTools = (kind: CodeKind) => `<span id="${kind}-tools" class="code-tool
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <div id="toolbar">
-    <div class="group"><button id="play" title="Loop pattern (Space)">▶ Pattern</button><button id="play-song" title="Play from the selected sequence step to the end, or repeat the loop once it is reached">▶ Song</button><button id="stop" title="Stop">■</button><button id="record" aria-pressed="false" title="Record mode: typed notes and values are entered (Esc)">● Rec</button><label class="check" title="Follow the song as it plays: the pattern changes with it, and while recording the cursor rides the play position. Untick to move around and edit freely while it plays"><input id="follow" type="checkbox" checked> Follow</label><label class="check" title="Volume 0 to 100 given to notes entered in record mode; blank leaves it unset">Vel <input id="velocity" type="number" min="0" max="100" placeholder="–" style="width:3.5em"></label><span id="play-position" class="muted"></span></div><div id="midi-controls" class="group"></div><div class="group"><label class="check" title="Snap live MIDI notes and releases to the selected row interval. Off records timing in the delay columns."><input id="midi-quantize" type="checkbox"> Quantize</label><select id="midi-grid" aria-label="MIDI quantization interval">${[1, 2, 4, 8, 16].map(n => `<option value="${n}">${n} row${n === 1 ? '' : 's'}</option>`).join('')}</select></div>
+    <div class="group"><button id="play" title="Loop pattern (Space)">▶ Pattern</button><button id="play-song" title="Play from the selected sequence step to the end, or repeat the loop once it is reached">▶ Song</button><button id="stop" title="Stop">■</button><button id="record" aria-pressed="false" title="Record mode: typed notes and values are entered (Esc)">● Rec</button><label class="check" title="Follow the song as it plays: the pattern changes with it, and while recording the cursor rides the play position. Untick to move around and edit freely while it plays"><input id="follow" type="checkbox" checked> Follow</label><label class="check" title="Volume 0 to 100 given to notes entered in record mode; blank leaves it unset">Vel <input id="velocity" type="number" min="0" max="100" placeholder="–" style="width:3.5em"></label><span id="play-position" class="muted"></span></div><div id="midi-controls" class="group"></div><div id="midi-learn" class="group"></div><div class="group"><label class="check" title="Snap live MIDI notes and releases to the selected row interval. Off records timing in the delay columns."><input id="midi-quantize" type="checkbox"> Quantize</label><select id="midi-grid" aria-label="MIDI quantization interval">${[1, 2, 4, 8, 16].map(n => `<option value="${n}">${n} row${n === 1 ? '' : 's'}</option>`).join('')}</select></div>
     <div class="group"><label>BPM <input id="bpm" type="number" min="20" max="300" step="1"></label><label>LPB <input id="rows-per-beat" type="number" min="1" max="16" title="Rows per beat"></label><label>Swing <input id="swing" type="number" min="0" max="75" title="Swing: how much of every pair of rows' time moves to the first row, 0 to 75 percent. Acts on rows, so LPB sets the subdivision swung"></label><label>Oct <input id="octave" type="number" min="0" max="8" value="4"></label><label>Step <input id="entry-step" aria-label="Note entry step" title="Rows to advance after entering a note; 0 stays on this row" type="number" min="0" max="256" value="4"></label></div>
     <div class="group"><label>Rows <input id="pattern-rows" type="number" min="1" max="256" data-structure></label><div class="group"><label>Pattern BPM <input id="pattern-bpm" aria-label="Pattern BPM" type="number" min="20" max="300" step="any"></label><label>LPB <input id="pattern-lpb" aria-label="Pattern rows per quarter note" type="number" min="1" max="16"></label><label>Meter <input id="meter-beats" aria-label="Beats per bar" type="number" min="1" max="32"> / <select id="meter-unit" aria-label="Meter beat unit"><option>1</option><option>2</option><option>4</option><option>8</option><option>16</option></select></label><label>Swing <input id="pattern-swing" aria-label="Pattern swing" type="number" min="0" max="75" title="Swing for this pattern, 0 to 75 percent; blank follows the song. 0 is straight even when the song swings"></label><label>Tempo points <input id="tempo-points" aria-label="Tempo automation points" placeholder="0:125, 32:80" title="Row:BPM points, separated by commas. Linear ramps between points; BPM counts quarter notes."></label><button id="reset-timing">Use song timing</button></div></div>
     <div class="group"><button id="undo" title="Undo (Cmd/Ctrl+Z)" aria-label="Undo">↶</button><button id="redo" title="Redo (Cmd/Ctrl+Shift+Z)" aria-label="Redo">↷</button><button id="add-track" data-structure title="Add track" aria-label="Add track">+ Track</button><button id="delete-track" data-structure title="Delete selected track" aria-label="Delete selected track">− Track</button><button id="duplicate-track" data-structure title="Duplicate the selected track, with its effects and notes" aria-label="Duplicate the selected track">⧉ Track</button><button id="restore-track" data-structure title="Restore last deleted track" aria-label="Restore last deleted track">↺</button></div>
@@ -161,6 +162,7 @@ let libraryFx: string | null = null;
 const chosenDevice = new Map<number, string>();
 let deletedTrack: DeletedTrack | null = null;
 let wasPlaying = false;
+let wasConnected = false;
 let connectionPending: 'connect' | 'disconnect' | null = null;
 let connectionAttempt: Promise<void> | null = null;
 let autoConnect = true;
@@ -260,7 +262,7 @@ function mixerView() {
   element('bottom-dock').classList.toggle('show-code', fxCodeShown && !element('code').hidden || libraryFx !== null);
   refreshMix(); browserTarget(); soundBrowser.refresh(); fxBrowser.refresh(); projectPanel.refresh();
   element('dock-track').textContent = stripOf(project, deviceTrack).name; markTabs();
-  if (shown.instr) renderInstrument(element('instr-controls'), shown.instr, allParameters(), editedPattern, (target, value) => grid.writeParameter(stripToColumn(project, deviceTrack), target, value), deviceTrack, changeSelectedSource);
+  if (shown.instr) renderInstrument(element('instr-controls'), shown.instr, allParameters(), editedPattern, (target, value) => grid.writeParameter(stripToColumn(project, deviceTrack), target, value), deviceTrack, changeSelectedSource, stripOf(project, deviceTrack));
   if (libraryFx !== null) { element('mixer').hidden = true; return; }
   element('mixer').hidden = false;
   envelopeEditor.select(stripToColumn(project, deviceTrack));
@@ -336,8 +338,8 @@ async function exportAudio(stems: boolean) {
     status(`Exported ${path}`);
   });
 }
-function editedPattern() {
-  save();
+function editedPattern(group?: string) {
+  save(group);
   clearTimeout(updateTimer);
   updateTimer = window.setTimeout(() => {
     if (audioStatus.connected) void action(syncSong);
@@ -402,7 +404,14 @@ function holdNote(key: number, instrument: string, note: string, track: number, 
 function releaseNote(key: number | null) {
   midiAction(async () => { if (audioStatus.connected) await audioCommand({ op: 'midi_off', key }); });
 }
-function receiveMidi(message: MidiMessage) {
+const midiLearn = new MidiLearn(element('midi-learn'), {
+  project: () => project, parameters: allParameters, changed: editedPattern,
+  record: (strip, target, value) => grid.recordMidiParameter(strip, target, value),
+  refresh: () => { mixerView(); grid.render(); }, feedback: status,
+});
+const receiveMidi = new MidiPerformance(applyMidi).receive;
+function applyMidi(message: MidiNoteMessage) {
+  if (message.kind === 'control') { midiLearn.receive(message); return; }
   if (message.kind === 'on') {
     const key = message.channel * 128 + message.note;
     const target = grid.midiNoteOn(message.note, message.velocity, key);
@@ -410,7 +419,7 @@ function receiveMidi(message: MidiMessage) {
     midiKeys.add(key);
     holdNote(key, target.instrument, target.note, target.track, target.velocity);
   } else if (message.kind === 'reset') {
-    grid.resetMidi(); midiRevision++; midiKeys.clear();
+    midiLearn.cancel(); grid.resetMidi(); midiRevision++; midiKeys.clear();
     releaseNote(null);
   } else {
     const keys = message.kind === 'off' ? [message.channel * 128 + message.note] : [...midiKeys].filter(key => Math.floor(key / 128) === message.channel);
@@ -1163,6 +1172,8 @@ envelopeEditor.projectHistory = { undo: undoProject, canUndo: () => projectHisto
 selectDefinition(selected, false); arrangement.reset(); grid.render(); mixerView(); patternControls(); timingInputs();
 showView('pattern'); showPanel('code', true); showFx();
 const audioTimer = observeAudio(state => {
+  if (wasPlaying && !state.playing || wasConnected && !state.connected) receiveMidi({ kind: 'reset' });
+  wasConnected = state.connected;
   if (state.playing !== wasPlaying) { wasPlaying = state.playing; mixerView(); }
   // Replacing a button's text node during a mouse press can cancel its click
   // in WebKit. Only change labels when the displayed state actually changes.
@@ -1341,4 +1352,4 @@ if (isTauri()) {
   // Connect to an engine that is running; starting one is up to the user.
   void action(ensureConnected);
 }
-window.addEventListener('beforeunload', () => { clearInterval(audioTimer); clearInterval(scopeTimer); for (const each of Object.values(editors)) each.destroy(); });
+window.addEventListener('beforeunload', () => { midiLearn.dispose(); clearInterval(audioTimer); clearInterval(scopeTimer); for (const each of Object.values(editors)) each.destroy(); });

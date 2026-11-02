@@ -1054,8 +1054,8 @@ impl Playback {
             || *self.rolls.borrow_mut().entry((index, track, column)).or_insert_with(|| self.roll()) * 100.0 < f64::from(chance)
     }
 
-    /// Apply edited sampler loop defaults to held and already queued notes.
-    pub fn loop_edits(&self, instrument: &str, args: &Value, now: u64) -> Vec<Value> {
+    /// Apply instrument controls to held and already queued notes.
+    pub fn instrument_edits(&self, instrument: &str, args: &Value, now: u64) -> Vec<Value> {
         self.sounding.iter().filter(|note| note.instrument == instrument && note.until > now)
             .map(|note| json!({"op":"set", "id":note.id, "at":now.max(note.begins + 1), "tag":"tracker-pattern", "args":args})).collect()
     }
@@ -1316,16 +1316,6 @@ impl Playback {
             }
         }
         ended(hold, LOOKAHEAD as f64, false)
-    }
-
-    /// Whether any pattern has a lane on `track` for a parameter of `instrument`, so its notes are named
-    /// and can be changed while they sound.
-    fn listens(&self, track: usize, instrument: &str) -> bool {
-        self.instrument_parameters.get(instrument).is_some_and(|params| params.iter().any(|p| p.name == "loop_start")) || self.song.patterns.iter().any(|p| {
-            p.fx.get(track).is_some_and(|lanes| {
-                lanes.iter().any(|l| matches!(&l.target, Some(crate::commands::FxTarget::Instrument { instrument: i, .. }) if i == instrument))
-            })
-        })
     }
 
     /// Changes the notes of `instrument` that are sounding on `track` to what an instrument-parameter lane
@@ -1620,7 +1610,8 @@ impl Playback {
                             "dur":format!("{:.6}sec", self.seconds_at(self.next_row as f64 + delay + offset + rows) - self.seconds_at(self.next_row as f64 + delay + offset)), "args":hit_args});
                         // A cut ends the sound where the note ends, with no release, and a bend changes its
                         // pitch while it sounds: either way the note is given an id to find it by.
-                        let changes = last && self.listens(index, id);
+                        // Compiled instrument controls need addressable voices even without an automation lane.
+                        let changes = last && self.instrument_parameters.contains_key(id);
                         let named = last && (hold.cut || !hold.bends.is_empty() || !hold.changes.is_empty()) || changes;
                         let note_id = named.then(|| NOTE_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
                         if let Some(id) = note_id {

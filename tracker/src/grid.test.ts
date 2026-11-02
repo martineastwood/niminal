@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PatternGrid } from './grid';
+import { MidiPerformance } from './midi';
 import { newProject, emptyFxLane, blankColumn, patternSeconds, patternTiming, type Project } from './project';
 import { ProjectHistory } from './history';
 
@@ -1181,4 +1182,69 @@ it('preserves fine MIDI delays when copying and pasting a block', () => {
   expect(text).toBe('0.390625\n99.609375');
   select(10); clipboard(parent, 'paste', text);
   expect(column.delay[10]).toBe('1'); expect(column.delay[11]).toBe('255');
+});
+
+
+it('records sustained note lengths at pedal-up, including independent channels and re-presses', () => {
+  const { project, grid } = setup(undefined, () => 'tone');
+  project.bpm = 120;
+  grid.midiQuantize = () => null;
+  const midi = new MidiPerformance(message => {
+    if (message.kind === 'on') grid.midiNoteOn(message.note, message.velocity, message.channel * 128 + message.note);
+    else if (message.kind === 'off') grid.midiNoteOff(message.channel * 128 + message.note);
+    else grid.resetMidi();
+  });
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    grid.paint(2, 0, 1000);
+    midi.receive({ kind: 'sustain', channel: 0, down: true });
+    midi.receive({ kind: 'on', channel: 0, note: 60, velocity: 100 });
+    midi.receive({ kind: 'on', channel: 1, note: 64, velocity: 90 });
+    clock.mockReturnValue(1125);
+    midi.receive({ kind: 'off', channel: 0, note: 60 });
+    midi.receive({ kind: 'off', channel: 1, note: 64 });
+    const columns = project.patterns[0].notes[0];
+    expect(columns[0].notes[3]).toBeNull(); expect(columns[1].notes[3]).toBe('OFF');
+    clock.mockReturnValue(1250); midi.receive({ kind: 'on', channel: 0, note: 60, velocity: 110 });
+    expect(columns[0].notes[4]).toBe('C-4');
+    clock.mockReturnValue(1375); midi.receive({ kind: 'off', channel: 0, note: 60 });
+    expect(columns[0].notes[5]).toBeNull();
+    clock.mockReturnValue(1437.5); midi.receive({ kind: 'sustain', channel: 0, down: false });
+    expect(columns[0].notes[5]).toBe('OFF'); expect(columns[0].delay[5]).toBe('128');
+  } finally { grid.paint(null); vi.restoreAllMocks(); }
+});
+
+
+it('records MIDI automation at fractional live positions without moving the cursor or step-entering it', () => {
+  const { project, grid, edited, feedback } = setup(); project.bpm = 120;
+  grid.midiQuantize = () => null;
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    const strip = project.tracks[0], target = { kind: 'pan' } as const;
+    grid.recordMidiParameter(strip, target, 0.2); expect(project.patterns[0].fx[0].some(l => l.target?.kind === 'pan')).toBe(false);
+    grid.paint(2, 0, 1000); grid.follows = () => false;
+    grid.recordMidiParameter(strip, target, 0.2); expect(project.patterns[0].fx[0].some(l => l.target?.kind === 'pan')).toBe(false);
+    grid.follows = () => true; const cursor = grid.cursorRow;
+    clock.mockReturnValue(1031.25); grid.recordMidiParameter(strip, target, 0.2); grid.recordMidiParameter(strip, target, 0.3);
+    clock.mockReturnValue(1062.5); grid.recordMidiParameter(strip, target, 0.8);
+    const envelope = project.patterns[0].fx[0].find(l => l.target?.kind === 'pan')!.envelope!;
+    expect(envelope.points).toEqual([{ row: 2.25, value: 0.3 }, { row: 2.5, value: 0.8 }]);
+    expect(grid.cursorRow).toBe(cursor); expect(edited).not.toHaveBeenCalled();
+    envelope.points = Array.from({ length: 4097 }, (_, i) => ({ row: i / 256, value: 0 }));
+    grid.paint(20, 0, 1062.5); grid.recordMidiParameter(strip, target, 1);
+    expect(envelope.points).toHaveLength(4097); expect(feedback).toHaveBeenLastCalledWith(expect.stringContaining('full'));
+  } finally { grid.paint(null); vi.restoreAllMocks(); }
+});
+
+it('records MIDI controls across pattern boundaries and on master/return lanes', () => {
+  const { project, grid } = setup(); project.bpm = 120; grid.midiQuantize = () => null;
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    grid.paint(31, 0.5, 1000); clock.mockReturnValue(1125);
+    grid.recordMidiParameter(project.master, { kind: 'volume' }, -12);
+    expect(project.patterns[0].master_fx.find(l => l.target?.kind === 'volume')!.envelope!.points).toContainEqual({ row: 0.5, value: -12 });
+    grid.midiQuantize = () => 4;
+    grid.paint(3, 0.2, 1125); grid.recordMidiParameter(project.master, { kind: 'pan' }, -0.2);
+    expect(project.patterns[0].master_fx.find(l => l.target?.kind === 'pan')!.envelope!.points).toContainEqual({ row: 4, value: -0.2 });
+  } finally { grid.paint(null); vi.restoreAllMocks(); }
 });
