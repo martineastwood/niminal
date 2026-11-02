@@ -93,10 +93,6 @@ impl Session {
         Ok(())
     }
 
-    fn logged(&self, at: At) -> At {
-        At::Sample(self.resolve(at))
-    }
-
     pub(super) fn resolve(&self, at: At) -> u64 {
         match at {
             At::Sample(n) => n,
@@ -187,7 +183,7 @@ impl Session {
     fn send_events_inner(
         &mut self,
         client: ClientId,
-        ops: Vec<Op>,
+        mut ops: Vec<Op>,
         has_changes: bool,
     ) -> Result<Sent, Vec<Problem>> {
         let mut invalid = Vec::new();
@@ -237,7 +233,9 @@ impl Session {
         // Changes of definitions go first: they are compiled, which can fail, and the
         // rest of the batch is checked against the program they leave. If anything later is wrong they are
         // taken back.
-        let mut resolved: Vec<Option<Op>> = vec![None; ops.len()];
+        for op in &mut ops {
+            *op.at_mut() = At::Sample(self.resolve(op.at()));
+        }
         let mut early = Vec::new();
         let mut clock_state = self.clocks.get(&client).copied().unwrap_or_default();
         // controls that are now kept to a number of beats (`Some`) or let go of (`None`), once the batch is accepted
@@ -248,21 +246,14 @@ impl Session {
                 Op::Routing { edits, .. } if crate::routing::Routing::is_control_edit(edits) => {
                     continue;
                 }
-                Op::Routing { at, edits, tag } => {
-                    resolved[n] = Some(Op::Routing {
-                        at: self.logged(*at),
-                        edits: edits.clone(),
-                        tag: tag.clone(),
-                    });
-                    (
-                        String::new(),
-                        None,
-                        self.resolve(*at),
-                        What::Definitions,
-                        in_seconds(edits, client, &clock_state, &mut linked),
-                        tag.clone(),
-                    )
-                }
+                Op::Routing { at, edits, tag } => (
+                    String::new(),
+                    None,
+                    self.resolve(*at),
+                    What::Definitions,
+                    in_seconds(edits, client, &clock_state, &mut linked),
+                    tag.clone(),
+                ),
                 Op::Define {
                     source,
                     at,
@@ -273,12 +264,7 @@ impl Session {
                         early.push(problem_at(n, "there is nothing to define"));
                         break;
                     }
-                    resolved[n] = Some(Op::Define {
-                        source: source.clone(),
-                        at: self.logged(*at),
-                        dir: dir.clone(),
-                        tag: tag.clone(),
-                    });
+
                     (
                         source.clone(),
                         dir.as_deref(),
@@ -288,20 +274,14 @@ impl Session {
                         tag.clone(),
                     )
                 }
-                Op::Forget { at, tag } => {
-                    resolved[n] = Some(Op::Forget {
-                        at: self.logged(*at),
-                        tag: tag.clone(),
-                    });
-                    (
-                        "new".to_string(),
-                        None,
-                        self.resolve(*at),
-                        What::Forget,
-                        Vec::new(),
-                        tag.clone(),
-                    )
-                }
+                Op::Forget { at, tag } => (
+                    "new".to_string(),
+                    None,
+                    self.resolve(*at),
+                    What::Forget,
+                    Vec::new(),
+                    tag.clone(),
+                ),
                 Op::Transaction {
                     source,
                     dir,
@@ -309,28 +289,18 @@ impl Session {
                     edits,
                     complete,
                     tag,
-                } => {
-                    resolved[n] = Some(Op::Transaction {
-                        source: source.clone(),
-                        dir: dir.clone(),
-                        at: self.logged(*at),
-                        edits: edits.clone(),
-                        complete: *complete,
-                        tag: tag.clone(),
-                    });
-                    (
-                        source.clone(),
-                        dir.as_deref(),
-                        self.resolve(*at),
-                        if *complete {
-                            What::Complete
-                        } else {
-                            What::Definitions
-                        },
-                        in_seconds(edits, client, &clock_state, &mut linked),
-                        tag.clone(),
-                    )
-                }
+                } => (
+                    source.clone(),
+                    dir.as_deref(),
+                    self.resolve(*at),
+                    if *complete {
+                        What::Complete
+                    } else {
+                        What::Definitions
+                    },
+                    in_seconds(edits, client, &clock_state, &mut linked),
+                    tag.clone(),
+                ),
                 _ => continue,
             };
             if let Some(dir) = dir {
@@ -364,7 +334,6 @@ impl Session {
             return Err(early);
         }
 
-        let ops = self.expand_parameter_events(client, ops)?;
         enum Plan {
             NodeBind {
                 id: String,
@@ -441,17 +410,47 @@ impl Session {
             },
         }
         // the notes this client holds, as the batch goes on opening and releasing them
-        let mut open: Vec<(u64, String)> = self
+        let mut open: Vec<(u64, Arc<niminal_lang::Instrument>)> = self
             .voices
             .iter()
             .filter(|v| v.client == client)
-            .map(|v| (v.id, v.instrument.clone()))
+            .map(|v| (v.id, v.schema.clone()))
             .collect();
         let mut plans = Vec::new();
         let mut problems = Vec::new();
         let mut controls = self.control_changes.len();
-        for (n, op) in ops.iter().enumerate() {
+        for (n, op) in ops.iter_mut().enumerate() {
             let mut fail = |message: String| problems.push(problem_at(n, message));
+            if let Op::Array {
+                id,
+                at,
+                param,
+                values,
+                glide,
+                tag,
+            } = op
+            {
+                let Some((_, schema)) = open.iter().find(|(open, _)| open == id) else {
+                    fail(format!("no note with id {id} is sounding"));
+                    continue;
+                };
+                let Some(paths) = schema.arrays.get(param) else {
+                    fail(format!("`{param}` is not a live array parameter"));
+                    continue;
+                };
+                if paths.len() != values.len() {
+                    fail(format!("array `{param}` needs {} values", paths.len()));
+                    continue;
+                }
+                *op = Op::Set {
+                    id: *id,
+                    at: *at,
+                    args: paths.iter().cloned().zip(std::mem::take(values)).collect(),
+                    glide: *glide,
+                    tag: tag.take(),
+                };
+            }
+            let op = &*op;
             match op {
                 Op::Note {
                     target,
@@ -463,15 +462,7 @@ impl Session {
                     tag,
                 } => {
                     let start = self.resolve(*at);
-                    resolved[n] = Some(Op::Note {
-                        to: to.clone(),
-                        target: target.clone(),
-                        at: self.logged(*at),
-                        args: args.clone(),
-                        dur: *dur,
-                        id: *id,
-                        tag: tag.clone(),
-                    });
+
                     if dur.is_none() && id.is_none() {
                         fail("a note needs a `dur`, or an `id` to be released by an `off`".into());
                         continue;
@@ -517,7 +508,10 @@ impl Session {
                         Ok(plan) => {
                             let instrument = program.instruments[plan.instrument].name.clone();
                             if let Some(id) = id {
-                                open.push((*id, instrument.clone()));
+                                open.push((
+                                    *id,
+                                    Arc::new(program.instruments[plan.instrument].clone()),
+                                ));
                             }
                             plans.push(Plan::Note {
                                 op: n,
@@ -544,16 +538,8 @@ impl Session {
                         fail("use routing edits to change private instance controls".into());
                         continue;
                     }
-                    let raw = at;
                     let at = self.resolve(*at);
-                    resolved[n] = Some(Op::Control {
-                        name: name.clone(),
-                        at: self.logged(*raw),
-                        value: *value,
-                        unit: unit.clone(),
-                        glide: *glide,
-                        tag: tag.clone(),
-                    });
+
                     // a control the definitions waiting to land make is set once they have
                     let at = if self.program_at(at).controls.iter().any(|c| c.name == *name) {
                         at
@@ -634,13 +620,7 @@ impl Session {
                         continue;
                     }
                     let start = self.resolve(*at);
-                    resolved[n] = Some(Op::Tempo {
-                        at: self.logged(*at),
-                        bpm: *bpm,
-                        meter: *meter,
-                        beat: *beat,
-                        tag: tag.clone(),
-                    });
+
                     let old = clock_state;
                     let new = old.changed(
                         start as f64 / f64::from(self.sample_rate),
@@ -812,11 +792,6 @@ impl Session {
                         }
                     }
                     if crate::routing::Routing::is_control_edit(edits) {
-                        resolved[n] = Some(Op::Routing {
-                            at: self.logged(*at),
-                            edits: edits.clone(),
-                            tag: tag.clone(),
-                        });
                         // an effect that the changes waiting to land make is set once they have
                         let ids: Vec<&String> = edits
                             .iter()
@@ -876,18 +851,8 @@ impl Session {
                     }
                     let start = self.resolve(*at);
                     let program = self.program_at(start);
-                    let Some((_, name)) = open.iter().find(|(open, _)| open == id) else {
+                    let Some((_, schema)) = open.iter().find(|(open, _)| open == id) else {
                         fail(format!("no note with id {id} is sounding"));
-                        continue;
-                    };
-                    let schema = self
-                        .voices
-                        .iter()
-                        .find(|v| v.client == client && v.id == *id)
-                        .map(|v| v.schema.as_ref())
-                        .or_else(|| program.instrument(name));
-                    let Some(schema) = schema else {
-                        fail("the instrument is no longer defined".into());
                         continue;
                     };
                     if let Err(error) = schema.param(param) {
@@ -912,16 +877,7 @@ impl Session {
                         fail("the modulation mapping queue is full".into());
                         continue;
                     }
-                    resolved[n] = Some(Op::Map {
-                        id: *id,
-                        at: self.logged(*at),
-                        param: param.clone(),
-                        source: source.clone(),
-                        channel: *channel,
-                        scale: *scale,
-                        offset: *offset,
-                        tag: tag.clone(),
-                    });
+
                     plans.push(Plan::Map {
                         id: *id,
                         start,
@@ -940,32 +896,13 @@ impl Session {
                     glide,
                     tag,
                 } => {
-                    let raw = at;
                     let at = self.resolve(*at);
-                    resolved[n] = Some(Op::Set {
-                        id: *id,
-                        at: self.logged(*raw),
-                        args: args.clone(),
-                        glide: *glide,
-                        tag: tag.clone(),
-                    });
+
                     let Some((_, instrument)) = open.iter().find(|(open, _)| open == id) else {
                         fail(format!("no note with id {id} is sounding"));
                         continue;
                     };
                     let program = self.program_at(at);
-                    let schema = self
-                        .voices
-                        .iter()
-                        .find(|v| v.client == client && v.id == *id)
-                        .map(|v| v.schema.clone())
-                        .or_else(|| program.instrument(instrument).map(|i| Arc::new(i.clone())));
-                    let Some(instrument) = schema else {
-                        fail(format!(
-                            "the instrument of note {id} is not defined any more"
-                        ));
-                        continue;
-                    };
                     let seconds = glide.map_or(0.0, |g| g.to_seconds(program.tempo));
                     if !seconds.is_finite() || !(0.0..=60.0).contains(&seconds) {
                         fail("`glide` must be between 0 and 60sec".into());
@@ -996,13 +933,8 @@ impl Session {
                     });
                 }
                 Op::Off { id, at, tag } => {
-                    let raw = at;
                     let at = self.resolve(*at);
-                    resolved[n] = Some(Op::Off {
-                        id: *id,
-                        at: self.logged(*raw),
-                        tag: tag.clone(),
-                    });
+
                     let Some(i) = open.iter().position(|(open, _)| open == id) else {
                         fail(format!("no note with id {id} is sounding"));
                         continue;
@@ -1022,13 +954,7 @@ impl Session {
                     tag,
                 } => {
                     let start = self.resolve(*at);
-                    resolved[n] = Some(Op::BufferWrite {
-                        name: name.clone(),
-                        at: self.logged(*at),
-                        offset: *offset,
-                        values: values.clone(),
-                        tag: tag.clone(),
-                    });
+
                     let program = self.program_at(start);
                     let Some((_, buffer)) = program.buffers.iter().find(|(n, _)| n == name) else {
                         fail(format!("no buffer `{name}`"));
@@ -1064,10 +990,7 @@ impl Session {
                 }
                 Op::Panic { at, tag } => {
                     let start = self.resolve(*at);
-                    resolved[n] = Some(Op::Panic {
-                        at: self.logged(*at),
-                        tag: tag.clone(),
-                    });
+
                     plans.push(Plan::Panic {
                         at: start,
                         tag: tag.clone(),
@@ -1082,17 +1005,7 @@ impl Session {
                 } => {
                     let at = self.resolve(*at);
                     let program = self.program_at(at);
-                    let schema = self
-                        .voices
-                        .iter()
-                        .find(|v| v.client == client && v.id == *id)
-                        .map(|v| v.schema.as_ref())
-                        .or_else(|| {
-                            open.iter()
-                                .find(|(i, _)| i == id)
-                                .and_then(|(_, n)| program.instrument(n))
-                        });
-                    let Some(schema) = schema else {
+                    let Some((_, schema)) = open.iter().find(|(open, _)| open == id) else {
                         fail(format!("no note with id {id}"));
                         continue;
                     };
@@ -1121,7 +1034,6 @@ impl Session {
                         at,
                         tag: tag.clone(),
                     });
-                    resolved[n] = Some(op.clone());
                 }
                 Op::Array { .. } => unreachable!("parameter events expanded"),
                 Op::Define { .. } | Op::Forget { .. } | Op::Transaction { .. } => {}
@@ -1142,13 +1054,6 @@ impl Session {
             };
         }
         let log_index = self.log.len();
-        self.log.push(LogEntry {
-            sample: clock,
-            input: LogInput::Send {
-                client,
-                ops: resolved.into_iter().flatten().collect(),
-            },
-        });
         self.accept_transactions(&accepted, client);
         let mut sent = Sent {
             notes: Vec::new(),
@@ -1173,6 +1078,10 @@ impl Session {
             sent.late += usize::from(at < clock);
             sent.first = Some(sent.first.map_or(at, |f| f.min(at)));
         }
+        self.log.push(LogEntry {
+            sample: clock,
+            input: LogInput::Send { client, ops },
+        });
         for plan in plans {
             let at = match plan {
                 Plan::NodeBind {
@@ -1321,7 +1230,6 @@ impl Session {
                             client,
                             id,
                             key,
-                            instrument: instrument.clone(),
                             schema,
                             tag: tag.clone(),
                         });

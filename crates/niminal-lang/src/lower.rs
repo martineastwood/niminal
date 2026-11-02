@@ -2955,7 +2955,17 @@ impl<'a> Lower<'a> {
 
     /// Arithmetic on lists goes entry by entry. A single value applies to every entry, and two lists must be the same length.
     fn binary_value(&mut self, op: BinOp, l: Datum, r: Datum, span: Span) -> Res<Datum> {
-        self.zip_values(l, r, span, |this, a, b| this.binary(op, a, b, span))
+        let tables = matches!(l, Datum::Table(_)) || matches!(r, Datum::Table(_));
+        let result = self.zip_values(l, r, span, |this, a, b| this.binary(op, a, b, span))?;
+        Ok(if tables { self.tabled(result) } else { result })
+    }
+
+    /// An array of numbers known while compiling, as the table it came from; anything else as it is.
+    fn tabled(&mut self, value: Datum) -> Datum {
+        match self.as_table(value.clone(), Span::new(0, 0)) {
+            Ok(table) => Datum::Table(table),
+            Err(_) => value,
+        }
     }
 
     fn zip_values(
@@ -2968,6 +2978,8 @@ impl<'a> Lower<'a> {
         match (a, b) {
             (Datum::Record(fields), b) => self.zip_values(fields[0].1.clone(), b, span, operation),
             (a, Datum::Record(fields)) => self.zip_values(a, fields[0].1.clone(), span, operation),
+            (Datum::Table(t), b) => self.zip_values(Datum::array(table_entries(&t)), b, span, operation),
+            (a, Datum::Table(t)) => self.zip_values(a, Datum::array(table_entries(&t)), span, operation),
             (Datum::Sig(a), Datum::Sig(b)) => operation(self, a, b).map(Datum::Sig),
             (Datum::Array(a), Datum::Array(b)) => {
                 if a.len() != b.len() {
@@ -3053,6 +3065,10 @@ impl<'a> Lower<'a> {
                     .collect::<Res<_>>()?,
             )),
             Datum::Record(fields) => self.map_value(fields[0].1.clone(), span, operation),
+            Datum::Table(table) => {
+                let mapped = self.map_value(Datum::array(table_entries(&table)), span, operation)?;
+                Ok(self.tabled(mapped))
+            }
             _ => Err(Diagnostic::new(
                 "this operation needs a number or an array",
                 span,
@@ -3322,6 +3338,15 @@ impl<'a> Lower<'a> {
                         | "concat"
                         | "integrate"
                         | "mix"
+                        | "slice"
+                        | "frames"
+                        | "spectrum"
+                        | "phases"
+                        | "mean"
+                        | "rms"
+                        | "remove_dc"
+                        | "soften"
+                        | "fade"
                 ) =>
             {
                 self.as_table(value.clone(), span)?
@@ -3376,6 +3401,82 @@ impl<'a> Lower<'a> {
                     }
                 };
                 Datum::Table(Arc::new(table.concat(&other)))
+            }
+            "slice" => {
+                let bound = funcs::bind("slice", name.span, &["start", "end"], 2, &args[1..])?;
+                let len = table.len();
+                let start = self.whole_number(&bound[0].expect("required").value, 0, len)?;
+                let end = match bound[1] {
+                    Some(a) => self.whole_number(&a.value, 0, len)?,
+                    None => len,
+                };
+                if end <= start {
+                    return Err(Diagnostic::new(
+                        "a slice of a table needs `end` after `start`",
+                        name.span,
+                    ));
+                }
+                Datum::Table(Arc::new(table.slice(start, end)))
+            }
+            "frames" => {
+                let size = self.whole_number(&args[1].value, 1, table.len())?;
+                Datum::array(
+                    table
+                        .frames(size)
+                        .into_iter()
+                        .map(|t| Datum::Table(Arc::new(t)))
+                        .collect(),
+                )
+            }
+            "spectrum" | "phases" => {
+                let count = match args.get(1) {
+                    Some(a) => self.whole_number(&a.value, 1, 4096)?,
+                    None => {
+                        return Err(Diagnostic::new(
+                            format!("`{}` takes how many harmonics to measure", name.name),
+                            name.span,
+                        ));
+                    }
+                };
+                let (amps, phases) = crate::tables::spectrum(&table, count);
+                let found = if name.name == "spectrum" { amps } else { phases };
+                Datum::array(
+                    found
+                        .into_iter()
+                        .map(|v| Datum::Sig(Sig::constant(Unit::Num, v)))
+                        .collect(),
+                )
+            }
+            "mean" | "rms" => {
+                if args.len() > 1 {
+                    return Err(Diagnostic::new(
+                        format!("`{}` takes no arguments", name.name),
+                        name.span,
+                    ));
+                }
+                let v = if name.name == "mean" { table.mean() } else { table.rms() };
+                Datum::Sig(Sig::constant(Unit::Num, v))
+            }
+            "remove_dc" => {
+                if args.len() > 1 {
+                    return Err(Diagnostic::new("`remove_dc` takes no arguments", name.span));
+                }
+                Datum::Table(Arc::new(table.remove_dc()))
+            }
+            "soften" | "fade" => {
+                let what = if name.name == "soften" { "a width" } else { "a length" };
+                let Some(a) = args.get(1) else {
+                    return Err(Diagnostic::new(
+                        format!("`{}` takes {what} in entries", name.name),
+                        name.span,
+                    ));
+                };
+                let n = self.whole_number(&a.value, 1, table.len())?;
+                Datum::Table(Arc::new(if name.name == "soften" {
+                    table.soften(n)
+                } else {
+                    table.fade(n)
+                }))
             }
             "mix" => {
                 let names = ["other", "amount"];
@@ -4913,7 +5014,12 @@ impl<'a> Lower<'a> {
         }
         match n {
             "map" | "sum" | "len" | "channels" | "indices" | "at" | "phase" | "step" | "active"
-            | "normalize" | "reverse" | "rotate" | "resample" | "concat" | "integrate" | "mix" => {
+            | "normalize" | "reverse" | "rotate" | "resample" | "concat" | "integrate" | "mix"
+            | "slice" | "spectrum" | "phases" | "mean" | "rms" | "remove_dc" | "soften" | "fade" => {
+                return self.array_call(name, args, span);
+            }
+            // `x.frames(size, fn(w) { ... })` belongs to signals
+            "frames" if args.len() == 2 && args[0].receiver => {
                 return self.array_call(name, args, span);
             }
             "record" => return self.buffer_record(name, args, span),
@@ -6348,6 +6454,20 @@ impl Lower<'_> {
         }
     }
 
+    /// `true` or `false` (or a constant 1 or 0), known while compiling; `default` when not given.
+    fn flag(&mut self, arg: Option<&Arg>, default: bool) -> Res<bool> {
+        let Some(arg) = arg else { return Ok(default) };
+        match self.expr(&arg.value)? {
+            Sig {
+                konst: Some(k), ..
+            } if k == 0.0 || k == 1.0 => Ok(k == 1.0),
+            _ => Err(Diagnostic::new(
+                "expected `true` or `false`",
+                arg.value.span,
+            )),
+        }
+    }
+
     fn const_numbers(&mut self, value: Datum, span: Span, what: &str) -> Res<Vec<f64>> {
         let mut out = Vec::new();
         for item in self.entries(value, span)? {
@@ -6370,7 +6490,7 @@ impl Lower<'_> {
 
     /// `harmonics([1, -1/2, 1/3], size: 4096, phases: [...])`
     fn harmonics(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
-        let names = ["amps", "size", "phases"];
+        let names = ["amps", "size", "phases", "normalize"];
         let bound = funcs::bind(&name.name, name.span, &names, 1, args)?;
         let Some(amps) = bound[0] else {
             return Err(Diagnostic::new(
@@ -6393,15 +6513,17 @@ impl Lower<'_> {
             }?),
             None => None,
         };
+        let normalize = self.flag(bound[3], true)?;
         Ok(Datum::Table(Arc::new(crate::tables::harmonics(
             &weights,
             phases.as_deref(),
             size,
+            normalize,
         ))))
     }
 
     fn partials(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
-        let names = ["partials", "size"];
+        let names = ["partials", "size", "normalize"];
         let bound = funcs::bind(&name.name, name.span, &names, 1, args)?;
         let Some(list) = bound[0] else {
             return Err(Diagnostic::new(
@@ -6431,11 +6553,14 @@ impl Lower<'_> {
             };
             rows.push(row);
         }
-        Ok(Datum::Table(Arc::new(crate::tables::partials(&rows, size))))
+        let normalize = self.flag(bound[2], true)?;
+        Ok(Datum::Table(Arc::new(crate::tables::partials(
+            &rows, size, normalize,
+        ))))
     }
 
     fn cosines(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
-        let names = ["amps", "size"];
+        let names = ["amps", "size", "normalize"];
         let bound = funcs::bind(&name.name, name.span, &names, 1, args)?;
         let Some(amps) = bound[0] else {
             return Err(Diagnostic::new(
@@ -6451,13 +6576,14 @@ impl Lower<'_> {
             let __v = self.value(&amps.value)?;
             self.const_numbers(__v, amps.value.span, "the amplitudes")
         }?;
+        let normalize = self.flag(bound[2], true)?;
         Ok(Datum::Table(Arc::new(crate::tables::cosines(
-            &weights, size,
+            &weights, size, normalize,
         ))))
     }
 
     fn curve(&mut self, name: &Ident, args: &[Arg]) -> Res<Datum> {
-        let names = ["points", "size", "shape"];
+        let names = ["points", "size", "shape", "bend"];
         let bound = funcs::bind(&name.name, name.span, &names, 1, args)?;
         let Some(points) = bound[0] else {
             return Err(Diagnostic::new(
@@ -6484,6 +6610,18 @@ impl Lower<'_> {
             },
             None => crate::tables::CurveShape::Linear,
         };
+        let bend = match bound[3] {
+            Some(a) => match self.expr(&a.value)?.konst {
+                Some(k) if k.is_finite() && k.abs() <= 20.0 => k,
+                _ => {
+                    return Err(Diagnostic::new(
+                        "`bend` is a number from -20 to 20, known while compiling",
+                        a.value.span,
+                    ));
+                }
+            },
+            None => 0.0,
+        };
         let mut rows = Vec::new();
         for item in {
             let __v = self.value(&points.value)?;
@@ -6495,7 +6633,7 @@ impl Lower<'_> {
             };
             rows.push([*x, *y]);
         }
-        crate::tables::curve(&rows, size, shape)
+        crate::tables::curve(&rows, size, shape, bend)
             .map(|t| Datum::Table(Arc::new(t)))
             .map_err(|e| Diagnostic::new(e, name.span))
     }
@@ -6655,9 +6793,10 @@ impl Lower<'_> {
                 ExprKind::Name(n) if n == "bilateral" => crate::tables::Dist::Bilateral,
                 ExprKind::Name(n) if n == "cauchy" => crate::tables::Dist::Cauchy,
                 ExprKind::Name(n) if n == "poisson" => crate::tables::Dist::Poisson,
+                ExprKind::Name(n) if n == "gauss" => crate::tables::Dist::Gauss,
                 _ => {
                     return Err(Diagnostic::new(
-                        "`dist` is uniform, linear, triangle, exponential, bilateral, cauchy or poisson",
+                        "`dist` is uniform, linear, triangle, exponential, bilateral, cauchy, poisson or gauss",
                         a.value.span,
                     ));
                 }

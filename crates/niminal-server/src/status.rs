@@ -13,8 +13,8 @@ fn visible_name(name: &str, client: Option<u64>) -> Option<&str> {
     }
 }
 
-fn controls_json(session: &Session, client: Option<u64>) -> Vec<Value> {
-    session.control_values().iter().filter_map(|(name, value, target, unit)| {
+fn controls_json(values: &[(String, f32, f32, Option<&str>)], client: Option<u64>) -> Vec<Value> {
+    values.iter().filter_map(|(name, value, target, unit)| {
         let name = visible_name(name, client)?;
         let display = |value: f32| if *unit == Some("db") {
             20.0 * f64::from(value.max(f32::MIN_POSITIVE)).log10()
@@ -49,7 +49,7 @@ fn inspection_json(session: &Session, client: Option<u64>) -> Value {
             "deadline_misses": m.deadline_misses, "max_render_micros": m.max_render_micros,
             "mixer_builds": m.mixer_builds, "planner_panics": m.planner_panics,
         })),
-        "controls": controls_json(session, client),
+        "controls": controls_json(&values, client),
         "processing_latency": session.program().processing_latency(),
         "instruments": program.instruments.iter().filter_map(|i| {
             let name = visible_name(&i.name, client)?;

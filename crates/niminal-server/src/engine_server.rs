@@ -366,16 +366,13 @@ impl EngineReply {
                 "limits": { "buffer_write_samples": 65536, "message_bytes": 4194304, "buffer_bytes":268435456,"file_chunk_bytes":262144,"report_values":64,"scope_frames":4096,"scopes_per_client":crate::scopes::MAX_SCOPES },
             }),
             EngineReply::Subscribed(topics) => json!({ "topics": topics }),
-            EngineReply::Sent { sent, horizon } => json!({
-                "notes": sent.notes,
-                "transactions": sent.transactions,
-                "accepted": sent.accepted,
-                "late": sent.late,
-                "first": sent.first,
-                "horizon": horizon,
-            }),
+            EngineReply::Sent { sent, horizon } => {
+                let mut result = serde_json::to_value(sent).expect("serializable receipt");
+                result["horizon"] = json!(horizon);
+                result
+            }
             EngineReply::Cancelled(c) => {
-                json!({ "cancelled": c.cancelled, "released": c.released })
+                serde_json::to_value(c).expect("serializable cancellation")
             }
             EngineReply::Panicked => json!({}),
             EngineReply::Json(v) => v.clone(),
@@ -385,11 +382,7 @@ impl EngineReply {
 }
 
 pub fn clock_json(c: &ClockInfo) -> Value {
-    json!({
-        "sample": c.sample,
-        "sample_rate": c.sample_rate, "prepared_until": c.prepared_until, "lookahead": c.lookahead,
-        "output_latency": c.output_latency, "wall_micros": c.wall_micros, "voices": c.voices,
-    })
+    serde_json::to_value(c).expect("serializable clock")
 }
 
 #[derive(Default)]

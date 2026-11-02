@@ -189,3 +189,87 @@ fn a_sample_can_be_cut_at_the_hits_found_in_it() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn tables_can_be_combined_with_arithmetic() {
+    ok(r#"
+const a = harmonics([1, 0.5], size: 64)
+const w = window(hann, size: 64)
+const shaped = a * w
+const louder = shaped * 2 + 0.1
+const flipped = -a
+const folded = a.abs
+const mixed = 1 - w
+instr x(freq: hz) { osc(shaped, freq) + osc(folded, freq) * env[1 10ms 0] }
+"#);
+    let errors = compile("const a = ramp(0, 1, size: 4)\nconst b = ramp(0, 1, size: 8)\nconst c = a + b\n")
+        .err()
+        .expect("sizes differ");
+    assert!(errors[0].message.contains("4"), "{:?}", errors[0].message);
+}
+
+#[test]
+fn tables_can_be_cut_and_chopped_into_a_bank() {
+    ok(r#"
+const a = harmonics([1], size: 64)
+const b = harmonics([1, 1], size: 64)
+const both = a.concat(b)
+const first = both.slice(0, 64)
+const second = both.slice(64)
+const frames = both.frames(64)
+const morph = bank(frames)
+instr x(freq: hz, p: num) { osc(morph, freq, position: p) + osc(first.concat(second).resample(64), freq) }
+"#);
+    for bad in [
+        "both.slice(5, 5)",
+        "both.slice(0, 500)",
+        "both.frames(500)",
+        "both.frames(0)",
+    ] {
+        let source = format!("const a = harmonics([1], size: 64)\nconst both = a.concat(a)\nconst x = {bad}\n");
+        assert!(compile(&source).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn a_table_can_be_measured_and_rebuilt_from_its_harmonics() {
+    ok(r#"
+const organ = harmonics([1, 0, 1/3, 0, 1/5], size: 512, normalize: false)
+const amps = organ.spectrum(8)
+const phases = organ.phases(8)
+const rebuilt = harmonics(amps.map(it * 0.5), size: 512, phases: phases, normalize: false)
+const level = organ.rms + organ.mean
+const cleaned = organ.remove_dc.soften(3).fade(16)
+instr x(freq: hz) { osc(rebuilt, freq) * level }
+"#);
+    assert!(compile("const a = harmonics([1])\nconst b = a.spectrum\n").is_err());
+}
+
+#[test]
+fn a_curve_can_bend_and_an_exp_curve_cannot_start_at_zero() {
+    ok("const a = curve([[0, 0], [1, 1]], size: 64, bend: -3)\n");
+    ok("const a = curve([[0, 1], [1, 0.001]], size: 64, shape: exp)\n");
+    let errors = compile("const a = curve([[0, 0], [1, 1]], size: 64, shape: exp)\n")
+        .err()
+        .expect("an exp curve through zero");
+    assert!(errors[0].message.contains("bend"), "{:?}", errors[0].message);
+    assert!(compile("const a = curve([[0, 0], [1, 1]], bend: 99)\n").is_err());
+}
+
+#[test]
+fn random_tables_can_be_gaussian_and_steps_must_rise() {
+    ok("const n = random(64, dist: gauss, seed: 3)\n");
+    assert!(compile("const s = steps([4, 0], [1, 2], size: 8)\n").is_err());
+}
+
+#[test]
+fn a_scala_file_is_a_table_of_degrees() {
+    let dir = std::env::temp_dir().join(format!("niminal-scl-lang-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("just.scl"), "just\n 2\n 5/4\n 2/1\n").unwrap();
+    let path = dir.join("just.scl").to_string_lossy().replace('\\', "/");
+    ok(&format!(
+        "const degrees = file(\"{path}\")\nconst n = degrees.len\ninstr a(degree: num) {{ osc(sine, 440hz * pow(2, degrees[degree] / 12)) }}"
+    ));
+    std::fs::remove_dir_all(&dir).ok();
+}

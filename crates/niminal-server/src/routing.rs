@@ -977,6 +977,7 @@ impl Routing {
                         .filter_map(|&b| mapping.get(b).copied().flatten())
                         .collect();
                     render_node.def.controls.clear();
+                    let mut exposed_keys = Vec::new();
                     for control in &fx.controls {
                         let param = param_name(control);
                         let mut exposed = control.clone();
@@ -990,27 +991,14 @@ impl Routing {
                             .def
                             .controls
                             .push((exposed.key.clone(), exposed.key.clone()));
+                        exposed_keys.push((control.key.as_str(), exposed.key.clone()));
                         program.controls.push(exposed);
                     }
                     if let Some(graph) = &render_node.def.chain {
                         let mut graph = graph.expose_controls(
-                            &fx.controls
+                            &exposed_keys
                                 .iter()
-                                .map(|c| {
-                                    (
-                                        c.key.as_str(),
-                                        program
-                                            .controls
-                                            .iter()
-                                            .rev()
-                                            .find(|p| {
-                                                p.name == format!("{name}::{}", param_name(c))
-                                            })
-                                            .unwrap()
-                                            .key
-                                            .as_str(),
-                                    )
-                                })
+                                .map(|(old, new)| (*old, new.as_str()))
                                 .collect::<Vec<_>>(),
                         );
                         for control in &fx.controls {
@@ -1228,53 +1216,42 @@ impl Routing {
             .get(&client)
             .ok_or("this connection has no routing graph")?;
         let mut updates = Vec::new();
+        let set = |id: &str, param: &str, value: Value, glide: f64| {
+            let key = param_key(client, id, param);
+            let def = program
+                .controls
+                .iter()
+                .find(|c| c.key == key)
+                .ok_or_else(|| format!("unknown fx parameter `{param}`"))?;
+            Ok::<_, String>((key, control_value(def, value, program.tempo)?, glide))
+        };
         for edit in edits {
-            if let RoutingEdit::Array {
-                id,
-                param,
-                values,
-                glide,
-            } = edit
-            {
-                let node = self
-                    .clients
-                    .get(&client)
-                    .and_then(|p| p.nodes.get(id))
-                    .ok_or("no node")?;
-                let fx = &node.fx.as_ref().ok_or("no fx")?.1;
-                let paths = fx.arrays.get(param).ok_or("no array parameter")?;
-                if paths.len() != values.len() {
-                    return Err("array shape differs".into());
-                }
-                updates.extend(self.updates(
-                    client,
-                    &[RoutingEdit::Set {
-                        id: id.clone(),
-                        args: paths.iter().cloned().zip(values.iter().copied()).collect(),
-                        glide: *glide,
-                    }],
-                    program,
-                )?);
-                continue;
-            }
             match edit {
-                RoutingEdit::Map { .. }
-                | RoutingEdit::Array { .. }
-                | RoutingEdit::BindBuffer { .. } => {}
+                RoutingEdit::Array {
+                    id,
+                    param,
+                    values,
+                    glide,
+                } => {
+                    smoothing(*glide)?;
+                    let node = patch.nodes.get(id).ok_or("no node")?;
+                    let fx = &node.fx.as_ref().ok_or("no fx")?.1;
+                    let paths = fx.arrays.get(param).ok_or("no array parameter")?;
+                    if paths.len() != values.len() {
+                        return Err("array shape differs".into());
+                    }
+                    for (path, value) in paths.iter().zip(values) {
+                        updates.push(set(id, path, *value, *glide)?);
+                    }
+                }
+                RoutingEdit::Map { .. } | RoutingEdit::BindBuffer { .. } => {}
                 RoutingEdit::Set { id, args, glide } => {
                     smoothing(*glide)?;
                     if !patch.nodes.contains_key(id) {
                         return Err(format!("no node `{id}`"));
                     }
                     for (name, value) in args {
-                        let key = format!("{}::{name}", node_name(client, id));
-                        let def = program
-                            .controls
-                            .iter()
-                            .find(|c| c.key == key)
-                            .ok_or_else(|| format!("unknown fx parameter `{name}`"))?;
-                        let value = control_value(def, *value, program.tempo)?;
-                        updates.push((key, value, *glide));
+                        updates.push(set(id, name, *value, *glide)?);
                     }
                 }
                 RoutingEdit::Gain { id, value, glide } => {
@@ -1282,8 +1259,7 @@ impl Routing {
                     if !patch.connections.contains_key(id) {
                         return Err(format!("no connection `{id}`"));
                     }
-                    gain(*value)?;
-                    updates.push((connection_key(client, id), *value as f32, *glide));
+                    updates.push((connection_key(client, id), gain(*value)?, *glide));
                 }
                 _ => unreachable!("only control edits use the control path"),
             }

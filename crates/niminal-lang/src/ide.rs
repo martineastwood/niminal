@@ -450,6 +450,39 @@ fn array_ops() -> Vec<OpInfo> {
             &[("other", "table", true), ("amount", "number", false)],
         ),
         method(
+            "slice",
+            "The entries from `start` up to `end` (the end of the table when left out).",
+            &[("start", "integer", true), ("end", "integer", false)],
+        ),
+        method(
+            "frames",
+            "Cut a table into an array of tables of `size` entries, dropping a short piece at the end: `bank(file(\"wt.wav\").frames(2048))`.",
+            &[("size", "integer", true)],
+        ),
+        method(
+            "spectrum",
+            "The amplitudes of the first `count` harmonics of a one cycle table, for `harmonics(amps)`.",
+            &[("count", "integer", true)],
+        ),
+        method(
+            "phases",
+            "The phases, in cycles, of the first `count` harmonics of a one cycle table, for `harmonics(amps, phases:)`.",
+            &[("count", "integer", true)],
+        ),
+        method("mean", "The average of a table's entries.", &[]),
+        method("rms", "The root-mean-square level of a table.", &[]),
+        method("remove_dc", "Subtract a table's average so it is centred on 0.", &[]),
+        method(
+            "soften",
+            "Average each entry with its neighbours over `width` entries, wrapping round the ends.",
+            &[("width", "integer", true)],
+        ),
+        method(
+            "fade",
+            "Fade the first and last `length` entries to and from silence.",
+            &[("length", "integer", true)],
+        ),
+        method(
             "record",
             "Write a signal into a shared buffer.",
             &[("x", "number", true), ("loop", "bool", false)],
@@ -463,34 +496,44 @@ fn array_ops() -> Vec<OpInfo> {
         ),
         op_info(
             "harmonics",
-            "One cycle from harmonic amplitudes.",
+            "One cycle from harmonic amplitudes, scaled to peak at 1 unless `normalize: false`.",
             false,
             &[
                 ("amps", "array", true),
                 ("size", "integer", false),
                 ("phases", "array", false),
+                ("normalize", "bool", false),
             ],
         ),
         op_info(
             "partials",
             "One cycle from inharmonic partials `[ratio, amp]` or `[ratio, amp, phase]`.",
             false,
-            &[("partials", "array", true), ("size", "integer", false)],
+            &[
+                ("partials", "array", true),
+                ("size", "integer", false),
+                ("normalize", "bool", false),
+            ],
         ),
         op_info(
             "cosines",
             "One cycle from a cosine series.",
             false,
-            &[("amps", "array", true), ("size", "integer", false)],
+            &[
+                ("amps", "array", true),
+                ("size", "integer", false),
+                ("normalize", "bool", false),
+            ],
         ),
         op_info(
             "curve",
-            "Breakpoint curve through `[x, y]` points.",
+            "Breakpoint curve through `[x, y]` points. `bend:` curves a linear curve (negative starts fast, positive starts slow), also through 0; an `exp` curve can't touch 0.",
             false,
             &[
                 ("points", "array", true),
                 ("size", "integer", false),
                 ("shape", "linear | exp | cubic | spline", false),
+                ("bend", "number", false),
             ],
         ),
         op_info(
@@ -533,7 +576,7 @@ fn array_ops() -> Vec<OpInfo> {
         ),
         op_info(
             "random",
-            "Deterministic random table; seed is required.",
+            "Deterministic random table within -1..1: uniform, linear, triangle, exponential, bilateral, cauchy, poisson or gauss. Seed is required.",
             false,
             &[
                 ("size", "integer", true),
@@ -543,7 +586,7 @@ fn array_ops() -> Vec<OpInfo> {
         ),
         op_info(
             "file",
-            "Load one channel of a WAV, or one column of a .csv/.txt/.dat file of numbers, as a table. `{n}` or `{n:2}` in the path is a constant.",
+            "Load one channel of a WAV, or one column of a .csv/.txt/.dat file of numbers, as a table. A Scala .scl tuning file loads as its degrees in semitones, 0 first and the period last. `{n}` or `{n:2}` in the path is a constant.",
             false,
             &[
                 ("path", "text", true),

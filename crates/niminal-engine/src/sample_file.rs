@@ -12,7 +12,9 @@ pub fn read_sample_file(path: &Path) -> Result<Vec<Table>, String> {
     let is_wav = path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("wav"));
-    if is_text {
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("scl")) {
+        read_scala(path).map(|t| vec![t])
+    } else if is_text {
         read_text(path)
     } else if is_wav {
         read_wav(path)
@@ -79,6 +81,37 @@ fn read_text(path: &Path) -> Result<Vec<Table>, String> {
         .into_iter()
         .map(|c| Table::from_f32(c.into_boxed_slice(), None))
         .collect())
+}
+
+/// A Scala tuning file as one table of the scale's degrees in semitones above the root: 0 first, then every
+/// pitch the file lists, so the last entry is the period (12 for an ordinary octave).
+fn read_scala(path: &Path) -> Result<Table, String> {
+    let fail = |e: &dyn std::fmt::Display| format!("can't read {}: {e}", path.display());
+    let text = std::fs::read_to_string(path).map_err(|e| fail(&e))?;
+    let mut lines = text.lines().filter(|l| !l.trim_start().starts_with('!'));
+    lines.next(); // the description, which may be empty
+    let count: usize = lines
+        .next()
+        .and_then(|l| l.trim().parse().ok())
+        .ok_or_else(|| fail(&"the second line must say how many pitches follow"))?;
+    let mut degrees = vec![0.0f64];
+    for line in lines.take(count) {
+        let word = line.split_whitespace().next().unwrap_or("");
+        let semitones = if word.contains('.') {
+            word.parse::<f64>().map(|cents| cents / 100.0).ok()
+        } else {
+            let (top, bottom) = word.split_once('/').unwrap_or((word, "1"));
+            match (top.parse::<f64>(), bottom.parse::<f64>()) {
+                (Ok(t), Ok(b)) if t > 0.0 && b > 0.0 => Some(12.0 * (t / b).log2()),
+                _ => None,
+            }
+        };
+        degrees.push(semitones.ok_or_else(|| fail(&format!("`{word}` is not a pitch")))?);
+    }
+    if degrees.len() != count + 1 {
+        return Err(fail(&format!("it lists fewer than the {count} pitches it promises")));
+    }
+    Ok(Table::from_f64(degrees, None))
 }
 
 /// FLAC, MP3, Ogg Vorbis, AIFF, AAC and the like, decoded to one table per channel.
@@ -244,6 +277,23 @@ fn read_wav(path: &Path) -> Result<Vec<Table>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scala_file_is_degrees_in_semitones() {
+        let dir = std::env::temp_dir().join(format!("niminal-scl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("just.scl");
+        std::fs::write(&path, "! just.scl\nJust major\n 3\n!\n 9/8\n 5/4 major third\n 2\n").unwrap();
+        let table = &read_sample_file(&path).unwrap()[0];
+        let expected = [0.0, 2.0391, 3.8631, 12.0];
+        assert_eq!(table.len(), 4);
+        for (got, want) in table.data().iter().zip(expected) {
+            assert!((got - want).abs() < 1e-3, "{got} vs {want}");
+        }
+        std::fs::write(&path, "x\n 3\n 9/8\n").unwrap();
+        assert!(read_sample_file(&path).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn a_wav_says_its_root_note_and_loop() {

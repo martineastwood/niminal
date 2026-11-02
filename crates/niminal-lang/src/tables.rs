@@ -1,13 +1,13 @@
-//! Named table constructors and transforms (the modern GEN routines).
+//! Named table constructors and transforms.
 //!
 //! All constructors are pure, deterministic, and return a [`Table`]. They
 //! accumulate in f64 and store f32.
 
 use niminal_engine::Table;
 
-/// One cycle of a wave from harmonic amplitudes (GEN10).
-/// `amps[0]` is the fundamental; optional `phases` are in cycles (0..1).
-pub fn harmonics(amps: &[f64], phases: Option<&[f64]>, size: usize) -> Table {
+/// One cycle of a wave from harmonic amplitudes.
+/// `amps[0]` is the fundamental; optional `phases` are in cycles (0..1). With `normalize` the peak is 1.
+pub fn harmonics(amps: &[f64], phases: Option<&[f64]>, size: usize, normalize: bool) -> Table {
     assert!(size > 0);
     let mut table: Vec<f64> = (0..size)
         .map(|i| {
@@ -22,12 +22,14 @@ pub fn harmonics(amps: &[f64], phases: Option<&[f64]>, size: usize) -> Table {
                 .sum()
         })
         .collect();
-    normalize_peak(&mut table);
+    if normalize {
+        normalize_peak(&mut table);
+    }
     Table::from_f64(table, None)
 }
 
-/// Inharmonic partials: each entry is `[ratio, amp]` or `[ratio, amp, phase]` (GEN09/19).
-pub fn partials(partials: &[[f64; 3]], size: usize) -> Table {
+/// Inharmonic partials: each entry is `[ratio, amp]` or `[ratio, amp, phase]`.
+pub fn partials(partials: &[[f64; 3]], size: usize, normalize: bool) -> Table {
     assert!(size > 0);
     let mut table: Vec<f64> = (0..size)
         .map(|i| {
@@ -38,12 +40,14 @@ pub fn partials(partials: &[[f64; 3]], size: usize) -> Table {
                 .sum()
         })
         .collect();
-    normalize_peak(&mut table);
+    if normalize {
+        normalize_peak(&mut table);
+    }
     Table::from_f64(table, None)
 }
 
-/// Cosine series (GEN11): `amps` weight cosines of successive harmonics.
-pub fn cosines(amps: &[f64], size: usize) -> Table {
+/// Cosine series: `amps` weight cosines of successive harmonics.
+pub fn cosines(amps: &[f64], size: usize, normalize: bool) -> Table {
     assert!(size > 0);
     let mut table: Vec<f64> = (0..size)
         .map(|i| {
@@ -54,7 +58,9 @@ pub fn cosines(amps: &[f64], size: usize) -> Table {
                 .sum()
         })
         .collect();
-    normalize_peak(&mut table);
+    if normalize {
+        normalize_peak(&mut table);
+    }
     Table::from_f64(table, None)
 }
 
@@ -66,8 +72,14 @@ pub enum CurveShape {
     Spline,
 }
 
-/// Breakpoint curve through `[x, y]` points spanning 0..1 on x (GEN05/07/08).
-pub fn curve(points: &[[f64; 2]], size: usize, shape: CurveShape) -> Result<Table, String> {
+/// Breakpoint curve through `[x, y]` points spanning 0..1 on x.
+/// `bend` curves every linear segment: negative starts fast and settles, positive starts slow and rushes.
+pub fn curve(
+    points: &[[f64; 2]],
+    size: usize,
+    shape: CurveShape,
+    bend: f64,
+) -> Result<Table, String> {
     assert!(size > 0);
     if points.len() < 2 {
         return Err("a curve needs at least two points".into());
@@ -79,16 +91,29 @@ pub fn curve(points: &[[f64; 2]], size: usize, shape: CurveShape) -> Result<Tabl
             return Err("curve points must have distinct x positions".into());
         }
     }
+    if bend != 0.0 && shape != CurveShape::Linear {
+        return Err("`bend` curves a `linear` curve".into());
+    }
+    if shape == CurveShape::Exp
+        && pts
+            .windows(2)
+            .any(|w| w[0][1] == 0.0 || w[1][1] == 0.0 || (w[0][1] < 0.0) != (w[1][1] < 0.0))
+    {
+        return Err(
+            "an `exp` curve can't start, end or cross at 0 (it grows by a ratio); use `bend:` on a linear curve instead"
+                .into(),
+        );
+    }
     let data: Vec<f64> = (0..size)
         .map(|i| {
             let x = i as f64 / (size - 1).max(1) as f64;
-            interpolate_curve(&pts, x, shape)
+            interpolate_curve(&pts, x, shape, bend)
         })
         .collect();
     Ok(Table::from_f64(data, None))
 }
 
-fn interpolate_curve(pts: &[[f64; 2]], x: f64, shape: CurveShape) -> f64 {
+fn interpolate_curve(pts: &[[f64; 2]], x: f64, shape: CurveShape, bend: f64) -> f64 {
     if x <= pts[0][0] {
         return pts[0][1];
     }
@@ -104,16 +129,18 @@ fn interpolate_curve(pts: &[[f64; 2]], x: f64, shape: CurveShape) -> f64 {
     let (x1, y1) = (pts[i + 1][0], pts[i + 1][1]);
     let t = (x - x0) / (x1 - x0);
     match shape {
-        CurveShape::Linear => y0 + (y1 - y0) * t,
-        CurveShape::Exp => {
-            if (y0 <= 0.0 && y1 <= 0.0) || (y0 >= 0.0 && y1 >= 0.0 && y0 != 0.0 && y1 != 0.0) {
-                let a = y0.abs().max(1e-30);
-                let b = y1.abs().max(1e-30);
-                let sign = if y1 < 0.0 || y0 < 0.0 { -1.0 } else { 1.0 };
-                sign * a * (b / a).powf(t)
+        CurveShape::Linear => {
+            let t = if bend.abs() < 1e-9 {
+                t
             } else {
-                y0 + (y1 - y0) * t
-            }
+                (bend * t).exp_m1() / bend.exp_m1()
+            };
+            y0 + (y1 - y0) * t
+        }
+        CurveShape::Exp => {
+            // `curve` has checked that both ends are non-zero and on the same side of 0
+            let sign = y0.signum();
+            sign * y0.abs() * (y1.abs() / y0.abs()).powf(t)
         }
         CurveShape::Cubic => {
             let t2 = t * t;
@@ -131,11 +158,14 @@ fn interpolate_curve(pts: &[[f64; 2]], x: f64, shape: CurveShape) -> f64 {
     }
 }
 
-/// Step function: at each integer index `xs[i]`, hold value `ys[i]` (GEN17-style).
+/// Step function: at each integer index `xs[i]`, hold value `ys[i]`.
 pub fn steps(xs: &[f64], ys: &[f64], size: usize) -> Result<Table, String> {
     assert!(size > 0);
     if xs.len() != ys.len() || xs.is_empty() {
         return Err("`steps` needs matching x and y arrays".into());
+    }
+    if xs.windows(2).any(|w| w[0] > w[1]) {
+        return Err("the x positions of `steps` must rise".into());
     }
     let data: Vec<f64> = (0..size)
         .map(|i| {
@@ -151,7 +181,7 @@ pub fn steps(xs: &[f64], ys: &[f64], size: usize) -> Result<Table, String> {
     Ok(Table::from_f64(data, None))
 }
 
-/// Polynomial evaluated over -1..1 mapped onto the table (GEN03).
+/// Polynomial evaluated over -1..1 mapped onto the table.
 pub fn poly(coeffs: &[f64], size: usize) -> Table {
     assert!(size > 0);
     let data: Vec<f64> = (0..size)
@@ -187,7 +217,7 @@ pub fn ramp(start: f64, end: f64, size: usize) -> Table {
     Table::from_f64(data, None)
 }
 
-/// Chebyshev transfer function (GEN13): `amps[0]` weights T1(x), etc., over -1..1.
+/// Chebyshev transfer function: `amps[0]` weights T1(x), etc., over -1..1.
 pub fn cheby(amps: &[f64], size: usize) -> Table {
     assert!(size > 0);
     let data: Vec<f64> = (0..size)
@@ -230,7 +260,7 @@ pub enum WindowKind {
     Tri,
 }
 
-/// Window function (GEN20).
+/// Window function.
 pub fn window(kind: WindowKind, size: usize) -> Table {
     assert!(size > 0);
     let data: Vec<f64> = (0..size)
@@ -307,9 +337,10 @@ pub enum Dist {
     Bilateral,
     Cauchy,
     Poisson,
+    Gauss,
 }
 
-/// Deterministic pseudo-random table (GEN21). `seed` is required for replay identity.
+/// Deterministic pseudo-random table, every value within -1..1. `seed` is required for replay identity.
 pub fn random(size: usize, dist: Dist, seed: u64) -> Table {
     assert!(size > 0);
     let mut state = seed | 1;
@@ -324,17 +355,19 @@ pub fn random(size: usize, dist: Dist, seed: u64) -> Table {
         .map(|_| match dist {
             Dist::Uniform => next() * 2.0 - 1.0,
             Dist::Linear => {
-                let u = next();
-                u * u * 2.0 - 1.0
+                let (a, b) = (next(), next());
+                a.min(b) * 2.0 - 1.0
             }
             Dist::Triangle => next() + next() - 1.0,
             Dist::Exponential => {
+                // a long tail, cut off at 8 so the table stays within -1..1
                 let u = next().max(1e-12);
-                -u.ln() * 2.0 - 1.0
+                (-u.ln()).min(8.0) / 4.0 - 1.0
             }
             Dist::Bilateral => {
                 let u = next().max(1e-12);
-                if next() < 0.5 { u.ln() } else { -u.ln() }
+                let size = (-u.ln()).min(8.0) / 8.0;
+                if next() < 0.5 { size } else { -size }
             }
             Dist::Cauchy => {
                 let u = (next() - 0.5).clamp(-0.499, 0.499);
@@ -352,11 +385,47 @@ pub fn random(size: usize, dist: Dist, seed: u64) -> Table {
                     p *= lambda / k as f64;
                     s += p;
                 }
-                k as f64 / 10.0 * 2.0 - 1.0
+                k as f64 / 10.0 - 1.0
+            }
+            Dist::Gauss => {
+                // Box-Muller, three deviations to the edge
+                let (u, v) = (next().max(1e-12), next());
+                let z = (-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * v).cos();
+                (z / 3.0).clamp(-1.0, 1.0)
             }
         })
         .collect();
     Table::from_f64(data, None)
+}
+
+/// The strength and phase of harmonics 1..=`count` of a one cycle table, as `harmonics(amps, phases:)` takes
+/// them: amplitudes as measured, phases in cycles. Harmonics past what the table can hold read as 0.
+pub fn spectrum(table: &Table, count: usize) -> (Vec<f64>, Vec<f64>) {
+    let n = table.len();
+    let mut amps = Vec::with_capacity(count);
+    let mut phases = Vec::with_capacity(count);
+    for h in 1..=count {
+        if h >= n.div_ceil(2) {
+            amps.push(0.0);
+            phases.push(0.0);
+            continue;
+        }
+        let (mut sin, mut cos) = (0.0, 0.0);
+        for (i, &v) in table.data().iter().enumerate() {
+            let t = std::f64::consts::TAU * ((h * i) % n) as f64 / n as f64;
+            sin += f64::from(v) * t.sin();
+            cos += f64::from(v) * t.cos();
+        }
+        let (a, b) = (2.0 * sin / n as f64, 2.0 * cos / n as f64);
+        let amp = a.hypot(b);
+        amps.push(amp);
+        phases.push(if amp > 1e-9 {
+            b.atan2(a) / std::f64::consts::TAU
+        } else {
+            0.0
+        });
+    }
+    (amps, phases)
 }
 
 fn normalize_peak(table: &mut [f64]) {
@@ -374,14 +443,69 @@ mod tests {
 
     #[test]
     fn harmonics_sine_is_unit_peak() {
-        let t = harmonics(&[1.0], None, 64);
+        let t = harmonics(&[1.0], None, 64, true);
         let peak = t.data().iter().fold(0.0f32, |m, v| m.max(v.abs()));
         assert!((peak - 1.0).abs() < 1e-5, "{peak}");
     }
 
     #[test]
+    fn spectrum_recovers_what_harmonics_built() {
+        let amps = [1.0, 0.0, 0.5, 0.25];
+        let phases = [0.0, 0.0, 0.25, 0.1];
+        let t = harmonics(&amps, Some(&phases), 256, false);
+        let (found, found_phases) = spectrum(&t, 4);
+        for h in [0, 2, 3] {
+            assert!((found[h] - amps[h]).abs() < 1e-4, "{h}: {}", found[h]);
+            assert!((found_phases[h] - phases[h]).abs() < 1e-4, "{h}");
+        }
+        assert!(found[1].abs() < 1e-4);
+        // past what 256 entries can hold
+        assert_eq!(spectrum(&t, 200).0[199], 0.0);
+    }
+
+    #[test]
+    fn harmonics_keeps_relative_level_when_not_normalized() {
+        let t = harmonics(&[0.25], None, 64, false);
+        let peak = t.data().iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!((peak - 0.25).abs() < 1e-5, "{peak}");
+    }
+
+    #[test]
+    fn exp_curve_from_zero_is_refused_and_bend_works_through_zero() {
+        assert!(curve(&[[0.0, 0.0], [1.0, 1.0]], 8, CurveShape::Exp, 0.0).is_err());
+        let rise = curve(&[[0.0, 0.0], [1.0, 1.0]], 5, CurveShape::Linear, 4.0).unwrap();
+        assert!((rise.get(0) - 0.0).abs() < 1e-6 && (rise.get(4) - 1.0).abs() < 1e-6);
+        assert!(rise.get(2) < 0.25, "slow start: {}", rise.get(2));
+        assert!(curve(&[[0.0, 0.0], [1.0, 1.0]], 5, CurveShape::Cubic, 1.0).is_err());
+    }
+
+    #[test]
+    fn steps_must_rise() {
+        assert!(steps(&[4.0, 0.0], &[1.0, 2.0], 8).is_err());
+    }
+
+    #[test]
+    fn every_random_distribution_stays_within_one() {
+        for dist in [
+            Dist::Uniform,
+            Dist::Linear,
+            Dist::Triangle,
+            Dist::Exponential,
+            Dist::Bilateral,
+            Dist::Cauchy,
+            Dist::Poisson,
+            Dist::Gauss,
+        ] {
+            for seed in 1..40 {
+                let t = random(512, dist, seed);
+                assert!(t.data().iter().all(|v| v.abs() <= 1.0), "{dist:?}");
+            }
+        }
+    }
+
+    #[test]
     fn curve_linear_endpoints() {
-        let t = curve(&[[0.0, 0.0], [1.0, 1.0]], 5, CurveShape::Linear).unwrap();
+        let t = curve(&[[0.0, 0.0], [1.0, 1.0]], 5, CurveShape::Linear, 0.0).unwrap();
         assert!((t.get(0) - 0.0).abs() < 1e-5);
         assert!((t.get(4) - 1.0).abs() < 1e-5);
     }

@@ -199,6 +199,60 @@ impl Table {
         Table::from_f32(data, self.sample_rate.or(other.sample_rate))
     }
 
+    pub fn mean(&self) -> f64 {
+        self.data.iter().map(|&v| f64::from(v)).sum::<f64>() / self.data.len().max(1) as f64
+    }
+
+    pub fn rms(&self) -> f64 {
+        let sum: f64 = self.data.iter().map(|&v| f64::from(v).powi(2)).sum();
+        (sum / self.data.len().max(1) as f64).sqrt()
+    }
+
+    /// Subtract the mean, so the table has no DC offset.
+    pub fn remove_dc(&self) -> Self {
+        let mean = self.mean();
+        let data: Box<[f32]> = self.data.iter().map(|&v| (f64::from(v) - mean) as f32).collect();
+        Table::from_f32(data, self.sample_rate)
+    }
+
+    /// Moving average over `width` entries (wrapping, as a table is read as a cycle).
+    pub fn soften(&self, width: usize) -> Self {
+        let n = self.data.len();
+        let width = width.clamp(1, n);
+        let before = (width - 1) / 2;
+        let data: Box<[f32]> = (0..n)
+            .map(|i| {
+                let sum: f64 = (0..width)
+                    .map(|k| f64::from(self.data[(i + n + k - before) % n]))
+                    .sum();
+                (sum / width as f64) as f32
+            })
+            .collect();
+        Table::from_f32(data, self.sample_rate)
+    }
+
+    /// Ramp the first and last `length` entries to and from silence.
+    pub fn fade(&self, length: usize) -> Self {
+        let n = self.data.len();
+        let length = length.min(n / 2);
+        let mut data = self.data.to_vec();
+        for k in 0..length {
+            let gain = (k as f32 + 0.5) / length as f32;
+            data[k] *= gain;
+            data[n - 1 - k] *= gain;
+        }
+        Table::from_f32(data.into_boxed_slice(), self.sample_rate)
+    }
+
+    /// Consecutive pieces of `size` entries; a short piece left at the end is dropped.
+    pub fn frames(&self, size: usize) -> Vec<Table> {
+        assert!(size > 0, "a frame has at least one entry");
+        self.data
+            .chunks_exact(size)
+            .map(|chunk| Table::from_f32(chunk.to_vec().into_boxed_slice(), self.sample_rate))
+            .collect()
+    }
+
     pub fn slice(&self, start: usize, end: usize) -> Self {
         let end = end.min(self.data.len());
         let start = start.min(end);
@@ -366,6 +420,23 @@ mod tests {
         b.write(2, 0.5);
         assert_eq!(b.read(2), 0.5);
         assert!((b.read_at(2.0, Interp::None) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn remove_dc_centres_and_frames_drop_the_remainder() {
+        let t = Table::from_f64([1.0, 2.0, 3.0, 4.0, 5.0], None);
+        assert!((t.remove_dc().mean()).abs() < 1e-6);
+        let frames = t.frames(2);
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[1].data(), &[3.0, 4.0]);
+    }
+
+    #[test]
+    fn soften_averages_and_fade_ends_quietly() {
+        let t = Table::from_f64([0.0, 3.0, 0.0, 0.0], None).soften(3);
+        assert_eq!(t.data(), &[1.0, 1.0, 1.0, 0.0]);
+        let f = Table::from_f64([1.0; 8], None).fade(2);
+        assert!(f.get(0) < 0.5 && f.get(7) < 0.5 && f.get(3) == 1.0);
     }
 
     #[test]

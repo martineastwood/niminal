@@ -14,7 +14,7 @@ Tables are fixed-length arrays of plain numbers, shared by every voice. They hol
 ```nml
 const organ = harmonics([1, 0, 1/3, 0, 1/5], size: 2048)
 const saw8  = harmonics([1, -1/2, 1/3, -1/4], size: 4096)
-const rise  = curve([[0, 0], [1, 1]], size: 1024, shape: exp)
+const rise  = curve([[0, 0], [1, 1]], size: 1024, bend: 4)
 const hall  = file("irs/hall.wav")
 ```
 
@@ -24,25 +24,57 @@ const hall  = file("irs/hall.wav")
 
 | Constructor | Role |
 | --- | --- |
-| `harmonics(amps, size:, phases:)` | Harmonic sine series (GEN10) |
-| `partials([[ratio, amp], ...], size:)` | Inharmonic partials |
-| `cosines(amps, size:)` | Cosine series |
-| `curve([[x, y], ...], size:, shape:)` | Breakpoint curve: `linear`, `exp`, `cubic`, `spline` |
-| `steps(xs, ys, size:)` | Step function |
+| `harmonics(amps, size:, phases:, normalize:)` | Harmonic sine series |
+| `partials([[ratio, amp], ...], size:, normalize:)` | Inharmonic partials |
+| `cosines(amps, size:, normalize:)` | Cosine series |
+| `curve([[x, y], ...], size:, shape:, bend:)` | Breakpoint curve: `linear`, `exp`, `cubic`, `spline` |
+| `steps(xs, ys, size:)` | Step function; `xs` must rise |
 | `poly(coeffs, size:)` | Polynomial over -1..1 |
 | `ramp(start, end, size:)` | Linear ramp |
 | `cheby(amps, size:)` | Chebyshev transfer function for waveshaping |
 | `window(kind, size:)` | `hann`, `hamming`, `blackman`, `kaiser(beta)`, `gauss`, `tukey`, `sinc`, `tri` |
-| `random(size, dist:, seed:)` | Deterministic noise; `seed:` is required |
-| `file("path.wav", channel:, start:, end:)` | Load one channel of a WAV, or one column of a `.csv`, `.txt` or `.dat` file of numbers (a first line that isn't numbers is a header, `#` starts a comment) |
+| `random(size, dist:, seed:)` | Deterministic noise within -1..1; `dist:` is `uniform`, `linear`, `triangle`, `exponential`, `bilateral`, `cauchy`, `poisson` or `gauss`; `seed:` is required |
+| `file("path.wav", channel:, start:, end:)` | Load one channel of a WAV, or one column of a `.csv`, `.txt` or `.dat` file of numbers (a first line that isn't numbers is a header, `#` starts a comment), or a Scala `.scl` tuning file (see [Tunings](#tunings)) |
 | `bank([t1, t2, ...])` | Wavetable bank for `osc(..., position:)` |
 | `zeros(n)` | Zero-filled array (also used to size buffers) |
+
+`harmonics`, `partials` and `cosines` scale the result to peak at 1; pass `normalize: false` to keep the amplitudes you gave. A `linear` curve can `bend:` (negative starts fast and settles, positive starts slow and rushes) and that works through 0. An `exp` curve grows by a ratio, so it can't start, end or cross at 0; the compiler says so rather than drawing a straight line.
 
 A path can hold constants, so a table can be picked by number: `file("kick{n}.wav")`, and `{n:2}` pads to two digits (`kick07.wav`). Each must be a whole number known while compiling.
 
 ## Transforms
 
-Methods on a table: `.normalize`, `.reverse`, `.rotate(n)`, `.resample(n)`, `.concat(other)`, `.integrate`, `.mix(other, amount:)`.
+Methods on a table: `.normalize`, `.reverse`, `.rotate(n)`, `.resample(n)`, `.concat(other)`, `.integrate`, `.mix(other, amount:)`, `.slice(start, end)`, `.remove_dc`, `.soften(width)` (a wrapping moving average), `.fade(length)` (fade in and out at the ends).
+
+Tables take arithmetic, with a number or with another table of the same length, and the usual maths functions: `organ * window(hann, size: 2048)`, `1 - w`, `-t`, `t.abs`, `tanh(t * 3)`. `.map(...)` handles anything else.
+
+`.mean` and `.rms` measure a table. `.frames(size)` cuts a table into an array of tables, dropping a short piece at the end, and `bank` takes that array, so a wavetable file becomes a bank:
+
+```nml
+const frames = file("wavetables/pad.wav").frames(2048)
+instr pad(freq: hz, morph: 0..1 = 0) { osc(bank(frames), freq, position: morph) }
+```
+
+To take a wave apart and rebuild it, `.spectrum(count)` gives the amplitudes of its first `count` harmonics and `.phases(count)` their phases, in the form `harmonics` takes. Keep the table's own level with `normalize: false` on `harmonics`:
+
+```nml
+const brass = file("cycles/brass.wav").slice(0, 2048)
+const hollow = harmonics(brass.spectrum(32).map(it * 0.5), phases: brass.phases(32), normalize: false)
+```
+
+## Tunings
+
+A Scala `.scl` file loads through `file` as a table of the scale's degrees in semitones above the root: `0` first, then every pitch the file lists, so the last entry is the period (12 for an octave). Cents and ratios are both read.
+
+```nml
+const just = file("tunings/just.scl")
+// degree n of the scale, over any number of periods
+fn tuned(n) {
+  size = just.len - 1
+  octave = floor(n / size)
+  440hz * pow(2, (octave * just[size] + just[n - octave * size]) / 12)
+}
+```
 
 ## Readers
 

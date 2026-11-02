@@ -210,3 +210,55 @@ fn mapping_cancellation_prevents_the_connection_from_landing() {
     assert_eq!(s.cancel_events(1, Some("map"), At::Now, false).cancelled, 1);
     assert!(s.process(64)[0].iter().all(|v| *v == 0.0));
 }
+
+#[test]
+fn array_updates_use_the_instrument_selected_for_a_destination_node() {
+    let mut s = session(&format!(
+        "{SOURCE}\ninstr other(weights: [num] = [1, 2, 3]) {{ weights.sum }}"
+    ));
+    s.send_events(
+        1,
+        vec![Op::Routing {
+            at: At::Now,
+            edits: vec![niminal_server::RoutingEdit::Node {
+                id: "lead".into(),
+                fx: None,
+                instrument: Some("other".into()),
+                args: Default::default(),
+            }],
+            tag: None,
+        }],
+    )
+    .unwrap();
+    let mut routed = note();
+    if let Op::Note { to, .. } = &mut routed {
+        *to = Some("lead".into());
+    }
+    s.send_events(1, vec![routed, array(17)]).unwrap();
+    let log = s.log().to_vec();
+    let out = s.process(64);
+    assert_eq!(out, Session::replay(48000.0, Layout::Mono, &log, 64, false));
+}
+
+#[test]
+fn binding_after_an_off_is_rejected_and_preserves_the_batch() {
+    let mut s = session(SOURCE);
+    s.send_events(1, vec![note()]).unwrap();
+    let log = s.log().to_vec();
+    let problems = s
+        .send_events(
+            1,
+            vec![
+                Op::Off {
+                    id: 10,
+                    at: At::Now,
+                    tag: None,
+                },
+                bind(0),
+            ],
+        )
+        .unwrap_err();
+    assert_eq!(problems[0].event, Some(1));
+    assert_eq!(s.log(), log);
+    assert!(s.process(16)[0].iter().all(|x| *x == 1.0));
+}

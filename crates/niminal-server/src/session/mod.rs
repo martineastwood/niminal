@@ -62,8 +62,6 @@ struct VoiceEntry {
     client: ClientId,
     id: u64,
     key: u32,
-    /// The instrument it plays, by name so that it survives the program being replaced.
-    instrument: String,
     schema: Arc<niminal_lang::Instrument>,
     tag: Option<String>,
 }
@@ -197,7 +195,7 @@ mod transactions;
 use definitions::{Meta, Pending, What, options};
 
 /// Where the engine is in time, for a client that wants to schedule against it.
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ClockInfo {
     /// The sample the output is at, as its audio callback last said; the render clock if it hasn't.
     pub sample: u64,
@@ -426,9 +424,6 @@ impl Session {
         bases.retain(|d| d != dir);
         bases.insert(0, dir.to_path_buf());
         *current = current.with_bases(bases);
-    }
-    pub fn sample_files(&self) -> &Samples {
-        &self.samples
     }
 
     /// Find the paths in `sample` and `kit` declarations from `dir`. Folders given earlier are still
