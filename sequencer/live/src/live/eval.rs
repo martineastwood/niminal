@@ -409,7 +409,11 @@ pub(super) fn prepare_pending(
             let mut left = left_out.borrow_mut();
             match (skip.typo_when_new, map.locate(skip.span)) {
                 // a command typed now (`lead.set(wobble: 1)`) with a lane that is not there is a typo to refuse
-                (false, at) if extra.iter().any(|p| p.text.contains(&format!("{}:", skip.name))) => {
+                (false, at)
+                    if extra
+                        .iter()
+                        .any(|p| p.text.contains(&format!("{}:", skip.name))) =>
+                {
                     let d = niminal_lang::Diagnostic::new(
                         format!("{} has no such parameter", skip.what),
                         skip.span,
@@ -451,8 +455,16 @@ pub(super) fn prepare_pending(
     // The commands run in order, each seeing what the ones before it left playing.
     let mut playing = base_playing.clone();
     // a clip that was taken out is not playing any more, and a new one of its name does not inherit that
-    for e in base.entries.iter().filter(|e| !project.entries.iter().any(|p| p.key == e.key)) {
-        if let Some((_, name)) = e.key.split_once(':').filter(|(k, _)| matches!(*k, "clip" | "bind" | "scene")) {
+    for e in base
+        .entries
+        .iter()
+        .filter(|e| !project.entries.iter().any(|p| p.key == e.key))
+    {
+        if let Some((_, name)) = e
+            .key
+            .split_once(':')
+            .filter(|(k, _)| matches!(*k, "clip" | "bind" | "scene"))
+        {
             playing.remove(name);
         }
     }

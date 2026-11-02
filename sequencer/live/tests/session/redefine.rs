@@ -343,7 +343,9 @@ fn a_redefined_grid_reaches_the_clip_that_plays_it() {
     let mut s = session();
     ok(
         &mut s,
-        &format!("{DRUMS}hits = grid {{\n kick: x...\n}}\nclip d {{ instrument: kit_a\n notes: hits }}\nd.start"),
+        &format!(
+            "{DRUMS}hits = grid {{\n kick: x...\n}}\nclip d {{ instrument: kit_a\n notes: hits }}\nd.start"
+        ),
     );
     run(&mut s, 2 * BAR);
     let before = run(&mut s, BAR);
@@ -361,7 +363,9 @@ fn a_redefined_kit_reaches_the_clip_that_plays_it() {
     let mut s = session();
     ok(
         &mut s,
-        &format!("{DRUMS}clip d {{ instrument: kit_a\n notes: grid {{\n kick: x...\n}} }}\nd.start"),
+        &format!(
+            "{DRUMS}clip d {{ instrument: kit_a\n notes: grid {{\n kick: x...\n}} }}\nd.start"
+        ),
     );
     run(&mut s, 2 * BAR);
     ok(&mut s, "kit_a = kit { kick: hi\n hat: hi }");
@@ -377,7 +381,9 @@ fn a_drum_the_kit_lost_is_left_out_of_the_clip_and_the_other_rows_keep_playing()
     let mut s = session();
     ok(
         &mut s,
-        &format!("{DRUMS}clip d {{ instrument: kit_a\n notes: grid {{\n kick: x...\n hat: ..x.\n}} }}\nd.start"),
+        &format!(
+            "{DRUMS}clip d {{ instrument: kit_a\n notes: grid {{\n kick: x...\n hat: ..x.\n}} }}\nd.start"
+        ),
     );
     run(&mut s, BAR);
     s.take_notices();
@@ -397,7 +403,9 @@ fn a_drum_the_kit_lost_is_left_out_of_the_clip_and_the_other_rows_keep_playing()
 fn a_drum_the_kit_never_had_is_still_refused_in_a_clip_just_sent() {
     let mut s = session();
     let refused = s.eval(
-        &format!("{DRUMS}clip d {{ instrument: kit_a\n notes: grid {{\n snare: x...\n}} }}\nd.start"),
+        &format!(
+            "{DRUMS}clip d {{ instrument: kit_a\n notes: grid {{\n snare: x...\n}} }}\nd.start"
+        ),
         Some("now"),
     );
     assert!(refused.is_err());
@@ -460,31 +468,54 @@ fn a_constant_taken_for_something_else_takes_what_used_it_and_says_so() {
     s.take_notices();
     ok(&mut s, "bus pitch_mult: stereo");
     let notices = s.take_notices();
-    assert!(notices.iter().any(|n| n.contains("took out")), "{notices:?}");
+    assert!(
+        notices.iter().any(|n| n.contains("took out")),
+        "{notices:?}"
+    );
 }
 
 #[test]
 fn a_lane_the_instrument_does_not_have_yet_is_left_out_whichever_comes_first() {
     let mut s = session();
-    ok(&mut s, &format!("{TONE}clip c {{ instrument: tone\n notes: [a3]\n k: [0.2 0.8] }}\nc.start"));
+    ok(
+        &mut s,
+        &format!("{TONE}clip c {{ instrument: tone\n notes: [a3]\n k: [0.2 0.8] }}\nc.start"),
+    );
     let notices = s.take_notices();
-    assert!(notices.iter().any(|n| n.contains("lane `k` of clip `c`")), "{notices:?}");
+    assert!(
+        notices.iter().any(|n| n.contains("lane `k` of clip `c`")),
+        "{notices:?}"
+    );
     assert!((pitch_after_two_bars(&mut s) - 220.0).abs() < 8.0);
     // sent again with nothing changed, it is not said again
     ok(&mut s, "pat = [a3]");
     assert!(s.take_notices().iter().all(|n| !n.contains("lane `k`")));
     // the instrument gets the parameter later, and the lane is used
-    ok(&mut s, "instr tone(freq: hz, k: 0..1 = 0.5) { osc(sine, freq * (1 + k)) * env[1 | 10ms 0] }");
+    ok(
+        &mut s,
+        "instr tone(freq: hz, k: 0..1 = 0.5) { osc(sine, freq * (1 + k)) * env[1 | 10ms 0] }",
+    );
     run(&mut s, 2 * BAR);
     assert!(s.take_notices().iter().all(|n| !n.contains("lane `k`")));
 }
 
 #[test]
-fn an_effect_lane_naming_an_effect_that_does_not_exist_is_left_out_and_the_project_still_compiles() {
+fn an_effect_lane_naming_an_effect_that_does_not_exist_is_left_out_and_the_project_still_compiles()
+{
     let mut s = session();
-    ok(&mut s, &format!("{TONE}clip c {{ instrument: tone\n notes: [a3]\n echo {{ length: 1/4beat }} }}\nc.start"));
+    ok(
+        &mut s,
+        &format!(
+            "{TONE}clip c {{ instrument: tone\n notes: [a3]\n echo {{ length: 1/4beat }} }}\nc.start"
+        ),
+    );
     let notices = s.take_notices();
-    assert!(notices.iter().any(|n| n.contains("echo.length") && n.contains("left out")), "{notices:?}");
+    assert!(
+        notices
+            .iter()
+            .any(|n| n.contains("echo.length") && n.contains("left out")),
+        "{notices:?}"
+    );
     assert!((pitch_after_two_bars(&mut s) - 220.0).abs() < 8.0);
     // what the project holds is text that loads on its own
     let mut fresh = session();
@@ -496,11 +527,16 @@ fn a_kit_given_its_drums_in_another_order_still_plays_each_drum() {
     let mut s = session();
     ok(
         &mut s,
-        &format!("{DRUMS}clip d {{ instrument: kit_a\n notes: grid {{\n kick: x...\n}} }}\nd.start"),
+        &format!(
+            "{DRUMS}clip d {{ instrument: kit_a\n notes: grid {{\n kick: x...\n}} }}\nd.start"
+        ),
     );
     run(&mut s, BAR);
     let before = run(&mut s, BAR);
-    assert!(hz(&before[2000..BAR / 4]) < 300.0, "the kick is the low drum");
+    assert!(
+        hz(&before[2000..BAR / 4]) < 300.0,
+        "the kick is the low drum"
+    );
     ok(&mut s, "kit_a = kit { hat: hi\n kick: lo }");
     run(&mut s, BAR);
     let after = run(&mut s, BAR);
@@ -512,12 +548,19 @@ fn a_kit_given_its_drums_in_another_order_still_plays_each_drum() {
 #[test]
 fn a_scene_redefined_while_it_plays_says_which_clips_it_started_and_stopped() {
     let mut s = session();
-    ok(&mut s, &format!("{TONE}clip c1 {{ instrument: tone\n notes: [a3] }}\nclip c2 {{ instrument: tone\n notes: [a4] }}\nclip c3 {{ instrument: tone\n notes: [a2] }}\nscene s1 {{ c1, c2 }}\ns1.start"));
+    ok(
+        &mut s,
+        &format!(
+            "{TONE}clip c1 {{ instrument: tone\n notes: [a3] }}\nclip c2 {{ instrument: tone\n notes: [a4] }}\nclip c3 {{ instrument: tone\n notes: [a2] }}\nscene s1 {{ c1, c2 }}\ns1.start"
+        ),
+    );
     s.take_notices();
     ok(&mut s, "scene s1 { c3, c1 }");
     let notices = s.take_notices();
     assert!(
-        notices.iter().any(|n| n.contains("scene `s1`") && n.contains("`c3`") && n.contains("`c2`")),
+        notices
+            .iter()
+            .any(|n| n.contains("scene `s1`") && n.contains("`c3`") && n.contains("`c2`")),
         "{notices:?}"
     );
     assert_eq!(clips(&mut s), ["c1[tone]*", "c2[tone]", "c3[tone]*"]);
@@ -540,8 +583,17 @@ __lab_drums.start"
 fn the_labs_drum_audition_plays_changes_while_it_sounds_and_stops() {
     let mut s = session();
     let send = |s: &mut Offline, src: &str| {
-        s.eval_parsed(niminal_live::ParsedEval::from_dir(src, &std::env::temp_dir(), Some("now")))
-            .unwrap_or_else(|p| panic!("refused: {:?}", p.iter().map(|p| &p.message).collect::<Vec<_>>()));
+        s.eval_parsed(niminal_live::ParsedEval::from_dir(
+            src,
+            &std::env::temp_dir(),
+            Some("now"),
+        ))
+        .unwrap_or_else(|p| {
+            panic!(
+                "refused: {:?}",
+                p.iter().map(|p| &p.message).collect::<Vec<_>>()
+            )
+        });
     };
     send(&mut s, &lab_drums("0.7"));
     run(&mut s, BAR);

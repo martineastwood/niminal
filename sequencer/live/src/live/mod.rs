@@ -885,14 +885,23 @@ impl Live {
     fn renumber_history(&mut self, before: &Composition) {
         let (old, new) = (before, &self.program);
         if old.sample_names == new.sample_names
-            && old.nodes.iter().map(|n| &n.name).eq(new.nodes.iter().map(|n| &n.name))
+            && old
+                .nodes
+                .iter()
+                .map(|n| &n.name)
+                .eq(new.nodes.iter().map(|n| &n.name))
         {
             return;
         }
         let samples: Vec<Option<u32>> = old
             .sample_names
             .iter()
-            .map(|name| new.sample_names.iter().position(|n| n == name).map(|i| i as u32))
+            .map(|name| {
+                new.sample_names
+                    .iter()
+                    .position(|n| n == name)
+                    .map(|i| i as u32)
+            })
             .collect();
         let nodes: Vec<Option<usize>> = old
             .nodes
@@ -900,7 +909,9 @@ impl Live {
             .map(|node| new.nodes.iter().position(|n| n.name == node.name))
             .collect();
         for h in &mut self.history {
-            if let NamedAction::Start { clip, .. } | NamedAction::Update { clip, .. } = &mut h.action {
+            if let NamedAction::Start { clip, .. } | NamedAction::Update { clip, .. } =
+                &mut h.action
+            {
                 let (samples, nodes) = (samples.clone(), nodes.clone());
                 clip.renumber(
                     move |id| samples.get(id as usize).copied().flatten(),
@@ -912,7 +923,12 @@ impl Live {
 
     /// The text of the project's definitions, which evaluated on its own makes the same project.
     pub fn project_source(&self) -> String {
-        let texts: Vec<&str> = self.project.entries.iter().map(|e| e.text.as_str()).collect();
+        let texts: Vec<&str> = self
+            .project
+            .entries
+            .iter()
+            .map(|e| e.text.as_str())
+            .collect();
         texts.join("\n")
     }
 
@@ -1122,7 +1138,9 @@ impl Live {
                 | NamedAction::Mute(t)
                 | NamedAction::Unmute(t)
                 | NamedAction::Solo(t) => program.node_index(t).is_some(),
-                NamedAction::Unsolo(t) => t.as_ref().is_none_or(|t| program.node_index(t).is_some()),
+                NamedAction::Unsolo(t) => {
+                    t.as_ref().is_none_or(|t| program.node_index(t).is_some())
+                }
                 _ => true,
             });
         }

@@ -13,21 +13,21 @@ instr bd(freq: hz = 55hz) {
   sweep = env[(freq * 4)  40ms  freq]
   body = osc(sine, sweep) * perc(decay: 280ms)
   click = noise().hpf(cutoff: 2khz) * env[1 3ms 0] * 0.35
-  out = (body + click).tanh.pan(azimuth: 0deg)
+  out = (body + click).tanh.pan(angle: 0deg)
   glue += out
 }
 
 instr sd(freq: hz = 180hz) {
   tone = osc(tri, freq) * perc(decay: 120ms) * 0.4
   air = pinknoise().bpf(cutoff: 4khz, res: 0.3) * perc(decay: 160ms)
-  out = (tone + air * 0.7).clip(level: 0.9).pan(azimuth: 10deg) * 0.85
+  out = (tone + air * 0.7).clip(level: 0.9).pan(angle: 10deg) * 0.85
   glue += out
 }
 
 instr hh(freq: hz = 8khz, open: 0..1 = 0) {
   decay = 40ms + open * 180ms
   out = noise().hpf(cutoff: 7khz).bitcrush(rate: 22khz, bits: 12) * perc(decay: decay) * 0.22
-  out = out.pan(azimuth: -25deg)
+  out = out.pan(angle: -25deg)
   glue += out.gain(-6db)
 }
 

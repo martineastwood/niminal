@@ -32,7 +32,7 @@ instr transformation(mode: 0..2 = 2) {
   // Modes 0 and 1 audition the original sources; mode 2 plays the tracked transformation.
   // This resynthesizes tonal partials. The original breath is not a separately preserved layer.
   voice = source_a * (mode == 0) + source_b * (mode == 1) + changed * (mode == 2)
-  out = (voice + voice.reverb(room: 0.3, damp: 0.7) * 0.08).pan(azimuth: 0deg) * env[0 100ms 1 | 400ms 0]
+  out = (voice + voice.reverb(room: 0.3, damp: 0.7) * 0.08).pan(angle: 0deg) * env[0 100ms 1 | 400ms 0]
 }
 
 transformation(mode: 0) for 2beats          // Learn the rounded A3 source.

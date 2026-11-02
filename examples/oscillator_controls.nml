@@ -7,7 +7,7 @@ instr pwm_pad(freq: hz) {
   width = 0.5 + osc(sine, 0.3hz) * 0.35
   voice = osc(pulse, freq, width: width, phase: 0.25).lpf(cutoff: 1800hz)
   movement = sin(phasor(0.125hz) * 2 * pi) * 25deg
-  out = (voice * env[0 80ms 0.1 | 300ms 0]).pan(azimuth: movement)
+  out = (voice * env[0 80ms 0.1 | 300ms 0]).pan(angle: movement)
 }
 
 instr sync_lead(freq: hz) {

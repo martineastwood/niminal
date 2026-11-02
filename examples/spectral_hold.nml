@@ -14,7 +14,7 @@ instr held(mode: 0..3 = 0) {
   frequency = capture * ((mode == 2) + (mode == 3))
   changed = spectral_hold(source, magnitude: magnitude, frequency: frequency,
     size: 2048, overlap: 8)
-  out = changed.pan(azimuth: 0deg) * env[0 40ms 1 | 250ms 0]
+  out = changed.pan(angle: 0deg) * env[0 40ms 1 | 250ms 0]
 }
 
 held(mode: 0) for 4beats                    // Live: level breathes and pitch gently bends.

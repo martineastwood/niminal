@@ -28,9 +28,9 @@ instr remembered() {
   bloom = env[0 11beats 0 1beat 1]
   third = spectral_pitch(captured, shift: 3, overlap: 8)
   fifth = spectral_pitch(captured, shift: 7, overlap: 8)
-  out = (captured.pan(azimuth: 0deg) * 0.8
-    + third.pan(azimuth: -30deg) * bloom * 0.38
-    + fifth.pan(azimuth: 30deg) * bloom * 0.38) * env[0 30ms 1 | 350ms 0]
+  out = (captured.pan(angle: 0deg) * 0.8
+    + third.pan(angle: -30deg) * bloom * 0.38
+    + fifth.pan(angle: 30deg) * bloom * 0.38) * env[0 30ms 1 | 350ms 0]
 }
 
 remembered() for 15beats

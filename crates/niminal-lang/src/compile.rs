@@ -2888,7 +2888,7 @@ mod tests {
         ok(&body("cutoff"));
         ok(&state("x.lpf(cutoff: 100hz) + s"));
         assert_eq!(
-            msg(&state("x.pan(azimuth: 10deg) + s")),
+            msg(&state("x.pan(angle: 10deg) + s")),
             "`pan` can't be used inside a function with state"
         );
         assert_eq!(msg(&state("x.exxp + s")), "unknown function `exxp`");
@@ -3344,28 +3344,25 @@ mod tests {
     #[test]
     fn pan_places_a_mono_signal_in_the_master_layout() {
         let p = ok(
-            "config { channels: surround(5.1) }\ninstr a(f: hz) { osc(saw, f).pan(azimuth: 20deg, spread: 0.3) }",
+            "config { channels: surround(5.1) }\ninstr a(f: hz) { osc(saw, f).pan(angle: 20deg, spread: 0.3) }",
         );
         assert_eq!(p.instruments[0].graph.channels(), 6);
         ok(
-            "config { channels: stereo }\ninstr a(f: hz, az: deg = 10deg) { osc(saw, f).pan(azimuth: az) }",
+            "config { channels: stereo }\ninstr a(f: hz, az: deg = 10deg) { osc(saw, f).pan(angle: az) }",
         );
 
         let d = first_error(
-            "config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan(azimuth: 20) }",
+            "config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan(angle: 20) }",
         );
-        assert_eq!(
-            d.message,
-            "`azimuth` expects an angle, found a plain number"
-        );
+        assert_eq!(d.message, "`angle` expects an angle, found a plain number");
         assert_eq!(d.help.as_deref(), Some("did you mean `20deg`?"));
         assert_eq!(
             msg("config { channels: stereo }\ninstr a(f: hz) { [osc(saw, f), osc(saw, f)].pan }"),
             "`pan` takes a one-channel signal, but `x` has 2"
         );
         assert_eq!(
-            msg("instr a(f: hz) { osc(saw, f).pan(azimuth: 5hz) }"),
-            "`azimuth` expects an angle, found hz"
+            msg("instr a(f: hz) { osc(saw, f).pan(angle: 5hz) }"),
+            "`angle` expects an angle, found hz"
         );
         assert_eq!(
             msg("instr a(f: hz) { osc(saw, f) * 20deg }"),
@@ -3376,11 +3373,11 @@ mod tests {
     #[test]
     fn angles_follow_the_unit_rules() {
         ok(
-            "config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan(azimuth: 20deg * 2 - 5deg) }",
+            "config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan(angle: 20deg * 2 - 5deg) }",
         );
         assert_eq!(
             msg(
-                "config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan(azimuth: 20deg + 1hz) }"
+                "config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan(angle: 20deg + 1hz) }"
             ),
             "can't add an angle and hz"
         );
@@ -3587,7 +3584,7 @@ mod tests {
     #[test]
     fn buses_and_nodes_carry_their_layouts() {
         let p = ok(
-            "\nconfig { channels: stereo }\nbus space: stereo\nbus lfe: mono\ninstr a(f: hz) { out = osc(saw, f).pan(azimuth: -20deg)\nspace += out\nlfe += out }\nfx room { out = space.reverb(room: 0.8) }\nfx sub { out = lfe.lpf(cutoff: 100hz) }",
+            "\nconfig { channels: stereo }\nbus space: stereo\nbus lfe: mono\ninstr a(f: hz) { out = osc(saw, f).pan(angle: -20deg)\nspace += out\nlfe += out }\nfx room { out = space.reverb(room: 0.8) }\nfx sub { out = lfe.lpf(cutoff: 100hz) }",
         );
         assert_eq!(p.bus_layouts, [Layout::Stereo, Layout::Mono]);
         assert_eq!(p.nodes[1].def.inputs.len(), 2, "a stereo bus is two inputs");
@@ -3682,7 +3679,7 @@ mod tests {
             "a node has only one `gain` line"
         );
         assert!(msg(&collection("gain = 20deg")).contains("expects"));
-        assert!(msg(&collection("pan = 20")).contains("azimuth"));
+        assert!(msg(&collection("pan = 20")).contains("angle"));
     }
 
     #[test]

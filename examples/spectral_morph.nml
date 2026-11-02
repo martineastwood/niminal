@@ -20,7 +20,7 @@ instr morphing() {
   frequency = env[0 2beats 0 4beats 1 6beats 1 2beats 0]
   changed = spectral_morph(a, b, magnitude: magnitude, frequency: frequency,
     size: 2048, overlap: 8)
-  out = (changed + changed.reverb(room: 0.35, damp: 0.7) * 0.12).pan(azimuth: 0deg) * env[0 70ms 1 | 350ms 0]
+  out = (changed + changed.reverb(room: 0.35, damp: 0.7) * 0.12).pan(angle: 0deg) * env[0 70ms 1 | 350ms 0]
 }
 
 morphing() for 14beats

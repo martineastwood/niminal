@@ -22,7 +22,6 @@ mod tests;
 pub use analysis::{
     CommandAction, PlayInfo, Ramp, Statement, StatementData, StatementKind, analyze, scene_clips,
 };
-pub use niminal_lang::ast::{ControlInput, InputSource};
 pub use compile::{
     Composition, ControlBinding, MacroDef, MacroTarget, QuantizeConfig, Trigger, compile,
     compile_with, interpolate,
@@ -31,8 +30,9 @@ pub use dsp::{
     BeatControl, beat_controls, division_controls, dsp_source, resolve_musical_time, warnings,
 };
 pub use ide::{RESERVED_WORDS, Symbol, SymbolKind, SymbolParam, pattern_ops, symbols};
-pub use niminal_lang::{Tok, Token, lex};
 pub use modules::expand;
+pub use niminal_lang::ast::{ControlInput, InputSource};
+pub use niminal_lang::{Tok, Token, lex};
 pub use perform::PITCH_PARAM;
 pub use performance::{
     Action, Arrangement, Clip, EnvLane, Keys, LaneEvent, LanePreview, Quantize, QuantizeRelation,

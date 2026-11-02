@@ -315,11 +315,29 @@ fn signal(r: &mut Rng, s: &mut Offline) {
     use niminal_live::ControlSignal::*;
     let channel = 1 + r.below(2) as u8;
     match r.below(6) {
-        0 => s.control_input(&MidiNote { note: [36, 37, 38, 39, 40, 41][r.below(6)], channel, velocity: [0, 100][r.below(2)] }),
-        1 => s.control_input(&MidiCc { cc: [1, 2, 3, 5, 21][r.below(5)], channel, value: r.below(128) as u8 }),
-        2 => s.control_input(&MidiBend { channel, value: r.below(16384) as u16 }),
-        3 => s.control_input(&MidiPressure { channel, note: None, value: r.below(128) as u8 }),
-        4 => s.control_input(&Osc { address: "/fx/vol", value: r.below(100) as f64 / 99.0 }),
+        0 => s.control_input(&MidiNote {
+            note: [36, 37, 38, 39, 40, 41][r.below(6)],
+            channel,
+            velocity: [0, 100][r.below(2)],
+        }),
+        1 => s.control_input(&MidiCc {
+            cc: [1, 2, 3, 5, 21][r.below(5)],
+            channel,
+            value: r.below(128) as u8,
+        }),
+        2 => s.control_input(&MidiBend {
+            channel,
+            value: r.below(16384) as u16,
+        }),
+        3 => s.control_input(&MidiPressure {
+            channel,
+            note: None,
+            value: r.below(128) as u8,
+        }),
+        4 => s.control_input(&Osc {
+            address: "/fx/vol",
+            value: r.below(100) as f64 / 99.0,
+        }),
         _ => {
             let (note, velocity) = (48 + r.below(24) as u8, [0, 90][r.below(2)]);
             s.key_input(channel, note, velocity);
@@ -350,7 +368,10 @@ fn running(s: &mut Offline) -> BTreeSet<String> {
 fn sounds(s: &mut Offline) -> bool {
     run(s, BAR);
     let heard = run(s, BAR);
-    assert!(heard.iter().all(|v| v.is_finite()), "the output is not finite");
+    assert!(
+        heard.iter().all(|v| v.is_finite()),
+        "the output is not finite"
+    );
     rms(&heard) > 0.01
 }
 
@@ -358,7 +379,8 @@ fn sounds(s: &mut Offline) -> bool {
 fn one_run(seed: u64, log: &mut Vec<String>) -> Result<String, String> {
     let mut r = Rng(seed);
     let mut s = session();
-    s.eval(SETUP, Some("now")).map_err(|p| format!("setup: {p:?}"))?;
+    s.eval(SETUP, Some("now"))
+        .map_err(|p| format!("setup: {p:?}"))?;
     let mut heard = Vec::new();
     let mut left_out_said = false;
     let mut kept_said = false;
@@ -385,13 +407,20 @@ fn one_run(seed: u64, log: &mut Vec<String>) -> Result<String, String> {
         edited |= ["reverse", "transpose", "drop(", ".mute", ".solo", ".set("]
             .iter()
             .any(|w| src.contains(w));
-        kept_said |= notices.iter().any(|n| n.contains("keeps playing as it was"));
+        kept_said |= notices
+            .iter()
+            .any(|n| n.contains("keeps playing as it was"));
         match result {
             Err(p) => {
-                log.push(format!("refused: {:?}", p.iter().map(|p| &p.message).collect::<Vec<_>>()));
+                log.push(format!(
+                    "refused: {:?}",
+                    p.iter().map(|p| &p.message).collect::<Vec<_>>()
+                ));
                 let after = state(&mut s);
                 if after != before {
-                    return Err(format!("a refused evaluation changed the session:\n{before}\n=>\n{after}"));
+                    return Err(format!(
+                        "a refused evaluation changed the session:\n{before}\n=>\n{after}"
+                    ));
                 }
             }
             Ok(_) => {
@@ -400,7 +429,10 @@ fn one_run(seed: u64, log: &mut Vec<String>) -> Result<String, String> {
                 let now = running(&mut s);
                 for gone in was_running.difference(&now) {
                     let stopped = src.contains(&format!("{gone}.stop"))
-                        || ["s1", "s2"].iter().any(|s| src.contains(&format!("{s}.start")) || src.contains(&format!("{s}.stop")));
+                        || ["s1", "s2"].iter().any(|s| {
+                            src.contains(&format!("{s}.start"))
+                                || src.contains(&format!("{s}.stop"))
+                        });
                     let said = notices.iter().any(|n| n.contains(&format!("`{gone}`")));
                     if !stopped && !said {
                         return Err(format!("clip `{gone}` stopped running without a notice"));
@@ -411,7 +443,11 @@ fn one_run(seed: u64, log: &mut Vec<String>) -> Result<String, String> {
         // the project on its own, with the same clips started, must sound as the live session does
         let live = sounds(&mut s);
         heard.push(live);
-        log.push(format!("running {:?}, sounds {live}, notices after {:?}", running(&mut s), s.take_notices()));
+        log.push(format!(
+            "running {:?}, sounds {live}, notices after {:?}",
+            running(&mut s),
+            s.take_notices()
+        ));
         let mut fresh = session();
         let started: String = running(&mut s)
             .iter()
@@ -424,7 +460,6 @@ fn one_run(seed: u64, log: &mut Vec<String>) -> Result<String, String> {
                 let other = sounds(&mut fresh);
                 // a clip that kept its old version, as it said, no longer sounds as the text says
                 if live != other && !kept_said && !edited && !running(&mut s).is_empty() {
-
                     return Err(format!(
                         "live session {} but the project on its own {}\n{}",
                         if live { "sounds" } else { "is silent" },
@@ -449,7 +484,8 @@ fn one_run(seed: u64, log: &mut Vec<String>) -> Result<String, String> {
 
 fn run_seed(seed: u64) {
     let mut log = Vec::new();
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| one_run(seed, &mut log)));
+    let outcome =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| one_run(seed, &mut log)));
     let report = |what: &str| {
         panic!("seed {seed}: {what}\n{}", log.join("\n"));
     };
@@ -473,7 +509,10 @@ fn any_order_of_definitions_keeps_the_session_sound() {
         return run_seed(seed.parse().unwrap());
     }
     let number = |name: &str, default: u64| {
-        std::env::var(name).ok().and_then(|n| n.parse().ok()).unwrap_or(default)
+        std::env::var(name)
+            .ok()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(default)
     };
     let from = number("FUZZ_FROM", 0);
     for seed in from..from + number("FUZZ_RUNS", 8) {
@@ -498,8 +537,15 @@ fn a_definition_taken_out_does_not_come_back_in_the_engine() {
         let _ = s.eval(step, Some("now"));
         run(&mut s, BAR);
     }
-    assert!(!s.project_source().contains("fx fb"), "{}", s.project_source());
+    assert!(
+        !s.project_source().contains("fx fb"),
+        "{}",
+        s.project_source()
+    );
     s.eval("const sb = 1", Some("now")).unwrap();
     run(&mut s, BAR);
-    assert!(rms(&run(&mut s, BAR)) < 0.01, "a definition that was taken out is sounding");
+    assert!(
+        rms(&run(&mut s, BAR)) < 0.01,
+        "a definition that was taken out is sounding"
+    );
 }

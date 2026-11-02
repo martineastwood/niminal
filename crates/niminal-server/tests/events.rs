@@ -1242,7 +1242,8 @@ fn a_control_can_be_set_in_the_batch_that_defines_it() {
 #[test]
 fn a_complete_transaction_drops_what_it_does_not_send() {
     let mut s = Session::new(SR, Layout::Mono).without_limiter();
-    s.eval("instr a() { 1 }\ninstr b() { 2 }", Some("now")).unwrap();
+    s.eval("instr a() { 1 }\ninstr b() { 2 }", Some("now"))
+        .unwrap();
     s.send_events(
         0,
         vec![Op::Transaction {
@@ -1257,7 +1258,10 @@ fn a_complete_transaction_drops_what_it_does_not_send() {
     .unwrap();
     s.process(480);
     assert!(s.eval("instr c() { a() }", Some("now")).is_ok());
-    assert!(s.eval("instr d() { b() }", Some("now")).is_err(), "`b` was not sent again");
+    assert!(
+        s.eval("instr d() { b() }", Some("now")).is_err(),
+        "`b` was not sent again"
+    );
 }
 
 #[test]
@@ -1274,10 +1278,24 @@ fn a_complete_transaction_with_no_source_drops_every_definition() {
     };
     s.send_events(0, vec![complete("")]).unwrap();
     s.process(480);
-    assert!(s.eval("instr c() { a() }", Some("now")).is_err(), "`a` was not sent again");
+    assert!(
+        s.eval("instr c() { a() }", Some("now")).is_err(),
+        "`a` was not sent again"
+    );
     // an ordinary transaction with no source still leaves definitions alone
     s.eval("instr a() { 1 }", Some("now")).unwrap();
-    s.send_events(0, vec![Op::Transaction { source: String::new(), at: At::Now, dir: None, edits: Vec::new(), complete: false, tag: None }]).unwrap();
+    s.send_events(
+        0,
+        vec![Op::Transaction {
+            source: String::new(),
+            at: At::Now,
+            dir: None,
+            edits: Vec::new(),
+            complete: false,
+            tag: None,
+        }],
+    )
+    .unwrap();
     s.process(480);
     assert!(s.eval("instr c() { a() }", Some("now")).is_ok());
 }

@@ -171,7 +171,10 @@ pub fn generate(request: &Request) -> Result<Vec<Row>, String> {
             ));
         }
     }
-    let (density, chaos) = (request.density.clamp(0.0, 1.0), request.chaos.clamp(0.0, 1.0));
+    let (density, chaos) = (
+        request.density.clamp(0.0, 1.0),
+        request.chaos.clamp(0.0, 1.0),
+    );
     let mut rows = Vec::new();
     for (d, (name, weights)) in theme.rows.iter().enumerate() {
         let scale = request

@@ -23,7 +23,7 @@ instr hybrid(freq: hz = a3, mode: init 0..2 = 2, amount: 0..1 = 1, amp: db = 0db
   voice = carrier * (mode == 0) + donor * (mode == 1) + balanced * (mode == 2)
   // Match the reference, breath and hybrid listening levels after gentle peak control.
   listen = 0.8 * (mode == 0) + 1.6 * (mode == 1) + 2.2 * (mode == 2)
-  out = (voice.limiter(ceiling: -14db, release: 45ms) * env[0 35ms 1 | 150ms 0] * 2.6 * listen).gain(amp).pan(azimuth: az)
+  out = (voice.limiter(ceiling: -14db, release: 45ms) * env[0 35ms 1 | 150ms 0] * 2.6 * listen).gain(amp).pan(angle: az)
 }
 
 // Hear the two ingredients briefly, at comparable listening levels.

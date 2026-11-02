@@ -278,7 +278,10 @@ fn shelf_insert(name: &str, defaults: &[(&str, &str)]) -> String {
     let shelf = include_str!("../../../crates/niminal-lang/std/fx.nml");
     let start = shelf.find(&format!("fx {name}(")).unwrap();
     let end = start + shelf[start..].find("\n}\n").unwrap() + 3;
-    let mut text = shelf[start..end].replace(" in\n", " src\n").replace("in.", "src.").replace("in *", "src *");
+    let mut text = shelf[start..end]
+        .replace(" in\n", " src\n")
+        .replace("in.", "src.")
+        .replace("in *", "src *");
     for (from, to) in defaults {
         assert!(text.contains(from), "{name} has no `{from}`");
         text = text.replacen(from, to, 1);
@@ -302,11 +305,24 @@ fn the_shelf_effects_that_sweep_keep_to_the_beat_as_the_tempo_changes() {
     };
     for (insert, input) in [
         (
-            shelf_insert("tremolo", &[("beats: 0.0625..16 = 0.25", "beats: 0.0625..16 = 1"), ("depth: 0..1 = 0.5", "depth: 0..1 = 1")]),
+            shelf_insert(
+                "tremolo",
+                &[
+                    ("beats: 0.0625..16 = 0.25", "beats: 0.0625..16 = 1"),
+                    ("depth: 0..1 = 0.5", "depth: 0..1 = 1"),
+                ],
+            ),
             "osc(sine, 1khz)",
         ),
         (
-            shelf_insert("lowpass", &[("sweep_beats: 0.25..64 = 8", "sweep_beats: 0.25..64 = 1"), ("sweep_depth: 0..4 = 0", "sweep_depth: 0..4 = 3"), ("2400hz", "300hz")]),
+            shelf_insert(
+                "lowpass",
+                &[
+                    ("sweep_beats: 0.25..64 = 8", "sweep_beats: 0.25..64 = 1"),
+                    ("sweep_depth: 0..4 = 0", "sweep_depth: 0..4 = 3"),
+                    ("2400hz", "300hz"),
+                ],
+            ),
             "osc(saw, 220hz)",
         ),
     ] {

@@ -505,10 +505,10 @@ impl Registry {
             ),
             OpSpec::new(
                 "pan",
-                "Places a signal in the master layout. `azimuth` is in degrees (0 is straight ahead, positive is right); `spread` widens it.",
+                "Places a signal in the master layout. `angle` is in degrees (0 is straight ahead, positive is right); `spread` widens it.",
                 vec![
                     req("x", SIGNAL),
-                    opt("azimuth", Kind::Signal(Unit::Angle)),
+                    opt("angle", Kind::Signal(Unit::Angle)),
                     opt("spread", SIGNAL),
                 ],
                 Build::Pan,

@@ -2,9 +2,9 @@
 //! rest, with the client's musical time resolved to seconds.
 
 use niminal_lang::ast::{Arg, Expr, ExprKind, Item};
-use niminal_lang::{Tok, lex};
 use niminal_lang::parse_composition_spanned as parse_spanned;
 use niminal_lang::{Diagnostic, Span};
+use niminal_lang::{Tok, lex};
 use niminal_score::Tempo;
 
 /// DSP source made from a composition, and where each part of it came from.

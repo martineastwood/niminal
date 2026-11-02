@@ -316,7 +316,7 @@ mod channels {
             let g = pan_gains(&surround(), az as f32, 0.0);
             assert!(
                 (power(&g) - 1.0).abs() < 1e-4,
-                "azimuth {az}: power {}",
+                "angle {az}: power {}",
                 power(&g)
             );
             assert_eq!(g[3], 0.0, "nothing is panned to the LFE");
@@ -336,7 +336,7 @@ mod channels {
     }
 
     #[test]
-    fn wrapping_azimuths_are_equivalent() {
+    fn wrapping_angles_are_equivalent() {
         let a = pan_gains(&surround(), -90.0, 0.2);
         let b = pan_gains(&surround(), 270.0, 0.2);
         assert!(a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-5));
@@ -354,7 +354,7 @@ mod channels {
         let right = g
             .add(
                 PanChannel::new(stereo(), 1),
-                &[("x", tone), ("azimuth", Src::Const(30.0))],
+                &[("x", tone), ("angle", Src::Const(30.0))],
             )
             .unwrap();
         let out = render(&Arc::new(g.build(right)), 480, None, 32);

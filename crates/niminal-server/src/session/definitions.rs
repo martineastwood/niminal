@@ -330,7 +330,11 @@ impl Session {
                     .cloned()
                     .collect(),
             };
-            let base = if clears || what == What::Complete { &fresh } else { base };
+            let base = if clears || what == What::Complete {
+                &fresh
+            } else {
+                base
+            };
             let mut project = base.clone();
             project.apply(&delta);
 

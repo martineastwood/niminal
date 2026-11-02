@@ -29,7 +29,7 @@ fx snare_fx {
 }
 bus snare_audio: stereo
 instr snare_voice(sample, freq: hz = c4, gain: db = 0db, pan: deg = 0deg) {
-  voice = drums(sample: sample, freq: freq, gain: gain).to_layout(mono).pan(azimuth: pan)
+  voice = drums(sample: sample, freq: freq, gain: gain).to_layout(mono).pan(angle: pan)
   snare_audio += voice
 }
 clip snare { instrument: snare_voice }
@@ -39,7 +39,7 @@ fx hat_fx {
 bus hat_audio: stereo
 
 instr hat_voice(sample, freq: hz = c4, gain: db = 0db, pan: deg = 0deg) {
-  voice = drums(sample: sample, freq: freq, gain: gain).to_layout(mono).pan(azimuth: pan)
+  voice = drums(sample: sample, freq: freq, gain: gain).to_layout(mono).pan(angle: pan)
   hat_audio += voice
 }
 clip hat { instrument: hat_voice }

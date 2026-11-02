@@ -1,10 +1,10 @@
 //! Splitting source into its top-level statements, for a live session that
 //! applies a snippet to a running project.
 
-use niminal_lang::ast::*;
-use niminal_lang::parse_composition_spanned as parse_spanned;
 use crate::performance::Quantize;
 use niminal_lang::Diagnostic;
+use niminal_lang::ast::*;
+use niminal_lang::parse_composition_spanned as parse_spanned;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatementKind {

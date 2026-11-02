@@ -474,12 +474,12 @@ impl Program {
         };
         let pan = match note_pan {
             Some(value) => {
-                let azimuth = value
+                let angle = value
                     .as_angle()
                     .map_err(|e| ArgError::new(format!("argument `pan`: {e}")))?;
                 Some(niminal_engine::ops::pan_gains(
                     &self.master.speaker_angles(),
-                    azimuth as f32,
+                    angle as f32,
                     0.0,
                 ))
             }

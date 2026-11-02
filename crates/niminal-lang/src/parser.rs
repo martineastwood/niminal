@@ -431,8 +431,22 @@ impl Parser {
             Tok::Ident(w) => {
                 matches!(
                     w.as_str(),
-                    "ctl" | "instr" | "mono" | "bus" | "buffer" | "midi_out" | "sample" | "kit"
-                        | "config" | "part" | "fx" | "node" | "control" | "fn" | "opcode" | "const"
+                    "ctl"
+                        | "instr"
+                        | "mono"
+                        | "bus"
+                        | "buffer"
+                        | "midi_out"
+                        | "sample"
+                        | "kit"
+                        | "config"
+                        | "part"
+                        | "fx"
+                        | "node"
+                        | "control"
+                        | "fn"
+                        | "opcode"
+                        | "const"
                 ) || self.peek_at(1) == &Tok::Eq
             }
             _ => false,
@@ -3096,8 +3110,22 @@ mod tests {
             "instr a() { x = if 1 > 0 then 4khz else if 2 > 3 then 1khz else 800hz\n y = if 1 > 0 then 1\n else 2 }",
         );
         let Item::Instr(i) = &items[0] else { panic!() };
-        assert!(matches!(&i.body[0], Stmt::Bind { value: Expr { kind: ExprKind::If { otherwise: Some(o), .. }, .. }, .. } if o.len() == 1));
-        assert!(matches!(&i.body[1], Stmt::Bind { value: Expr { kind: ExprKind::If { otherwise: Some(_), .. }, .. }, .. }));
+        assert!(
+            matches!(&i.body[0], Stmt::Bind { value: Expr { kind: ExprKind::If { otherwise: Some(o), .. }, .. }, .. } if o.len() == 1)
+        );
+        assert!(matches!(
+            &i.body[1],
+            Stmt::Bind {
+                value: Expr {
+                    kind: ExprKind::If {
+                        otherwise: Some(_),
+                        ..
+                    },
+                    ..
+                },
+                ..
+            }
+        ));
         assert!(err("instr a() { x = if 1 > 0 then 2 }").contains("needs both values"));
     }
 
@@ -3181,7 +3209,7 @@ mod tests {
     #[test]
     fn channel_lists_destructuring_and_config() {
         let items = parse_ok(
-            "\nconfig { channels: surround(5.1) }\ninstr a(f: hz) {\n  [l, r] = osc(saw, f).pan(azimuth: 20deg)\n  mid = (l + r) * 0.5\n  [mid + l, mid - r]\n}",
+            "\nconfig { channels: surround(5.1) }\ninstr a(f: hz) {\n  [l, r] = osc(saw, f).pan(angle: 20deg)\n  mid = (l + r) * 0.5\n  [mid + l, mid - r]\n}",
         );
         let Item::Config(c) = &items[0] else { panic!() };
         assert_eq!(c.entries[0].0.name, "channels");

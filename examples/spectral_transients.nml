@@ -25,7 +25,7 @@ instr groove(wet: 0..1 = 1, transients: 0..1 = 1) {
   }
   source = (kick + snare + hat + pluck) * env[0 5ms 1 | 100ms 0]
   shifted = spectral_pitch(source, shift: 5, transients: transients, size: 2048, overlap: 8)
-  out = ((source * (1 - wet) + shifted * wet) * 1.8).pan(azimuth: 0deg)
+  out = ((source * (1 - wet) + shifted * wet) * 1.8).pan(angle: 0deg)
 }
 
 groove(wet: 0) for 4beats                       // Learn the original groove and its attack shapes.

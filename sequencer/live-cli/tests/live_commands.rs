@@ -24,7 +24,10 @@ fn niminal() -> Command {
             .stderr(Stdio::inherit())
             .output()
             .unwrap();
-        assert!(output.status.success(), "the niminal server would not build");
+        assert!(
+            output.status.success(),
+            "the niminal server would not build"
+        );
         // Cargo reports the actual path, including any custom target directory or target triple.
         String::from_utf8(output.stdout)
             .unwrap()

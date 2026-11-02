@@ -10,7 +10,7 @@ instr shifted(shift: hz = 0hz, lowest: hz = 0hz) {
   pluck = env[0 30ms 1 400ms 0.4 | 300ms 0]
   source = (upper + bass).lpf(cutoff: 3500hz) * pluck
   changed = spectral_shift(source, shift: shift, lowest: lowest, size: 2048, overlap: 8)
-  out = (changed + changed.reverb(room: 0.35, damp: 0.7) * 0.15).pan(azimuth: 0deg)
+  out = (changed + changed.reverb(room: 0.35, damp: 0.7) * 0.15).pan(angle: 0deg)
 }
 
 shifted() for 2beats                         // Original chord and bass.

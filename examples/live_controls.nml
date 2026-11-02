@@ -9,7 +9,7 @@ ctl volume = -18db
 instr tone(freq: hz) {
   osc(saw, freq)
   .lpf(cutoff: cutoff, res: 0.2)
-  .pan(azimuth: 0deg) * env[0 2ms 1 200ms 0]
+  .pan(angle: 0deg) * env[0 2ms 1 200ms 0]
 }
 
 fx lead_fx {

@@ -9,12 +9,12 @@ use niminal_lang::{
 use niminal_lang::{Span, closest};
 use niminal_score::{Event, Tempo, Time, Tuning};
 
-use niminal_lang::ast::*;
 use crate::dsp::{DspSource, project};
 use crate::literal::{arg_error, literal_args, literal_time};
-use niminal_lang::parse_composition_spanned as parse_spanned;
 use crate::perform::{Context, compile_performance};
 use crate::performance::{Arrangement, Quantize, Scheduled};
+use niminal_lang::ast::*;
+use niminal_lang::parse_composition_spanned as parse_spanned;
 
 type Res<T> = Result<T, Diagnostic>;
 

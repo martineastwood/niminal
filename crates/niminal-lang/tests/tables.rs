@@ -158,17 +158,34 @@ fn a_sample_can_be_cut_at_the_hits_found_in_it() {
         };
         let source = format!("hits = sample(\"hits.wav\")\nchops = hits.slices({args})\n");
         let program = niminal_lang::compile_with(&source, &options).unwrap();
-        program.instruments.iter().find(|i| i.name == "chops").unwrap().members.clone()
+        program
+            .instruments
+            .iter()
+            .find(|i| i.name == "chops")
+            .unwrap()
+            .members
+            .clone()
     };
     // three hits are found out of up to sixteen, and the names run from s0 for as many as there are
     assert_eq!(members("detect: 16"), ["s0", "s1", "s2"]);
     assert_eq!(members("detect: 16, sensitivity: 0.7"), ["s0", "s1", "s2"]);
     // never more than asked for
     assert_eq!(members("detect: 2"), ["s0", "s1"]);
-    for bad in ["detect: 16, sensitivity: 2", "detect: x", "detect: 4, 8", "detect: 4, other: 1"] {
+    for bad in [
+        "detect: 16, sensitivity: 2",
+        "detect: x",
+        "detect: 4, 8",
+        "detect: 4, other: 1",
+    ] {
         let source = format!("hits = sample(\"hits.wav\")\nchops = hits.slices({bad})\n");
-        let options = niminal_lang::CompileOptions { samples: niminal_lang::Samples::new(&dir), ..Default::default() };
-        assert!(niminal_lang::compile_with(&source, &options).is_err(), "{bad}");
+        let options = niminal_lang::CompileOptions {
+            samples: niminal_lang::Samples::new(&dir),
+            ..Default::default()
+        };
+        assert!(
+            niminal_lang::compile_with(&source, &options).is_err(),
+            "{bad}"
+        );
     }
     let _ = std::fs::remove_dir_all(&dir);
 }

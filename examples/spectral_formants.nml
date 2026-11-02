@@ -16,7 +16,7 @@ instr colour(freq: hz = a3, shift: -48..48 = 0, preserve: 0..1 = 0,
   movement = env[-3 2beats 3 2beats -3]
   source = voice * env[0 90ms 1 | 250ms 0]
   shifted = spectral_pitch(source, shift: shift, preserve: preserve, formant: formant + movement * sweep, detail: 32, overlap: 8)
-  out = shifted.gain(amp).pan(azimuth: az)
+  out = shifted.gain(amp).pan(angle: az)
 }
 
 // The notes stay still while the apparent size of the harmony changes.

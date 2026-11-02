@@ -26,7 +26,11 @@ fn render(args: &[&str]) -> (bool, String, Vec<f32>) {
     let samples = hound::WavReader::open(&out)
         .map(|mut r| r.samples::<f32>().map(Result::unwrap).collect())
         .unwrap_or_default();
-    (run.status.success(), String::from_utf8_lossy(&run.stderr).into_owned(), samples)
+    (
+        run.status.success(),
+        String::from_utf8_lossy(&run.stderr).into_owned(),
+        samples,
+    )
 }
 
 #[test]
@@ -36,11 +40,18 @@ fn the_clip_a_then_starts_is_heard() {
     // a bar at 120bpm is two seconds: the first clip plays in bar 1 and the second in bar 2
     let bar = 2 * 48_000 * 2;
     let loud = |part: &[f32]| part.iter().any(|v| v.abs() > 0.05);
-    assert!(samples.len() > bar && loud(&samples[..bar]) && loud(&samples[bar..]), "{} samples", samples.len());
+    assert!(
+        samples.len() > bar && loud(&samples[..bar]) && loud(&samples[bar..]),
+        "{} samples",
+        samples.len()
+    );
 }
 
 #[test]
 fn a_file_with_then_asks_how_long_to_render() {
     let (ok, error, _) = render(&[]);
-    assert!(!ok && error.contains("`then:`") && error.contains("--bars"), "{error}");
+    assert!(
+        !ok && error.contains("`then:`") && error.contains("--bars"),
+        "{error}"
+    );
 }

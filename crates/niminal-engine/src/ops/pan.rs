@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::opcode::{Opcode, Port, ProcessCtx};
 
-/// Gains for placing a mono source at `azimuth` degrees (0 is straight ahead,
+/// Gains for placing a mono source at `angle` degrees (0 is straight ahead,
 /// positive to the right) among speakers at the given angles. `None` marks a
 /// channel that is never panned to, such as an LFE.
 ///
@@ -12,7 +12,7 @@ use crate::opcode::{Opcode, Port, ProcessCtx};
 /// all speakers equally.
 pub fn pan_gains(
     speakers: &[Option<f32>],
-    azimuth: f32,
+    angle: f32,
     spread: f32,
 ) -> [f32; crate::mixer::MAX_CHANNELS] {
     let mut gains = [0.0f32; crate::mixer::MAX_CHANNELS];
@@ -31,7 +31,7 @@ pub fn pan_gains(
     let ring = &mut slots[..count];
     ring.sort_by(|a, b| a.0.total_cmp(&b.0));
 
-    let az = azimuth.rem_euclid(360.0);
+    let az = angle.rem_euclid(360.0);
     // The speaker at or before the source going round the circle, and the next.
     let before = ring
         .iter()
@@ -74,12 +74,12 @@ pub fn pan_gains(
 }
 
 /// One output channel of a pan: the mono input scaled by this speaker's gain
-/// for the current azimuth. A pan to N speakers is N of these sharing inputs.
+/// for the current angle. A pan to N speakers is N of these sharing inputs.
 #[derive(Clone)]
 pub struct PanChannel {
     speakers: Arc<[Option<f32>]>,
     index: usize,
-    /// The azimuth and spread the gain was last worked out for, and that gain. Panning rarely moves,
+    /// The angle and spread the gain was last worked out for, and that gain. Panning rarely moves,
     /// and working it out is far dearer than the multiply.
     last: Option<(f32, f32, f32)>,
 }
@@ -102,7 +102,7 @@ impl Opcode for PanChannel {
     fn ports(&self) -> &[Port] {
         const PORTS: &[Port] = &[
             Port::required("x"),
-            Port::optional("azimuth", 0.0),
+            Port::optional("angle", 0.0),
             Port::optional("spread", 0.0),
         ];
         PORTS
@@ -114,16 +114,16 @@ impl Opcode for PanChannel {
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         for (i, o) in out.iter_mut().enumerate() {
-            let (azimuth, spread) = (inputs[1][i], inputs[2][i]);
+            let (angle, spread) = (inputs[1][i], inputs[2][i]);
             let gain = match self.last {
                 Some((a, s, gain))
-                    if a.to_bits() == azimuth.to_bits() && s.to_bits() == spread.to_bits() =>
+                    if a.to_bits() == angle.to_bits() && s.to_bits() == spread.to_bits() =>
                 {
                     gain
                 }
                 _ => {
-                    let gain = pan_gains(&self.speakers, azimuth, spread)[self.index];
-                    self.last = Some((azimuth, spread, gain));
+                    let gain = pan_gains(&self.speakers, angle, spread)[self.index];
+                    self.last = Some((angle, spread, gain));
                     gain
                 }
             };

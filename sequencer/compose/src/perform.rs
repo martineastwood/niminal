@@ -10,11 +10,11 @@ use niminal_pattern::{
 };
 use niminal_score::{Tempo, Time, Value};
 
-use niminal_lang::ast::*;
 use crate::compile::Names;
 use crate::performance::*;
 use niminal_lang::GAIN_PARAM;
 use niminal_lang::Unit;
+use niminal_lang::ast::*;
 use niminal_lang::{Diagnostic, Span, closest};
 use niminal_lang::{Instrument, NodeInfo};
 
@@ -360,7 +360,10 @@ fn atom_value(atom: &str, sample_names: &[String]) -> Result<Value, String> {
                 let mut message = format!("`{atom}` isn't a note, a value, or a sample in a kit");
                 let slices = sample_names
                     .iter()
-                    .filter(|n| n.strip_prefix('s').is_some_and(|d| d.parse::<u32>().is_ok()))
+                    .filter(|n| {
+                        n.strip_prefix('s')
+                            .is_some_and(|d| d.parse::<u32>().is_ok())
+                    })
                     .count();
                 let is_slice = member
                     .strip_prefix('s')
@@ -1089,8 +1092,13 @@ impl Perform<'_> {
             match a.name.as_ref().map(|n| n.name.as_str()) {
                 None | Some("theme") => {
                     let ExprKind::Name(word) = &a.value.kind else {
-                        return Err(Diagnostic::new("expected the name of a theme", a.value.span)
-                            .with_help(format!("the themes are {}", crate::drums::themes().join(", "))));
+                        return Err(
+                            Diagnostic::new("expected the name of a theme", a.value.span)
+                                .with_help(format!(
+                                    "the themes are {}",
+                                    crate::drums::themes().join(", ")
+                                )),
+                        );
                     };
                     theme = Some(word.clone());
                 }
@@ -3730,7 +3738,11 @@ impl Perform<'_> {
             );
             if self.cx.lenient {
                 self.cx.skipped.borrow_mut().push(crate::compile::Skipped {
-                    what: format!("lane `{}` of clip `{}`", crate::compile::written(lane), clip.name),
+                    what: format!(
+                        "lane `{}` of clip `{}`",
+                        crate::compile::written(lane),
+                        clip.name
+                    ),
                     name: crate::compile::written(lane).to_string(),
                     span,
                     typo_when_new: false,

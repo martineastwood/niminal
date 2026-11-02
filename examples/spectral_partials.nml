@@ -22,8 +22,8 @@ instr tracked() {
   third = spectral_warp(partials, shift: 3, size: 2048, overlap: 8)
   fifth = spectral_warp(partials, shift: 7, size: 2048, overlap: 8)
   voice = source * (1 - reveal) + partials * reveal * 0.8
-  out = (voice.pan(azimuth: 0deg) + third.pan(azimuth: -30deg) * chord * 0.3
-    + fifth.pan(azimuth: 30deg) * chord * 0.3) * env[0 50ms 1 | 400ms 0] * 1.6
+  out = (voice.pan(angle: 0deg) + third.pan(angle: -30deg) * chord * 0.3
+    + fifth.pan(angle: 30deg) * chord * 0.3) * env[0 50ms 1 | 400ms 0] * 1.6
 }
 
 tracked() for 13beats

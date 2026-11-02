@@ -20,7 +20,7 @@ instr spectral_demo(freq: hz = a3, shift: -48..48 = 0, wet: 0..1 = 1,
   colour = env[700hz 70ms 3200hz 450ms 900hz]
   source = tone.lpf(cutoff: colour) * env[0 35ms 1 400ms 0.45 | 130ms 0] * 0.6
   shifted = spectral_pitch(source, shift: shift, size: 2048, overlap: 8)
-  out = (source * (1 - wet) + shifted * wet).gain(amp).pan(azimuth: az)
+  out = (source * (1 - wet) + shifted * wet).gain(amp).pan(angle: az)
 }
 
 // 1. The original A-minor phrase: learn the source's tone and articulation.

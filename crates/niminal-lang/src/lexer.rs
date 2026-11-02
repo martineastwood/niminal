@@ -135,7 +135,8 @@ fn lex_with(src: &str, dsp: bool) -> Result<Vec<Token>, Diagnostic> {
             }
             b'.' | b'x' | b'X' | b'o' | b'<'
                 if !dsp
-                    && takes_steps(&tokens, scopes.last(), &macros) && steps_end(src, i).is_some() =>
+                    && takes_steps(&tokens, scopes.last(), &macros)
+                    && steps_end(src, i).is_some() =>
             {
                 let end = steps_end(src, i).unwrap_or(i);
                 let text = src[i..end].to_string();
@@ -184,13 +185,13 @@ fn lex_with(src: &str, dsp: bool) -> Result<Vec<Token>, Diagnostic> {
             }
             b'[' if !dsp
                 && is_raw_bracket(
-                &tokens,
-                braces.last().copied().unwrap_or(false)
-                    || matches!(
-                        statement_keyword.as_deref(),
-                        Some("const" | "fn" | "instr" | "mono" | "fx")
-                    ),
-            ) =>
+                    &tokens,
+                    braces.last().copied().unwrap_or(false)
+                        || matches!(
+                            statement_keyword.as_deref(),
+                            Some("const" | "fn" | "instr" | "mono" | "fx")
+                        ),
+                ) =>
             {
                 let is_grid =
                     matches!(tokens.last(), Some(Token { tok: Tok::Ident(n), .. }) if n == "grid");

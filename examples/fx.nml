@@ -8,7 +8,7 @@ bus echo: stereo
 
 instr pluck(freq: hz, bright: 0..1 = 0.5) {
   voice = osc(saw, freq).lpf(cutoff: freq * (2 + bright * 8), res: 0.25) * perc(decay: 400ms)
-  voice.pan(azimuth: 0deg)
+  voice.pan(angle: 0deg)
 }
 
 // Persistent fx declarations read the shared buses.

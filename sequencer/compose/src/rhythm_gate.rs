@@ -1,8 +1,8 @@
 //! Rhythmic DSP grids lowered to ordinary sample-by-sample niminal code.
 use niminal_lang::ast::{Arg, Expr, ExprKind, Item, Stmt};
-use niminal_lang::{Tok, lex};
 use niminal_lang::parse_composition_spanned as parse_spanned;
 use niminal_lang::{Diagnostic, Span};
+use niminal_lang::{Tok, lex};
 
 pub(crate) const HELPER: &str = r#"
 fn __niminal_rhythm_gate(__rg_levels: [num], __rg_before: [num], __rg_after: [num],

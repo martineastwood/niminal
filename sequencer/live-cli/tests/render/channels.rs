@@ -43,7 +43,7 @@ fn a_mono_instrument_is_centred_in_a_stereo_master() {
 fn pan_places_the_sound_between_the_speakers() {
     let at = |az: &str| {
         raw(&format!(
-            "config {{ channels: stereo }}\ninstr a() {{ ({TONE}).pan(azimuth: {az}) }}\na() for 1beat"
+            "config {{ channels: stereo }}\ninstr a() {{ ({TONE}).pan(angle: {az}) }}\na() for 1beat"
         ))
     };
     let (left, right) = (at("-30deg"), at("30deg"));
@@ -174,7 +174,7 @@ fn left_right_plays_the_original_and_its_change_in_different_speakers() {
 fn surround_pan_uses_the_right_speakers() {
     let at = |az: &str| {
         raw(&format!(
-            "config {{ channels: surround(5.1) }}\ninstr a() {{ ({TONE}).pan(azimuth: {az}) }}\na() for 1beat"
+            "config {{ channels: surround(5.1) }}\ninstr a() {{ ({TONE}).pan(angle: {az}) }}\na() for 1beat"
         ))
     };
     let ahead = at("0deg");
@@ -271,7 +271,7 @@ fn surround_folds_down_to_stereo_without_the_lfe() {
 #[test]
 fn routing_to_a_mono_bus_then_back_up() {
     let out = raw(
-        "\nconfig { channels: stereo }\nbus m: mono\ninstr a() { osc(sine, 220hz).pan(azimuth: -30deg) * env[1 | 1ms 0] }\ninstr t_voice() { voice = a()\nm += voice }\nclip t { instrument: t_voice }\nfx back { out = m }\nt() for 1beat",
+        "\nconfig { channels: stereo }\nbus m: mono\ninstr a() { osc(sine, 220hz).pan(angle: -30deg) * env[1 | 1ms 0] }\ninstr t_voice() { voice = a()\nm += voice }\nclip t { instrument: t_voice }\nfx back { out = m }\nt() for 1beat",
     );
     // hard-left stereo averaged to mono (half), then centred in stereo at -3db
     assert_eq!(out[0], out[1]);
@@ -297,7 +297,7 @@ fn a_stereo_reverb_decorrelates_the_channels() {
 #[test]
 fn notes_start_on_the_same_sample_on_every_channel() {
     let out = raw(
-        "\nconfig { channels: surround(5.1) }\ninstr click() { osc(sine, 1000hz).pan(azimuth: 70deg) * env[1 0.5ms 0] }\nat 250ms click() for 1beat",
+        "\nconfig { channels: surround(5.1) }\ninstr click() { osc(sine, 1000hz).pan(angle: 70deg) * env[1 0.5ms 0] }\nat 250ms click() for 1beat",
     );
     let first = |c: &[f32]| c.iter().position(|s| s.abs() > 1e-6);
     let starts: Vec<_> = out.iter().map(|c| first(c)).collect();
@@ -337,7 +337,7 @@ fn the_limiter_ducks_all_channels_together() {
 #[test]
 fn wav_files_interleave_the_channels() {
     let p = program(
-        "config { channels: stereo }\ninstr a() { osc(sine, 220hz).pan(azimuth: 30deg) * env[1 | 1ms 0] }\na() for 1/4beat",
+        "config { channels: stereo }\ninstr a() { osc(sine, 220hz).pan(angle: 30deg) * env[1 | 1ms 0] }\na() for 1/4beat",
     );
     let out = render_with(
         &p,
@@ -368,7 +368,7 @@ fn wav_files_interleave_the_channels() {
 #[test]
 fn explicit_gain_and_pan_parameters_apply_before_instrument_sends() {
     let out = raw(
-        "config { channels: stereo }\nbus audio: stereo\ninstr tone(freq: hz, gain: db = 0db, pan: deg = 0deg) { audio += osc(sine, freq).gain(gain).pan(azimuth: pan) * env[1 | 1ms 0] }\nfx room { out = audio }\nclip c { instrument: tone\nnotes: [c4]\ngain: -6db\npan: 30deg }\nc.start\nat 1bar hush",
+        "config { channels: stereo }\nbus audio: stereo\ninstr tone(freq: hz, gain: db = 0db, pan: deg = 0deg) { audio += osc(sine, freq).gain(gain).pan(angle: pan) * env[1 | 1ms 0] }\nfx room { out = audio }\nclip c { instrument: tone\nnotes: [c4]\ngain: -6db\npan: 30deg }\nc.start\nat 1bar hush",
     );
     assert!(peak(&out[0][..2000]) < 1e-6);
     assert!((peak(&out[1][..2000]) - 10f32.powf(-6.0 / 20.0)).abs() < 0.01);

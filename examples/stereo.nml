@@ -8,7 +8,7 @@ bus space: stereo
 instr pluck(freq: hz, az: deg = 0deg, amp: db = -6db) {
   level = env[0 2ms 1 500ms.exp 0]
   voice = osc(saw, freq).lpf(cutoff: freq * 6, res: 0.2).gain(amp) * level
-  out = voice.pan(azimuth: az)
+  out = voice.pan(angle: az)
   space += out.gain(-10db)
 }
 

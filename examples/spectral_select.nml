@@ -17,7 +17,7 @@ instr selected() {
     width: 2.5, size: 2048, overlap: 8)
   reveal = env[0 8beats 0 1beat 1]
   voice = sparse * (1 - reveal) + arp * reveal
-  out = (voice + voice.reverb(room: 0.4, damp: 0.65) * 0.16).pan(azimuth: 0deg) * env[0 50ms 1 | 350ms 0]
+  out = (voice + voice.reverb(room: 0.4, damp: 0.65) * 0.16).pan(angle: 0deg) * env[0 50ms 1 | 350ms 0]
 }
 
 selected() for 16beats

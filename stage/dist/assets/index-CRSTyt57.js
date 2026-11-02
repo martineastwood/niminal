@@ -24,7 +24,7 @@ fx space_return {
 instr pluck(freq: hz, bright: 0..1 = 0.5, az: deg = 0deg) {
   level = perc(decay: 340ms)
   voice = osc(saw, freq).lpf(cutoff: freq * (2 + bright * 8), res: 0.25) * level
-  out = voice.pan(azimuth: az)
+  out = voice.pan(angle: az)
   space += out.gain(-18db)
 }
 

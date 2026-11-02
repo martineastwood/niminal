@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use niminal_lang::{Diagnostic, Instrument, Span, closest, unknown_unit};
 use niminal_score::{Tempo, Time, Value};
 
-use niminal_lang::ast::*;
 use crate::perform::{negate, value_of};
+use niminal_lang::ast::*;
 
 type Res<T> = Result<T, Diagnostic>;
 

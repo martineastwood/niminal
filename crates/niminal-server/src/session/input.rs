@@ -324,7 +324,11 @@ impl Session {
                         source.clone(),
                         dir.as_deref(),
                         self.resolve(*at),
-                        if *complete { What::Complete } else { What::Definitions },
+                        if *complete {
+                            What::Complete
+                        } else {
+                            What::Definitions
+                        },
                         in_seconds(edits, client, &clock_state, &mut linked),
                         tag.clone(),
                     )

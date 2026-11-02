@@ -103,7 +103,10 @@ impl Live {
                 }
                 if !stops.is_empty() {
                     let names: Vec<String> = stops.iter().map(|c| format!("`{c}`")).collect();
-                    notes.push(format!("starting scene `{name}` stops {}", names.join(", ")));
+                    notes.push(format!(
+                        "starting scene `{name}` stops {}",
+                        names.join(", ")
+                    ));
                 }
                 for clip in stops {
                     out.extend(command(&format!("{clip}.stop"), &s, Some(quantum)));

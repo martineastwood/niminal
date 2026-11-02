@@ -1478,15 +1478,15 @@ pub(crate) fn compile_chain(
             } else {
                 signal
             };
-            let azimuth = Arg {
+            let angle = Arg {
                 name: Some(Ident {
-                    name: "azimuth".into(),
+                    name: "angle".into(),
                     span: p.span,
                 }),
                 value: p.clone(),
                 receiver: false,
             };
-            signal = call("pan", vec![receiver(mono), azimuth], p.span);
+            signal = call("pan", vec![receiver(mono), angle], p.span);
         }
         out = lower.expr(&signal)?;
     }
