@@ -64,6 +64,7 @@ export class PatternGrid {
   private column = 0;
   private anchor = { row: 0, column: 0 };
   private playing: number | null = null;
+  private midiHeld = new Map<number, { project: Project; pattern: Pattern; track: Track; col: number; row: number; note: string; live: boolean }>();
   /** The space above the first row and below the last, which lets the cursor row stay at one height while the grid scrolls under it. */
   private pad = { top: 0, bottom: 0 };
   /** Set while a blurred cell editor commits, so clicking away does not scroll the grid. */
@@ -403,7 +404,7 @@ export class PatternGrid {
    */
   paint(row: number | null, phase: number | null = null, atMs = Date.now()) {
     const was = this.playing; this.playing = row;
-    if (row === null) { this.playhead.hidden = true; this.shown = -1; if (was !== null) this.placeFrame(); return; }
+    if (row === null) { if (was !== null) this.resetMidi(); this.playhead.hidden = true; this.shown = -1; if (was !== null) this.placeFrame(); return; }
     if (was === null) this.placeFrame();
     const t = patternTiming(this.project(), this.pattern());
     const swing = patternSwing(this.project(), this.pattern()), rows = this.pattern().rows, start = patternSeconds(t, row, swing, rows), end = patternSeconds(t, row+1, swing, rows);
@@ -568,7 +569,7 @@ export class PatternGrid {
       return;
     }
   }
-  setRecording(on: boolean) { this.recording = on; this.modeChanged(on); }
+  setRecording(on: boolean) { if (!on) this.resetMidi(); this.recording = on; this.modeChanged(on); }
   /** Corner brackets mark the selected track, from its header to the bottom of the grid. */
   private placeFrame() {
     const header = this.parent.querySelector<HTMLElement>(`.track-header[data-track="${this.activeTrack}"]`);
@@ -907,23 +908,72 @@ export class PatternGrid {
     this.resetSelection(); this.edited(); this.advance(); this.render(); this.parent.focus();
     this.feedback(`Recorded at row ${row} of this pattern: see the Automation tab`);
   }
-  /** MIDI uses absolute pitch and hardware velocity, even when the cursor is on a sub-column or lane. */
-  midiNoteOn(number: number, velocity: number) {
+  /** MIDI uses absolute pitch and hardware velocity, even on a sub-column or lane. */
+  midiNoteOn(number: number, velocity: number, key = number) {
     if (!Number.isInteger(number) || number < 12 || number > 119 || !Number.isInteger(velocity) || velocity < 1 || velocity > 127) return null;
+    this.midiHeld.delete(key);
+    const project = this.project(), pattern = this.pattern();
     const note = transposeNote('C-4', number - 60)!;
     const selected = this.lanes[this.column];
-    const track = Math.min(selected.track, this.project().tracks.length - 1);
-    const col = selected.track === track ? selected.col : 0;
-    const noteLane = this.lanes.findIndex(l => l.track === track && l.col === col && l.kind === 'note');
-    const column = this.pattern().notes[track][col];
-    const row = this.live ? this.nearestRow() : this.row;
+    const track = Math.min(selected.track, project.tracks.length - 1);
+    if (track < 0) return null;
+    let col = selected.track === track ? selected.col : 0;
+    let row = this.live ? this.nearestRow() : this.row;
+    const held = [...this.midiHeld.values()].filter(h => h.project === project && h.track === project.tracks[track]);
+    if (this.recording && held.length) {
+      // Step-entered chords share their first note's row; live notes keep their own timing.
+      const chord = held.find(h => h.pattern === pattern && !h.live);
+      if (!this.live && chord) row = chord.row;
+      const first = Math.min(col, ...held.map(h => h.col));
+      col = first;
+      while (held.some(h => h.col === col) && col < maxNoteColumns) col++;
+      if (col === maxNoteColumns) {
+        this.feedback('All eight note columns are held. Release a key before recording another note.');
+        return { note, track, instrument: this.currentInstrument(), velocity };
+      }
+      while (pattern.notes[track].length <= col) {
+        for (const p of project.patterns) p.notes[track].push(blankColumn(Math.max(p.rows, p.notes[track][0].notes.length), p.notes[track][0].fx.length));
+      }
+    }
+    const column = pattern.notes[track][col];
     const instrument = this.currentInstrument() ?? instrumentAt(column.inst, row);
     if (this.recording) {
-      this.column = noteLane;
+      this.row = row;
+      this.column = this.lanes.findIndex(l => l.track === track && l.col === col && l.kind === 'note');
       this.writeNote(note, velocity / 127 * 100, false);
+      const firstCol = Math.min(col, ...held.map(h => h.col));
+      this.column = this.lanes.findIndex(l => l.track === track && l.col === firstCol && l.kind === 'note');
+      this.resetSelection(); this.paintSelection();
+      this.midiHeld.set(key, { project, pattern, track: project.tracks[track], col, row, note, live: this.live });
     }
     return { note, track, instrument, velocity };
   }
+
+  /** Only live recording captures duration. Step entry releases sound without inserting OFF. */
+  midiNoteOff(key: number, record = true) {
+    const held = this.midiHeld.get(key);
+    this.midiHeld.delete(key);
+    if (!record || !held || !held.live || !this.live || held.project !== this.project()) return;
+    const track = this.project().tracks.indexOf(held.track), pattern = this.pattern();
+    if (track < 0 || !this.project().patterns.includes(held.pattern)) return;
+    const start = held.pattern.notes[track]?.[held.col];
+    const column = pattern.notes[track]?.[held.col];
+    if (!column || start?.notes[held.row] !== held.note) return;
+    let row = this.nearestRow();
+    // A tap quantized onto its own onset gets at least one row, never replaces the onset.
+    if (pattern === held.pattern && row === held.row) row++;
+    if (row >= pattern.rows || column.notes[row] !== null) return;
+    // Do not end a different note entered after this one in the same column.
+    const intervening = pattern === held.pattern && row > held.row
+      ? column.notes.slice(held.row + 1, row)
+      : [...start.notes.slice(held.row + 1, held.pattern.rows), ...column.notes.slice(0, row)];
+    if (intervening.some(n => n !== null)) return;
+    const lane = this.lanes.findIndex(l => l.track === track && l.col === held.col && l.kind === 'note');
+    if (lane >= 0) this.apply([{ row, track: lane, before: null, after: 'OFF' }]);
+  }
+
+  /** Device changes, panic and focus loss release previews without editing the song. */
+  resetMidi() { this.midiHeld.clear(); }
 
   private writeNote(note: string, velocity: number | null, preview = true, key?: KeyboardEvent) {
     const lane = this.lanes[this.column], ending = note === 'OFF' || note === 'CUT';

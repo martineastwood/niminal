@@ -505,6 +505,7 @@ it('enters absolute MIDI pitch, hardware velocity and instrument as one undoable
   expect(grid.midiNoteOn(61, 64)).toEqual({ note: 'C#4', track: 1, instrument: 'tone', velocity: 64 });
   expect(column.notes[5]).toBe('C#4'); expect(column.inst[5]).toBe('tone'); expect(column.vol[5]).toBe('65');
   expect(project.tracks[1].show?.vol).toBe(true); expect(audition).not.toHaveBeenCalled(); // native held preview is separate
+  grid.midiNoteOff(61);
   grid.midiNoteOn(72, 127); expect(column.notes[6]).toBe('C-5'); expect(column.vol[6]).toBe('128');
   grid.undo(); expect(column.notes[6]).toBeNull(); expect(column.vol[6]).toBeNull();
   grid.redo(); expect(column.notes[6]).toBe('C-5'); expect(column.inst[6]).toBe('tone');
@@ -537,7 +538,8 @@ it('records MIDI on the nearest live row without stepping away from playback', (
   try {
     grid.selectTrack(1); grid.paint(3, 0.6, Date.now());
     grid.midiNoteOn(62, 90); grid.midiNoteOn(64, 90);
-    expect(project.patterns[0].notes[1][0].notes[4]).toBe('E-4');
+    expect(project.patterns[0].notes[1][0].notes[4]).toBe('D-4');
+    expect(project.patterns[0].notes[1][1].notes[4]).toBe('E-4');
     expect(project.patterns[0].notes[1][0].notes[5]).toBeNull();
     grid.paint(null);
   } finally { clock.mockRestore(); }
@@ -948,4 +950,80 @@ it('opens a root menu and then a scale menu from Snap to scale, and a chord menu
   choose('Make chord…');
   expect(menu().map(b => b.textContent)).toContain('minor7');
   grid.render();
+});
+
+
+it('step-enters a held MIDI chord on one row and advances once, without recording releases', () => {
+  const { project, grid, click } = setup(undefined, () => 'tone');
+  click(5, 1);
+  for (const note of [60, 64, 67]) grid.midiNoteOn(note, 100);
+  const columns = project.patterns[0].notes[1];
+  expect(columns.map(c => c.notes[5])).toEqual(['C-4', 'E-4', 'G-4']);
+  expect(grid.cursorRow).toBe(6);
+  expect(project.patterns.every(p => p.notes[1].length === 3)).toBe(true);
+  for (const note of [60, 64, 67]) grid.midiNoteOff(note);
+  expect(columns.every(c => c.notes[6] === null)).toBe(true);
+  grid.midiNoteOn(62, 100);
+  expect(columns[0].notes[6]).toBe('D-4');
+});
+
+it('records independent live note-offs and reuses released chord columns', () => {
+  const { project, grid } = setup(undefined, () => 'tone');
+  vi.spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    grid.paint(2, 0, 1000);
+    grid.midiNoteOn(60, 100, 60); grid.midiNoteOn(64, 90, 192);
+    grid.paint(4, 0, 1000); grid.midiNoteOff(60);
+    grid.midiNoteOn(67, 80, 67);
+    grid.paint(6, 0, 1000); grid.midiNoteOff(192); grid.midiNoteOff(67);
+    const columns = project.patterns[0].notes[0];
+    expect(columns[0].notes[2]).toBe('C-4'); expect(columns[1].notes[2]).toBe('E-4');
+    expect(columns[0].notes[4]).toBe('G-4');
+    expect(columns.map(c => c.notes[6])).toEqual(['OFF', 'OFF']);
+    grid.undo(); expect(columns[0].notes[6]).toBeNull();
+    grid.redo(); expect(columns[0].notes[6]).toBe('OFF');
+    grid.paint(null);
+  } finally { grid.paint(null); vi.restoreAllMocks(); }
+});
+
+it('keeps short live taps audible and never overwrites another note with a release', () => {
+  const { project, grid } = setup(undefined, () => 'tone');
+  vi.spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    grid.paint(2, 0, 1000); grid.midiNoteOn(60, 100); grid.midiNoteOff(60);
+    const column = project.patterns[0].notes[0][0];
+    expect(column.notes[2]).toBe('C-4'); expect(column.notes[3]).toBe('OFF');
+    grid.paint(5, 0, 1000); grid.midiNoteOn(62, 100);
+    column.notes[7] = 'G-4';
+    grid.paint(7, 0, 1000); grid.midiNoteOff(62);
+    expect(column.notes[7]).toBe('G-4');
+    grid.paint(10, 0, 1000); grid.midiNoteOn(64, 100);
+    column.notes[11] = 'A-4'; column.notes[12] = null; grid.paint(12, 0, 1000); grid.midiNoteOff(64);
+    expect(column.notes[12]).toBeNull();
+    grid.paint(null);
+  } finally { grid.paint(null); vi.restoreAllMocks(); }
+});
+
+it('cancels pending MIDI recording on reset, stop and disabling record mode', () => {
+  const { project, grid } = setup(undefined, () => 'tone');
+  vi.spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    for (const cancel of [() => grid.resetMidi(), () => { grid.setRecording(false); grid.setRecording(true); }, () => { grid.paint(null); grid.paint(6, 0, 1000); }]) {
+      grid.paint(2, 0, 1000); grid.midiNoteOn(60, 100); cancel();
+      grid.paint(6, 0, 1000); grid.midiNoteOff(60);
+      expect(project.patterns[0].notes[0][0].notes[6]).toBeNull();
+    }
+    grid.paint(null);
+  } finally { grid.paint(null); vi.restoreAllMocks(); }
+});
+
+it('limits MIDI chords without overwriting held notes, and identifies keys by channel', () => {
+  const { project, grid, feedback } = setup(undefined, () => 'tone');
+  for (let key = 0; key < 8; key++) grid.midiNoteOn(60, 100, key * 128 + 60);
+  const before = JSON.stringify(project);
+  grid.midiNoteOn(72, 100, 72);
+  expect(JSON.stringify(project)).toBe(before);
+  expect(feedback).toHaveBeenCalledWith(expect.stringContaining('eight'));
+  grid.midiNoteOff(188); grid.midiNoteOn(62, 100, 62);
+  expect(project.patterns[0].notes[0][1].notes[0]).toBe('D-4');
 });

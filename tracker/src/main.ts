@@ -404,17 +404,17 @@ function releaseNote(key: number | null) {
 }
 function receiveMidi(message: MidiMessage) {
   if (message.kind === 'on') {
-    const target = grid.midiNoteOn(message.note, message.velocity);
-    if (!target?.instrument) return;
     const key = message.channel * 128 + message.note;
+    const target = grid.midiNoteOn(message.note, message.velocity, key);
+    if (!target?.instrument) return;
     midiKeys.add(key);
     holdNote(key, target.instrument, target.note, target.track, target.velocity);
   } else if (message.kind === 'reset') {
-    midiRevision++; midiKeys.clear();
+    grid.resetMidi(); midiRevision++; midiKeys.clear();
     releaseNote(null);
   } else {
     const keys = message.kind === 'off' ? [message.channel * 128 + message.note] : [...midiKeys].filter(key => Math.floor(key / 128) === message.channel);
-    for (const key of keys) { midiKeys.delete(key); releaseNote(key); }
+    for (const key of keys) { grid.midiNoteOff(key, message.kind === 'off'); midiKeys.delete(key); releaseNote(key); }
   }
 }
 grid.releaseHeld = releaseNote;

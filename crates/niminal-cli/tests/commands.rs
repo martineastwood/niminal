@@ -216,3 +216,18 @@ fn the_server_refuses_what_it_cannot_do() {
     assert!(!out.status.success());
     assert!(stderr(&out).contains("TLS"), "{}", stderr(&out));
 }
+
+/// The opcode reference on the docs site is what `niminal docs` prints now. `BLESS=1` rewrites it.
+#[test]
+fn the_opcode_reference_page_is_current() {
+    let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/src/content/docs/reference/opcodes.md");
+    let printed = stdout(&niminal().arg("docs").output().unwrap());
+    if std::env::var_os("BLESS").is_some() {
+        std::fs::write(&page, &printed).unwrap();
+    }
+    assert!(
+        std::fs::read_to_string(&page).unwrap() == printed,
+        "docs/src/content/docs/reference/opcodes.md is out of date: run `BLESS=1 cargo test -p niminal-cli --test commands`"
+    );
+}

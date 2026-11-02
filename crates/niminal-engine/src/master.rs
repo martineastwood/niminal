@@ -264,6 +264,10 @@ impl Master {
             self.min_sum + min - self.windowed_min[p]
         };
         self.windowed_min[p] = min;
+        // with the gain very small a little drift is a lot of it, so once a window the sum is made again
+        if p == 0 && self.reduced_min > 0 {
+            self.min_sum = self.windowed_min.iter().sum();
+        }
         let smoothed = (self.min_sum / n as f64).min(1.0);
 
         self.gain = if smoothed < self.gain {

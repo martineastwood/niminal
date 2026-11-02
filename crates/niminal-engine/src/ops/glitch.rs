@@ -67,8 +67,10 @@ impl Ring {
         let len = self.buf.len() as i64;
         let base = pos.floor();
         let t = (pos - base) as f32;
-        let a = self.buf[(base as i64).rem_euclid(len) as usize];
-        let b = self.buf[(base as i64 + 1).rem_euclid(len) as usize];
+        // a position far past the ring saturates `as i64`, so step past it without overflowing
+        let whole = base as i64;
+        let a = self.buf[whole.rem_euclid(len) as usize];
+        let b = self.buf[whole.wrapping_add(1).rem_euclid(len) as usize];
         a + (b - a) * t
     }
 
