@@ -6287,7 +6287,7 @@ impl Lower<'_> {
                     return Err(Diagnostic::new("`pow` expects plain numbers", b_span));
                 }
                 if let (Some(x), Some(y)) = (a.konst, b.konst) {
-                    return Ok(Sig::constant(Unit::Num, x.powf(y)));
+                    return Ok(Sig::constant(Unit::Num, niminal_engine::ops::pow(x, y)));
                 }
                 self.elementwise(&a, &b, Unit::Num, b_span, |g, x, y| {
                     g.add(Pow, &[("a", x), ("b", y)]).expect("pow ports")

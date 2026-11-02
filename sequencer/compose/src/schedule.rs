@@ -179,6 +179,13 @@ const END_SLACK: f64 = 1e-9;
 /// Padding, in cycles, around the part of a clip that a search looks at.
 const PAD_CYCLES: f64 = 1e-4;
 
+/// A time rounded to the nearest nanosecond. A note on the edge of a window can come out a hair either side
+/// of it depending on how the tempo changes before it were added up, and the window before it and the one after
+/// must agree which of them it is in, or it is in neither.
+fn snap(seconds: f64) -> f64 {
+    (seconds * 1e9).round() / 1e9
+}
+
 trait Micro {
     fn floor_to_micro(self) -> i64;
     fn ceil_to_micro(self) -> i64;
@@ -699,8 +706,8 @@ impl Schedule {
     ) -> Result<(), ScheduleError> {
         let clock = &segment.clock;
         let length = segment.clip.length.to_f64();
-        let until = segment.end.map_or(to, |e| e.min(to));
-        let window_start = from.max(segment.start);
+        let until = snap(segment.end.map_or(to, |e| e.min(to)));
+        let window_start = snap(from.max(segment.start));
         if window_start >= until || length <= 0.0 {
             return Ok(());
         }
@@ -737,7 +744,7 @@ impl Schedule {
             if let Some(notes) = segment.clip.lane("notes") {
                 for hap in notes.onsets(span) {
                     let whole = hap.whole.expect("notes have a duration");
-                    let onset = clock.seconds_at(base + whole.start.to_f64());
+                    let onset = snap(clock.seconds_at(base + whole.start.to_f64()));
                     if onset < window_start || onset >= until {
                         continue;
                     }
@@ -757,7 +764,7 @@ impl Schedule {
                 if note.at < span.start || note.at >= span.end {
                     continue;
                 }
-                let onset = clock.seconds_at(base + note.at.to_f64());
+                let onset = snap(clock.seconds_at(base + note.at.to_f64()));
                 if onset < window_start || onset >= until {
                     continue;
                 }

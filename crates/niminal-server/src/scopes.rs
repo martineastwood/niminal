@@ -43,7 +43,6 @@ impl Scopes {
             return Err(format!("at most {MAX_SCOPES} scopes per client"));
         }
         let meter = session.endpoint_meter(client, &endpoint)?;
-        meter.waveform().enabled.store(true, Ordering::Relaxed);
         self.remove(client, &id);
         meter.waveform().enabled.store(true, Ordering::Relaxed);
         self.entries.insert(

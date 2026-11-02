@@ -252,8 +252,15 @@ fn chain_map_command(program: &Program, map: &super::ChainMap, at: u64) -> Comma
         at,
         kind: Kind::ChainMap {
             node: map.node(),
-            param: map.param.clone(),
-            mapping: super::parameters::prepare_mapping(program, &map.mapping),
+            param: map.control_key.clone(),
+            mapping: super::parameters::prepare_mapping(
+                program,
+                map.source.as_deref(),
+                map.channel,
+                map.scale,
+                map.offset,
+                None,
+            ),
         },
     }
 }
@@ -280,7 +287,14 @@ fn map_command(program: &Program, set: &super::VoiceMap, at: u64) -> Command {
         kind: Kind::Map {
             key: set.key,
             param: set.param.clone(),
-            mapping: super::parameters::prepare_mapping(program, set),
+            mapping: super::parameters::prepare_mapping(
+                program,
+                set.source.as_deref(),
+                set.channel,
+                set.scale,
+                set.offset,
+                set.range,
+            ),
         },
     }
 }
@@ -355,7 +369,7 @@ impl Fresh {
             Fresh::Buffer(set) => set.at,
             Fresh::Map(set) => set.at,
             Fresh::Bind(set) => set.at,
-            Fresh::ChainMap(map) => map.mapping.at,
+            Fresh::ChainMap(map) => map.at,
         }
     }
 }
@@ -648,8 +662,8 @@ impl Session {
         }
         self.prune_buffer_binds(stale);
         for map in &mut self.chain_maps {
-            if map.mapping.at < self.clock {
-                map.mapping.done = true;
+            if map.at < self.clock {
+                map.done = true;
             }
         }
         self.prune_chain_maps();
@@ -879,9 +893,9 @@ impl Session {
                     kind: Kind::Release { key },
                 }),
                 Fresh::ChainMap(map) => window.commands.push(chain_map_command(
-                    self.program_at(map.mapping.at),
+                    self.program_at(map.at),
                     &map,
-                    map.mapping.at.max(self.clock),
+                    map.at.max(self.clock),
                 )),
                 Fresh::Bind(set) => window
                     .commands
@@ -1110,12 +1124,19 @@ impl Session {
     fn chain_restores(&self, program: &Program, at: u64) -> Vec<ChainRestore> {
         super::parameters::latest_chain_maps(&self.chain_maps, at)
             .filter(|m| {
-                m.mapping.source.is_some() && program.controls.iter().any(|c| c.key == m.param)
+                m.source.is_some() && program.controls.iter().any(|c| c.key == m.control_key)
             })
             .map(|m| ChainRestore {
                 node: m.node(),
-                param: m.param.clone(),
-                mapping: super::parameters::prepare_mapping(program, &m.mapping),
+                param: m.control_key.clone(),
+                mapping: super::parameters::prepare_mapping(
+                    program,
+                    m.source.as_deref(),
+                    m.channel,
+                    m.scale,
+                    m.offset,
+                    None,
+                ),
             })
             .collect()
     }
@@ -1186,10 +1207,10 @@ impl Session {
             }
         }
         for map in &self.chain_maps {
-            if map.mapping.at >= from && map.mapping.at < to {
+            if map.at >= from && map.at < to {
                 window
                     .commands
-                    .push(chain_map_command(program, map, map.mapping.at));
+                    .push(chain_map_command(program, map, map.at));
             }
         }
         for set in &self.buffer_binds {

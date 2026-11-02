@@ -130,7 +130,7 @@ y = curve.phase(p)
 | `clock.time` | Elapsed engine time in seconds |
 | `clock.bpm`, `clock.beat`, `clock.bar`, `clock.meter`, `clock.beat_length`, `clock.bar_length` | This connection’s tempo, the beats and bars counted since its performance started, the beats in a bar, and how long a beat and a bar are in seconds. The clock can be read anywhere: in functions, `control { }` blocks and `control fn`s too. A length in a definition that follows the tempo is `3/16 * clock.beat_length`; a literal like `3/16beat` is fixed at the tempo it was sent at, which `delay`, `comb` and envelopes need. A delay that follows the tempo needs `max:`. The client tells the server the tempo with a `tempo` event; each connection has its own. |
 
-Functions don't see `note` or `clock`: pass these in as arguments.
+Functions can read `clock`, but don't see `note`: pass `note.time` and the like in as arguments.
 
 ### Sharing state between notes
 
@@ -196,7 +196,7 @@ instr pad(freq: hz) {
 }
 ```
 
-A name that isn't one of the settings is an ordinary local value, so a misspelt setting is not reported.
+A name that isn't one of the settings is an ordinary local value, but a line that sets a plain number nobody reads is an error that suggests the setting you probably meant (`maxx = 4`: did you mean `max`?).
 
 | Setting | Effect | Built |
 | --- | --- | --- |

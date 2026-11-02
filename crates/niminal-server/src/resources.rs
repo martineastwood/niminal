@@ -1,7 +1,7 @@
 //! Buffer resource work stays on the server thread. Audio changes use logged, timed events.
 use crate::engine_server::{ClientId, INVALID_PARAMS};
 use crate::session::definitions::{local, scoped};
-use crate::{At, EngineError, EngineRequest, Op, Session};
+use crate::{At, EngineError, Op, Session};
 use serde_json::{Value, json};
 
 fn bad(message: &str) -> EngineError {
@@ -48,96 +48,102 @@ fn allocate(name: &str, frames: usize, channels: usize) -> Result<Op, EngineErro
     })
 }
 
-pub(crate) fn request(
+pub(crate) fn budget(
     session: &mut Session,
     client: ClientId,
-    request: EngineRequest,
+    bytes: Option<usize>,
 ) -> Result<Value, EngineError> {
-    match request {
-        EngineRequest::BuffersBudget { bytes } => {
-            if let Some(bytes) = bytes {
-                session
-                    .set_buffer_budget(client, bytes)
-                    .map_err(|e| bad(&e))?;
-            }
-            let (bytes, retained) = session.buffer_budget(client);
-            Ok(json!({"bytes":bytes,"retained_bytes":retained}))
-        }
-        EngineRequest::BuffersList {} => Ok(
-            json!({ "buffers": session.program().buffers.iter().filter_map(|(name, b)| {
+    if let Some(bytes) = bytes {
+        session
+            .set_buffer_budget(client, bytes)
+            .map_err(|e| bad(&e))?;
+    }
+    let (bytes, retained) = session.buffer_budget(client);
+    Ok(json!({"bytes":bytes,"retained_bytes":retained}))
+}
+
+pub(crate) fn list(session: &mut Session, client: ClientId) -> Result<Value, EngineError> {
+    Ok(
+        json!({ "buffers": session.program().buffers.iter().filter_map(|(name, b)| {
             if session.buffer_is_hidden(name) {return None;}
             let name = local(client,name)?;
             Some(json!({ "name": name, "frames": b.len(), "channels":b.channels(), "sample_rate": b.sample_rate_or(session.sample_rate()) }))
         }).collect::<Vec<_>>() }),
-        ),
-        EngineRequest::BuffersRead {
-            name,
-            offset,
-            count,
-        } => {
-            let b = buffer(session, client, &name)?;
-            if count.saturating_mul(b.channels()) > 65536
-                || offset > b.len()
-                || count > b.len() - offset
-            {
-                return Err(bad(
-                    "read at most 65536 interleaved samples within the buffer",
-                ));
-            }
-            Ok(
-                json!({ "name": name, "offset": offset, "channels":b.channels(), "values": (offset*b.channels()..(offset+count)*b.channels()).map(|i| b.read_sample(i)).collect::<Vec<_>>() }),
-            )
-        }
-        EngineRequest::BuffersAlloc {
-            name,
-            frames,
-            channels,
-        } => {
-            if session
-                .program()
-                .buffers
-                .iter()
-                .any(|(n, _)| *n == scoped(client, &name) && !session.buffer_is_hidden(n))
-            {
-                return Err(bad("buffer already exists; redefine it to change its size"));
-            }
-            session
-                .send_events(client, vec![allocate(&name, frames, channels)?])
-                .map_err(|p| EngineError::rejected(&p))?;
-            session.publish_buffer(&scoped(client, &name));
-            Ok(json!({ "name": name, "frames": frames, "channels":channels }))
-        }
-        EngineRequest::BuffersLoad {
-            name,
-            path,
-            channel,
-        } => load_buffer(session, client, &name, &path, channel),
-        EngineRequest::BuffersFree { name } => {
-            buffer(session, client, &name)?;
-            session.hide_buffer(scoped(client, &name));
-            Ok(json!({}))
-        }
-        EngineRequest::BuffersSave { name, path } => {
-            let b = buffer(session, client, &name)?;
+    )
+}
 
-            let spec = hound::WavSpec {
-                channels: b.channels() as u16,
-                sample_rate: b.sample_rate_or(session.sample_rate()).round() as u32,
-                bits_per_sample: 32,
-                sample_format: hound::SampleFormat::Float,
-            };
-            let mut writer =
-                hound::WavWriter::create(&path, spec).map_err(|e| bad(&e.to_string()))?;
-            for i in 0..b.len() * b.channels() {
-                writer
-                    .write_sample(b.read_sample(i))
-                    .map_err(|e| bad(&e.to_string()))?;
-            }
-            writer.finalize().map_err(|e| bad(&e.to_string()))?;
-            Ok(json!({ "name": name, "path": path, "frames": b.len(), "channels":b.channels() }))
-        }
-        _ => unreachable!("buffer request dispatch"),
+pub(crate) fn read(
+    session: &mut Session,
+    client: ClientId,
+    name: String,
+    offset: usize,
+    count: usize,
+) -> Result<Value, EngineError> {
+    let b = buffer(session, client, &name)?;
+    if count.saturating_mul(b.channels()) > 65536 || offset > b.len() || count > b.len() - offset {
+        return Err(bad(
+            "read at most 65536 interleaved samples within the buffer",
+        ));
     }
+    Ok(
+        json!({ "name": name, "offset": offset, "channels":b.channels(), "values": (offset*b.channels()..(offset+count)*b.channels()).map(|i| b.read_sample(i)).collect::<Vec<_>>() }),
+    )
+}
+
+pub(crate) fn alloc(
+    session: &mut Session,
+    client: ClientId,
+    name: String,
+    frames: usize,
+    channels: usize,
+) -> Result<Value, EngineError> {
+    if session
+        .program()
+        .buffers
+        .iter()
+        .any(|(n, _)| *n == scoped(client, &name) && !session.buffer_is_hidden(n))
+    {
+        return Err(bad("buffer already exists; redefine it to change its size"));
+    }
+    session
+        .send_events(client, vec![allocate(&name, frames, channels)?])
+        .map_err(|p| EngineError::rejected(&p))?;
+    session.publish_buffer(&scoped(client, &name));
+    Ok(json!({ "name": name, "frames": frames, "channels":channels }))
+}
+
+pub(crate) fn free(
+    session: &mut Session,
+    client: ClientId,
+    name: String,
+) -> Result<Value, EngineError> {
+    buffer(session, client, &name)?;
+    session.hide_buffer(scoped(client, &name));
+    Ok(json!({}))
+}
+
+pub(crate) fn save(
+    session: &mut Session,
+    client: ClientId,
+    name: String,
+    path: String,
+) -> Result<Value, EngineError> {
+    let b = buffer(session, client, &name)?;
+
+    let spec = hound::WavSpec {
+        channels: b.channels() as u16,
+        sample_rate: b.sample_rate_or(session.sample_rate()).round() as u32,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut writer = hound::WavWriter::create(&path, spec).map_err(|e| bad(&e.to_string()))?;
+    for i in 0..b.len() * b.channels() {
+        writer
+            .write_sample(b.read_sample(i))
+            .map_err(|e| bad(&e.to_string()))?;
+    }
+    writer.finalize().map_err(|e| bad(&e.to_string()))?;
+    Ok(json!({ "name": name, "path": path, "frames": b.len(), "channels":b.channels() }))
 }
 
 pub(crate) fn load_buffer(

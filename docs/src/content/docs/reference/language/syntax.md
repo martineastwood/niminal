@@ -11,6 +11,21 @@ description: Comments, blocks, bindings, calls and control flow in the orchestra
 - **Blocks:** `{` `}`. Indentation is never significant, so evaluating a selected snippet is always safe.
 - **Line continuation:** a line starting with `.` continues the previous expression.
 
+## Language version
+
+A file can say which versions of the language it is written for, on a line of its own:
+
+```nml
+niminal 0.1                  // that version or newer
+niminal >=0.1, <0.3          // or a range
+```
+
+- **Bare version:** `niminal 0.1` means 0.1 or newer. Conditions are `>=`, `>`, `<=`, `<` and `==`, joined by commas. Versions are `major.minor`.
+- **When it isn't met** the file is not run, and the error says which side is wrong: update niminal, or update the file.
+- **Leaving it out** is fine: the file is run as it is, and may stop working when the language changes.
+- **Modules** can have their own line; each is checked against the language on its own.
+- **The current version** is 0.1. It goes up only when a change would break files written for the one before, so a file whose requirement the current version meets is meant to keep working. Until 1.0 that is a goal, not a promise.
+
 ## Bindings and names
 
 - **Bindings:** no keyword. `name = expr` creates or rebinds a local; reads see the most recent binding above them.
@@ -37,6 +52,7 @@ From the tightest to the loosest:
 | `or` | 1 when either is non-zero |
 
 - **The remainder** is `x.mod(y)`, with the sign of `y`. `%` only means percent.
+- **Maths never makes NaN.** Where there is no real answer the result is 0: dividing by zero, `x.mod(0)`, `sqrt` of a negative number, `pow` of a negative number to a fractional power, and `pow(0, y)` for a negative `y`. `log` of zero or a negative number is the log of a tiny number (about -69), so turning silence into decibels stays finite. A result too big to hold, such as `exp(100)`, is infinity, and a voice or effect that produces one is silenced and reported.
 - **No power operator:** `pow(x, y)`.
 - **Math** works everywhere: `sin cos tan tanh exp log sqrt abs sign floor ceil fract`, `min(a, b)`, `max(a, b)`, `pow(x, y)`, `x.clamp(lo..hi)`, and the helpers `lerp`, `smoothstep`, `floor_to`, `log2`, `log10`, `atan`, `asin`, `acos`, `mtof` and `ftom`. For a whole number from a range, use `.floor`: `random_between(0, 10).floor` is 0 to 9, and `xs.at(random_between(0, 4).floor)` picks from a list; constants `pi`, `sample_rate`, `true`, `false`.
 

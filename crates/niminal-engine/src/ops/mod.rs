@@ -60,7 +60,7 @@ pub use control::Control;
 pub use convolve::{Convolve, IrSpectrum};
 pub use custom::{
     ArraySource, BinOp, Cmp, Custom, Fn1, FrameScope, Func, Instr, Interp, Kernel, LaneSrc, Native,
-    NativeInput, Reduce, ResetScope, read_array, read_at, rem,
+    NativeInput, Reduce, ResetScope, pow, read_array, read_at, rem,
 };
 pub use dc_block::DcBlock;
 pub use delay::Delay;

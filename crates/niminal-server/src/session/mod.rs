@@ -135,8 +135,15 @@ struct TimedPanic {
 struct ChainMap {
     client: u64,
     node: String,
-    param: String,
-    mapping: VoiceMap,
+    control_key: String,
+    parameter_name: String,
+    source: Option<String>,
+    channel: usize,
+    scale: f32,
+    offset: f32,
+    at: u64,
+    tag: Option<String>,
+    done: bool,
 }
 impl ChainMap {
     fn node(&self) -> String {
@@ -241,7 +248,6 @@ pub struct Session {
     clocks: HashMap<ClientId, niminal_lang::ClockState>,
     /// The controls that are kept to a number of beats, by name, and how many: they follow their connection's tempo.
     linked: HashMap<String, Link>,
-    sample_dirs: Vec<std::path::PathBuf>,
     clock: u64,
 
     transactions: VecDeque<transactions::Transaction>,
@@ -321,7 +327,6 @@ impl Session {
             key_offs: Vec::new(),
             audio_input: Vec::new(),
             midi_out: Vec::new(),
-            sample_dirs: Vec::new(),
             clock: 0,
             transactions: VecDeque::new(),
             current_transaction: None,
@@ -429,10 +434,11 @@ impl Session {
     /// Find the paths in `sample` and `kit` declarations from `dir`. Folders given earlier are still
     /// searched, after this one.
     pub fn set_sample_dir(&mut self, dir: &std::path::Path) {
-        if self.sample_dirs.first().is_none_or(|d| d != dir) {
-            self.sample_dirs.retain(|d| d != dir);
-            self.sample_dirs.insert(0, dir.to_path_buf());
-            self.samples = self.samples.with_bases(self.sample_dirs.clone());
+        if self.samples.bases().first().is_none_or(|d| d != dir) {
+            let mut bases = self.samples.bases().to_vec();
+            bases.retain(|d| d != dir);
+            bases.insert(0, dir.to_path_buf());
+            self.samples = self.samples.with_bases(bases);
         }
     }
 
@@ -1017,12 +1023,7 @@ impl Session {
                 .map(|k| k.at)
                 .chain(self.voice_sets.iter().filter(|s| !s.done).map(|s| s.at))
                 .chain(self.node_sets.iter().filter(|s| !s.done).map(|s| s.at))
-                .chain(
-                    self.chain_maps
-                        .iter()
-                        .filter(|m| !m.mapping.done)
-                        .map(|m| m.mapping.at),
-                )
+                .chain(self.chain_maps.iter().filter(|m| !m.done).map(|m| m.at))
                 .chain(self.buffer_binds.iter().filter(|b| !b.done).map(|b| b.at))
                 .chain(self.timed_panics.iter().filter(|p| !p.done).map(|p| p.at))
                 .chain(self.buffer_sets.iter().filter(|s| !s.done).map(|s| s.at))

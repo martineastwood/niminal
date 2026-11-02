@@ -93,21 +93,20 @@ impl Session {
 
 pub(super) fn prepare_mapping(
     program: &Program,
-    set: &VoiceMap,
+    source: Option<&str>,
+    channel: usize,
+    scale: f32,
+    offset: f32,
+    range: Option<(f32, f32)>,
 ) -> Option<Box<niminal_engine::ParamMapping>> {
-    let source = set.source.as_ref()?;
-    let mapping = if let Some(control) = program.controls.iter().find(|c| c.name == *source) {
-        niminal_engine::ParamMapping::control(
-            control.key.clone(),
-            control.initial,
-            set.scale,
-            set.offset,
-        )
+    let source = source?;
+    let mapping = if let Some(control) = program.controls.iter().find(|c| c.name == source) {
+        niminal_engine::ParamMapping::control(control.key.clone(), control.initial, scale, offset)
     } else {
         let bus = program.buses.iter().position(|n| n == source)?;
-        niminal_engine::ParamMapping::bus(bus, set.channel, set.scale, set.offset)
+        niminal_engine::ParamMapping::bus(bus, channel, scale, offset)
     };
-    Some(Box::new(mapping.with_range(set.range)))
+    Some(Box::new(mapping.with_range(range)))
 }
 impl Session {
     pub(super) fn apply_voice_maps(&mut self) {
@@ -116,7 +115,14 @@ impl Session {
                 continue;
             }
             if let Some((_, id, _)) = self.sounding.held.iter().find(|h| h.2 == set.key) {
-                let mut mapping = prepare_mapping(&self.program, set);
+                let mut mapping = prepare_mapping(
+                    &self.program,
+                    set.source.as_deref(),
+                    set.channel,
+                    set.scale,
+                    set.offset,
+                    set.range,
+                );
                 self.mixer.swap_voice_mapping(*id, &set.param, &mut mapping);
                 crate::controls::sync_note(&self.controls, &mut self.mixer, *id, self.clock);
             }
@@ -159,20 +165,28 @@ impl Session {
 impl Session {
     pub(super) fn apply_chain_maps(&mut self) {
         for map in &mut self.chain_maps {
-            if !map.mapping.done && map.mapping.at <= self.clock {
+            if !map.done && map.at <= self.clock {
                 if let Some(node) = self.program.node_index(&map.node()) {
-                    if map.mapping.source.is_none()
-                        && let Some(value) = self.mixer.chain_param_value(node, &map.param)
-                        && let Some(control) = self.controls.iter_mut().find(|c| c.key == map.param)
+                    if map.source.is_none()
+                        && let Some(value) = self.mixer.chain_param_value(node, &map.control_key)
+                        && let Some(control) =
+                            self.controls.iter_mut().find(|c| c.key == map.control_key)
                     {
                         control.set(self.clock, value, 0);
                     }
-                    let mut prepared = prepare_mapping(&self.program, &map.mapping);
+                    let mut prepared = prepare_mapping(
+                        &self.program,
+                        map.source.as_deref(),
+                        map.channel,
+                        map.scale,
+                        map.offset,
+                        None,
+                    );
                     self.mixer
-                        .swap_chain_mapping(node, &map.param, &mut prepared);
+                        .swap_chain_mapping(node, &map.control_key, &mut prepared);
                     crate::controls::sync_mixer(&self.controls, &mut self.mixer, self.clock);
                 }
-                map.mapping.done = true;
+                map.done = true;
             }
         }
         self.prune_chain_maps();
@@ -215,11 +229,11 @@ impl Session {
     pub(super) fn prune_chain_maps(&mut self) {
         let mut latest = std::collections::BTreeMap::new();
         for (i, map) in self.chain_maps.iter().enumerate() {
-            if map.mapping.done {
-                let key = (map.client, map.node.clone(), map.param.clone());
+            if map.done {
+                let key = (map.client, map.node.clone(), map.control_key.clone());
                 if latest
                     .get(&key)
-                    .is_none_or(|old: &usize| self.chain_maps[*old].mapping.at <= map.mapping.at)
+                    .is_none_or(|old: &usize| self.chain_maps[*old].at <= map.at)
                 {
                     latest.insert(key, i);
                 }
@@ -227,9 +241,9 @@ impl Session {
         }
         let mut index = 0;
         self.chain_maps.retain(|map| {
-            let keep = !map.mapping.done
+            let keep = !map.done
                 || (self.program.node_index(&map.node()).is_some()
-                    && latest.get(&(map.client, map.node.clone(), map.param.clone()))
+                    && latest.get(&(map.client, map.node.clone(), map.control_key.clone()))
                         == Some(&index));
             index += 1;
             keep
@@ -237,12 +251,19 @@ impl Session {
     }
     pub(super) fn restore_chain_bindings(&mut self) {
         for map in latest_chain_maps(&self.chain_maps, self.clock) {
-            if map.mapping.source.is_some()
+            if map.source.is_some()
                 && let Some(node) = self.program.node_index(&map.node())
             {
-                let mut mapping = prepare_mapping(&self.program, &map.mapping);
+                let mut mapping = prepare_mapping(
+                    &self.program,
+                    map.source.as_deref(),
+                    map.channel,
+                    map.scale,
+                    map.offset,
+                    None,
+                );
                 self.mixer
-                    .swap_chain_mapping(node, &map.param, &mut mapping);
+                    .swap_chain_mapping(node, &map.control_key, &mut mapping);
             }
         }
         for (id, bind) in latest_chain_binds(&self.buffer_binds, self.clock) {
@@ -263,11 +284,11 @@ impl Session {
 pub(super) fn latest_chain_maps(maps: &[ChainMap], at: u64) -> impl Iterator<Item = &ChainMap> {
     let mut latest = std::collections::BTreeMap::new();
     for map in maps {
-        if map.mapping.at <= at {
-            let key = (map.client, map.node.as_str(), map.param.as_str());
+        if map.at <= at {
+            let key = (map.client, map.node.as_str(), map.control_key.as_str());
             if latest
                 .get(&key)
-                .is_none_or(|old: &&ChainMap| old.mapping.at <= map.mapping.at)
+                .is_none_or(|old: &&ChainMap| old.at <= map.at)
             {
                 latest.insert(key, map);
             }
@@ -295,4 +316,36 @@ pub(super) fn latest_chain_binds(
         }
     }
     latest.into_values()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn latest_chain_mapping_uses_last_entry_at_equal_samples() {
+        let map = ChainMap {
+            client: 7,
+            node: "fx".into(),
+            control_key: "fx::wet".into(),
+            parameter_name: "wet".into(),
+            source: Some("ctl".into()),
+            channel: 0,
+            scale: 1.,
+            offset: 0.,
+            at: 10,
+            tag: None,
+            done: false,
+        };
+        let mut unmap = map.clone();
+        unmap.source = None;
+        let mut future = map.clone();
+        future.at = 20;
+        let maps = [map, unmap, future];
+        assert!(latest_chain_maps(&maps, 9).next().is_none());
+        let latest: Vec<_> = latest_chain_maps(&maps, 10).collect();
+        assert_eq!(latest.len(), 1);
+        assert!(latest[0].source.is_none());
+        assert_eq!(latest_chain_maps(&maps, 20).next().unwrap().at, 20);
+    }
 }

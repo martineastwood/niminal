@@ -773,6 +773,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         defined.add(&def.name, &mut errors, || {
             compile_instr(def, owned_tempo(&def.name.name, tempo), &registry, &names)
                 .and_then(|mut i| voice_options(def, &mut i, &mut samples_state).map(|()| i))
+                .and_then(|i| crate::parser::reject_unread_constants(&def.body).map(|()| i))
         });
     }
     for item in &items {

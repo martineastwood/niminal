@@ -2,34 +2,45 @@
 use crate::{ClientId, Session};
 use niminal_engine::ops::Report;
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Weak},
+};
 struct Source {
     owner: u64,
     report: Arc<Report>,
     cursor: u64,
     dropped: u64,
 }
+struct Instance {
+    name: String,
+    graphs: Vec<Weak<niminal_engine::Graph>>,
+}
+
 #[derive(Default)]
 pub(crate) struct Reports {
     sources: Vec<Source>,
-    instances: BTreeMap<u64, (ClientId, String)>,
+    instances: BTreeMap<u64, Instance>,
 }
 impl Reports {
     pub fn register(&mut self, session: &Session) {
         self.sources.retain(|s| Arc::strong_count(&s.report) > 1);
-        let mut graphs: Vec<_> = session
+        self.instances.retain(|_, instance| {
+            instance.graphs.retain(|graph| graph.strong_count() > 0);
+            !instance.graphs.is_empty()
+        });
+        let graphs = session
             .program()
             .instruments
             .iter()
             .map(|i| (&i.name, &i.graph))
-            .collect();
-        graphs.extend(
-            session
-                .program()
-                .nodes
-                .iter()
-                .filter_map(|t| t.def.chain.as_ref().map(|g| (&t.name, g))),
-        );
+            .chain(
+                session
+                    .program()
+                    .nodes
+                    .iter()
+                    .filter_map(|t| t.def.chain.as_ref().map(|g| (&t.name, g))),
+            );
         for (name, graph) in graphs {
             let owner = if let Some(rest) = name
                 .strip_prefix("__routing_node_")
@@ -44,8 +55,17 @@ impl Reports {
             let public = crate::session::definitions::local(owner, name)
                 .unwrap_or(name)
                 .to_string();
-            self.instances
-                .insert(niminal_engine::instance_id(name), (owner, public));
+            let instance = self
+                .instances
+                .entry(niminal_engine::instance_id(name))
+                .or_insert_with(|| Instance {
+                    name: public,
+                    graphs: Vec::new(),
+                });
+            let weak = Arc::downgrade(graph);
+            if !instance.graphs.iter().any(|g| g.ptr_eq(&weak)) {
+                instance.graphs.push(weak);
+            }
             graph.reports(&mut |report| {
                 if !self.sources.iter().any(|s| Arc::ptr_eq(report, &s.report)) {
                     self.sources.push(Source {
@@ -71,12 +91,60 @@ impl Reports {
                 } else {
                     self.instances
                         .get(&instance)
-                        .map(|(_, n)| n.clone())
+                        .map(|instance| instance.name.clone())
                         .unwrap_or_default()
                 };
                 result.push((owner,json!({"name":source.report.name,"source":name,"token":(token!=0).then_some(token),"sample":sample,"values":values,"dropped":source.dropped})));
             }
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{At, Op};
+
+    #[test]
+    fn instance_names_survive_retained_graphs_and_are_pruned_after_release() {
+        let mut session = Session::new(48_000., niminal_lang::Layout::Mono);
+        let mut reports = Reports::default();
+        session
+            .send_events(
+                0,
+                vec![Op::Define {
+                    source: "instr flat() { 0.25 }".into(),
+                    at: At::Now,
+                    dir: None,
+                    tag: None,
+                }],
+            )
+            .unwrap();
+        session.process(1);
+        reports.register(&session);
+        let graph = session.program().instrument("flat").unwrap().graph.clone();
+        let id = niminal_engine::instance_id("flat");
+        session
+            .send_events(
+                0,
+                vec![Op::Define {
+                    source: "instr flat() { 0.5 }".into(),
+                    at: At::Now,
+                    dir: None,
+                    tag: None,
+                }],
+            )
+            .unwrap();
+        session.process(1);
+        reports.register(&session);
+        // A held voice owns its old graph even after the replacement definition leaves the session.
+        drop(session);
+        let empty = Session::new(48_000., niminal_lang::Layout::Mono);
+        reports.register(&empty);
+        assert_eq!(reports.instances.get(&id).unwrap().name, "flat");
+        drop(graph);
+        reports.register(&empty);
+        assert!(!reports.instances.contains_key(&id));
     }
 }

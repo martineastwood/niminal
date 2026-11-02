@@ -1007,7 +1007,7 @@ impl Live {
     /// reached.
     pub fn engine_status(&mut self) -> Result<serde_json::Value, String> {
         match self.link.request(EngineRequest::Status {}) {
-            Ok(EngineReply::Status(mut v)) => {
+            Ok(EngineReply::Json(mut v)) => {
                 self.tidy_controls(&mut v);
                 Ok(v)
             }

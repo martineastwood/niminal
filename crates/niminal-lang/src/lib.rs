@@ -35,6 +35,8 @@ mod sample;
 mod sfz;
 mod tables;
 mod unit;
+mod version;
+pub use version::LANGUAGE_VERSION;
 
 pub use analysis::{Statement, analyze};
 

@@ -168,19 +168,17 @@ impl Session {
                 self.notices.clone(),
                 self.recent_notices.clone(),
                 self.samples.clone(),
-                self.sample_dirs.clone(),
                 self.client_samples.clone(),
             )
         });
         let result = self.send_events_inner(client, ops, has_changes);
         if result.is_err()
-            && let Some((pending, notices, recent, samples, dirs, client_samples)) = backup
+            && let Some((pending, notices, recent, samples, client_samples)) = backup
         {
             self.pending = pending;
             self.notices = notices;
             self.recent_notices = recent;
             self.samples = samples;
-            self.sample_dirs = dirs;
             self.client_samples = client_samples;
         }
         result
@@ -805,20 +803,15 @@ impl Session {
                                 Ok(ChainMap {
                                     client,
                                     node: id.clone(),
-                                    param: key,
-                                    mapping: VoiceMap {
-                                        key: 0,
-                                        param: param.clone(),
-                                        source: name,
-                                        channel: channel - 1,
-                                        scale: *scale,
-                                        offset: *offset,
-                                        range: None,
-                                        at: start,
-                                        client,
-                                        tag: tag.clone(),
-                                        done: false,
-                                    },
+                                    control_key: key,
+                                    parameter_name: param.clone(),
+                                    source: name,
+                                    channel: channel - 1,
+                                    scale: *scale,
+                                    offset: *offset,
+                                    at: start,
+                                    tag: tag.clone(),
+                                    done: false,
                                 })
                             })();
                             match result {
@@ -1228,7 +1221,7 @@ impl Session {
                     at
                 }
                 Plan::ChainMap(map) => {
-                    let at = map.mapping.at;
+                    let at = map.at;
                     if self.live.is_some() {
                         self.fresh.push(realtime::Fresh::ChainMap(map.clone()));
                     }
@@ -1661,8 +1654,7 @@ impl Session {
             !drop
         });
         self.chain_maps.retain(|s| {
-            let drop =
-                !s.mapping.done && s.mapping.at >= from && mine(Some(s.client), &s.mapping.tag);
+            let drop = !s.done && s.at >= from && mine(Some(s.client), &s.tag);
             done.cancelled += usize::from(drop);
             !drop
         });

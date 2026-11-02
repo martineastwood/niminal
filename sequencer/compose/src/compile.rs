@@ -1028,7 +1028,9 @@ fn meter_of(items: &[Item]) -> Res<(f64, u32)> {
     for item in items {
         let Item::Meter(e) = item else { continue };
         if meter.is_some() {
-            return Err(Diagnostic::new("meter is set more than once", e.span));
+            return Err(Diagnostic::new("meter is set more than once", e.span).with_help(
+                "to change it part way through, give each section of an `arrangement` its own `meter:`",
+            ));
         }
         meter = Some(meter_beats(e)?);
     }
@@ -1079,7 +1081,9 @@ fn tempo_of(items: &[Item], meter: (f64, u32), tuning: Tuning) -> Res<Tempo> {
     for item in items {
         let Item::Tempo(stmt) = item else { continue };
         if tempo.is_some() {
-            return Err(Diagnostic::new("tempo is set more than once", stmt.span));
+            return Err(Diagnostic::new("tempo is set more than once", stmt.span).with_help(
+                "to change it part way through, write `tempo 90bpm @ next 4bars over 2bars` (a gradual change), or give each section of an `arrangement` its own `tempo:`",
+            ));
         }
         // `@ next bar` and `over 2bars` say how a live session gets there; a file starts at the tempo.
         tempo = Some(Tempo {

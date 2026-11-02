@@ -431,32 +431,20 @@ impl Session {
                 self.sample_rate,
             )
             .map_err(|e| vec![Problem::plain(e)])?;
-        for mapping in &self.chain_maps {
-            if mapping.client != meta.client
-                || mapping.mapping.at > lands_at
-                || mapping.mapping.source.is_none()
-            {
-                continue;
-            }
-            if self.chain_maps.iter().any(|later| {
-                later.client == mapping.client
-                    && later.node == mapping.node
-                    && later.param == mapping.param
-                    && later.mapping.at > mapping.mapping.at
-                    && later.mapping.at <= lands_at
-            }) {
+        for mapping in super::parameters::latest_chain_maps(&self.chain_maps, lands_at) {
+            if mapping.client != meta.client || mapping.source.is_none() {
                 continue;
             }
             if !routing.has_node(mapping.client, &mapping.node) {
                 continue;
             }
-            let explicitly_unmapped=edits.iter().any(|e|matches!(e,crate::RoutingEdit::Map{id,param,source:None,..} if *id==mapping.node && *param==mapping.mapping.param));
+            let explicitly_unmapped=edits.iter().any(|e|matches!(e,crate::RoutingEdit::Map{id,param,source:None,..} if *id==mapping.node && *param==mapping.parameter_name));
             if !explicitly_unmapped
-                && routing.parameter_unit(mapping.client, &mapping.node, &mapping.mapping.param)
+                && routing.parameter_unit(mapping.client, &mapping.node, &mapping.parameter_name)
                     != self.routing.parameter_unit(
                         mapping.client,
                         &mapping.node,
-                        &mapping.mapping.param,
+                        &mapping.parameter_name,
                     )
             {
                 return Err(vec![Problem::plain(

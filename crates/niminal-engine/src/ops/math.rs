@@ -132,7 +132,7 @@ binary_op!(
 );
 binary_op!(
     /// `a` raised to `b`
-    Pow, "pow", "a", "b", Port::required("b"), |a, b| a.powf(b)
+    Pow, "pow", "a", "b", Port::required("b"), |a, b| super::custom::pow32(a, b)
 );
 binary_op!(
     /// The angle of the point (`b`, `a`), in radians

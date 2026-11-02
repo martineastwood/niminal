@@ -6,7 +6,7 @@ fn project(files: &[(&str, &str)]) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "niminal-modules-{}-{}",
         std::process::id(),
-        files.iter().map(|(n, _)| n.len()).sum::<usize>()
+        files.iter().map(|(n, t)| n.len() + t.len()).sum::<usize>()
     ));
     for (name, text) in files {
         let path = dir.join(name);
@@ -53,4 +53,42 @@ fn a_module_with_private_names_plays() {
 fn the_library_that_comes_with_niminal_plays() {
     let source = "use std/filters\ntempo 100bpm\ninstr pad(freq: hz) { osc(saw, freq).biquad_lp(2khz) * env[0 20ms 1 | 400ms 0] }\npad(freq: a3) for 2beats\n";
     assert!(peak(source, Path::new(".")) > 0.1);
+}
+
+/// What `niminal-live render` says about `main`, a file that uses the modules given.
+fn render_error(main: &str, modules: &[(&str, &str)]) -> String {
+    let mut files = vec![("main.nml", main)];
+    files.extend_from_slice(modules);
+    let dir = project(&files.iter().map(|(n, t)| (*n, *t)).collect::<Vec<_>>());
+    let run = std::process::Command::new(env!("CARGO_BIN_EXE_niminal-live"))
+        .arg("render")
+        .arg(dir.join("main.nml"))
+        .args(["--bars", "1", "--out"])
+        .arg(dir.join("out.wav"))
+        .output()
+        .unwrap();
+    assert!(!run.status.success());
+    String::from_utf8_lossy(&run.stderr).into_owned()
+}
+
+const USES_RIG: &str = "tempo 120bpm\nuse rig\nclip c { instrument: tone, notes: [c4] }\nc.start\n";
+
+#[test]
+fn a_syntax_error_in_a_module_names_the_module_and_the_use_line() {
+    let e = render_error(
+        USES_RIG,
+        &[("rig.nml", "\ninstr tone(freq: hz = 220hz) { osc(sine, freq) +* }\n")],
+    );
+    assert!(e.contains("in rig.nml line 2:"), "{e}");
+    assert!(e.contains("main.nml:2:1"), "points at the `use` line: {e}");
+}
+
+#[test]
+fn a_version_a_module_asks_for_is_checked_and_located_the_same_way() {
+    let e = render_error(
+        USES_RIG,
+        &[("rig.nml", "niminal 99.0\ninstr tone(freq: hz = 220hz) { osc(sine, freq) }\n")],
+    );
+    assert!(e.contains("in rig.nml line 1: this file is for niminal 99.0"), "{e}");
+    assert!(e.contains("main.nml:2:1"), "{e}");
 }

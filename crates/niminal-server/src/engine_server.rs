@@ -201,8 +201,7 @@ pub enum EngineReply {
     },
     Cancelled(Cancelled),
     Panicked,
-    Status(Value),
-    Buffers(Value),
+    Json(Value),
     Clock(ClockInfo),
 }
 
@@ -332,9 +331,9 @@ impl EngineReply {
             | EngineRequest::BuffersLoad { .. }
             | EngineRequest::BuffersSave { .. }
             | EngineRequest::BuffersFree { .. }
-            | EngineRequest::BuffersBudget { .. } => EngineReply::Buffers(result.clone()),
-            EngineRequest::Status {} => EngineReply::Status(result.clone()),
-            EngineRequest::AudioDevices {}
+            | EngineRequest::BuffersBudget { .. }
+            | EngineRequest::Status {}
+            | EngineRequest::AudioDevices {}
             | EngineRequest::AudioStatus {}
             | EngineRequest::AudioConfigure { .. }
             | EngineRequest::CaptureStart { .. }
@@ -346,7 +345,7 @@ impl EngineReply {
             | EngineRequest::FilesRead { .. }
             | EngineRequest::FilesRemove { .. }
             | EngineRequest::ScopesCreate { .. }
-            | EngineRequest::ScopesRemove { .. } => EngineReply::Status(result.clone()),
+            | EngineRequest::ScopesRemove { .. } => EngineReply::Json(result.clone()),
             EngineRequest::Clock {} => EngineReply::Clock(decode(result)?),
         })
     }
@@ -379,7 +378,7 @@ impl EngineReply {
                 json!({ "cancelled": c.cancelled, "released": c.released })
             }
             EngineReply::Panicked => json!({}),
-            EngineReply::Status(v) | EngineReply::Buffers(v) => v.clone(),
+            EngineReply::Json(v) => v.clone(),
             EngineReply::Clock(c) => clock_json(c),
         }
     }
@@ -698,46 +697,65 @@ impl EngineServer {
                 self.session.panic_client(client);
                 Ok(EngineReply::Panicked)
             }
-            request @ (EngineRequest::BuffersList {}
-            | EngineRequest::BuffersRead { .. }
-            | EngineRequest::BuffersAlloc { .. }
-            | EngineRequest::BuffersLoad { .. }
-            | EngineRequest::BuffersSave { .. }
-            | EngineRequest::BuffersFree { .. }
-            | EngineRequest::BuffersBudget { .. }) => {
-                let mut request = request;
-                match &mut request {
-                    EngineRequest::BuffersLoad { path, .. } if path.starts_with("file:") => {
-                        *path = self
-                            .files
-                            .path(client, path)
-                            .map_err(|e| EngineError::new(INVALID_PARAMS, &e))?
-                            .to_string_lossy()
-                            .into_owned();
-                    }
-                    _ => {}
-                }
-                crate::resources::request(&mut self.session, client, request)
-                    .map(EngineReply::Buffers)
+            EngineRequest::BuffersBudget { bytes } => {
+                crate::resources::budget(&mut self.session, client, bytes).map(EngineReply::Json)
+            }
+            EngineRequest::BuffersList {} => {
+                crate::resources::list(&mut self.session, client).map(EngineReply::Json)
+            }
+            EngineRequest::BuffersRead {
+                name,
+                offset,
+                count,
+            } => crate::resources::read(&mut self.session, client, name, offset, count)
+                .map(EngineReply::Json),
+            EngineRequest::BuffersAlloc {
+                name,
+                frames,
+                channels,
+            } => crate::resources::alloc(&mut self.session, client, name, frames, channels)
+                .map(EngineReply::Json),
+            EngineRequest::BuffersFree { name } => {
+                crate::resources::free(&mut self.session, client, name).map(EngineReply::Json)
+            }
+            EngineRequest::BuffersSave { name, path } => {
+                crate::resources::save(&mut self.session, client, name, path).map(EngineReply::Json)
+            }
+            EngineRequest::BuffersLoad {
+                name,
+                path,
+                channel,
+            } => {
+                let path = if path.starts_with("file:") {
+                    self.files
+                        .path(client, &path)
+                        .map_err(|e| EngineError::new(INVALID_PARAMS, &e))?
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    path
+                };
+                crate::resources::load_buffer(&mut self.session, client, &name, &path, channel)
+                    .map(EngineReply::Json)
             }
             EngineRequest::Status {} => {
                 let mut status = crate::status::client_status_json(&self.session, client);
                 status["active_voices"] = self.session.active_voice_status(client);
                 status["client_id"] = json!(client);
                 status["transactions"] = self.session.transaction_status(client);
-                Ok(EngineReply::Status(status))
+                Ok(EngineReply::Json(status))
             }
-            EngineRequest::AudioDevices {} => Ok(EngineReply::Status(self.audio.devices())),
-            EngineRequest::AudioStatus {} => Ok(EngineReply::Status(self.audio.status())),
+            EngineRequest::AudioDevices {} => Ok(EngineReply::Json(self.audio.devices())),
+            EngineRequest::AudioStatus {} => Ok(EngineReply::Json(self.audio.status())),
             EngineRequest::AudioConfigure { settings, restart } => self
                 .audio
                 .configure(settings, restart)
-                .map(EngineReply::Status)
+                .map(EngineReply::Json)
                 .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
             EngineRequest::CaptureStart { output, at } => self
                 .jobs
                 .capture(&self.session, client, output, at)
-                .map(EngineReply::Status)
+                .map(EngineReply::Json)
                 .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
             EngineRequest::CaptureStop { id, at } => self
                 .jobs
@@ -749,22 +767,22 @@ impl EngineServer {
                         At::Sample(n) => n,
                     },
                 )
-                .map(EngineReply::Status)
+                .map(EngineReply::Json)
                 .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
             EngineRequest::RenderStart { spec } => self
                 .jobs
                 .render(client, spec, &self.files)
-                .map(EngineReply::Status)
+                .map(EngineReply::Json)
                 .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
             EngineRequest::JobsStatus { id } => self
                 .jobs
                 .status(client, id, &mut self.files)
-                .map(EngineReply::Status)
+                .map(EngineReply::Json)
                 .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
             EngineRequest::JobsCancel { id } => self
                 .jobs
                 .cancel(client, id)
-                .map(EngineReply::Status)
+                .map(EngineReply::Json)
                 .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
             EngineRequest::FilesUpload {
                 id,
@@ -774,17 +792,17 @@ impl EngineServer {
             } => self
                 .files
                 .upload(client, id, offset, &data, finish)
-                .map(EngineReply::Status)
+                .map(EngineReply::Json)
                 .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
             EngineRequest::FilesRead { id, offset, count } => self
                 .files
                 .read(client, &id, offset, count)
-                .map(EngineReply::Status)
+                .map(EngineReply::Json)
                 .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
             EngineRequest::FilesRemove { id } => self
                 .files
                 .remove(client, &id)
-                .map(|_| EngineReply::Status(json!({})))
+                .map(|_| EngineReply::Json(json!({})))
                 .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
             EngineRequest::ScopesCreate {
                 id,
@@ -794,11 +812,11 @@ impl EngineServer {
             } => self
                 .scopes
                 .create(&self.session, client, id, endpoint, frames, rate)
-                .map(EngineReply::Status)
+                .map(EngineReply::Json)
                 .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
             EngineRequest::ScopesRemove { id } => {
                 self.scopes.remove(client, &id);
-                Ok(EngineReply::Status(json!({})))
+                Ok(EngineReply::Json(json!({})))
             }
             EngineRequest::Clock {} => Ok(EngineReply::Clock(self.session.clock_info())),
         }
@@ -867,70 +885,44 @@ impl EngineServer {
             .collect()
     }
 
+    fn send_to_client_subscriber(
+        &mut self,
+        client: ClientId,
+        topic: &str,
+        method: &str,
+        params: Value,
+    ) {
+        if self
+            .clients
+            .get(&client)
+            .is_some_and(|c| c.greeted && c.topics.contains(topic))
+        {
+            self.outbox.push((
+                client,
+                json!({"jsonrpc": "2.0", "method": method, "params": params}).to_string(),
+            ));
+        }
+    }
+
     fn collect_notifications(&mut self) {
         self.session.sync_realtime();
         for (client, params) in self.jobs.poll(&mut self.files) {
-            if self
-                .clients
-                .get(&client)
-                .is_some_and(|c| c.topics.contains("jobs"))
-            {
-                self.outbox.push((
-                    client,
-                    json!({"jsonrpc":"2.0","method":"job","params":params}).to_string(),
-                ));
-            }
+            self.send_to_client_subscriber(client, "jobs", "job", params);
         }
         for (client, params) in self.reports.poll(&self.session) {
-            if self
-                .clients
-                .get(&client)
-                .is_some_and(|c| c.topics.contains("reports"))
-            {
-                self.outbox.push((
-                    client,
-                    json!({"jsonrpc":"2.0","method":"report","params":params}).to_string(),
-                ));
-            }
+            self.send_to_client_subscriber(client, "reports", "report", params);
         }
         for (client, params) in self.session.take_voice_updates() {
-            if self
-                .clients
-                .get(&client)
-                .is_some_and(|c| c.topics.contains("voices"))
-            {
-                self.outbox.push((
-                    client,
-                    json!({"jsonrpc":"2.0","method":"voice","params":params}).to_string(),
-                ));
-            }
+            self.send_to_client_subscriber(client, "voices", "voice", params);
         }
         self.session
             .voice_sequence
             .retain(|client, _| self.clients.contains_key(client));
         for (client, params) in self.scopes.poll(&self.session) {
-            if self
-                .clients
-                .get(&client)
-                .is_some_and(|c| c.topics.contains("scopes"))
-            {
-                self.outbox.push((
-                    client,
-                    json!({"jsonrpc":"2.0","method":"scope","params":params}).to_string(),
-                ));
-            }
+            self.send_to_client_subscriber(client, "scopes", "scope", params);
         }
-        for (id, update) in self.session.take_transaction_updates() {
-            if self
-                .clients
-                .get(&id)
-                .is_some_and(|c| c.greeted && c.topics.contains("transactions"))
-            {
-                self.outbox.push((
-                    id,
-                    json!({"jsonrpc":"2.0","method":"transaction","params":update}).to_string(),
-                ));
-            }
+        for (client, params) in self.session.take_transaction_updates() {
+            self.send_to_client_subscriber(client, "transactions", "transaction", params);
         }
         for notice in self.session.take_notices() {
             for (&client, state) in &self.clients {

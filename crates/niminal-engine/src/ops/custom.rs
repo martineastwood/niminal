@@ -148,11 +148,24 @@ impl BinOp {
             }
             BinOp::Min => x.min(y),
             BinOp::Max => x.max(y),
-            BinOp::Pow => x.powf(y),
+            BinOp::Pow => pow(x, y),
             BinOp::Atan2 => x.atan2(y),
             BinOp::Rem => rem(x, y),
         }
     }
+}
+
+/// `pow(x, y)`. Where there is no real answer (a negative base to a fractional power, zero to a negative
+/// power) it is 0, as dividing by zero is, so no sound can be made of NaN or infinity this way.
+pub fn pow(x: f64, y: f64) -> f64 {
+    let r = if x == 0.0 && y < 0.0 { 0.0 } else { x.powf(y) };
+    if r.is_nan() { 0.0 } else { r }
+}
+
+/// [`pow`] on the engine's own sample type.
+pub fn pow32(x: f32, y: f32) -> f32 {
+    let r = if x == 0.0 && y < 0.0 { 0.0 } else { x.powf(y) };
+    if r.is_nan() { 0.0 } else { r }
 }
 
 /// `x.mod(y)`.

@@ -19,3 +19,12 @@ codegen-units = 1
 # Full debuginfo made target/debug tens of GB; line tables keep backtraces readable.
 [profile.dev]
 debug = "line-tables-only"
+
+# The audio code and the libraries it leans on are far too slow unoptimised to test: the audio baseline took
+# over two minutes. Everything else keeps the quick unoptimised build, and a debugger can be pointed at the
+# engine by lowering this temporarily.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.package.niminal-engine]
+opt-level = 3

@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::diag::{Diagnostic, Span};
+use crate::diag::{Diagnostic, Span, closest};
 use crate::lexer::{Tok, Token, lex, lex_dsp};
 
 /// A name, its parameters, its settings, its body, and where it all is.
@@ -26,6 +26,7 @@ pub fn parse_composition_spanned(src: &str) -> Result<Vec<(Item, Span)>, Diagnos
 }
 
 fn parse_with(src: &str, dsp: bool) -> Result<Vec<(Item, Span)>, Diagnostic> {
+    let src = &*crate::version::check(src)?;
     if src.len() > MAX_SOURCE {
         return Err(Diagnostic::new(
             format!(
@@ -2571,6 +2572,51 @@ fn take_options(body: &mut Vec<Stmt>, names: &[&str]) -> Vec<Arg> {
     }
     *body = rest;
     options
+}
+
+/// A body line like `max_voices = 4` that sets a number and is never read is a setting spelt wrong:
+/// settings are the only lines in a body that are not part of the sound, and an unknown name is
+/// otherwise just a local, so it would quietly do nothing.
+pub(crate) fn reject_unread_constants(body: &[Stmt]) -> Res<()> {
+    fn reads(e: &Expr, name: &str) -> bool {
+        let mut found = matches!(&e.kind, ExprKind::Name(n) if n == name)
+            || matches!(&e.kind, ExprKind::Call { name: n, .. } if n.name == name);
+        e.for_each_child(&mut |c| found |= reads(c, name));
+        found
+    }
+    for stmt in body {
+        let Stmt::Bind { name, value } = stmt else {
+            continue;
+        };
+        let constant = match &value.kind {
+            ExprKind::Num { .. } => true,
+            ExprKind::Neg(inner) => matches!(inner.kind, ExprKind::Num { .. }),
+            _ => false,
+        };
+        // `out` is the result, which nothing reads by name
+        if !constant
+            || name.name == "out"
+            || body
+                .iter()
+                .flat_map(Stmt::exprs)
+                .any(|e| reads(e, &name.name))
+        {
+            continue;
+        }
+        let d = Diagnostic::new(format!("`{}` is set but never used", name.name), name.span);
+        return Err(match closest(&name.name, INSTR_OPTIONS.iter().copied()) {
+            Some(c) => d.with_help(format!("did you mean the setting `{c}`?")),
+            None => d.with_help(format!(
+                "a line in an instrument's body that is not used is ignored; the settings are {}",
+                INSTR_OPTIONS
+                    .iter()
+                    .map(|o| format!("`{o}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        });
+    }
+    Ok(())
 }
 
 /// `quantize: 1bar` in a clip or scene sets when its changes land, so it is not one of its entries.

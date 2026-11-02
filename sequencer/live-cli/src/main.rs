@@ -400,7 +400,7 @@ fn run_render(args: RenderArgs) -> Result<(), String> {
         .map_err(|d| d.render(&name, &source))?;
     // a tempo ramp is made as the music plays, so a file with one is played through a session
     let (rest, ramps) = niminal_live_cli::render::split_ramps(&expanded.text)
-        .map_err(|d| d.render(&name, &source))?;
+        .map_err(|d| expanded.locate(d).render(&name, &source))?;
     let program = niminal_compose::compile_with(&rest, &options).map_err(|errors| {
         errors
             .into_iter()
