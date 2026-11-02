@@ -2978,8 +2978,12 @@ impl<'a> Lower<'a> {
         match (a, b) {
             (Datum::Record(fields), b) => self.zip_values(fields[0].1.clone(), b, span, operation),
             (a, Datum::Record(fields)) => self.zip_values(a, fields[0].1.clone(), span, operation),
-            (Datum::Table(t), b) => self.zip_values(Datum::array(table_entries(&t)), b, span, operation),
-            (a, Datum::Table(t)) => self.zip_values(a, Datum::array(table_entries(&t)), span, operation),
+            (Datum::Table(t), b) => {
+                self.zip_values(Datum::array(table_entries(&t)), b, span, operation)
+            }
+            (a, Datum::Table(t)) => {
+                self.zip_values(a, Datum::array(table_entries(&t)), span, operation)
+            }
             (Datum::Sig(a), Datum::Sig(b)) => operation(self, a, b).map(Datum::Sig),
             (Datum::Array(a), Datum::Array(b)) => {
                 if a.len() != b.len() {
@@ -3066,7 +3070,8 @@ impl<'a> Lower<'a> {
             )),
             Datum::Record(fields) => self.map_value(fields[0].1.clone(), span, operation),
             Datum::Table(table) => {
-                let mapped = self.map_value(Datum::array(table_entries(&table)), span, operation)?;
+                let mapped =
+                    self.map_value(Datum::array(table_entries(&table)), span, operation)?;
                 Ok(self.tabled(mapped))
             }
             _ => Err(Diagnostic::new(
@@ -3439,7 +3444,11 @@ impl<'a> Lower<'a> {
                     }
                 };
                 let (amps, phases) = crate::tables::spectrum(&table, count);
-                let found = if name.name == "spectrum" { amps } else { phases };
+                let found = if name.name == "spectrum" {
+                    amps
+                } else {
+                    phases
+                };
                 Datum::array(
                     found
                         .into_iter()
@@ -3454,7 +3463,11 @@ impl<'a> Lower<'a> {
                         name.span,
                     ));
                 }
-                let v = if name.name == "mean" { table.mean() } else { table.rms() };
+                let v = if name.name == "mean" {
+                    table.mean()
+                } else {
+                    table.rms()
+                };
                 Datum::Sig(Sig::constant(Unit::Num, v))
             }
             "remove_dc" => {
@@ -3464,7 +3477,11 @@ impl<'a> Lower<'a> {
                 Datum::Table(Arc::new(table.remove_dc()))
             }
             "soften" | "fade" => {
-                let what = if name.name == "soften" { "a width" } else { "a length" };
+                let what = if name.name == "soften" {
+                    "a width"
+                } else {
+                    "a length"
+                };
                 let Some(a) = args.get(1) else {
                     return Err(Diagnostic::new(
                         format!("`{}` takes {what} in entries", name.name),
@@ -5015,7 +5032,8 @@ impl<'a> Lower<'a> {
         match n {
             "map" | "sum" | "len" | "channels" | "indices" | "at" | "phase" | "step" | "active"
             | "normalize" | "reverse" | "rotate" | "resample" | "concat" | "integrate" | "mix"
-            | "slice" | "spectrum" | "phases" | "mean" | "rms" | "remove_dc" | "soften" | "fade" => {
+            | "slice" | "spectrum" | "phases" | "mean" | "rms" | "remove_dc" | "soften"
+            | "fade" => {
                 return self.array_call(name, args, span);
             }
             // `x.frames(size, fn(w) { ... })` belongs to signals
@@ -6458,9 +6476,7 @@ impl Lower<'_> {
     fn flag(&mut self, arg: Option<&Arg>, default: bool) -> Res<bool> {
         let Some(arg) = arg else { return Ok(default) };
         match self.expr(&arg.value)? {
-            Sig {
-                konst: Some(k), ..
-            } if k == 0.0 || k == 1.0 => Ok(k == 1.0),
+            Sig { konst: Some(k), .. } if k == 0.0 || k == 1.0 => Ok(k == 1.0),
             _ => Err(Diagnostic::new(
                 "expected `true` or `false`",
                 arg.value.span,

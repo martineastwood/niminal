@@ -8,7 +8,10 @@ use crate::opcode::{Opcode, Port, ProcessCtx, TAIL_LEVEL};
 /// plucks. In feedforward mode (`feedback` at 0) it is a simple comb
 /// notch / peak pattern. `time` sets the comb spacing; `feedback` or
 /// `feedforward` scale the delayed copy. `damp` is a one-pole lowpass on
-/// the feedback path (0 = none, 1 = heavily damped).
+/// the feedback path (0 = none, 1 = heavily damped). Allpass interpolation avoids
+/// fractional-delay gain loss at fixed settings, with phase dispersion at high
+/// frequencies. `time` is the low-frequency delay, not a damping-compensated pitch.
+/// Abrupt changes to time can click.
 #[derive(Clone)]
 pub struct Comb {
     max_seconds: f32,
@@ -19,6 +22,10 @@ pub struct Comb {
     in_flight: usize,
     /// One-pole state for the damping filter on the feedback path.
     damp_state: f64,
+    /// First-order allpass fractional-delay memory (unity magnitude at fixed time).
+    interp_in: f64,
+    interp_out: f64,
+    interp_delay: f64,
 }
 
 impl Comb {
@@ -31,6 +38,9 @@ impl Comb {
             quiet_run: 0,
             in_flight: 0,
             damp_state: 0.0,
+            interp_in: 0.0,
+            interp_out: 0.0,
+            interp_delay: f64::NAN,
         };
         c.prepare(48_000.0);
         c
@@ -44,6 +54,9 @@ impl Opcode for Comb {
         self.quiet_run = 0;
         self.in_flight = 0;
         self.damp_state = 0.0;
+        self.interp_in = 0.0;
+        self.interp_out = 0.0;
+        self.interp_delay = f64::NAN;
     }
 
     fn name(&self) -> &str {
@@ -73,6 +86,9 @@ impl Opcode for Comb {
         self.quiet_run = 0;
         self.in_flight = 0;
         self.damp_state = 0.0;
+        self.interp_in = 0.0;
+        self.interp_out = 0.0;
+        self.interp_delay = f64::NAN;
     }
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {
@@ -85,6 +101,9 @@ impl Opcode for Comb {
             self.quiet_run = old.quiet_run;
             self.in_flight = old.in_flight;
             self.damp_state = old.damp_state;
+            self.interp_in = old.interp_in;
+            self.interp_out = old.interp_out;
+            self.interp_delay = old.interp_delay;
         }
     }
 
@@ -105,8 +124,21 @@ impl Opcode for Comb {
             let frac = (samples - samples.floor()) as f32;
 
             let newer = self.buf[(self.write + len - whole) % len];
-            let older = self.buf[(self.write + len - whole - 1) % len];
-            let delayed = newer + (older - newer) * frac;
+            let a = (1.0 - f64::from(frac)) / (1.0 + f64::from(frac));
+            let delayed = if samples != self.interp_delay {
+                // A time-varying allpass can pump energy into a nearly lossless
+                // feedback loop. Use bounded linear interpolation while time moves.
+                let older = self.buf[(self.write + len - whole - 1) % len];
+                f64::from(newer + (older - newer) * frac)
+            } else if frac == 0.0 {
+                f64::from(newer)
+            } else {
+                a * (f64::from(newer) - self.interp_out) + self.interp_in
+            };
+            self.interp_delay = samples;
+            self.interp_in = f64::from(newer);
+            self.interp_out = crate::denormals::flush(delayed);
+            let delayed = delayed as f32;
 
             let fb = inputs[2][i].clamp(-0.9999, 0.9999);
             let ff = inputs[3][i].clamp(-1.0, 1.0);

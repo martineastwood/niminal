@@ -369,3 +369,10 @@ fn a_short_quiet_input_pulse_keeps_its_delayed_fir_response() {
         assert!(v.is_finished());
     }
 }
+
+#[test]
+fn zero_pitch_shift_aligns_with_a_parallel_dry_path() {
+    let source = "instr a() { x = osc(sine, 997hz)\nx - x.pitch_shift(shift: 0) }";
+    let out = render(&mut voice(source, "a"), 4096, 32);
+    assert!(out.iter().all(|x| x.abs() < 1e-6));
+}

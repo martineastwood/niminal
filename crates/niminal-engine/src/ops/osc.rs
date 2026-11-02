@@ -110,7 +110,7 @@ impl Wavetable {
 }
 
 /// Oscillator. Saw and pulse are band-limited with PolyBLEP; the triangle is
-/// computed directly (its harmonics fall off fast enough that aliasing is mild).
+/// corrected at its slope discontinuities with PolyBLAMP.
 ///
 /// `phase_mod` is added to the phase in cycles, so a sine modulated by another
 /// sine gives phase-modulation FM. The default starting phase is zero; `phase`
@@ -127,6 +127,7 @@ pub struct Osc {
     sync_phase: f64,
     correction: f64,
     sample_rate: f32,
+    modulation: Option<(f64, f64)>,
 }
 
 impl Osc {
@@ -140,6 +141,7 @@ impl Osc {
             sync_phase: 0.0,
             correction: 0.0,
             sample_rate: 48_000.0,
+            modulation: None,
         }
     }
 
@@ -173,6 +175,19 @@ fn poly_blep(t: f64, dt: f64) -> f64 {
     }
 }
 
+// Integral of the BLEP residual: smooth a slope change without dulling the whole wave.
+fn poly_blamp(t: f64, dt: f64) -> f64 {
+    if dt <= 0.0 {
+        return 0.0;
+    }
+    let distance = t.min(1.0 - t);
+    if distance < dt {
+        dt * (1.0 - distance / dt).powi(3) / 3.0
+    } else {
+        0.0
+    }
+}
+
 fn wrap(x: f64) -> f64 {
     x - x.floor()
 }
@@ -183,6 +198,7 @@ impl Opcode for Osc {
         self.initial_phase = None;
         self.sync_phase = 0.0;
         self.correction = 0.0;
+        self.modulation = None;
     }
     fn name(&self) -> &'static str {
         "osc"
@@ -206,6 +222,7 @@ impl Opcode for Osc {
             initial_phase: None,
             sync_phase: 0.0,
             correction: 0.0,
+            modulation: None,
             ..self.clone()
         })
     }
@@ -223,6 +240,7 @@ impl Opcode for Osc {
             self.initial_phase = old.initial_phase;
             self.sync_phase = old.sync_phase;
             self.correction = old.correction;
+            self.modulation = old.modulation;
         }
     }
 
@@ -274,14 +292,27 @@ impl Osc {
             self.phase = initial;
         }
         if sync > 0.0 || self.correction != 0.0 {
+            self.modulation = None;
             return self.synced_step(freq, phase_mod, width, position, sync.max(0.0));
         }
         self.sync_phase = 0.0;
         self.correction = 0.0;
         let sr = f64::from(self.sample_rate);
         let inc = f64::from(freq) / sr;
-        let dt = inc.abs().min(0.5);
-        let t = wrap(self.phase + f64::from(phase_mod));
+        let pm = f64::from(phase_mod);
+        let width = if self.wave == Wave::Square {
+            0.5
+        } else {
+            f64::from(width).clamp(0.01, 0.99)
+        };
+        let (previous_pm, previous_width) = self.modulation.unwrap_or((pm, width));
+        self.modulation = Some((pm, width));
+        // Local phase velocity includes PM, and the falling pulse edge moves with width.
+        // Abrupt/arbitrary modulation still benefits from an explicit oversample scope.
+        let effective_inc = inc + pm - previous_pm;
+        let dt = effective_inc.abs().min(0.5);
+        let width_dt = (effective_inc - (width - previous_width)).abs().min(0.5);
+        let t = wrap(self.phase + pm);
 
         if let Some(bank) = &self.bank {
             let pos = f64::from(position).clamp(0.0, 1.0);
@@ -290,40 +321,36 @@ impl Osc {
             let a = p as usize;
             let b = (a + 1).min(bank.len() - 1);
             let w = (p - a as f64) as f32;
-            let low = bank[a].read(t, inc);
-            let high = bank[b].read(t, inc);
+            let low = bank[a].read(t, effective_inc);
+            let high = bank[b].read(t, effective_inc);
             self.phase = wrap(self.phase + inc);
             return low + (high - low) * w;
         }
 
         if let Some(table) = &self.table {
             self.phase = wrap(self.phase + inc);
-            return table.read(t, inc);
+            return table.read(t, effective_inc);
         }
 
         let v = match self.wave {
             Wave::Sine => {
                 self.phase = wrap(self.phase + inc);
-                return SINE_TABLE.read(t, inc);
+                return SINE_TABLE.read(t, effective_inc);
             }
             Wave::Saw => 2.0 * t - 1.0 - poly_blep(t, dt),
             Wave::Square | Wave::Pulse => {
-                let w = if self.wave == Wave::Square {
-                    0.5
-                } else {
-                    f64::from(width).clamp(0.01, 0.99)
-                };
-                let naive = if t < w { 1.0 } else { -1.0 };
-                naive + poly_blep(t, dt) - poly_blep(wrap(t - w), dt)
+                let naive = if t < width { 1.0 } else { -1.0 };
+                naive + poly_blep(t, dt) - poly_blep(wrap(t - width), width_dt)
             }
             Wave::Tri => {
-                if t < 0.25 {
+                let naive = if t < 0.25 {
                     4.0 * t
                 } else if t < 0.75 {
                     2.0 - 4.0 * t
                 } else {
                     4.0 * t - 4.0
-                }
+                };
+                naive - 4.0 * poly_blamp(wrap(t - 0.25), dt) + 4.0 * poly_blamp(wrap(t - 0.75), dt)
             }
         };
 
@@ -765,5 +792,61 @@ mod tests {
                 .fold(0.0, f32::max);
             assert!(worst < 1e-4, "{wave:?}: forward/reverse asymmetry {worst}");
         }
+    }
+}
+
+#[cfg(test)]
+mod quality_tests {
+    use super::*;
+
+    #[test]
+    fn a_phase_ramp_uses_the_total_phase_velocity_for_bandlimiting() {
+        let ctx = ProcessCtx::new(48000.0, true);
+        for wave in [Wave::Saw, Wave::Pulse, Wave::Tri] {
+            let mut modulated = Osc::new(wave);
+            let mut pitched = Osc::new(wave);
+            modulated.prepare(48000.0);
+            pitched.prepare(48000.0);
+            for i in 0..10000 {
+                let a = modulated.process_one(&ctx, &[300.0, i as f32 / 16.0, 0.3]);
+                let b = pitched.process_one(&ctx, &[3300.0, 0.0, 0.3]);
+                if i > 0 {
+                    assert!((a - b).abs() < 1e-5, "{wave:?}, sample {i}: {a} vs {b}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn triangle_slope_corrections_reduce_the_first_folded_harmonic() {
+        let mut osc = Osc::new(Wave::Tri);
+        osc.prepare(48000.0);
+        let ctx = ProcessCtx::new(48000.0, true);
+        let mut corrected = Vec::new();
+        let mut naive = Vec::new();
+        for i in 0..48000 {
+            corrected.push(osc.process_one(&ctx, &[9100.0, 0.0]));
+            let t = wrap(i as f64 * 9100.0 / 48000.0);
+            naive.push(
+                (if t < 0.25 {
+                    4.0 * t
+                } else if t < 0.75 {
+                    2.0 - 4.0 * t
+                } else {
+                    4.0 * t - 4.0
+                }) as f32,
+            );
+        }
+        let bin = |x: &[f32], hz: f64| {
+            let (mut re, mut im) = (0.0, 0.0);
+            for (i, &v) in x.iter().enumerate() {
+                let angle = std::f64::consts::TAU * hz * i as f64 / 48000.0;
+                re += f64::from(v) * angle.cos();
+                im += f64::from(v) * angle.sin();
+            }
+            re.hypot(im) / x.len() as f64
+        };
+        assert!(bin(&corrected, 20700.0) < bin(&naive, 20700.0) / 3.0);
+        assert!(bin(&corrected, 9100.0) > 0.35);
     }
 }

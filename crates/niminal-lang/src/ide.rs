@@ -471,7 +471,11 @@ fn array_ops() -> Vec<OpInfo> {
         ),
         method("mean", "The average of a table's entries.", &[]),
         method("rms", "The root-mean-square level of a table.", &[]),
-        method("remove_dc", "Subtract a table's average so it is centred on 0.", &[]),
+        method(
+            "remove_dc",
+            "Subtract a table's average so it is centred on 0.",
+            &[],
+        ),
         method(
             "soften",
             "Average each entry with its neighbours over `width` entries, wrapping round the ends.",

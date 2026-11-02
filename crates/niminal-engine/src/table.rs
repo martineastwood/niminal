@@ -211,7 +211,11 @@ impl Table {
     /// Subtract the mean, so the table has no DC offset.
     pub fn remove_dc(&self) -> Self {
         let mean = self.mean();
-        let data: Box<[f32]> = self.data.iter().map(|&v| (f64::from(v) - mean) as f32).collect();
+        let data: Box<[f32]> = self
+            .data
+            .iter()
+            .map(|&v| (f64::from(v) - mean) as f32)
+            .collect();
         Table::from_f32(data, self.sample_rate)
     }
 

@@ -242,17 +242,16 @@ fx compressor(
 
 // folder: distortion
 
-/// Warm or hard distortion. `drive` is how hard the signal is pushed, `tone` how bright it is. It runs
-/// at twice the sample rate, so bright sounds pushed hard don't fold harmonics back down as noise.
+/// Warm or hard distortion. `drive` pushes the signal; `tone` tilts its colour around a neutral midpoint.
+/// Runs at the session sample rate. For less aliasing, use a custom fx with
+/// `out = oversample(4) { in.distortion(drive: 6, tone: 0.5) }` (extra CPU and latency).
 fx overdrive(
   drive: 0..1 = 0.4,
   tone: 0..1 = 0.5,
   mix: 0..1 = 1
 ) {
   push = 1 + drive * 12
-  bright = tone
-  wet = mix
-  out = oversample(2) { in.distortion(drive: push, tone: bright, mix: wet) }
+  out = in.distortion(drive: push, tone: tone, mix: mix)
 }
 
 /// Lo-fi: fewer bits and a lower sample rate, for grit.

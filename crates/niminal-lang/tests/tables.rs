@@ -202,9 +202,10 @@ const folded = a.abs
 const mixed = 1 - w
 instr x(freq: hz) { osc(shaped, freq) + osc(folded, freq) * env[1 10ms 0] }
 "#);
-    let errors = compile("const a = ramp(0, 1, size: 4)\nconst b = ramp(0, 1, size: 8)\nconst c = a + b\n")
-        .err()
-        .expect("sizes differ");
+    let errors =
+        compile("const a = ramp(0, 1, size: 4)\nconst b = ramp(0, 1, size: 8)\nconst c = a + b\n")
+            .err()
+            .expect("sizes differ");
     assert!(errors[0].message.contains("4"), "{:?}", errors[0].message);
 }
 
@@ -226,7 +227,9 @@ instr x(freq: hz, p: num) { osc(morph, freq, position: p) + osc(first.concat(sec
         "both.frames(500)",
         "both.frames(0)",
     ] {
-        let source = format!("const a = harmonics([1], size: 64)\nconst both = a.concat(a)\nconst x = {bad}\n");
+        let source = format!(
+            "const a = harmonics([1], size: 64)\nconst both = a.concat(a)\nconst x = {bad}\n"
+        );
         assert!(compile(&source).is_err(), "{bad}");
     }
 }
@@ -252,7 +255,11 @@ fn a_curve_can_bend_and_an_exp_curve_cannot_start_at_zero() {
     let errors = compile("const a = curve([[0, 0], [1, 1]], size: 64, shape: exp)\n")
         .err()
         .expect("an exp curve through zero");
-    assert!(errors[0].message.contains("bend"), "{:?}", errors[0].message);
+    assert!(
+        errors[0].message.contains("bend"),
+        "{:?}",
+        errors[0].message
+    );
     assert!(compile("const a = curve([[0, 0], [1, 1]], bend: 99)\n").is_err());
 }
 

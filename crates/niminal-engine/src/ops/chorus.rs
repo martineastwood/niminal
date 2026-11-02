@@ -94,9 +94,20 @@ impl Opcode for Chorus {
             let samples = (base * (1.0 + depth * (lfo * 2.0 - 1.0) * 0.9)).clamp(1.0, max_delay);
             let whole = samples.floor() as usize;
             let frac = (samples - samples.floor()) as f32;
-            let newer = self.buf[(self.write + len - whole) % len];
-            let older = self.buf[(self.write + len - whole - 1) % len];
-            let wet = newer + (older - newer) * frac;
+            // Cubic interpolation preserves more top end as the fractional delay moves.
+            // At a one-sample delay the fourth tap is today's dry sample.
+            let at = |back: usize| {
+                if back == 0 {
+                    dry
+                } else {
+                    self.buf[(self.write + len - back) % len]
+                }
+            };
+            let (a, b, c, d) = (at(whole - 1), at(whole), at(whole + 1), at(whole + 2));
+            let wet = b + 0.5
+                * frac
+                * (c - a
+                    + frac * (2.0 * a - 5.0 * b + 4.0 * c - d + frac * (3.0 * (b - c) + d - a)));
 
             self.buf[self.write] = flush32(dry);
             self.write = (self.write + 1) % len;

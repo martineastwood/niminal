@@ -73,15 +73,35 @@ fn check_reference(name: &str, lines: Vec<(String, String)>) {
         .unwrap_or_else(|_| panic!("no reference {}; run with REFERENCE=1", path.display()));
     let (got, want): (Vec<_>, Vec<_>) = (text.lines().collect(), expected.lines().collect());
     assert_eq!(got.len(), want.len(), "{name}: different number of renders");
+    let mut differences = Vec::new();
     for (g, w) in got.iter().zip(&want) {
         let (gn, gv) = g.split_once(": ").unwrap();
         let (wn, wv) = w.split_once(": ").unwrap();
         assert_eq!(gn, wn);
-        assert!(
-            close(gv, wv),
-            "{name}: {gn} no longer sounds like its reference"
-        );
+        if !close(gv, wv) {
+            let values = |text: &str| {
+                text.split_whitespace()
+                    .filter_map(|s| s.parse::<f64>().ok())
+                    .collect::<Vec<_>>()
+            };
+            let (actual, reference) = (values(gv), values(wv));
+            let max_delta = actual
+                .iter()
+                .zip(&reference)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0, f64::max);
+            let energy = |v: &[f64]| v.iter().map(|v| v * v).sum::<f64>();
+            let db = 10.0 * (energy(&actual) / energy(&reference)).log10();
+            differences.push(format!(
+                "{gn}: max block RMS change {max_delta:.6}, digest energy change {db:+.3}dB"
+            ));
+        }
     }
+    assert!(
+        differences.is_empty(),
+        "{name}: renders no longer sound like their references:\n{}",
+        differences.join("\n")
+    );
 }
 
 fn baseline_file(name: &str) -> PathBuf {

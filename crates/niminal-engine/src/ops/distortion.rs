@@ -16,9 +16,9 @@ pub struct Distortion {
     sample_rate: f32,
     /// One-pole state for the tone filter.
     tone_state: f64,
-    /// The tone filter's coefficient, and the tone setting it was worked out for.
+    /// The tone split's fixed 1kHz pole.
     tone_coeff: f64,
-    tone_for: f64,
+
     /// The DC blocker's memory: its last input and output.
     dc_in: f64,
     dc_out: f64,
@@ -33,7 +33,6 @@ impl Default for Distortion {
             sample_rate: 48_000.0,
             tone_state: 0.0,
             tone_coeff: 0.0,
-            tone_for: f64::NAN,
             dc_in: 0.0,
             dc_out: 0.0,
         }
@@ -67,7 +66,7 @@ impl Opcode for Distortion {
 
     fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
-        self.tone_for = f64::NAN;
+        self.tone_coeff = (-std::f64::consts::TAU * 1000.0 / f64::from(sample_rate)).exp();
     }
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {
@@ -100,17 +99,14 @@ impl Opcode for Distortion {
             self.dc_in = shaped;
             self.dc_out = centred;
 
-            // one-pole tone: tone 0..1 maps to lowpass cutoff 200Hz..20kHz; the coefficient is only
-            // worked out again when the setting moves
-            if tone != self.tone_for {
-                let freq = 200.0 * (100.0_f64).powf(tone);
-                self.tone_coeff = (-std::f64::consts::TAU * freq / sr).exp();
-                self.tone_for = tone;
-            }
-            let coeff = self.tone_coeff;
-            self.tone_state = flush(centred * (1.0 - coeff) + self.tone_state * coeff);
+            // Split at 1kHz and apply reciprocal shelf gains, ±6dB at either end.
+            // At the midpoint both gains are exactly one, preserving the centred signal.
+            self.tone_state =
+                flush(centred * (1.0 - self.tone_coeff) + self.tone_state * self.tone_coeff);
+            let high_gain = 10.0_f64.powf((tone - 0.5) * 12.0 / 20.0);
+            let toned = self.tone_state / high_gain + (centred - self.tone_state) * high_gain;
 
-            *o = (dry * (1.0 - mix) + self.tone_state * mix) as f32;
+            *o = (dry * (1.0 - mix) + toned * mix) as f32;
         }
     }
 }

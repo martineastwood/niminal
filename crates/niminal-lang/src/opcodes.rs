@@ -483,7 +483,7 @@ impl Registry {
             ),
             OpSpec::new(
                 "chorus",
-                "A chorus (or flanger, with more `depth` and less `time`). `rate` is the LFO in hz; `mix` blends wet with dry.",
+                "A chorus (or flanger, with more `depth` and less `time`). Cubic delay interpolation preserves the top end. `rate` is the LFO in hz; `mix` blends wet with dry.",
                 vec![
                     req("x", SIGNAL),
                     opt("rate", Kind::Signal(Unit::Hz)),
@@ -576,7 +576,7 @@ impl Registry {
             ),
             OpSpec::new(
                 "comb",
-                "A comb filter. `feedback` for tuned resonance and Karplus-Strong; `feedforward` for a comb notch/peak. `damp` lowpasses the feedback path.",
+                "A comb filter. `feedback` for tuned resonance and Karplus-Strong; `feedforward` for a comb notch/peak. Fractional delays use allpass interpolation to preserve brightness at fixed settings. `time` is the delay at low frequencies; allpass dispersion and `damp` change tuning at higher frequencies. While time moves, bounded linear interpolation avoids pumping energy into feedback; abrupt changes can click. `damp` lowpasses the feedback path.",
                 vec![
                     req("x", SIGNAL),
                     req("time", Kind::Signal(Unit::Time)),
@@ -752,7 +752,7 @@ impl Registry {
             ),
             OpSpec::new(
                 "ladder",
-                "A four-pole low-pass with a `tanh` in each stage, like a transistor ladder. `res` feeds the output back to the input: 0 is a plain low-pass, and near 1 it rings and then sings at the cutoff. `drive` scales the input, so loud sounds saturate the stages harder.",
+                "A four-pole low-pass with a `tanh` in each stage, like a transistor ladder. `res` feeds the output back to the input: 0 is a plain low-pass, and near 1 it rings and then sings at the cutoff. `drive` scales the input, so loud sounds saturate the stages harder. Trapezoidal stages solve resonance feedback within the current sample. Runs at the session rate; use `oversample(2) { ... }` or `oversample(4) { ... }` for less aliasing at extra CPU cost and latency.",
                 vec![
                     req("x", SIGNAL),
                     req("cutoff", Kind::Signal(Unit::Hz)),
@@ -865,7 +865,7 @@ impl Registry {
             ),
             OpSpec::new(
                 "pitch_shift",
-                "Real-time pitch shifting. `shift` is in semitones; `window` controls grain size (longer = smoother, more latency).",
+                "Real-time pitch shifting, from -24 to +24 semitones. `window` controls grain size (5ms to 100ms; longer = smoother, more latency). Zero shift preserves the signal with a two-sample delay. Upward shifts need up to three windows of history. Grain crossfades can colour the sound; rapid shift or window changes can produce artefacts.",
                 vec![
                     req("x", SIGNAL),
                     opt("shift", SIGNAL),
@@ -881,7 +881,7 @@ impl Registry {
             ),
             OpSpec::new(
                 "distortion",
-                "Tube-style asymmetric distortion. `drive` pushes the signal; `tone` tilts the EQ (0 dark, 1 bright); `mix` blends.",
+                "Tube-style asymmetric distortion. `drive` pushes the signal; `tone` tilts around 1khz (0 dark, 0.5 neutral, 1 bright, up to 6db per shelf); `mix` blends. Runs at the session rate. Wrap the call in `oversample(2) { ... }` or `oversample(4) { ... }` to reduce aliasing at extra CPU cost and latency.",
                 vec![
                     req("x", SIGNAL),
                     opt("drive", SIGNAL),

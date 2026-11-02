@@ -12,7 +12,10 @@ pub fn read_sample_file(path: &Path) -> Result<Vec<Table>, String> {
     let is_wav = path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("wav"));
-    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("scl")) {
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("scl"))
+    {
         read_scala(path).map(|t| vec![t])
     } else if is_text {
         read_text(path)
@@ -109,7 +112,9 @@ fn read_scala(path: &Path) -> Result<Table, String> {
         degrees.push(semitones.ok_or_else(|| fail(&format!("`{word}` is not a pitch")))?);
     }
     if degrees.len() != count + 1 {
-        return Err(fail(&format!("it lists fewer than the {count} pitches it promises")));
+        return Err(fail(&format!(
+            "it lists fewer than the {count} pitches it promises"
+        )));
     }
     Ok(Table::from_f64(degrees, None))
 }
@@ -283,7 +288,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("niminal-scl-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("just.scl");
-        std::fs::write(&path, "! just.scl\nJust major\n 3\n!\n 9/8\n 5/4 major third\n 2\n").unwrap();
+        std::fs::write(
+            &path,
+            "! just.scl\nJust major\n 3\n!\n 9/8\n 5/4 major third\n 2\n",
+        )
+        .unwrap();
         let table = &read_sample_file(&path).unwrap()[0];
         let expected = [0.0, 2.0391, 3.8631, 12.0];
         assert_eq!(table.len(), 4);
