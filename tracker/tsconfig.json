@@ -7,8 +7,7 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "baseUrl": ".",
-    "paths": { "@codemirror/*": ["node_modules/@codemirror/*"], "@lezer/highlight": ["node_modules/@lezer/highlight"] }
+    "paths": { "@codemirror/*": ["./node_modules/@codemirror/*"], "@lezer/highlight": ["./node_modules/@lezer/highlight"] }
   },
   "include": ["src", "../editors/codemirror"]
 }

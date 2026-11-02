@@ -3101,6 +3101,39 @@ mod tests {
         assert!(err("instr a() { x = if 1 > 0 then 2 }").contains("needs both values"));
     }
 
+    fn server_err(src: &str) -> String {
+        super::parse(src).unwrap_err().message
+    }
+
+    #[test]
+    fn the_server_takes_definitions_and_refuses_composition_items() {
+        let items = super::parse(
+            "instr a(f: hz) { osc(sine, f) }\nnode n { instrument = a }\nnode m = a\nfx r { out = 1 }\nbus b\nctl x = 0.5",
+        )
+        .unwrap();
+        assert_eq!(items.len(), 6);
+        assert!(matches!(items[1], Item::Node(_)) && matches!(items[2], Item::Node(_)));
+        for src in [
+            "clip c { instrument: a }",
+            "scene s { }",
+            "tempo 90bpm",
+            "meter 3/4",
+            "a.start",
+            "c3 d3",
+            "x = 1",
+            "ctl x = midi.cc(7).range(0..1)",
+        ] {
+            assert!(super::parse(src).is_err(), "the server accepted `{src}`");
+        }
+        assert!(server_err("clip c { instrument: a }").contains("a definition"));
+    }
+
+    #[test]
+    fn a_composition_refuses_node_which_is_the_servers() {
+        assert!(err("node n { instrument = a }").contains("sound server"));
+        assert!(parse("clip c { instrument: a }").is_ok());
+    }
+
     #[test]
     fn env_takes_a_note_field_as_a_duration() {
         let env = env_of("env[0 note.dur 1 | 5ms.exp 0]");
