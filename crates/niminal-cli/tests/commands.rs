@@ -217,17 +217,13 @@ fn the_server_refuses_what_it_cannot_do() {
     assert!(stderr(&out).contains("TLS"), "{}", stderr(&out));
 }
 
-/// The opcode reference on the docs site is what `niminal docs` prints now. `BLESS=1` rewrites it.
+/// The docs site's opcode page is generated from `niminal docs` and not committed (`docs/.gitignore`),
+/// so what matters here is that the command prints the page.
 #[test]
-fn the_opcode_reference_page_is_current() {
-    let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/src/content/docs/reference/opcodes.md");
-    let printed = stdout(&niminal().arg("docs").output().unwrap());
-    if std::env::var_os("BLESS").is_some() {
-        std::fs::write(&page, &printed).unwrap();
-    }
-    assert!(
-        std::fs::read_to_string(&page).unwrap() == printed,
-        "docs/src/content/docs/reference/opcodes.md is out of date: run `BLESS=1 cargo test -p niminal-cli --test commands`"
-    );
+fn the_opcode_reference_page_is_generated() {
+    let out = niminal().arg("docs").output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let printed = stdout(&out);
+    assert!(printed.starts_with("---\ntitle: Opcodes\n"), "{printed}");
+    assert!(printed.contains("\n## abs\n"), "{printed}");
 }

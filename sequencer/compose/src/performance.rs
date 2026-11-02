@@ -1,6 +1,6 @@
 //! The performance layer's data: what clips and scenes are, and the timed
 //! commands that start, stop and mute them. Evaluating the source into this
-//! lives in `perform.rs`; turning it into notes lives in `schedule.rs`.
+//! lives in `perform/`; turning it into notes lives in `schedule.rs`.
 
 use niminal_engine::ops::Curve;
 use niminal_pattern::{Pattern, Rational, Span, with_budget};
