@@ -44,7 +44,7 @@ A path can hold constants, so a table can be picked by number: `file("kick{n}.wa
 
 ## Transforms
 
-Methods on a table: `.normalize`, `.reverse`, `.rotate(n)`, `.resample(n)`, `.concat(other)`, `.integrate`, `.mix(other, amount:)`, `.slice(start, end)`, `.remove_dc`, `.soften(width)` (a wrapping moving average), `.fade(length)` (fade in and out at the ends).
+Methods on a table: `.normalize`, `.reverse`, `.rotate(n)`, `.resample(n)`, `.concat(other)`, `.integrate`, `.mix(other, amount:)`, `.slice(start, end)`, `.remove_dc`, `.moving_average(width)` (each entry averaged with its neighbours, wrapping round the ends), `.fade(length)` (fade in and out at the ends).
 
 Tables take arithmetic, with a number or with another table of the same length, and the usual maths functions: `organ * window(hann, size: 2048)`, `1 - w`, `-t`, `t.abs`, `tanh(t * 3)`. `.map(...)` handles anything else.
 
@@ -72,7 +72,7 @@ const just = file("tunings/just.scl")
 fn tuned(n) {
   size = just.len - 1
   octave = floor(n / size)
-  440hz * pow(2, (octave * just[size] + just[n - octave * size]) / 12)
+  440hz * 2 ^ ((octave * just[size] + just[n - octave * size]) / 12)
 }
 ```
 

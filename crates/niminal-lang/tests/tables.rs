@@ -242,7 +242,7 @@ const amps = organ.spectrum(8)
 const phases = organ.phases(8)
 const rebuilt = harmonics(amps.map(it * 0.5), size: 512, phases: phases, normalize: false)
 const level = organ.rms + organ.mean
-const cleaned = organ.remove_dc.soften(3).fade(16)
+const cleaned = organ.remove_dc.moving_average(3).fade(16)
 instr x(freq: hz) { osc(rebuilt, freq) * level }
 "#);
     assert!(compile("const a = harmonics([1])\nconst b = a.spectrum\n").is_err());
@@ -279,4 +279,13 @@ fn a_scala_file_is_a_table_of_degrees() {
         "const degrees = file(\"{path}\")\nconst n = degrees.len\ninstr a(degree: num) {{ osc(sine, 440hz * pow(2, degrees[degree] / 12)) }}"
     ));
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_caret_is_a_power() {
+    ok(r#"
+const just = [0, 4, 7]
+instr x(degree: num) { osc(sine, 440hz * 2 ^ (just[degree] / 12)) * 2 ^ -1 }
+"#);
+    assert!(compile("const a = 2 ^\n").is_err());
 }

@@ -220,7 +220,7 @@ impl Table {
     }
 
     /// Moving average over `width` entries (wrapping, as a table is read as a cycle).
-    pub fn soften(&self, width: usize) -> Self {
+    pub fn moving_average(&self, width: usize) -> Self {
         let n = self.data.len();
         let width = width.clamp(1, n);
         let before = (width - 1) / 2;
@@ -436,8 +436,8 @@ mod tests {
     }
 
     #[test]
-    fn soften_averages_and_fade_ends_quietly() {
-        let t = Table::from_f64([0.0, 3.0, 0.0, 0.0], None).soften(3);
+    fn moving_average_averages_and_fade_ends_quietly() {
+        let t = Table::from_f64([0.0, 3.0, 0.0, 0.0], None).moving_average(3);
         assert_eq!(t.data(), &[1.0, 1.0, 1.0, 0.0]);
         let f = Table::from_f64([1.0; 8], None).fade(2);
         assert!(f.get(0) < 0.5 && f.get(7) < 0.5 && f.get(3) == 1.0);

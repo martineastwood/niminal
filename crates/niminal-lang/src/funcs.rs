@@ -394,7 +394,7 @@ const BUILTIN_CALLS: &[&str] = &[
     "mean",
     "rms",
     "remove_dc",
-    "soften",
+    "moving_average",
     "fade",
     "record",
     "data",

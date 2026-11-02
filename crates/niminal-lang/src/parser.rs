@@ -121,6 +121,7 @@ fn describe(tok: &Tok) -> String {
         Tok::Star => "`*`".into(),
         Tok::Slash => "`/`".into(),
         Tok::Percent => "`%`".into(),
+        Tok::Caret => "`^`".into(),
         Tok::Bar => "`|`".into(),
         Tok::Tilde => "`~`".into(),
         Tok::At => "`@`".into(),
@@ -1971,7 +1972,34 @@ impl Parser {
                 span,
             });
         }
-        self.postfix()
+        self.power()
+    }
+
+    /// `base ^ exponent` is `pow(base, exponent)`. It binds tighter than `*` and a leading `-`, and
+    /// `a ^ b ^ c` is `a ^ (b ^ c)`, so `-2 ^ 2` is -4 and `2 ^ -1` is a half.
+    fn power(&mut self) -> Res<Expr> {
+        let base = self.postfix()?;
+        if self.peek() != &Tok::Caret {
+            return Ok(base);
+        }
+        let op = self.bump().span;
+        let exponent = self.nested(Self::unary)?;
+        let span = base.span.to(exponent.span);
+        let arg = |value| Arg {
+            name: None,
+            receiver: false,
+            value,
+        };
+        Ok(Expr {
+            kind: ExprKind::Call {
+                name: Ident {
+                    name: "pow".into(),
+                    span: op,
+                },
+                args: vec![arg(base), arg(exponent)],
+            },
+            span,
+        })
     }
 
     fn postfix(&mut self) -> Res<Expr> {

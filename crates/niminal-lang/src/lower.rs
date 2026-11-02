@@ -3350,7 +3350,7 @@ impl<'a> Lower<'a> {
                         | "mean"
                         | "rms"
                         | "remove_dc"
-                        | "soften"
+                        | "moving_average"
                         | "fade"
                 ) =>
             {
@@ -3476,8 +3476,8 @@ impl<'a> Lower<'a> {
                 }
                 Datum::Table(Arc::new(table.remove_dc()))
             }
-            "soften" | "fade" => {
-                let what = if name.name == "soften" {
+            "moving_average" | "fade" => {
+                let what = if name.name == "moving_average" {
                     "a width"
                 } else {
                     "a length"
@@ -3489,8 +3489,8 @@ impl<'a> Lower<'a> {
                     ));
                 };
                 let n = self.whole_number(&a.value, 1, table.len())?;
-                Datum::Table(Arc::new(if name.name == "soften" {
-                    table.soften(n)
+                Datum::Table(Arc::new(if name.name == "moving_average" {
+                    table.moving_average(n)
                 } else {
                     table.fade(n)
                 }))
@@ -5032,7 +5032,7 @@ impl<'a> Lower<'a> {
         match n {
             "map" | "sum" | "len" | "channels" | "indices" | "at" | "phase" | "step" | "active"
             | "normalize" | "reverse" | "rotate" | "resample" | "concat" | "integrate" | "mix"
-            | "slice" | "spectrum" | "phases" | "mean" | "rms" | "remove_dc" | "soften"
+            | "slice" | "spectrum" | "phases" | "mean" | "rms" | "remove_dc" | "moving_average"
             | "fade" => {
                 return self.array_call(name, args, span);
             }

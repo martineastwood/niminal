@@ -37,6 +37,8 @@ pub enum Tok {
     Slash,
     /// `%` between two values: the remainder
     Percent,
+    /// `^` between two values: a power
+    Caret,
     Bar,
     Tilde,
     At,
@@ -351,6 +353,7 @@ fn lex_with(src: &str, dsp: bool) -> Result<Vec<Token>, Diagnostic> {
                     b'*' => Tok::Star,
                     b'/' => Tok::Slash,
                     b'%' => Tok::Percent,
+                    b'^' => Tok::Caret,
                     b'|' => Tok::Bar,
                     _ => {
                         let ch = src[start..].chars().next().unwrap();
@@ -587,6 +590,14 @@ mod tests {
         assert_eq!(
             toks("600ms.exp")[..3],
             [num(600.0, Some("ms")), Tok::Dot, Tok::Ident("exp".into())]
+        );
+    }
+
+    #[test]
+    fn a_caret_is_a_power() {
+        assert_eq!(
+            toks("2^3")[..3],
+            [num(2.0, None), Tok::Caret, num(3.0, None)]
         );
     }
 

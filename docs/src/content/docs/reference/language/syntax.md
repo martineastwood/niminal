@@ -43,6 +43,7 @@ From the tightest to the loosest:
 | Operators | Notes |
 | --- | --- |
 | `f(...)`, `x.f`, `x[i]` | Calls, methods, indexing |
+| `x ^ y` | A power, the same as `pow(x, y)`. It groups to the right, so `2 ^ 3 ^ 2` is 512, and it binds tighter than a minus in front: `-2 ^ 2` is -4 |
 | `-x`, `not x` | |
 | `*`, `/` | Dividing by zero gives 0 |
 | `+`, `-` | |
@@ -53,7 +54,6 @@ From the tightest to the loosest:
 
 - **The remainder** is `x.mod(y)`, with the sign of `y`. `%` only means percent.
 - **Maths never makes NaN.** Where there is no real answer the result is 0: dividing by zero, `x.mod(0)`, `sqrt` of a negative number, `pow` of a negative number to a fractional power, and `pow(0, y)` for a negative `y`. `log` of zero or a negative number is the log of a tiny number (about -69), so turning silence into decibels stays finite. A result too big to hold, such as `exp(100)`, is infinity, and a voice or effect that produces one is silenced and reported.
-- **No power operator:** `pow(x, y)`.
 - **Math** works everywhere: `sin cos tan tanh exp log sqrt abs sign floor ceil fract`, `min(a, b)`, `max(a, b)`, `pow(x, y)`, `x.clamp(lo..hi)`, and the helpers `lerp`, `smoothstep`, `floor_to`, `log2`, `log10`, `atan`, `asin`, `acos`, `mtof` and `ftom`. For a whole number from a range, use `.floor`: `random_between(0, 10).floor` is 0 to 9, and `xs.at(random_between(0, 4).floor)` picks from a list; constants `pi`, `sample_rate`, `true`, `false`.
 
 ## Calls and chaining

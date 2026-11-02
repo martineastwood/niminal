@@ -477,7 +477,7 @@ fn array_ops() -> Vec<OpInfo> {
             &[],
         ),
         method(
-            "soften",
+            "moving_average",
             "Average each entry with its neighbours over `width` entries, wrapping round the ends.",
             &[("width", "integer", true)],
         ),

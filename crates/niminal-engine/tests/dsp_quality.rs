@@ -206,9 +206,9 @@ fn nonlinear_opcodes_run_natively_and_allow_explicit_oversampling() {
 fn live_redefinitions_preserve_effect_memory_and_reset_rearms_it() {
     let n = 2048;
     let x = sine(48000.0, 997.0, n, 0.3);
-    let cases: Vec<(Box<dyn Opcode>, Vec<Vec<f32>>)> = vec![
+    let cases = [
         (
-            Box::new(Ladder::default()),
+            Box::new(Ladder::default()) as Box<dyn Opcode>,
             vec![x.clone(), vec![2000.0; n], vec![0.8; n], vec![3.0; n]],
         ),
         (
