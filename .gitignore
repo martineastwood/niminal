@@ -16,3 +16,4 @@ design/
 /releases/
 *.vsix
 __pycache__/
+.vscode/

@@ -334,7 +334,11 @@ pub fn builtin_ops() -> Vec<OpInfo> {
         for (name, doc) in crate::prelude::DOCS {
             let params: &[(&str, &str, bool)] = match name {
                 "lfo" => &[("rate", "hz", true), ("shape", "sine, tri, saw or square", false)],
-                "synced_lfo" => &[("beats", "number", false), ("shape", "sine, tri, saw or square", false), ("phase", "number", false)],                "unipolar" => &[("x", "number", true)],
+                "synced_lfo" => &[("beats", "number", false), ("shape", "sine, tri, saw or square", false), ("phase", "number", false)],                "unipolar" | "bipolar" | "smoothstep" | "log2" | "log10" | "atan" | "asin" | "acos" => &[("x", "number", true)],
+                "lerp" => &[("a", "number", true), ("b", "number", true), ("t", "number", true)],
+                "floor_to" => &[("x", "number", true), ("step", "number", true)],
+                "mtof" => &[("note", "number", true)],
+                "ftom" => &[("freq", "hz", true)],
                 "random_steps" => &[("rate", "hz", true), ("seed", "number", false)],
                 "random_between" => &[("lo", "number", true), ("hi", "number", true), ("seed", "number", false)],
                 _ => &[("rate", "hz", true), ("glide", "time", false), ("seed", "number", false)],

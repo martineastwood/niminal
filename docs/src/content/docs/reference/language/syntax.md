@@ -38,7 +38,7 @@ From the tightest to the loosest:
 
 - **The remainder** is `x.mod(y)`, with the sign of `y`. `%` only means percent.
 - **No power operator:** `pow(x, y)`.
-- **Math** works everywhere: `sin cos tan tanh exp log sqrt abs sign floor ceil fract`, `min(a, b)`, `max(a, b)`, `pow(x, y)`, `x.clamp(lo..hi)`; constants `pi`, `sample_rate`, `true`, `false`.
+- **Math** works everywhere: `sin cos tan tanh exp log sqrt abs sign floor ceil fract`, `min(a, b)`, `max(a, b)`, `pow(x, y)`, `x.clamp(lo..hi)`, and the helpers `lerp`, `smoothstep`, `floor_to`, `log2`, `log10`, `atan`, `asin`, `acos`, `mtof` and `ftom`. For a whole number from a range, use `.floor`: `random_between(0, 10).floor` is 0 to 9, and `xs.at(random_between(0, 4).floor)` picks from a list; constants `pi`, `sample_rate`, `true`, `false`.
 
 ## Calls and chaining
 

@@ -539,12 +539,16 @@ impl Registry {
             math("tan", "Tangent of a signal (radians).", |_| {
                 Ok(Box::new(Func(Fn1::Tan)))
             }),
-            math("floor", "The whole number at or below a signal.", |_| {
-                Ok(Box::new(Func(Fn1::Floor)))
-            }),
-            math("ceil", "The whole number at or above a signal.", |_| {
-                Ok(Box::new(Func(Fn1::Ceil)))
-            }),
+            math(
+                "floor",
+                "The whole number at or below a signal: `3.7.floor` is 3. Use it for a whole number from a random or scaled value: `random_between(0, 10).floor` is 0 to 9. To round to the nearest instead, use `(x + 0.5).floor`.",
+                |_| Ok(Box::new(Func(Fn1::Floor))),
+            ),
+            math(
+                "ceil",
+                "The whole number at or above a signal: `3.2.ceil` is 4.",
+                |_| Ok(Box::new(Func(Fn1::Ceil))),
+            ),
             math(
                 "sqrt",
                 "Square root of a signal (0 for a negative one).",

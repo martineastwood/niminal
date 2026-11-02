@@ -12,6 +12,20 @@ control fn lfo(rate: hz, shape: (sine | tri | saw | square) = sine) {
   else { osc(square, rate) }
 }
 fn unipolar(x) { x * 0.5 + 0.5 }
+fn bipolar(x) { x * 2 - 1 }
+fn lerp(a, b, t) { a + (b - a) * t }
+fn smoothstep(x) {
+  t = x.max(0).min(1)
+  t * t * (3 - 2 * t)
+}
+fn floor_to(x, step) { (x / step).floor * step }
+fn log2(x) { log(x) / log(2) }
+fn log10(x) { log(x) / log(10) }
+fn atan(x) { atan2(x, 1) }
+fn asin(x) { atan2(x, sqrt(1 - x * x)) }
+fn acos(x) { atan2(sqrt(1 - x * x), x) }
+fn mtof(note: num) -> hz { 440hz * pow(2, (note - 69) / 12) }
+fn ftom(freq: hz) -> num { 69 + 12 * log(freq / 440hz) / log(2) }
 control fn random_steps(rate: hz, seed: num = 0) {
   noise(seed: seed).sample_hold(impulse(rate))
 }
@@ -99,7 +113,7 @@ control fn snap_division(length: sec) {
 ";
 
 /// What each prelude function is for, for completion and the opcode reference.
-pub const DOCS: [(&str, &str); 9] = [
+pub const DOCS: [(&str, &str); 20] = [
     (
         "lfo",
         "A low-frequency oscillator from -1 to 1, run once per block: `lfo(2hz)`, or `lfo(0.3hz, shape: tri)` (sine, tri, saw or square). Move it to 0..1 with `.unipolar`, scale it with `.range(300hz..3khz)` and smooth it where a step would be heard: `lfo(2hz).smooth`.",
@@ -118,7 +132,7 @@ pub const DOCS: [(&str, &str); 9] = [
     ),
     (
         "random_between",
-        "A random number from `lo` to `hi`, picked when the note starts: `cutoff + random_between(-100hz, 100hz)`. Each call and each note picks its own, the same on every run; `seed:` makes a different run of picks.",
+        "A random number from `lo` to `hi`, picked when the note starts: `cutoff + random_between(-100hz, 100hz)`. The result is not a whole number; for one, add `.floor`: `random_between(0, 10).floor` picks 0 to 9. Each call and each note picks its own, the same on every run; `seed:` makes a different run of picks.",
     ),
     (
         "random_glide",
@@ -135,6 +149,50 @@ pub const DOCS: [(&str, &str); 9] = [
     (
         "apply",
         "Runs a function on the sound as much as `when` says: 0 is not at all, 1 is all of it, and a value between mixes the two. `when` moves smoothly over `blend` (3ms), so switching it never clicks. `x.apply(fn(s) { s.bitcrush(bits: 5) }, when: gate)`.",
+    ),
+    (
+        "bipolar",
+        "Moves a signal from 0..1 to -1..1, the opposite of `unipolar`: `osc(saw, 2hz).unipolar.bipolar`.",
+    ),
+    (
+        "lerp",
+        "Moves from `a` to `b` as `t` goes from 0 to 1: `lerp(200hz, 800hz, 0.25)` is 350hz. `t` outside 0..1 carries on past the ends. To blend two sounds, use `crossfade`.",
+    ),
+    (
+        "smoothstep",
+        "An S-shaped curve from 0 to 1 as `x` goes from 0 to 1, flat at both ends: `smoothstep(0.5)` is 0.5, and anything outside 0..1 stays at 0 or 1. Use it to ease a fade in or out.",
+    ),
+    (
+        "floor_to",
+        "Rounds `x` down to a multiple of `step`: `floor_to(0.37, 0.25)` is 0.25, and `floor_to(random_between(0, 1), 0.125)` picks one of eight steps.",
+    ),
+    (
+        "log2",
+        "Logarithm of a signal to base 2, the number of octaves: `log2(8)` is 3.",
+    ),
+    (
+        "log10",
+        "Logarithm of a signal to base 10: `log10(1000)` is 3.",
+    ),
+    (
+        "atan",
+        "Arctangent of a signal, in radians from -pi/2 to pi/2. For a full circle from two values, use `atan2`.",
+    ),
+    (
+        "asin",
+        "Arcsine of a signal from -1 to 1, in radians from -pi/2 to pi/2.",
+    ),
+    (
+        "acos",
+        "Arccosine of a signal from -1 to 1, in radians from 0 to pi.",
+    ),
+    (
+        "mtof",
+        "The frequency of a MIDI note number: `mtof(69)` is 440hz and each 12 is an octave. `mtof(60 + random_between(0, 12).floor)` plays a random note in the octave above middle C.",
+    ),
+    (
+        "ftom",
+        "The MIDI note number of a frequency, the opposite of `mtof`: `ftom(440hz)` is 69. The result is not rounded; use `.floor` or `(x + 0.5).floor` for the nearest note.",
     ),
 ];
 
