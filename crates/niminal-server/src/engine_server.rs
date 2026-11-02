@@ -504,7 +504,6 @@ impl EngineServer {
 
     /// Handle one message from `client`; the replies to send back to it.
     pub fn handle(&mut self, client: ClientId, text: &str) -> Vec<String> {
-        self.session.sync_realtime();
         let request: Value = match serde_json::from_str(text) {
             Ok(v) => v,
             Err(e) => {
@@ -616,32 +615,23 @@ impl EngineServer {
             EngineRequest::Unsubscribe { topics } => self.subscribe(client, &topics, false),
             EngineRequest::EventsSend { mut events } => {
                 for event in &events {
-                    let values = match event {
+                    let is_sample =
+                        |v: &niminal_score::Value| matches!(v, niminal_score::Value::Sample(_));
+                    let has_sample = match event {
                         Op::Note { args, .. } | Op::Set { args, .. } => {
-                            args.values().collect::<Vec<_>>()
+                            args.values().any(is_sample)
                         }
-                        Op::Array { values, .. } => values.iter().collect(),
-                        _ => Vec::new(),
+                        Op::Array { values, .. } => values.iter().any(is_sample),
+                        _ => false,
                     };
-                    if values
-                        .iter()
-                        .any(|v| matches!(v, niminal_score::Value::Sample(_)))
-                    {
+                    if has_sample {
                         return Err(EngineError::new(
                             INVALID_PARAMS,
                             "use instrument-local numeric sample indices; resolve compiler sample IDs in the client",
                         ));
                     }
                     let value = serde_json::to_value(event).expect("serializable event");
-                    fn reserved(v: &Value) -> bool {
-                        match v {
-                            Value::String(s) => s.contains("__client_"),
-                            Value::Array(a) => a.iter().any(reserved),
-                            Value::Object(o) => o.values().any(reserved),
-                            _ => false,
-                        }
-                    }
-                    if reserved(&value) {
+                    if contains_reserved_namespace(&value) {
                         return Err(EngineError::new(
                             INVALID_PARAMS,
                             "internal namespace names are reserved",
@@ -983,4 +973,13 @@ pub(crate) fn error_reply(id: Value, code: i64, message: &str, data: Option<Valu
         error["data"] = d;
     }
     json!({"jsonrpc": "2.0", "id": id, "error": error}).to_string()
+}
+
+fn contains_reserved_namespace(v: &Value) -> bool {
+    match v {
+        Value::String(s) => s.contains("__client_"),
+        Value::Array(a) => a.iter().any(contains_reserved_namespace),
+        Value::Object(o) => o.values().any(contains_reserved_namespace),
+        _ => false,
+    }
 }

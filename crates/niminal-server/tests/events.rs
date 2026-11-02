@@ -1299,3 +1299,37 @@ fn a_complete_transaction_with_no_source_drops_every_definition() {
     s.process(480);
     assert!(s.eval("instr c() { a() }", Some("now")).is_ok());
 }
+
+#[test]
+fn note_receipts_keep_indices_in_a_mixed_batch() {
+    let mut s = session();
+    let sent = s
+        .send_events(
+            0,
+            vec![
+                Op::Control {
+                    name: "level".into(),
+                    value: 0.2,
+                    unit: None,
+                    glide: None,
+                    at: At::Now,
+                    tag: None,
+                },
+                note("lead", At::Now, 440.0),
+                Op::Control {
+                    name: "level".into(),
+                    value: 0.3,
+                    unit: None,
+                    glide: None,
+                    at: At::Now,
+                    tag: None,
+                },
+                note("lead", At::Now, 220.0),
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        sent.notes.iter().map(|note| note.event).collect::<Vec<_>>(),
+        vec![1, 3]
+    );
+}

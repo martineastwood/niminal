@@ -9,12 +9,7 @@ pub(crate) struct Note {
     announced: [u64; 4],
 }
 impl Note {
-    pub fn new(
-        activity: Arc<Activity>,
-        id: Option<u64>,
-        target: String,
-        _key: Option<u32>,
-    ) -> Self {
+    pub fn new(activity: Arc<Activity>, id: Option<u64>, target: String) -> Self {
         Self {
             activity,
             id,

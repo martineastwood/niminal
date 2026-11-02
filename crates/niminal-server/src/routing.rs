@@ -183,6 +183,44 @@ struct Fx {
     imported: Option<String>,
     instrument: Option<String>,
 }
+impl Fx {
+    fn from_program(
+        program: &Program,
+        node: &NodeInfo,
+        name: &str,
+        imported: Option<String>,
+    ) -> Self {
+        let prefix = format!("{name}::");
+        Self {
+            resources: program
+                .resource_controls
+                .iter()
+                .filter_map(|(name, key)| {
+                    name.strip_prefix(&prefix)
+                        .map(|name| (name.to_owned(), *key))
+                })
+                .collect(),
+            arrays: program
+                .array_controls
+                .iter()
+                .filter_map(|(name, paths)| {
+                    name.strip_prefix(&prefix)
+                        .map(|name| (name.to_owned(), paths.clone()))
+                })
+                .collect(),
+            controls: program
+                .controls
+                .iter()
+                .filter(|c| c.name.starts_with(&prefix))
+                .cloned()
+                .collect(),
+            node: node.clone(),
+            buses: program.buses.clone(),
+            instrument: node.instrument.map(|i| program.instruments[i].name.clone()),
+            imported,
+        }
+    }
+}
 #[derive(Clone)]
 struct Bus {
     meter: Arc<niminal_engine::Meter>,
@@ -533,39 +571,12 @@ impl Routing {
                     if template.instrument.is_some() {
                         return Err("an fx processes audio; select instruments when creating nodes or sending notes".into());
                     }
-                    let controls = compiled
-                        .controls
-                        .iter()
-                        .filter(|c| c.name.starts_with(&format!("{internal}::")))
-                        .cloned()
-                        .collect();
                     patch.fx_decls.insert(
                         name.clone(),
-                        Fx {
-                            resources: compiled
-                                .resource_controls
-                                .iter()
-                                .filter_map(|(n, k)| {
-                                    n.strip_prefix(&format!("{internal}::"))
-                                        .map(|n| (n.to_string(), *k))
-                                })
-                                .collect(),
-                            arrays: compiled
-                                .array_controls
-                                .iter()
-                                .filter_map(|(n, k)| {
-                                    n.strip_prefix(&format!("{internal}::"))
-                                        .map(|n| (n.to_string(), k.clone()))
-                                })
-                                .collect(),
-                            node: template.clone(),
-                            controls,
-                            buses: compiled.buses,
-                            imported: None,
-                            instrument: None,
-                        },
+                        Fx::from_program(&compiled, template, &internal, None),
                     );
                 }
+
                 RoutingEdit::Import {
                     name,
                     node: render_node,
@@ -577,41 +588,17 @@ impl Routing {
                         .skip(1)
                         .find(|t| t.name == *render_node)
                         .ok_or_else(|| format!("no fx or collection template `{render_node}`"))?;
-                    let controls = definitions
-                        .controls
-                        .iter()
-                        .filter(|c| c.name.starts_with(&format!("{render_node}::")))
-                        .cloned()
-                        .collect();
                     patch.fx_decls.insert(
                         name.clone(),
-                        Fx {
-                            resources: definitions
-                                .resource_controls
-                                .iter()
-                                .filter_map(|(n, k)| {
-                                    n.strip_prefix(&format!("{render_node}::"))
-                                        .map(|n| (n.to_string(), *k))
-                                })
-                                .collect(),
-                            arrays: definitions
-                                .array_controls
-                                .iter()
-                                .filter_map(|(n, k)| {
-                                    n.strip_prefix(&format!("{render_node}::"))
-                                        .map(|n| (n.to_string(), k.clone()))
-                                })
-                                .collect(),
-                            node: template.clone(),
-                            controls,
-                            buses: definitions.buses.clone(),
-                            imported: Some(render_node.clone()),
-                            instrument: template
-                                .instrument
-                                .map(|i| definitions.instruments[i].name.clone()),
-                        },
+                        Fx::from_program(
+                            definitions,
+                            template,
+                            render_node,
+                            Some(render_node.clone()),
+                        ),
                     );
                 }
+
                 RoutingEdit::Bus {
                     id,
                     channels,
@@ -1304,8 +1291,8 @@ impl Routing {
         Ok(updates)
     }
 
-    pub fn meters(&self, take: bool) -> serde_json::Value {
-        let clients = self.clients.iter().map(|(client, patch)| {
+    pub fn meters(&self, take: bool, owner: Option<u64>) -> serde_json::Value {
+        let clients = self.clients.iter().filter(|(client, _)| owner.is_none_or(|owner| owner == **client)).map(|(client, patch)| {
             serde_json::json!({
                 "client": client,
                 "nodes": patch.nodes.iter().map(|(id, node)| serde_json::json!({ "id": id, "peaks": node.meter.read(take) })).collect::<Vec<_>>(),
@@ -1315,9 +1302,13 @@ impl Routing {
         serde_json::json!(clients.collect::<Vec<_>>())
     }
 
-    pub fn status(&self, values: &[(String, f32, f32, Option<&str>)]) -> serde_json::Value {
+    pub fn status(
+        &self,
+        values: &[(String, f32, f32, Option<&str>)],
+        owner: Option<u64>,
+    ) -> serde_json::Value {
         let control = |key: &str| values.iter().find(|v| v.0 == key).map(|v| (v.1, v.2));
-        let clients = self.clients.iter().map(|(client, patch)| {
+        let clients = self.clients.iter().filter(|(client, _)| owner.is_none_or(|owner| owner == **client)).map(|(client, patch)| {
             let nodes = patch
                 .nodes
                 .iter()

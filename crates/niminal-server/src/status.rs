@@ -6,27 +6,40 @@ use serde_json::{Value, json};
 
 use crate::session::Session;
 
-/// Every control with its current value and where it is heading, in the units it is written in. A request
-/// for just these is much cheaper than a whole status.
-pub fn controls_json(session: &Session) -> Vec<Value> {
-    session
-        .control_values()
-        .iter()
-        .map(|(name, value, target, unit)| {
-            let display = |value: f32| if *unit == Some("db") { 20.0 * f64::from(value.max(f32::MIN_POSITIVE)).log10() } else { f64::from(value) };
-            json!({ "name": name, "value": display(*value), "target": display(*target), "unit": unit })
-        })
-        .collect()
+fn visible_name(name: &str, client: Option<u64>) -> Option<&str> {
+    match client {
+        Some(client) => crate::session::definitions::local(client, name),
+        None => Some(name),
+    }
+}
+
+fn controls_json(session: &Session, client: Option<u64>) -> Vec<Value> {
+    session.control_values().iter().filter_map(|(name, value, target, unit)| {
+        let name = visible_name(name, client)?;
+        let display = |value: f32| if *unit == Some("db") {
+            20.0 * f64::from(value.max(f32::MIN_POSITIVE)).log10()
+        } else { f64::from(value) };
+        Some(json!({ "name": name, "value": display(*value), "target": display(*target), "unit": unit }))
+    }).collect()
 }
 
 /// The engine's state: clock, definitions with their parameters, controls, realtime health and, for each
 /// client, its held notes and how many of its events are waiting.
 pub fn status_json(session: &Session) -> Value {
-    let (instruments, nodes, buses) = session.definitions();
+    inspection_json(session, None)
+}
+
+fn inspection_json(session: &Session, client: Option<u64>) -> Value {
+    let program = session.program();
+    let values = session.control_values();
+    let mut routing = session.routing.status(&values, client);
+    if let Some(client) = client {
+        public_names(&mut routing, client);
+    }
     json!({
         "clock": state_json(session),
-        "routing": session.routing_status(),
-        "routing_meters": session.routing_meters(false),
+        "routing": routing,
+        "routing_meters": session.routing.meters(false, client),
         "sample_rate": session.sample_rate(),
         "channels": session.channels(),
         "realtime": session.realtime_metrics().map(|m| json!({
@@ -36,10 +49,12 @@ pub fn status_json(session: &Session) -> Value {
             "deadline_misses": m.deadline_misses, "max_render_micros": m.max_render_micros,
             "mixer_builds": m.mixer_builds, "planner_panics": m.planner_panics,
         })),
-        "controls": controls_json(session),
+        "controls": controls_json(session, client),
         "processing_latency": session.program().processing_latency(),
-        "instruments": instruments.iter().map(|i| json!({
-            "name": i.name,
+        "instruments": program.instruments.iter().filter_map(|i| {
+            let name = visible_name(&i.name, client)?;
+            let mut instrument = json!({
+            "name": name,
             "members":i.members,
             "arrays": i.arrays,
             "buffers": i.resources,
@@ -49,11 +64,14 @@ pub fn status_json(session: &Session) -> Value {
                 "default": p.default,
                 "range": p.range,
             })).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>(),
-        "nodes": nodes,
-        "load": load_json(session),
-        "buses": buses,
-        "clients": session.client_status().iter().map(|(client, voices, waiting)| json!({
+        });
+            if let Some(client) = client { public_names(&mut instrument, client); }
+            Some(instrument)
+        }).collect::<Vec<_>>(),
+        "nodes": program.nodes.iter().skip(1).filter_map(|n| visible_name(&n.name, client)).collect::<Vec<_>>(),
+        "load": load_json(session, client),
+        "buses": program.buses.iter().filter_map(|name| visible_name(name, client)).collect::<Vec<_>>(),
+        "clients": session.client_status().iter().filter(|(id, _, _)| client.is_none_or(|client| client == *id)).map(|(client, voices, waiting)| json!({
             "id": client, "voices": voices, "waiting": waiting,
         })).collect::<Vec<_>>(),
     })
@@ -61,7 +79,7 @@ pub fn status_json(session: &Session) -> Value {
 
 /// What each node costs to render, as a share of the time one block has: `voices` is the work of the
 /// node's voices (summed over every thread that helped, so it can pass 1), `chain` its effect chain.
-fn load_json(session: &Session) -> Value {
+fn load_json(session: &Session, client: Option<u64>) -> Value {
     let program = session.program();
     let budget = niminal_engine::block_size() as f64 / f64::from(session.sample_rate()) * 1e9;
     let share = |nanos: &AtomicU32| f64::from(nanos.load(Ordering::Relaxed)) / budget;
@@ -70,13 +88,14 @@ fn load_json(session: &Session) -> Value {
         .iter()
         .zip(&program.profile.nodes)
         .filter(|(node, _)| !node.name.is_empty() && !node.name.contains("__routing_"))
-        .map(|(node, load)| {
-            json!({
-                "name": node.name,
+        .filter_map(|(node, load)| {
+            let name = visible_name(&node.name, client)?;
+            Some(json!({
+                "name": name,
                 "voices": load.voices.load(Ordering::Relaxed),
                 "voice_cpu": share(&load.voice_nanos),
                 "chain_cpu": share(&load.chain_nanos),
-            })
+            }))
         })
         .collect()
 }
@@ -90,43 +109,9 @@ fn state_json(session: &Session) -> Value {
 
 /// Public inspection is owner-scoped; health and clock remain engine-wide.
 pub(crate) fn client_status_json(session: &Session, client: u64) -> Value {
-    let mut status = status_json(session);
-    for field in ["instruments", "controls"] {
-        if let Some(entries) = status[field].as_array_mut() {
-            entries.retain(|entry| {
-                entry["name"]
-                    .as_str()
-                    .is_some_and(|name| crate::session::definitions::local(client, name).is_some())
-            });
-        }
-    }
-    if let Some(entries) = status["load"].as_array_mut() {
-        entries.retain(|entry| {
-            entry["name"]
-                .as_str()
-                .is_some_and(|name| crate::session::definitions::local(client, name).is_some())
-        });
-    }
-    for field in ["nodes", "buses"] {
-        if let Some(entries) = status[field].as_array_mut() {
-            entries.retain(|entry| {
-                entry
-                    .as_str()
-                    .is_some_and(|name| crate::session::definitions::local(client, name).is_some())
-            });
-        }
-    }
-    for field in ["routing", "routing_meters"] {
-        if let Some(entries) = status[field].as_array_mut() {
-            entries.retain(|entry| entry["client"].as_u64() == Some(client));
-        }
-    }
-    if let Some(entries) = status["clients"].as_array_mut() {
-        entries.retain(|entry| entry["id"].as_u64() == Some(client));
-    }
-    public_names(&mut status, client);
-    status
+    inspection_json(session, Some(client))
 }
+
 pub(crate) fn public_names(value: &mut Value, client: u64) {
     match value {
         Value::String(s) => {
@@ -143,5 +128,43 @@ pub(crate) fn public_names(value: &mut Value, client: u64) {
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{At, Op};
+
+    #[test]
+    fn client_inspection_filters_before_serializing_and_preserves_public_names() {
+        let mut session = Session::new(48_000., niminal_lang::Layout::Mono);
+        for client in [1, 2] {
+            session.send_events(client, vec![Op::Define {
+                source: "ctl level = 0.5\ninstr tone() { level }\nnode lead { instrument = tone }\nbus send".into(),
+                at: At::Now, dir: None, tag: None,
+            }]).unwrap();
+        }
+        session.process(1);
+        let global = status_json(&session);
+        let own = client_status_json(&session, 1);
+        for field in ["instruments", "controls", "load"] {
+            let mut expected = json!(
+                global[field]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|entry| {
+                        crate::session::definitions::local(1, entry["name"].as_str().unwrap())
+                            .is_some()
+                    })
+                    .collect::<Vec<_>>()
+            );
+            public_names(&mut expected, 1);
+            assert_eq!(own[field], expected, "{field}");
+        }
+        assert_eq!(own["nodes"], json!(["lead"]));
+        assert_eq!(own["buses"], json!(["send"]));
+        assert!(!own.to_string().contains("__client_"));
     }
 }

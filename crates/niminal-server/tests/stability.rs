@@ -116,3 +116,26 @@ fn an_effect_silenced_for_going_wrong_plays_again_when_redefined() {
     );
     assert_eq!(session.take_silenced(), 0);
 }
+
+/// What a default session plays, which is what the live audio device is given, can never be louder than the
+/// limiter's ceiling, whatever the piece does.
+#[test]
+fn a_default_session_cannot_be_louder_than_the_limiter_ceiling() {
+    let mut session = Session::new(48_000.0, Layout::Mono);
+    let source = "instr loud() { osc(saw, 110hz) * 1000000 }\nnode n { instrument = loud }";
+    session
+        .send_events(1, vec![define(source), note()])
+        .unwrap();
+    let audio = session.process(48_000).remove(0);
+    assert!(
+        peak(&audio) > 0.5,
+        "the test must actually be loud: {}",
+        peak(&audio)
+    );
+    assert!(
+        peak(&audio) <= niminal_engine::DEFAULT_CEILING + 1e-4,
+        "{}",
+        peak(&audio)
+    );
+    assert!(audio.iter().all(|v| v.is_finite()));
+}

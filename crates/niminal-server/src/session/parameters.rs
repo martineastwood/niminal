@@ -318,6 +318,34 @@ pub(super) fn latest_chain_binds(
     latest.into_values()
 }
 
+/// Shared source and numeric validation for voice and node modulation.
+pub(super) fn validate_mapping(
+    program: &Program,
+    source: Option<&str>,
+    channel: usize,
+    scale: f32,
+    offset: f32,
+) -> Result<(), String> {
+    if channel == 0 || !scale.is_finite() || !offset.is_finite() {
+        return Err("mapping scale and offset must be finite, and channel is 1-based".into());
+    }
+    let Some(source) = source else {
+        return Ok(());
+    };
+    if program.controls.iter().any(|c| c.name == source) {
+        if channel != 1 {
+            return Err("control sources have one channel".into());
+        }
+    } else if let Some(bus) = program.buses.iter().position(|b| b == source) {
+        if channel > program.bus_layouts[bus].channels() {
+            return Err("bus channel does not exist".into());
+        }
+    } else {
+        return Err(format!("no control or bus `{source}`"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

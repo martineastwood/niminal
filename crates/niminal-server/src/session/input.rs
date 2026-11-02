@@ -400,6 +400,7 @@ impl Session {
                 tag: Option<String>,
             },
             Note {
+                op: usize,
                 event: Event,
                 instrument: String,
                 start: u64,
@@ -519,6 +520,7 @@ impl Session {
                                 open.push((*id, instrument.clone()));
                             }
                             plans.push(Plan::Note {
+                                op: n,
                                 start,
                                 dur: dur.map_or(0, |d| self.samples(d.to_seconds(program.tempo))),
                                 event,
@@ -782,24 +784,13 @@ impl Session {
                                     .as_ref()
                                     .map(|s| routing.source(client, s))
                                     .transpose()?;
-                                if *channel == 0 || !scale.is_finite() || !offset.is_finite() {
-                                    return Err("invalid modulation channel/scale/offset".into());
-                                }
-                                if let Some(name) = &name {
-                                    if program.controls.iter().any(|c| c.name == *name) {
-                                        if *channel != 1 {
-                                            return Err("control sources have one channel".into());
-                                        }
-                                    } else if let Some(i) =
-                                        program.buses.iter().position(|b| b == name)
-                                    {
-                                        if *channel > program.bus_layouts[i].channels() {
-                                            return Err("bus channel does not exist".into());
-                                        }
-                                    } else {
-                                        return Err("modulation source does not exist".into());
-                                    }
-                                }
+                                super::parameters::validate_mapping(
+                                    program,
+                                    name.as_deref(),
+                                    *channel,
+                                    *scale,
+                                    *offset,
+                                )?;
                                 Ok(ChainMap {
                                     client,
                                     node: id.clone(),
@@ -907,25 +898,15 @@ impl Session {
                         fail("use bind_buffer to select a buffer resource".into());
                         continue;
                     }
-                    if !scale.is_finite() || !offset.is_finite() || *channel == 0 {
-                        fail(
-                            "mapping scale and offset must be finite, and channel is 1-based"
-                                .into(),
-                        );
+                    if let Err(error) = super::parameters::validate_mapping(
+                        program,
+                        source.as_deref(),
+                        *channel,
+                        *scale,
+                        *offset,
+                    ) {
+                        fail(error);
                         continue;
-                    }
-                    if let Some(source) = source {
-                        if let Some(bus) = program.buses.iter().position(|n| n == source) {
-                            if *channel > program.bus_layouts[bus].channels() {
-                                fail("mapping channel is outside the bus".into());
-                                continue;
-                            }
-                        } else if !program.controls.iter().any(|c| c.name == *source)
-                            || *channel != 1
-                        {
-                            fail(format!("no control or bus `{source}` with that channel"));
-                            continue;
-                        }
                     }
                     if self.voice_maps.len() + plans.len() >= 4096 {
                         fail("the modulation mapping queue is full".into());
@@ -1309,6 +1290,7 @@ impl Session {
                     start
                 }
                 Plan::Note {
+                    op,
                     event,
                     instrument,
                     start,
@@ -1351,17 +1333,9 @@ impl Session {
                         activity.clone(),
                         id,
                         instrument.clone(),
-                        key,
                     ));
-                    sent.notes.push(crate::events::NoteReceipt {
-                        event: ops
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, op)| matches!(op, Op::Note { .. }))
-                            .nth(sent.notes.len())
-                            .map_or(0, |(i, _)| i),
-                        token,
-                    });
+                    sent.notes
+                        .push(crate::events::NoteReceipt { event: op, token });
                     self.add_explicit(
                         start.max(clock),
                         dur,

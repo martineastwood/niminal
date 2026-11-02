@@ -255,7 +255,7 @@ pub struct Session {
     project: Project,
     program: Arc<Program>,
     definitions: Arc<Program>,
-    routing: crate::routing::Routing,
+    pub(crate) routing: crate::routing::Routing,
     mixer: Mixer,
     master_meter: Arc<niminal_engine::Meter>,
     limiter: Option<Master>,
@@ -527,11 +527,11 @@ impl Session {
     }
 
     pub fn routing_meters(&self, take: bool) -> serde_json::Value {
-        self.routing.meters(take)
+        self.routing.meters(take, None)
     }
 
     pub fn routing_status(&self) -> serde_json::Value {
-        self.routing.status(&self.control_values())
+        self.routing.status(&self.control_values(), None)
     }
 
     fn seconds(&self, sample: u64) -> f64 {
@@ -697,20 +697,6 @@ impl Session {
             wall_micros: probe.map(|(_, wall, _)| wall),
             voices: self.state().voices,
         }
-    }
-
-    /// The instruments and nodes that are defined, with their parameters, for a client that wants to offer them.
-    pub fn definitions(&self) -> (Vec<niminal_lang::Instrument>, Vec<String>, Vec<String>) {
-        (
-            self.program.instruments.clone(),
-            self.program
-                .nodes
-                .iter()
-                .skip(1)
-                .map(|t| t.name.clone())
-                .collect(),
-            self.program.buses.clone(),
-        )
     }
 
     /// Each client's held notes (by the ids it chose) and how many of its events are still waiting.
