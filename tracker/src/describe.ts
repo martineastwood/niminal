@@ -21,6 +21,7 @@ export function describeCommand(text: string): string {
       const change = x === 0 || x === 8 ? 'at the same level' : x <= 5 ? `each ${levels[x]}% quieter` : x === 6 ? 'each 33% quieter, building up' : x === 7 ? 'each 50% quieter, building up' : x <= 13 ? `each ${levels[x - 8]}% louder` : x === 14 ? 'each 50% louder, building up' : 'each 100% louder, building up';
       return `plays the note ${Math.floor(12 / y)} times in the row (every ${plural(y, 'tick')}), ${change}`;
     }
+    case 'N': return `releases the held note ${trim(value / 256 * 100)}% into the row`;
     case 'C': return `cuts the note ${y} of 12 ticks into the row`;
     case 'Y': return `plays the note ${Math.round(value / 255 * 100)}% of the time`;
     case 'I': return repeat('fade') ?? `fades the held note's level in by ${value} of 128 during the row`;

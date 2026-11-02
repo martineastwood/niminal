@@ -39,3 +39,8 @@ it('describes either kind of command for an fx cell', () => {
   expect(describeAnyCommand('L80', project, lead)).toContain('sets the track volume');
   expect(describeAnyCommand('12FF', project, lead)).toContain('effect 1 (none there yet)');
 });
+
+
+it('describes precise releases without treating them as cuts', () => {
+  expect(describeCommand('N80')).toBe('releases the held note 50% into the row');
+});

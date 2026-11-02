@@ -322,6 +322,7 @@ const TICKS: f64 = 12.0;
 /// | `Uxx`, `Dxx` | slide the held note up or down by `xx` sixteenths of a semitone per tick during the row; `00` repeats the last one |
 /// | `Rxy` | retrigger every `y` ticks (1 to 6), each hit changed in level by `x`'s factor |
 /// | `C0y` | cut the note `y` ticks (1 to 11) into the row |
+/// | `Nxx` | release the note `xx`/256 of the way through the row |
 /// | `Yxx` | play the note with probability `xx`/255 |
 /// | `Ixx`, `Oxx` | fade the held note's level in or out by `xx` volume units (0 to 128) during the row; `00` repeats the last one |
 ///
@@ -351,14 +352,14 @@ impl Command {
     /// Why the engine cannot play this command, if it cannot.
     pub fn problem(self) -> Option<&'static str> {
         match self.letter {
-            'S' => None,
+            'S' | 'N' => None,
             'B' => (self.value > 1).then_some("B is B00 (backwards) or B01 (forwards)"),
             'G' | 'U' | 'D' => None,
             'Y' => (self.value == 0).then_some("Y runs from 01 to FF"),
             'I' | 'O' => (self.value > 0x80).then_some("I and O run from 00 to 80"),
             'R' => (self.y() == 0 || self.y() > 6).then_some("R is Rxy with y from 1 to 6 ticks"),
             'C' => (self.x() != 0 || self.y() == 0 || self.y() > 11).then_some("C is C0y with y from 1 to 11 ticks"),
-            _ => Some("Commands are S, B, G, U, D, R, C, Y, I and O for a note, and L, P or four hex digits for the track"),
+            _ => Some("Commands are S, B, G, U, D, R, C, N, Y, I and O for a note, and L, P or four hex digits for the track"),
         }
     }
 }
@@ -841,7 +842,7 @@ fn hertz(midi: f64) -> f64 {
 pub static NOTE_IDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// No note is shorter than this many rows, so back-to-back notes with delays still sound.
-const MIN_HOLD: f64 = 0.01;
+const MIN_HOLD: f64 = 1.0 / 256.0;
 
 /// A note's volume cell (0–128, 128 being full level) as decibels.
 pub fn volume_db(volume: u32) -> f64 {
@@ -1300,6 +1301,9 @@ impl Playback {
                 current = Some(to);
                 continue;
             }
+            if let Some(release) = next.commands(row).iter().rev().find(|c| c.letter == 'N') {
+                return ended(hold, ahead as f64 + f64::from(release.value) / 256.0, false);
+            }
             if let Some(change) = next.fade(row) {
                 volume = (volume + change).clamp(0.0, 128.0);
                 hold.changes.push(Change { index: index + ahead, delay: if ahead == 0 { delay } else { 0.0 }, volume });
@@ -1606,8 +1610,9 @@ impl Playback {
                     let hits = retrigger.map_or(1, |r| r.hits);
                     for hit in 0..hits {
                         let hit_args = retrigger.map_or_else(|| args.clone(), |r| hit_args(&args, r.gain(hit), self.instrument_parameters.get(id).map_or(&[], Vec::as_slice)));
-                        let last = hit + 1 == hits;
                         let offset = f64::from(hit) / f64::from(hits);
+                        if offset >= hold.rows { break; }
+                        let last = hit + 1 == hits || f64::from(hit + 1) / f64::from(hits) >= hold.rows;
                         let rows = if last { hold.rows - offset } else { 1.0 / f64::from(hits) };
                         let rows = column.length(position.row).map_or(rows, |len| rows.min(len / f64::from(hits))).max(MIN_HOLD);
                         let begins = self.origin + (self.seconds_at(self.next_row as f64 + delay + offset) * sample_rate).round() as u64;
@@ -2012,6 +2017,30 @@ mod tests {
         // Looping a pattern holds a lone note for the whole pattern.
         let looped = played(8, vec![column(8, &[(2, "C-4")])], Mode::Pattern);
         assert!((duration(&looped[0]) - 8.0 * 0.125).abs() < 1e-5);
+    }
+
+    #[test]
+    fn precise_release_commands_preserve_short_taps_and_release_tails() {
+        let mut first = column(4, &[(0, "C-4"), (2, "D-4"), (3, "OFF")]);
+        first.delay = vec![Some("64".into()), None, Some("32".into()), Some("160".into())];
+        first.fx = vec![vec![Some("NC0".into()), None, None, None]];
+        let events = played(4, vec![first], Mode::Song);
+        let notes: Vec<_> = events.iter().filter(|e| e["op"] == "note").collect();
+        assert_eq!(notes.len(), 2);
+        assert!((duration(notes[0]) - 0.5 * 0.125).abs() < 1e-5);
+        assert!((duration(notes[1]) - 1.5 * 0.125).abs() < 1e-5);
+        assert!(!events.iter().any(|e| e["op"] == "cut"), "a release must preserve the instrument's tail");
+        let mut retrigger = with_commands(4, &[(0, "C-4")], &[(0, "R03")]);
+        retrigger.fx.push(vec![Some("N80".into()), None, None, None]);
+        let events = played(4, vec![retrigger], Mode::Song);
+        let notes: Vec<_> = events.iter().filter(|e| e["op"] == "note").collect();
+        assert_eq!(notes.len(), 2, "no retrigger may start after the recorded release");
+        assert!(notes.iter().all(|e| (duration(e) - 0.25 * 0.125).abs() < 1e-5));
+        for command in ["N00", "N01", "NFF"] {
+            assert!(Command::parse(command).unwrap().problem().is_none());
+            let events = played(4, vec![with_commands(4, &[(0, "C-4")], &[(0, command)])], Mode::Song);
+            assert!(events.iter().filter(|e| e["op"] == "note").all(|e| duration(e).is_finite() && duration(e) > 0.0));
+        }
     }
 
     #[test]

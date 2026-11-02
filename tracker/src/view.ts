@@ -15,11 +15,13 @@ export interface ViewPrefs {
   sideWidth: number;
   /** Brighter text and borders */
   contrast: boolean;
+  midiQuantize: boolean;
+  midiGrid: number;
 }
 
 export const scales = [0.85, 1, 1.15, 1.3, 1.5, 1.75, 2];
 export const fontRange = { min: 9, max: 32 };
-export const defaultView: ViewPrefs = { scale: 1, codeFont: 12, sequence: true, side: true, matrix: false, sequenceWidth: 168, sideWidth: 280, contrast: false };
+export const defaultView: ViewPrefs = { scale: 1, codeFont: 12, sequence: true, side: true, matrix: false, sequenceWidth: 168, sideWidth: 280, contrast: false, midiQuantize: false, midiGrid: 1 };
 export const widthRange = { min: 120, max: 520 };
 const storageKey = 'niminal-tracker-view';
 
@@ -48,6 +50,8 @@ export function readView(raw: string | null): ViewPrefs {
     sequenceWidth: clampWidth(number(saved.sequenceWidth, defaultView.sequenceWidth)),
     sideWidth: clampWidth(number(saved.sideWidth, defaultView.sideWidth)),
     contrast: flag(saved.contrast, defaultView.contrast),
+    midiQuantize: flag(saved.midiQuantize, defaultView.midiQuantize),
+    midiGrid: [1, 2, 4, 8, 16].includes(saved.midiGrid!) ? saved.midiGrid! : 1,
   };
 }
 export function loadView(): ViewPrefs {

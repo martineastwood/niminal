@@ -37,7 +37,7 @@ const codeTools = (kind: CodeKind) => `<span id="${kind}-tools" class="code-tool
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <div id="toolbar">
-    <div class="group"><button id="play" title="Loop pattern (Space)">▶ Pattern</button><button id="play-song" title="Play from the selected sequence step to the end, or repeat the loop once it is reached">▶ Song</button><button id="stop" title="Stop">■</button><button id="record" aria-pressed="false" title="Record mode: typed notes and values are entered (Esc)">● Rec</button><label class="check" title="Follow the song as it plays: the pattern changes with it, and while recording the cursor rides the play position. Untick to move around and edit freely while it plays"><input id="follow" type="checkbox" checked> Follow</label><label class="check" title="Volume 0 to 100 given to notes entered in record mode; blank leaves it unset">Vel <input id="velocity" type="number" min="0" max="100" placeholder="–" style="width:3.5em"></label><span id="play-position" class="muted"></span><span id="midi-controls" class="group"></span></div>
+    <div class="group"><button id="play" title="Loop pattern (Space)">▶ Pattern</button><button id="play-song" title="Play from the selected sequence step to the end, or repeat the loop once it is reached">▶ Song</button><button id="stop" title="Stop">■</button><button id="record" aria-pressed="false" title="Record mode: typed notes and values are entered (Esc)">● Rec</button><label class="check" title="Follow the song as it plays: the pattern changes with it, and while recording the cursor rides the play position. Untick to move around and edit freely while it plays"><input id="follow" type="checkbox" checked> Follow</label><label class="check" title="Volume 0 to 100 given to notes entered in record mode; blank leaves it unset">Vel <input id="velocity" type="number" min="0" max="100" placeholder="–" style="width:3.5em"></label><span id="play-position" class="muted"></span></div><div id="midi-controls" class="group"></div><div class="group"><label class="check" title="Snap live MIDI notes and releases to the selected row interval. Off records timing in the delay columns."><input id="midi-quantize" type="checkbox"> Quantize</label><select id="midi-grid" aria-label="MIDI quantization interval">${[1, 2, 4, 8, 16].map(n => `<option value="${n}">${n} row${n === 1 ? '' : 's'}</option>`).join('')}</select></div>
     <div class="group"><label>BPM <input id="bpm" type="number" min="20" max="300" step="1"></label><label>LPB <input id="rows-per-beat" type="number" min="1" max="16" title="Rows per beat"></label><label>Swing <input id="swing" type="number" min="0" max="75" title="Swing: how much of every pair of rows' time moves to the first row, 0 to 75 percent. Acts on rows, so LPB sets the subdivision swung"></label><label>Oct <input id="octave" type="number" min="0" max="8" value="4"></label><label>Step <input id="entry-step" aria-label="Note entry step" title="Rows to advance after entering a note; 0 stays on this row" type="number" min="0" max="256" value="4"></label></div>
     <div class="group"><label>Rows <input id="pattern-rows" type="number" min="1" max="256" data-structure></label><div class="group"><label>Pattern BPM <input id="pattern-bpm" aria-label="Pattern BPM" type="number" min="20" max="300" step="any"></label><label>LPB <input id="pattern-lpb" aria-label="Pattern rows per quarter note" type="number" min="1" max="16"></label><label>Meter <input id="meter-beats" aria-label="Beats per bar" type="number" min="1" max="32"> / <select id="meter-unit" aria-label="Meter beat unit"><option>1</option><option>2</option><option>4</option><option>8</option><option>16</option></select></label><label>Swing <input id="pattern-swing" aria-label="Pattern swing" type="number" min="0" max="75" title="Swing for this pattern, 0 to 75 percent; blank follows the song. 0 is straight even when the song swings"></label><label>Tempo points <input id="tempo-points" aria-label="Tempo automation points" placeholder="0:125, 32:80" title="Row:BPM points, separated by commas. Linear ramps between points; BPM counts quarter notes."></label><button id="reset-timing">Use song timing</button></div></div>
     <div class="group"><button id="undo" title="Undo (Cmd/Ctrl+Z)" aria-label="Undo">↶</button><button id="redo" title="Redo (Cmd/Ctrl+Shift+Z)" aria-label="Redo">↷</button><button id="add-track" data-structure title="Add track" aria-label="Add track">+ Track</button><button id="delete-track" data-structure title="Delete selected track" aria-label="Delete selected track">− Track</button><button id="duplicate-track" data-structure title="Duplicate the selected track, with its effects and notes" aria-label="Duplicate the selected track">⧉ Track</button><button id="restore-track" data-structure title="Restore last deleted track" aria-label="Restore last deleted track">↺</button></div>
@@ -752,6 +752,16 @@ grid.trackMenu = () => {
   return [{ heading: 'Track' }, ...entry('Add track', 'add-track'), ...entry('Duplicate', 'duplicate-track'), ...entry('Delete', 'delete-track'), ...entry('Restore deleted track', 'restore-track')];
 };
 grid.follows = () => element<HTMLInputElement>('follow').checked;
+grid.midiQuantize = () => element<HTMLInputElement>('midi-quantize').checked ? Number(element<HTMLSelectElement>('midi-grid').value) : null;
+grid.midiPatternAhead = steps => {
+  let position = audioStatus.sequence_position;
+  if (position === null) return arrangement.pattern;
+  for (let i = 0; i < steps; i++) {
+    position = project.loop_range && position === project.loop_range.end ? project.loop_range.start : position + 1;
+    if (position >= project.sequence.length) return null;
+  }
+  return project.patterns.find(p => p.id === project.sequence[position]) ?? null;
+};
 grid.modeChanged = on => { element('grid-wrap').classList.toggle('recording', on); element('record').setAttribute('aria-pressed', String(on)); };
 element('record').onclick = () => { grid.setRecording(!grid.recording); element('grid').focus(); };
 // Toggle even when editors or popups consume Escape, while preserving their close/cancel action.
@@ -1182,6 +1192,10 @@ void connectLanguageServer(status);
 
 // Interface size, code font and side bars: kept between sessions
 let view = loadView(), focusMode = false;
+element<HTMLInputElement>('midi-quantize').checked = view.midiQuantize;
+element<HTMLSelectElement>('midi-grid').value = String(view.midiGrid);
+element('midi-quantize').onchange = () => { view.midiQuantize = element<HTMLInputElement>('midi-quantize').checked; saveView(view); };
+element('midi-grid').onchange = () => { view.midiGrid = Number(element<HTMLSelectElement>('midi-grid').value); saveView(view); };
 function renderView() {
   applyView(view, focusMode);
   setText('zoom-level', `${Math.round(view.scale * 100)}%`);

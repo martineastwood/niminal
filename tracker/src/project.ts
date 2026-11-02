@@ -52,14 +52,14 @@ export const maxFxColumns = 4;
 function noteCommandProblem(match: RegExpExecArray): string | null {
   const value = parseInt(match[2] + match[3], 16), x = value >> 4, y = value & 15;
   switch (match[1]) {
-    case 'S': return null;
+    case 'S': case 'N': return null;
     case 'B': return value > 1 ? 'B is B00 (backwards) or B01 (forwards)' : null;
     case 'G': case 'U': case 'D': return null;
     case 'Y': return value === 0 ? 'Y runs from 01 to FF' : null;
     case 'I': case 'O': return value > 0x80 ? 'I and O run from 00 to 80' : null;
     case 'R': return y === 0 || y > 6 ? 'R is Rxy with y from 1 to 6 ticks' : null;
     case 'C': return x !== 0 || y === 0 || y > 11 ? 'C is C0y with y from 1 to 11 ticks' : null;
-    default: return 'Commands are S, B, G, U, D, R, C, Y, I and O for a note, and L, P or four hex digits for the track';
+    default: return 'Commands are S, B, G, U, D, R, C, N, Y, I and O for a note, and L, P or four hex digits for the track';
   }
 }
 /** Why a command cannot be played, or null if it can: a note command, or a track command (see {@link trackCommandProblem}). */

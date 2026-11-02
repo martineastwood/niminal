@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PatternGrid } from './grid';
-import { newProject, emptyFxLane, blankColumn, type Project } from './project';
+import { newProject, emptyFxLane, blankColumn, patternSeconds, patternTiming, type Project } from './project';
 import { ProjectHistory } from './history';
 
 Element.prototype.scrollIntoView = () => {};
@@ -602,7 +602,7 @@ it('enters command cells and plays the note they act on with them', () => {
   expect(cell(0).title).toBe('S80 starts the sample 50% of the way in'); expect(feedback).toHaveBeenLastCalledWith('S80 starts the sample 50% of the way in');
   expect(audition).toHaveBeenLastCalledWith('tone', 'C-4', 0, { commands: ['S80'] });
   type(3, 0, 'r03'); expect(column.fx[0][3]).toBe('R03'); expect(audition).toHaveBeenLastCalledWith('tone', 'C-4', 0, { commands: ['R03'] }); // the note held above it
-  audition.mockClear(); type(4, 0, 'x99'); expect(column.fx[0][4]).toBeNull(); expect(feedback).toHaveBeenLastCalledWith('Commands are S, B, G, U, D, R, C, Y, I and O for a note, and L, P or four hex digits for the track'); expect(audition).not.toHaveBeenCalled();
+  audition.mockClear(); type(4, 0, 'x99'); expect(column.fx[0][4]).toBeNull(); expect(feedback).toHaveBeenLastCalledWith('Commands are S, B, G, U, D, R, C, N, Y, I and O for a note, and L, P or four hex digits for the track'); expect(audition).not.toHaveBeenCalled();
   type(4, 0, 'b02'); expect(column.fx[0][4]).toBeNull(); expect(feedback).toHaveBeenLastCalledWith('B is B00 (backwards) or B01 (forwards)');
   type(5, 0, 'g10'); expect(column.fx[0][5]).toBe('G10'); expect(audition).not.toHaveBeenCalled();
   type(5, 1, 'r03'); expect(column.fx[1][5]).toBeNull(); // a glide and a retrigger compete for the row, even in another command column
@@ -1026,4 +1026,159 @@ it('limits MIDI chords without overwriting held notes, and identifies keys by ch
   expect(feedback).toHaveBeenCalledWith(expect.stringContaining('eight'));
   grid.midiNoteOff(188); grid.midiNoteOn(62, 100, 62);
   expect(project.patterns[0].notes[0][1].notes[0]).toBe('D-4');
+});
+
+
+it('records free MIDI timing and same-row releases in 256ths of a row', () => {
+  const { project, grid } = setup(undefined, () => 'tone');
+  grid.midiQuantize = () => null;
+  vi.spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    grid.paint(2, 0.25, 1000); grid.midiNoteOn(60, 100);
+    grid.paint(2, 0.75, 1000); grid.midiNoteOff(60);
+    const column = project.patterns[0].notes[0][0];
+    expect(column.notes[2]).toBe('C-4'); expect(column.delay[2]).toBe('64');
+    expect(column.fx[0][2]).toBe('NC0');
+    grid.undo(); expect(column.fx[0][2]).toBeNull();
+    grid.redo(); expect(column.fx[0][2]).toBe('NC0');
+    grid.paint(5, 0.125, 1000); grid.midiNoteOn(62, 100);
+    column.notes[6] = null;
+    grid.paint(6, 0.625, 1000); grid.midiNoteOff(62);
+    expect(column.delay[5]).toBe('32'); expect(column.notes[6]).toBe('OFF'); expect(column.delay[6]).toBe('160');
+    expect(project.tracks[0].show?.delay).toBe(true);
+  } finally { grid.paint(null); vi.restoreAllMocks(); }
+});
+
+it('quantizes MIDI onsets and releases to the chosen interval and clears stale delay', () => {
+  const { project, grid } = setup(undefined, () => 'tone');
+  grid.midiQuantize = () => 4;
+  vi.spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    const column = project.patterns[0].notes[0][0]; column.delay[4] = '128'; column.notes[8] = null;
+    grid.paint(3, 0.3, 1000); grid.midiNoteOn(60, 100);
+    grid.paint(6, 0.6, 1000); grid.midiNoteOff(60);
+    expect(column.notes[4]).toBe('C-4'); expect(column.delay[4]).toBeNull();
+    expect(column.notes[8]).toBe('OFF'); expect(column.delay[8]).toBeNull();
+  } finally { grid.paint(null); vi.restoreAllMocks(); }
+});
+
+it('records free releases over a loop boundary and preserves taps on the final row', () => {
+  const { project, grid } = setup(undefined, () => 'tone');
+  grid.midiQuantize = () => null;
+  vi.spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    const column = project.patterns[0].notes[0][0]; column.notes.fill(null);
+    grid.paint(31, 0.25, 1000); grid.midiNoteOn(60, 100);
+    grid.paint(31, 0.75, 1000); grid.midiNoteOff(60);
+    expect(column.fx[0][31]).toBe('NC0');
+    grid.paint(31, 0.5, 1000); grid.midiNoteOn(62, 100);
+    grid.paint(0, 0.25, 1000); grid.midiNoteOff(62);
+    expect(column.fx[0][31]).toBe('NC0');
+    const second = project.patterns[0].notes[0][1];
+    expect(second.notes[31]).toBe('D-4'); expect(second.notes[0]).toBe('OFF'); expect(second.delay[0]).toBe('64');
+  } finally { grid.paint(null); vi.restoreAllMocks(); }
+});
+
+it('routes quantization across the next pattern and leaves the song end alone', () => {
+  const { project, grid } = setup(undefined, () => 'tone');
+  const next = structuredClone(project.patterns[0]); next.id = 'next';
+  for (const cols of next.notes) for (const col of cols) { col.notes.fill(null); col.inst.fill(null); col.delay.fill(null); }
+  project.patterns.push(next); project.sequence.push(next.id);
+  grid.midiPatternAhead = () => next;
+  vi.spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    grid.paint(31, 0.8, 1000); grid.midiNoteOn(60, 100);
+    expect(next.notes[0][0].notes[0]).toBe('C-4');
+    grid.midiNoteOff(60);
+    expect(next.notes[0][0].notes[1]).toBe('OFF');
+    grid.midiPatternAhead = () => null;
+    const before = JSON.stringify(project);
+    grid.midiNoteOn(62, 100);
+    expect(JSON.stringify(project)).toBe(before);
+  } finally { grid.paint(null); vi.restoreAllMocks(); }
+});
+
+
+it('keeps successive short taps in one row instead of overwriting the first', () => {
+  const { project, grid } = setup(undefined, () => 'tone');
+  grid.midiQuantize = () => null;
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    grid.paint(2, 0, 1000);
+    clock.mockReturnValue(1025); grid.midiNoteOn(60, 100);
+    clock.mockReturnValue(1050); grid.midiNoteOff(60);
+    clock.mockReturnValue(1075); grid.midiNoteOn(62, 100);
+    clock.mockReturnValue(1100); grid.midiNoteOff(62);
+    const columns = project.patterns[0].notes[0];
+    expect(columns[0].notes[2]).toBe('C-4'); expect(columns[1].notes[2]).toBe('D-4');
+    expect(columns[0].fx[0][2]).not.toBeNull(); expect(columns[1].fx[0][2]).not.toBeNull();
+  } finally { grid.paint(null); vi.restoreAllMocks(); }
+});
+
+it('records fractional MIDI positions through swing and a tempo ramp', () => {
+  const { project, grid } = setup(undefined, () => 'tone');
+  grid.midiQuantize = () => null;
+  const pattern = project.patterns[0];
+  pattern.timing = { bpm: 120, rows_per_beat: 4, beats_per_bar: 4, beat_unit: 4, tempo: [{ row: 0, value: 120 }, { row: 16, value: 60 }] };
+  pattern.swing = 50;
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    grid.paint(0, 0, 1000);
+    clock.mockReturnValue(1000 + patternSeconds(pattern.timing, 3.375, 50, pattern.rows) * 1000);
+    grid.midiNoteOn(60, 100);
+    clock.mockReturnValue(1000 + patternSeconds(pattern.timing, 5.625, 50, pattern.rows) * 1000);
+    pattern.notes[0][0].notes[4] = null; pattern.notes[0][0].notes[5] = null;
+    grid.midiNoteOff(60);
+    expect(pattern.notes[0][0].delay[3]).toBe('96'); expect(pattern.notes[0][0].delay[5]).toBe('160');
+    expect(pattern.notes[0][0].notes[5]).toBe('OFF');
+  } finally { grid.paint(null); vi.restoreAllMocks(); }
+});
+
+
+it('keeps a held note’s quantization setting and does not shorten it after a full loop', () => {
+  const { project, grid } = setup(undefined, () => 'tone');
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    grid.midiQuantize = () => null;
+    grid.paint(2, 0.25, 1000); grid.midiNoteOn(60, 100);
+    grid.midiQuantize = () => 4;
+    grid.paint(2, 0.75, 1000); grid.midiNoteOff(60);
+    const column = project.patterns[0].notes[0][0];
+    expect(column.fx[0][2]).toBe('NC0');
+    grid.resetMidi(); grid.midiQuantize = () => 1;
+    grid.paint(10, 0, 1000); grid.midiNoteOn(62, 100);
+    clock.mockReturnValue(5000); grid.paint(10, 0, 5000); grid.midiNoteOff(62);
+    expect(column.fx[0][10]).toBeNull();
+    expect(column.notes[11]).toBeNull();
+  } finally { grid.paint(null); vi.restoreAllMocks(); }
+});
+
+
+it('keeps release timing across a pattern boundary between engine status polls', () => {
+  const { project, grid } = setup(undefined, () => 'tone');
+  const first = project.patterns[0], next = structuredClone(first); next.id = 'next';
+  for (const col of next.notes[0]) col.notes.fill(null);
+  next.timing = { bpm: 60, rows_per_beat: 4, beats_per_bar: 4, beat_unit: 4, tempo: [] };
+  project.patterns.push(next); grid.midiPatternAhead = () => next; grid.midiQuantize = () => null;
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    grid.paint(31, 0.5, 1000); grid.midiNoteOn(60, 100);
+    const remaining = patternSeconds(patternTiming(project, first), 32) - patternSeconds(patternTiming(project, first), 31.5);
+    clock.mockReturnValue(1000 + remaining * 1000 + 62.5);
+    grid.midiNoteOff(60);
+    expect(next.notes[0][0].notes[0]).toBe('OFF'); expect(next.notes[0][0].delay[0]).toBe('64');
+  } finally { grid.paint(null); vi.restoreAllMocks(); }
+});
+
+
+it('preserves fine MIDI delays when copying and pasting a block', () => {
+  const { project, grid, parent, key } = setup();
+  project.tracks[0].show = { delay: true }; grid.render();
+  const column = project.patterns[0].notes[0][0]; column.delay[3] = '1'; column.delay[4] = '255';
+  const select = (row: number) => parent.querySelector<HTMLElement>(`#cell-${row}-0-0-delay`)!.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+  select(3); key('ArrowDown', { shiftKey: true });
+  const text = clipboard(parent, 'copy');
+  expect(text).toBe('0.390625\n99.609375');
+  select(10); clipboard(parent, 'paste', text);
+  expect(column.delay[10]).toBe('1'); expect(column.delay[11]).toBe('255');
 });

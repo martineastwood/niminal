@@ -40,3 +40,11 @@ it('sizes a side bar from the keyboard', () => {
   expect(width).toBe(170);
   expect(done).toBe(2);
 });
+
+
+it('remembers MIDI quantization independently of the project and rejects invalid intervals', () => {
+  expect(readView('{"midiQuantize":true,"midiGrid":4}')).toMatchObject({ midiQuantize: true, midiGrid: 4 });
+  for (const midiGrid of [0, -1, 3, 1.5, 256, "4", null]) {
+    expect(readView(JSON.stringify({ midiGrid })).midiGrid).toBe(1);
+  }
+});

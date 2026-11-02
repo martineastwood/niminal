@@ -1,7 +1,7 @@
 import { maxLanes, patternTiming, patternSeconds, patternRow, patternSwing } from './project';
 import { targetKey } from './automation';
 import { describeAnyCommand } from './describe';
-import { columnCommands, commandProblem, commandValue, glideRetriggers, maxFxColumns, maxTrackCommandColumns, trackCommandProblem, trackCommandValue, keyboardNote, noteAt, noteNumber, transposeNote, blankColumn, subColumns, maxNoteColumns, columnCount, columnStrip, columnLanes, type FxTarget, type Project, type Song, type Pattern, type Track, type SubColumn } from './project';
+import { columnCommands, commandProblem, commandValue, glideRetriggers, maxFxColumns, maxTrackCommandColumns, trackCommandProblem, trackCommandValue, keyboardNote, noteAt, noteNumber, transposeNote, blankColumn, subColumns, maxNoteColumns, columnCount, columnStrip, columnLanes, type FxTarget, type NoteColumn, type Project, type Song, type Pattern, type Track, type SubColumn } from './project';
 import { parseNotes, type NoteEdit } from './history';
 import { draggable, dropTarget } from './drag';
 import { openMenu, type MenuEntry } from './menu';
@@ -23,8 +23,8 @@ const subTitle: Record<Exclude<Kind, 'note'>, string> = {
   inst: 'Instrument for this note: its number in the sidebar list',
   vol: 'Velocity: how hard this note plays, 0 to 100. The track\'s own volume is an automation lane',
   pan: 'Panning for this note, -50 (left) to +50 (right), C for centre',
-  delay: 'Delay: how far into the row the note starts, as a percent, 0 to 99',
-  fx: 'Command: a letter and two hex digits, or four for an effect. S20 starts the sample partway in, B00 plays it backwards, G10 glides the held note to this one, U08 / D08 slide it up or down, R03 retriggers, C03 cuts after 3 of 12 ticks, Y80 plays it half the time, I20 / O20 fade the level; L80 sets the track volume, P80 its pan, 12FF parameter 2 of effect 1',
+  delay: 'Delay: how far into the row the note starts, as a percent, 0 to less than 100; fractional percentages are allowed',
+  fx: 'Command: a letter and two hex digits, or four for an effect. S20 starts the sample partway in, B00 plays it backwards, G10 glides the held note to this one, U08 / D08 slide it up or down, R03 retriggers, C03 cuts after 3 of 12 ticks, N80 releases halfway through the row, Y80 plays it half the time, I20 / O20 fade the level; L80 sets the track volume, P80 its pan, 12FF parameter 2 of effect 1',
 };
 const subRange: Record<Exclude<Kind, 'note'>, string> = { cmd: 'Lxx, Pxx or four hex digits, such as 12FF', inst: 'an instrument number', vol: '0 to 100', pan: '-50 to 50, or C', delay: '0 to 99', fx: 'a letter and two hex digits, such as S20' };
 
@@ -46,11 +46,11 @@ export function subValue(kind: Exclude<Kind, 'note'>, text: string, project: Pro
   if (kind === 'cmd') return trackCommandValue(text);
   const t = text.trim().replace(/%$/, '');
   if (kind === 'pan' && /^c$/i.test(t)) return '64';
+  if (kind === 'delay') return /^\d{1,2}(?:\.\d+)?$/.test(t) && Number(t) < 100 ? String(Math.min(255, Math.round(Number(t) * 2.56))) : null;
   if (!/^[+-]?\d{1,3}$/.test(t)) return null;
   const n = Number(t);
   if (kind === 'inst') return n >= 0 && /^\d+$/.test(t) ? project.definitions.filter(d => d.kind === 'instr')[n]?.id ?? null : null;
   if (kind === 'vol') return n >= 0 && n <= 100 && /^\d+$/.test(t) ? String(Math.round(n * 1.28)) : null;
-  if (kind === 'delay') return n >= 0 && n <= 99 && /^\d+$/.test(t) ? String(Math.round(n * 2.56)) : null;
   return n >= -50 && n <= 50 ? String(Math.round(64 + n * 64 / 50)) : null;
 }
 
@@ -64,7 +64,8 @@ export class PatternGrid {
   private column = 0;
   private anchor = { row: 0, column: 0 };
   private playing: number | null = null;
-  private midiHeld = new Map<number, { project: Project; pattern: Pattern; track: Track; col: number; row: number; note: string; live: boolean }>();
+  private midiWritten = new Map<NoteColumn, { row: number; at: number }>();
+  private midiHeld = new Map<number, { project: Project; pattern: Pattern; track: Track; col: number; row: number; note: string; delay: number; at: number; quantum: number | null; live: boolean }>();
   /** The space above the first row and below the last, which lets the cursor row stay at one height while the grid scrolls under it. */
   private pad = { top: 0, bottom: 0 };
   /** Set while a blurred cell editor commits, so clicking away does not scroll the grid. */
@@ -84,6 +85,35 @@ export class PatternGrid {
   private moving: { from: { row: number; column: number }; by: { rows: number; columns: number } } | null = null;
   /** Set by the owner: whether the cursor rides the play position while recording over playback. Off, it stays where it is. */
   follows: () => boolean = () => true;
+  /** null records freely; otherwise snap MIDI input to this many rows. */
+  midiQuantize: () => number | null = () => 1;
+  /** Pattern playback loops; the owner supplies sequence/loop-range routing for song playback. */
+  midiPatternAhead: (steps: number) => Pattern | null = () => this.pattern();
+
+  private midiPosition(extraRows = 0, quantum = this.midiQuantize()) {
+    let pattern = this.pattern(), ahead = 0, seconds = 0;
+    const elapsed = Math.max(0, (Date.now() - this.origin) / 1000);
+    const duration = () => patternSeconds(patternTiming(this.project(), pattern), pattern.rows, patternSwing(this.project(), pattern), pattern.rows);
+    const advance = () => {
+      seconds += duration();
+      const next = this.midiPatternAhead(++ahead);
+      if (!next) return false;
+      pattern = next;
+      return true;
+    };
+    // Extrapolate across boundaries between engine status polls, using each pattern's own timing.
+    while (elapsed >= seconds + duration()) if (!advance()) return null;
+    const current = patternRow(patternTiming(this.project(), pattern), elapsed - seconds, pattern.rows, patternSwing(this.project(), pattern)) + extraRows;
+    let ticks = quantum === null ? Math.round(current * 256) : Math.round(current / quantum) * quantum * 256;
+    while (ticks >= pattern.rows * 256) {
+      ticks -= pattern.rows * 256;
+      if (!advance()) return null;
+    }
+    const row = Math.floor(ticks / 256), timing = patternTiming(this.project(), pattern), swing = patternSwing(this.project(), pattern);
+    const start = patternSeconds(timing, row, swing, pattern.rows);
+    const rowDuration = patternSeconds(timing, row + 1, swing, pattern.rows) - start;
+    return { pattern, row, delay: ticks % 256, at: this.origin + (seconds + start) * 1000, duration: rowDuration * 1000 };
+  }
 
   constructor(
     private parent: HTMLElement,
@@ -615,7 +645,7 @@ export class PatternGrid {
       const values: string[] = [];
       for (let c = left; c <= right; c++) {
         const lane = lanes[c], value = lane.values[row];
-        values.push(value === null ? '---' : this.text(lane, String(value)));
+        values.push(value === null ? '---' : lane.kind === 'delay' ? String(Number(value) * 100 / 256) : this.text(lane, String(value)));
       }
       rows.push(values.join('\t'));
     }
@@ -912,23 +942,31 @@ export class PatternGrid {
   midiNoteOn(number: number, velocity: number, key = number) {
     if (!Number.isInteger(number) || number < 12 || number > 119 || !Number.isInteger(velocity) || velocity < 1 || velocity > 127) return null;
     this.midiHeld.delete(key);
-    const project = this.project(), pattern = this.pattern();
+    const project = this.project();
+    const position = this.live ? this.midiPosition() : { pattern: this.pattern(), row: this.row, delay: 0, at: 0, duration: 0 };
     const note = transposeNote('C-4', number - 60)!;
     const selected = this.lanes[this.column];
     const track = Math.min(selected.track, project.tracks.length - 1);
     if (track < 0) return null;
     let col = selected.track === track ? selected.col : 0;
-    let row = this.live ? this.nearestRow() : this.row;
+    if (!position) return { note, track, instrument: this.currentInstrument(), velocity };
+    const { pattern, delay } = position;
+    let row = position.row;
     const held = [...this.midiHeld.values()].filter(h => h.project === project && h.track === project.tracks[track]);
-    if (this.recording && held.length) {
+    if (this.recording) {
       // Step-entered chords share their first note's row; live notes keep their own timing.
       const chord = held.find(h => h.pattern === pattern && !h.live);
       if (!this.live && chord) row = chord.row;
       const first = Math.min(col, ...held.map(h => h.col));
       col = first;
-      while (held.some(h => h.col === col) && col < maxNoteColumns) col++;
+      while (col < maxNoteColumns) {
+        const written = this.midiWritten.get(pattern.notes[track][col]);
+        const occupied = held.some(h => h.col === col) || this.live && written?.row === row && Math.abs(written.at - position.at) < position.duration / 2;
+        if (!occupied) break;
+        col++;
+      }
       if (col === maxNoteColumns) {
-        this.feedback('All eight note columns are held. Release a key before recording another note.');
+        this.feedback('No free note columns to the right (maximum eight per track). Release a key before recording another note.');
         return { note, track, instrument: this.currentInstrument(), velocity };
       }
       while (pattern.notes[track].length <= col) {
@@ -938,13 +976,19 @@ export class PatternGrid {
     const column = pattern.notes[track][col];
     const instrument = this.currentInstrument() ?? instrumentAt(column.inst, row);
     if (this.recording) {
-      this.row = row;
-      this.column = this.lanes.findIndex(l => l.track === track && l.col === col && l.kind === 'note');
-      this.writeNote(note, velocity / 127 * 100, false);
+      column.notes[row] = note;
+      if (instrument) column.inst[row] = instrument;
+      column.vol[row] = String(Math.round(velocity / 127 * 128));
+      column.delay[row] = delay ? String(delay) : null;
+      for (const fx of column.fx) if (fx[row]?.startsWith('N')) fx[row] = null;
+      const strip = project.tracks[track];
+      strip.show = { ...strip.show, vol: true, ...(this.live ? { delay: true } : {}) };
+      if (!this.live) { this.row = row; this.advance(); }
       const firstCol = Math.min(col, ...held.map(h => h.col));
       this.column = this.lanes.findIndex(l => l.track === track && l.col === firstCol && l.kind === 'note');
-      this.resetSelection(); this.paintSelection();
-      this.midiHeld.set(key, { project, pattern, track: project.tracks[track], col, row, note, live: this.live });
+      this.resetSelection(); this.render(); this.edited();
+      if (this.live) this.midiWritten.set(column, { row, at: position.at });
+      this.midiHeld.set(key, { project, pattern, track: strip, col, row, note, delay, at: position.at, quantum: this.midiQuantize(), live: this.live });
     }
     return { note, track, instrument, velocity };
   }
@@ -954,26 +998,43 @@ export class PatternGrid {
     const held = this.midiHeld.get(key);
     this.midiHeld.delete(key);
     if (!record || !held || !held.live || !this.live || held.project !== this.project()) return;
-    const track = this.project().tracks.indexOf(held.track), pattern = this.pattern();
+    const quantum = held.quantum;
+    let position = this.midiPosition(0, quantum);
+    // Reused patterns cannot hold a different release on the same cell in a later loop pass.
+    if (position?.pattern === held.pattern && position.row === held.row && position.at - held.at > position.duration / 2) return;
+    if (position?.pattern === held.pattern && position.row === held.row && quantum !== null) {
+      position = this.midiPosition(quantum, quantum);
+    }
+    if (!position) return;
+    const { pattern, row } = position;
+    const track = this.project().tracks.indexOf(held.track);
     if (track < 0 || !this.project().patterns.includes(held.pattern)) return;
     const start = held.pattern.notes[track]?.[held.col];
     const column = pattern.notes[track]?.[held.col];
     if (!column || start?.notes[held.row] !== held.note) return;
-    let row = this.nearestRow();
-    // A tap quantized onto its own onset gets at least one row, never replaces the onset.
-    if (pattern === held.pattern && row === held.row) row++;
-    if (row >= pattern.rows || column.notes[row] !== null) return;
-    // Do not end a different note entered after this one in the same column.
-    const intervening = pattern === held.pattern && row > held.row
-      ? column.notes.slice(held.row + 1, row)
-      : [...start.notes.slice(held.row + 1, held.pattern.rows), ...column.notes.slice(0, row)];
-    if (intervening.some(n => n !== null)) return;
-    const lane = this.lanes.findIndex(l => l.track === track && l.col === held.col && l.kind === 'note');
-    if (lane >= 0) this.apply([{ row, track: lane, before: null, after: 'OFF' }]);
+    if (pattern === held.pattern && row === held.row) {
+      const delay = Math.min(255, Math.max(held.delay + 1, position.delay));
+      let fx = column.fx.find(c => c[row] === null || c[row]?.startsWith('N'));
+      if (!fx && column.fx.length < maxFxColumns) {
+        fx = Array(column.notes.length).fill(null); column.fx.push(fx!);
+      }
+      if (!fx) { this.feedback('No free command column for this short note’s release.'); return; }
+      fx[row] = `N${delay.toString(16).toUpperCase().padStart(2, '0')}`;
+    } else {
+      if (column.notes[row] !== null && column.notes[row] !== 'OFF') return;
+      const intervening = pattern === held.pattern && row > held.row
+        ? column.notes.slice(held.row + 1, row)
+        : [...start.notes.slice(held.row + 1, held.pattern.rows), ...column.notes.slice(0, row)];
+      if (intervening.some(n => n !== null)) return;
+      column.notes[row] = 'OFF';
+      column.delay[row] = position.delay ? String(position.delay) : null;
+    }
+    held.track.show = { ...held.track.show, delay: true };
+    this.render(); this.edited();
   }
 
   /** Device changes, panic and focus loss release previews without editing the song. */
-  resetMidi() { this.midiHeld.clear(); }
+  resetMidi() { this.midiHeld.clear(); this.midiWritten.clear(); }
 
   private writeNote(note: string, velocity: number | null, preview = true, key?: KeyboardEvent) {
     const lane = this.lanes[this.column], ending = note === 'OFF' || note === 'CUT';
