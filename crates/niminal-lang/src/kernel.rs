@@ -1714,6 +1714,18 @@ impl Kb<'_> {
                 "text can't be used inside a function with state",
                 e.span,
             )),
+            ExprKind::Pattern(_)
+            | ExprKind::Grid(_)
+            | ExprKind::Rows(_)
+            | ExprKind::Steps(_)
+            | ExprKind::FxLanes(_)
+            | ExprKind::Events(_)
+            | ExprKind::Rest
+            | ExprKind::ClipBlock(_)
+            | ExprKind::SceneBlock(_) => Err(Diagnostic::new(
+                "composition syntax can't be used in a sound definition",
+                e.span,
+            )),
             ExprKind::Env(env) if self.instrument_scope => self.envelope(env, e.span),
             ExprKind::Env(_) => Err(Diagnostic::new(
                 "envelopes can't be used inside a function with state",

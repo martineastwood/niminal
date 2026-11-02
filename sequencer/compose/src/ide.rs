@@ -2,8 +2,8 @@
 
 use std::sync::OnceLock;
 
-use crate::ast::*;
-use crate::parser::parse_spanned;
+use niminal_lang::ast::*;
+use niminal_lang::parse_composition_spanned as parse_spanned;
 use niminal_lang::{Diagnostic, OpInfo, ParamInfo, Span};
 
 /// Names that mean something to the language itself: reserved for rename checks,
@@ -266,7 +266,7 @@ fn clip_lanes(source: &str, clip: &NamedBlock, items: &[(Item, Span)]) -> Vec<Sy
         .iter()
         .find(|o| o.name.as_ref().is_some_and(|n| n.name == "pitch"))
         .and_then(|o| match &o.value.kind {
-            crate::ast::ExprKind::Name(n) => Some(n.as_str()),
+            niminal_lang::ast::ExprKind::Name(n) => Some(n.as_str()),
             _ => None,
         })
         .unwrap_or(crate::perform::PITCH_PARAM);

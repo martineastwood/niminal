@@ -3,7 +3,7 @@
 //! and sends timestamped events.
 
 mod analysis;
-mod ast;
+pub mod ast;
 mod call;
 mod compile;
 mod diag;
@@ -45,6 +45,7 @@ pub use ide::{
 };
 pub use layout::Layout;
 pub use lexer::{Tok, Token, lex, lex_dsp};
+pub use parser::{parse_composition, parse_composition_spanned};
 pub use lower::{GAIN_PARAM, unknown_unit};
 pub use modules::{
     Expanded, Import, Module, ModuleRules, STD_DIR, check_private_words,

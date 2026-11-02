@@ -10,7 +10,7 @@ use niminal_pattern::{
 };
 use niminal_score::{Tempo, Time, Value};
 
-use crate::ast::*;
+use niminal_lang::ast::*;
 use crate::compile::Names;
 use crate::performance::*;
 use niminal_lang::GAIN_PARAM;
@@ -4472,7 +4472,7 @@ fn section_to_clip(section: crate::Section, tempo: Tempo) -> Res<Clip> {
 fn clipdef_to_clip(def: &crate::ClipDef, cx: &Context) -> Res<Clip> {
     // Re-parse the canonical source so lanes go through the same path as handwritten clips.
     let src = def.to_source();
-    let items = crate::parser::parse(&src)?;
+    let items = niminal_lang::parse_composition(&src)?;
     let Item::Clip(block) = items
         .into_iter()
         .find(|i| matches!(i, Item::Clip(_)))

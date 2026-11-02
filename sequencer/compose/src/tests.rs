@@ -1,6 +1,6 @@
 //! Tests of compiling a whole composition, definitions and all.
 
-use crate::ast::*;
+use niminal_lang::ast::*;
 use crate::compile::*;
 use niminal_lang::{Diagnostic, Layout, Param, Unit};
 use niminal_score::{Event, Time, Value};

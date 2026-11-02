@@ -1,9 +1,9 @@
 //! The part of a composition that is a sound-server definition: instruments, nodes, buses and the
 //! rest, with the client's musical time resolved to seconds.
 
-use crate::ast::{Arg, Expr, ExprKind, Item};
+use niminal_lang::ast::{Arg, Expr, ExprKind, Item};
 use niminal_lang::{Tok, lex};
-use crate::parser::parse_spanned;
+use niminal_lang::parse_composition_spanned as parse_spanned;
 use niminal_lang::{Diagnostic, Span};
 use niminal_score::Tempo;
 
@@ -172,7 +172,7 @@ pub fn division_controls(source: &str) -> Vec<(String, String)> {
     for (item, _) in &items {
         if let Item::Fx(fx) = item {
             for param in &fx.params {
-                if matches!(&param.ty, Some(crate::ast::TypeSpec::Unit(t)) if t.name == "division")
+                if matches!(&param.ty, Some(niminal_lang::ast::TypeSpec::Unit(t)) if t.name == "division")
                 {
                     found.push((fx.name.name.clone(), param.name.name.clone()));
                 }
@@ -478,14 +478,14 @@ pub fn warnings(source: &str) -> Vec<Diagnostic> {
 
 /// Does the clip have rows for an effect, such as `stutter_fx { hold: ..x. }`, or a lane for one of the
 /// `macros`? With no instrument it is a gesture: it plays no notes and only moves those controls.
-pub fn drives_effects(clip: &crate::ast::NamedBlock, macros: &[&str]) -> bool {
+pub fn drives_effects(clip: &niminal_lang::ast::NamedBlock, macros: &[&str]) -> bool {
     clip.entries
         .iter()
         .any(|(k, v)| matches!(v.kind, ExprKind::FxLanes(_)) || macros.contains(&k.name.as_str()))
 }
 
 /// Is the clip a gesture: rows for an effect of its own, or made from a clip that has them?
-fn is_gesture(clip: &crate::ast::NamedBlock, items: &[(Item, Span)], depth: usize) -> bool {
+fn is_gesture(clip: &niminal_lang::ast::NamedBlock, items: &[(Item, Span)], depth: usize) -> bool {
     let macros: Vec<&str> = items
         .iter()
         .filter_map(|(item, _)| match item {
@@ -507,7 +507,7 @@ fn is_gesture(clip: &crate::ast::NamedBlock, items: &[(Item, Span)], depth: usiz
 /// The instrument a clip plays: its own `instrument:`, or its base's when it is made from another clip
 /// (`clip bass_chorus = bass.transpose(+5st)`).
 fn instrument_of<'a>(
-    clip: &'a crate::ast::NamedBlock,
+    clip: &'a niminal_lang::ast::NamedBlock,
     items: &'a [(Item, Span)],
     depth: usize,
 ) -> Option<&'a Expr> {

@@ -1,8 +1,8 @@
 //! Splitting source into its top-level statements, for a live session that
 //! applies a snippet to a running project.
 
-use crate::ast::*;
-use crate::parser::parse_spanned;
+use niminal_lang::ast::*;
+use niminal_lang::parse_composition_spanned as parse_spanned;
 use crate::performance::Quantize;
 use niminal_lang::Diagnostic;
 
@@ -362,6 +362,7 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             Item::Arrangement(d) => {
                 simple_def(text, offset, format!("arrangement:{}", d.name.name))
             }
+            Item::Node(_) => unreachable!("a composition has no `node`"),
             Item::Bus(d) => simple_def(text, offset, format!("bus:{}", d.name.name)),
             Item::Buffer(d) => simple_def(text, offset, format!("buffer:{}", d.name.name)),
             Item::Fx(d) => {

@@ -3,14 +3,12 @@
 //! events a client sends to a server.
 
 mod analysis;
-mod ast;
 mod compile;
 pub mod drums;
 mod dsp;
 mod ide;
 mod literal;
 mod modules;
-mod parser;
 mod perform;
 mod performance;
 mod rhythm_gate;
@@ -24,7 +22,7 @@ mod tests;
 pub use analysis::{
     CommandAction, PlayInfo, Ramp, Statement, StatementData, StatementKind, analyze, scene_clips,
 };
-pub use ast::{ControlInput, InputSource};
+pub use niminal_lang::ast::{ControlInput, InputSource};
 pub use compile::{
     Composition, ControlBinding, MacroDef, MacroTarget, QuantizeConfig, Trigger, compile,
     compile_with, interpolate,

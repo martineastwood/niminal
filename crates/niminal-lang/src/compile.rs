@@ -148,6 +148,7 @@ fn desugar(items: Vec<Item>) -> Vec<Item> {
                             span: param.name.span,
                         },
                         value: default,
+                        input: None,
                     });
                 }
             }
@@ -573,7 +574,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
     }
 
     for item in &items {
-        let Item::Control { name, value } = item else {
+        let Item::Control { name, value, .. } = item else {
             continue;
         };
         if names.controls.iter().any(|c| c.name == name.name) {

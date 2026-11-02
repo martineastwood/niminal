@@ -2522,6 +2522,18 @@ impl<'a> Lower<'a> {
                 "text can only be an argument that asks for it",
                 e.span,
             )),
+            ExprKind::Pattern(_)
+            | ExprKind::Grid(_)
+            | ExprKind::Rows(_)
+            | ExprKind::Steps(_)
+            | ExprKind::FxLanes(_)
+            | ExprKind::Events(_)
+            | ExprKind::Rest
+            | ExprKind::ClipBlock(_)
+            | ExprKind::SceneBlock(_) => Err(Diagnostic::new(
+                "composition syntax can't be used in a sound definition",
+                e.span,
+            )),
             ExprKind::Compare { op, lhs, rhs } => {
                 let (l, r) = (self.expr(lhs)?, self.expr(rhs)?);
                 self.compare(*op, l, r, e.span)

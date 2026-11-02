@@ -34,6 +34,7 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
             Item::Node(d) => format!("node:{}", d.name.name),
             Item::Fx(d) => format!("fx:{}", d.name.name),
             Item::Config(_) => "config".into(),
+            _ => continue,
         };
         out.push(Statement {
             text: source[span.start..span.end].to_string(),

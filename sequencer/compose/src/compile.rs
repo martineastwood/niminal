@@ -9,10 +9,10 @@ use niminal_lang::{
 use niminal_lang::{Span, closest};
 use niminal_score::{Event, Tempo, Time, Tuning};
 
-use crate::ast::*;
+use niminal_lang::ast::*;
 use crate::dsp::{DspSource, project};
 use crate::literal::{arg_error, literal_args, literal_time};
-use crate::parser::parse_spanned;
+use niminal_lang::parse_composition_spanned as parse_spanned;
 use crate::perform::{Context, compile_performance};
 use crate::performance::{Arrangement, Quantize, Scheduled};
 

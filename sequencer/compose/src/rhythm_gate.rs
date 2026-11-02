@@ -1,7 +1,7 @@
 //! Rhythmic DSP grids lowered to ordinary sample-by-sample niminal code.
-use crate::ast::{Arg, Expr, ExprKind, Item, Stmt};
+use niminal_lang::ast::{Arg, Expr, ExprKind, Item, Stmt};
 use niminal_lang::{Tok, lex};
-use crate::parser::parse_spanned;
+use niminal_lang::parse_composition_spanned as parse_spanned;
 use niminal_lang::{Diagnostic, Span};
 
 pub(crate) const HELPER: &str = r#"

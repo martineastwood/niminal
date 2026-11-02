@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use niminal_lang::{Diagnostic, Instrument, Span, closest, unknown_unit};
 use niminal_score::{Tempo, Time, Value};
 
-use crate::ast::*;
+use niminal_lang::ast::*;
 use crate::perform::{negate, value_of};
 
 type Res<T> = Result<T, Diagnostic>;
@@ -36,7 +36,7 @@ pub(crate) fn literal_args(
                     }
                     ExprKind::Pattern(raw) => {
                         let text = format!("const __argument = [{raw}]");
-                        let parsed = crate::parser::parse(&text).map_err(|_| {
+                        let parsed = niminal_lang::parse_composition(&text).map_err(|_| {
                             Diagnostic::new("array arguments use comma-separated values", e.span)
                         })?;
                         let Some(Item::Const { value, .. }) = parsed.first() else {

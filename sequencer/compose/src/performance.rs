@@ -316,31 +316,7 @@ pub enum Action {
     },
 }
 
-/// Which grid a change waits for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuantizeRelation {
-    /// Land on the grid: `@ bar`, `@ 4bars`.
-    OnGrid,
-    /// The next line of the grid: `@ next 4bars`.
-    Next,
-    /// Counted from now: `@ in 4bars`.
-    In,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuantizeUnit {
-    Now,
-    Beat,
-    Bar,
-    Cycle,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Quantize {
-    pub relation: QuantizeRelation,
-    pub count: f64,
-    pub unit: QuantizeUnit,
-}
+pub use niminal_lang::ast::{Quantize, QuantizeRelation, QuantizeUnit};
 
 /// A command with the time it was written for. `at` is when it happens in a
 /// rendered file; `quantize` says how a live session should delay it.
