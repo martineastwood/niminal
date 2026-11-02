@@ -2,7 +2,7 @@
 //! rest, with the client's musical time resolved to seconds.
 
 use crate::ast::{Arg, Expr, ExprKind, Item};
-use crate::lexer::{Tok, lex};
+use niminal_lang::{Tok, lex};
 use crate::parser::parse_spanned;
 use niminal_lang::{Diagnostic, Span};
 use niminal_score::Tempo;

@@ -3,7 +3,7 @@
 
 use crate::ast::{Item, Stmt};
 use crate::parser::parse_spanned;
-use crate::{Diagnostic, Span, Tok, lex};
+use crate::{Diagnostic, Span, Tok, lex_dsp};
 use niminal_score::{Tempo, Value};
 
 /// Resolve musical parameter values before sending them to the audio server.
@@ -101,7 +101,7 @@ pub fn unlowered_span(edits: &[ClockEdit], span: Span, source_len: usize) -> Spa
 
 /// Where `clock.beat` and the like are in `source`, and the reads of the tempo controls they become.
 fn clock_reads(source: &str) -> Result<Vec<(usize, usize, String)>, Diagnostic> {
-    let tokens = lex(source)?;
+    let tokens = lex_dsp(source)?;
     let beat = format!("((clock.time - {CLOCK_ORIGIN}) / 1sec * {CLOCK_BPM} / 60)");
     let mut edits = Vec::new();
     for (i, t) in tokens.iter().enumerate() {
@@ -190,7 +190,7 @@ pub fn validate_dsp(source: &str) -> Result<(), Diagnostic> {
             ));
         }
     }
-    let tokens = lex(source)?;
+    let tokens = lex_dsp(source)?;
     for (i, t) in tokens.iter().enumerate() {
         let musical = (i > 0
             && matches!(tokens[i - 1].tok, Tok::Dot)

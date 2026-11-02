@@ -8,7 +8,6 @@ mod compile;
 pub mod drums;
 mod dsp;
 mod ide;
-mod lexer;
 mod literal;
 mod modules;
 mod parser;
@@ -34,7 +33,7 @@ pub use dsp::{
     BeatControl, beat_controls, division_controls, dsp_source, resolve_musical_time, warnings,
 };
 pub use ide::{RESERVED_WORDS, Symbol, SymbolKind, SymbolParam, pattern_ops, symbols};
-pub use lexer::{Tok, Token, lex};
+pub use niminal_lang::{Tok, Token, lex};
 pub use modules::expand;
 pub use perform::PITCH_PARAM;
 pub use performance::{

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::diag::{Diagnostic, Span};
 use crate::ide::{SymbolKind, symbols};
-use crate::lexer::{Tok, lex};
+use crate::lexer::{Tok, lex_dsp};
 
 /// A source with its `use` lines resolved.
 pub struct Expanded {
@@ -445,7 +445,7 @@ fn keep_only(source: &str, module: &str, keep: &[String], at: Span) -> Result<St
 }
 
 fn check_private(source: &str, at: Option<Span>) -> Result<(), Diagnostic> {
-    let Ok(tokens) = lex(source) else {
+    let Ok(tokens) = lex_dsp(source) else {
         return Ok(());
     };
     let words: Vec<Option<(String, Span)>> = tokens
@@ -461,7 +461,7 @@ fn check_private(source: &str, at: Option<Span>) -> Result<(), Diagnostic> {
 /// Rename what a module defines so it cannot meet other files' names: public
 /// names get the alias (when there is one), private names the module's name.
 fn rename(source: &str, module: &str, alias: Option<&str>) -> String {
-    let (Ok(defs), Ok(tokens)) = (symbols(source), lex(source)) else {
+    let (Ok(defs), Ok(tokens)) = (symbols(source), lex_dsp(source)) else {
         return source.to_string();
     };
     let mut edits = Vec::new();

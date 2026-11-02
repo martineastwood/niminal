@@ -9,7 +9,7 @@
 use std::path::Path;
 
 use crate::ide::{SymbolKind, symbols};
-use crate::lexer::{Tok, lex};
+use niminal_lang::{Tok, lex};
 use niminal_lang::{Diagnostic, Expanded, ModuleRules, Span};
 
 /// Resolve the `use` lines of `source`, which lives in `dir`. A module is

@@ -1,6 +1,6 @@
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span};
-use crate::lexer::{Tok, Token, lex};
+use crate::lexer::{Tok, Token, lex_dsp};
 
 /// A name, its parameters, its settings, its body, and where it all is.
 type Definition = (Ident, Vec<ParamDef>, Vec<Arg>, Vec<Stmt>, Span);
@@ -21,7 +21,7 @@ pub fn parse_spanned(src: &str) -> Result<Vec<(Item, Span)>, Diagnostic> {
             Span::new(0, 0),
         ));
     }
-    let tokens = lex(src)?;
+    let tokens = lex_dsp(src)?;
     if tokens.len() > MAX_TOKENS {
         return Err(Diagnostic::new(
             format!(
@@ -99,6 +99,10 @@ fn describe(tok: &Tok) -> String {
         Tok::Percent => "`%`".into(),
         Tok::Bar => "`|`".into(),
         Tok::Str(_) => "a string".into(),
+        Tok::Tilde => "`~`".into(),
+        Tok::At => "`@`".into(),
+        Tok::Pattern(_) | Tok::Grid(_) | Tok::Rows(_) | Tok::Events(_) => "a pattern".into(),
+        Tok::Steps(_) => "a row of steps".into(),
         Tok::Newline => "the end of the line".into(),
         Tok::Eof => "the end of the file".into(),
     }
@@ -806,10 +810,29 @@ impl Parser {
     }
 
     /// `if cond { ... } else { ... }` (or `else if ...`), after the `if`. The `else` is optional;
-    /// without one the `if` can only be a statement.
+    /// without one the `if` can only be a statement. `if cond then a else b` is the one-line form
+    /// for a single value, and its `else` is required.
     fn if_expr(&mut self) -> Res<Expr> {
         let start = self.bump().span; // `if`
         let cond = self.expr()?;
+        if self.is_keyword("then") {
+            self.bump();
+            let then = self.expr()?;
+            if !self.else_follows() {
+                return Err(self.unexpected("`else`, as `if ... then` needs both values"));
+            }
+            self.skip_newlines();
+            self.bump(); // `else`
+            let otherwise = self.expr()?;
+            return Ok(Expr {
+                span: start.to(otherwise.span),
+                kind: ExprKind::If {
+                    cond: Box::new(cond),
+                    then: vec![Stmt::Expr(then)],
+                    otherwise: Some(vec![Stmt::Expr(otherwise)]),
+                },
+            });
+        }
         let (then, mut end) = self.block()?;
         let otherwise = if self.else_follows() {
             self.skip_newlines();
@@ -1355,10 +1378,29 @@ impl Parser {
         match self.peek() {
             Tok::Ident(_) => {
                 let id = self.ident(what)?;
-                Ok(EnvValue::Expr(Box::new(Expr {
+                let mut value = Expr {
                     kind: ExprKind::Name(id.name),
                     span: id.span,
-                })))
+                };
+                // `note.dur`: a field read, unless the name after the dot is a curve (`decay.exp`)
+                if self.peek() == &Tok::Dot
+                    && matches!(self.peek_at(1), Tok::Ident(s) if !matches!(s.as_str(), "exp" | "log" | "curve"))
+                {
+                    self.bump();
+                    let name = self.ident("a field name after `.`")?;
+                    value = Expr {
+                        span: id.span.to(name.span),
+                        kind: ExprKind::Call {
+                            name,
+                            args: vec![Arg {
+                                name: None,
+                                value,
+                                receiver: true,
+                            }],
+                        },
+                    };
+                }
+                Ok(EnvValue::Expr(Box::new(value)))
             }
             Tok::LParen => {
                 let start = self.bump().span;
@@ -1431,7 +1473,7 @@ impl Parser {
             }
             other => Err(
                 Diagnostic::new(format!("unknown curve `{other}`"), name.span)
-                    .with_help("curves are `exp`, `log` and `curve(k)`"),
+                    .with_help("curves are `exp`, `log` and `curve(k)`; to use a calculation as a duration or level, put it in parentheses, such as `(note.dur * 0.9)`"),
             ),
         }
     }
@@ -1973,6 +2015,23 @@ mod tests {
         assert!(
             err("instr a() { env[0 5ms 1 | 5ms 0].loop }").contains("can't have a sustain point")
         );
+    }
+
+    #[test]
+    fn if_then_else_is_a_one_line_value() {
+        let items = parse_ok(
+            "instr a() { x = if 1 > 0 then 4khz else if 2 > 3 then 1khz else 800hz\n y = if 1 > 0 then 1\n else 2 }",
+        );
+        let Item::Instr(i) = &items[0] else { panic!() };
+        assert!(matches!(&i.body[0], Stmt::Bind { value: Expr { kind: ExprKind::If { otherwise: Some(o), .. }, .. }, .. } if o.len() == 1));
+        assert!(matches!(&i.body[1], Stmt::Bind { value: Expr { kind: ExprKind::If { otherwise: Some(_), .. }, .. }, .. }));
+        assert!(err("instr a() { x = if 1 > 0 then 2 }").contains("needs both values"));
+    }
+
+    #[test]
+    fn env_takes_a_note_field_as_a_duration() {
+        let env = env_of("env[0 note.dur 1 | 5ms.exp 0]");
+        assert_eq!(env.segments.len(), 2);
     }
 
     #[test]

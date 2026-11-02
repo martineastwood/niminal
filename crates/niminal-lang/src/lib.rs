@@ -44,7 +44,7 @@ pub use ide::{
     OpInfo, ParamInfo, RESERVED_WORDS, Symbol, SymbolKind, SymbolParam, builtin_ops, symbols, waves,
 };
 pub use layout::Layout;
-pub use lexer::{Tok, Token, lex};
+pub use lexer::{Tok, Token, lex, lex_dsp};
 pub use lower::{GAIN_PARAM, unknown_unit};
 pub use modules::{
     Expanded, Import, Module, ModuleRules, STD_DIR, check_private_words,
