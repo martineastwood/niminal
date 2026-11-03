@@ -358,6 +358,8 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&item("save-all", "Save All", Some("CmdOrCtrl+Alt+S"))?)
         .separator()
         .item(&item("close-tab", "Close Tab", Some("CmdOrCtrl+W"))?)
+        .separator()
+        .item(&item("install-cli", "Install Command Line Tools…", None)?)
         .build()?;
     let edit = SubmenuBuilder::new(app, "Edit")
         .item(&item("undo", "Undo", Some("CmdOrCtrl+Z"))?)
@@ -393,13 +395,33 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     menu.items(&[&file, &edit, &view]).build()
 }
 
+/// Asks about linking the command line tools (see `niminal_ws::launch::offer_cli_install`).
+fn offer_cli_install(force: bool) {
+    let ask = |text: &str| {
+        rfd::MessageDialog::new().set_title("niminal").set_description(text).set_buttons(rfd::MessageButtons::YesNo).show()
+            == rfd::MessageDialogResult::Yes
+    };
+    let tell = |text: &str| {
+        rfd::MessageDialog::new().set_title("niminal").set_description(text).show();
+    };
+    niminal_ws::launch::offer_cli_install(force, ask, tell);
+}
+
 fn main() {
     let shared = Arc::new(session::Shared::new());
     session::start_worker(shared.clone());
     tauri::Builder::default()
         .menu(menu)
         .on_menu_event(|app, event| {
-            let _ = app.emit("menu", event.id().as_ref());
+            if event.id().as_ref() == "install-cli" {
+                std::thread::spawn(|| offer_cli_install(true));
+            } else {
+                let _ = app.emit("menu", event.id().as_ref());
+            }
+        })
+        .setup(|_| {
+            std::thread::spawn(|| offer_cli_install(false));
+            Ok(())
         })
         .manage(AppState {
             shared: shared.clone(),

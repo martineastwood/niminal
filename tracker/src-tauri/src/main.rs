@@ -372,6 +372,8 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .separator()
         .item(&item("palette", "Command Palette… (⌘K)", None)?)
         .item(&item("shortcuts", "Keyboard Shortcuts (⌘/)", None)?)
+        .separator()
+        .item(&item("install-cli", "Install Command Line Tools…", None)?)
         .build()?;
     let mut menu = MenuBuilder::new(app);
     if cfg!(target_os = "macos") {
@@ -385,11 +387,31 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     menu.items(&[&file, &edit, &song, &sound, &view]).build()
 }
 
+/// Asks about linking the command line tools (see `niminal_ws::launch::offer_cli_install`).
+fn offer_cli_install(force: bool) {
+    let ask = |text: &str| {
+        rfd::MessageDialog::new().set_title("niminal").set_description(text).set_buttons(rfd::MessageButtons::YesNo).show()
+            == rfd::MessageDialogResult::Yes
+    };
+    let tell = |text: &str| {
+        rfd::MessageDialog::new().set_title("niminal").set_description(text).show();
+    };
+    niminal_ws::launch::offer_cli_install(force, ask, tell);
+}
+
 fn main() {
     let app = tauri::Builder::default()
         .menu(menu)
         .on_menu_event(|app, event| {
-            let _ = app.emit("menu", event.id().as_ref());
+            if event.id().as_ref() == "install-cli" {
+                std::thread::spawn(|| offer_cli_install(true));
+            } else {
+                let _ = app.emit("menu", event.id().as_ref());
+            }
+        })
+        .setup(|_| {
+            std::thread::spawn(|| offer_cli_install(false));
+            Ok(())
         })
         .manage(LanguageServer::default())
         .manage(audio::Audio::new())

@@ -79,6 +79,55 @@ pub fn ensure_server(port: u16, token: Option<&str>) -> Result<(), String> {
     Err("The niminal server did not start in time. ~/.niminal/server.log may say why.".into())
 }
 
+const LINK_DIR: &str = "/usr/local/bin";
+const PROGRAMS: [&str; 2] = ["niminal", "niminal-live"];
+
+/// The `bin` folder of the macOS download the calling app is part of.
+fn download_bin() -> Option<PathBuf> {
+    packaged_bin(&std::env::current_exe().ok()?)
+}
+
+fn cli_linked(bin: &Path) -> bool {
+    PROGRAMS.iter().all(|name| std::fs::read_link(Path::new(LINK_DIR).join(name)).is_ok_and(|to| to == bin.join(name)))
+}
+
+/// Offer to link `niminal` and `niminal-live` into `/usr/local/bin`, so Terminal and editors find them.
+/// Unless `force` is set (the menu item) it asks once, and only from the macOS download with the tools not
+/// linked yet. `ask` shows a yes/no question and `tell` shows a message.
+pub fn offer_cli_install(force: bool, ask: impl Fn(&str) -> bool, tell: impl Fn(&str)) {
+    let Some(bin) = download_bin() else {
+        if force {
+            tell("The command line tools are linked from the Niminal download; this copy of the app is not part of one.");
+        }
+        return;
+    };
+    let marker = home().map(|home| home.join(".niminal").join("cli-offered"));
+    if !force && (cli_linked(&bin) || marker.as_ref().is_none_or(|m| m.exists())) {
+        return;
+    }
+    if let Some(dir) = marker.as_ref().and_then(|m| m.parent()) {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Some(marker) = &marker {
+        let _ = std::fs::write(marker, "");
+    }
+    if !ask("Install the niminal and niminal-live commands?\n\nThis links them into /usr/local/bin so Terminal and editors can find them. macOS will ask for your password.") {
+        return;
+    }
+    match link_cli(&bin) {
+        Ok(()) => tell("Installed. Open a new Terminal window and run: niminal --version"),
+        Err(message) => tell(&format!("Could not install the command line tools: {message}")),
+    }
+}
+
+fn link_cli(bin: &Path) -> Result<(), String> {
+    let bin = bin.to_str().filter(|b| !b.contains(['"', '\\', '\''])).ok_or("the download's folder has a quote or backslash in its path")?;
+    let links: Vec<String> = PROGRAMS.iter().map(|name| format!("ln -sf '{bin}/{name}' {LINK_DIR}/{name}")).collect();
+    let script = format!("do shell script \"mkdir -p {LINK_DIR} && {}\" with administrator privileges", links.join(" && "));
+    let output = Command::new("osascript").arg("-e").arg(script).output().map_err(|e| e.to_string())?;
+    if output.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&output.stderr).trim().to_string()) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
