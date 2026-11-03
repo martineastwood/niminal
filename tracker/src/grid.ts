@@ -938,6 +938,27 @@ export class PatternGrid {
     this.resetSelection(); this.edited(); this.advance(); this.render(); this.parent.focus();
     this.feedback(`Recorded at row ${row} of this pattern: see the Automation tab`);
   }
+  /** Hardware controls record at the live playhead; MidiLearn owns the edit notification. */
+  recordMidiParameter(strip: Track, target: FxTarget, value: number) {
+    if (!this.live || !Number.isFinite(value)) return;
+    const project = this.project(), track = [...project.tracks, ...project.returns, project.master].indexOf(strip);
+    const position = this.midiPosition();
+    if (track < 0 || !position) return;
+    const lanes = columnLanes(project, position.pattern, track);
+    let lane = lanes.find(other => targetKey(other.target) === targetKey(target));
+    if (!lane) {
+      lane = lanes.find(other => other.target === null && !other.envelope?.points.length);
+      if (!lane && lanes.length < maxLanes) { lane = { target: null }; lanes.push(lane); }
+      if (!lane) { this.feedback('Remove an automation lane before recording this control (maximum 16 per track).'); return; }
+      lane.target = { ...target };
+    }
+    const envelope = lane.envelope ??= { enabled: true, mode: 'hold', points: [] };
+    const row = position.row + position.delay / 256, point = envelope.points.find(p => p.row === row);
+    if (!point && envelope.points.length >= 4097) { this.feedback('This automation envelope is full (maximum 4097 points).'); return; }
+    envelope.enabled = true;
+    if (point) point.value = value;
+    else { envelope.points.push({ row, value }); envelope.points.sort((a, b) => a.row - b.row); }
+  }
   /** MIDI uses absolute pitch and hardware velocity, even on a sub-column or lane. */
   midiNoteOn(number: number, velocity: number, key = number) {
     if (!Number.isInteger(number) || number < 12 || number > 119 || !Number.isInteger(velocity) || velocity < 1 || velocity > 127) return null;
