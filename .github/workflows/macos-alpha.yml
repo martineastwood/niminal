@@ -93,3 +93,20 @@ jobs:
             --title "Niminal $RELEASE_VERSION" \
             --prerelease \
             --notes-file scripts/macos-release-notes.md
+      - name: Update the Homebrew cask
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::warning::The TAP_TOKEN secret is not set, so the Homebrew cask was not updated."
+            exit 0
+          fi
+          sha=$(cut -d' ' -f1 "releases/Niminal-$RELEASE_VERSION-macos-arm64.dmg.sha256")
+          git clone --depth 1 "https://x-access-token:$TAP_TOKEN@github.com/martineastwood/homebrew-niminal.git" tap
+          python3 scripts/update-cask.py tap/Casks/niminal.rb "$RELEASE_VERSION" "$sha"
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Update the niminal cask to $RELEASE_VERSION"
+          git push

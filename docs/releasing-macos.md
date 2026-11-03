@@ -109,10 +109,25 @@ physical audio/MIDI devices.
 
 ## Publish after review
 
-Create a GitHub prerelease for the tested tag and attach the ZIP and checksum.
-Describe it as an experimental Apple Silicon alpha, state the tested macOS
-versions, and mention that it is ad-hoc signed rather than notarized. Include the
-server-first startup instructions. Update the README download link when the
-release exists. Release archives are immutable: use a new alpha version for
-fixes. Windows, Linux, Homebrew and notarization can be added later using the
-same versioned-release approach.
+Pushing a `v*-alpha.N` tag runs the **macOS alpha package** workflow, which tests, builds the dmg and
+publishes the GitHub prerelease, then updates the Homebrew cask. Run the Tracker, Stage and VS Code
+suites locally first (`npm test` in each, and `cargo test` in `tracker/src-tauri` and `stage/src-tauri`):
+`scripts/check.sh` does not cover them and the workflow does. A failed run leaves a dead tag, so use a
+new version for the retry.
+
+Release archives are immutable: use a new alpha version for fixes. Describe the release as an
+experimental Apple Silicon alpha, state the tested macOS versions, and mention that it is ad-hoc signed
+rather than notarized (`scripts/macos-release-notes.md` does).
+
+### The Homebrew cask
+
+The last workflow step writes the new version and the dmg's SHA-256 into `Casks/niminal.rb` in
+[martineastwood/homebrew-niminal](https://github.com/martineastwood/homebrew-niminal) and pushes it
+(`scripts/update-cask.py`). It needs a repository secret, set once:
+
+1. Create a fine-grained personal access token for the `homebrew-niminal` repository only, with
+   **Contents: Read and write**.
+2. Add it to this repository's secrets as `TAP_TOKEN` (Settings > Secrets and variables > Actions).
+
+Without the secret the step prints a warning and skips, and the cask must be edited by hand.
+Notarization can be added later using the same versioned-release approach.
