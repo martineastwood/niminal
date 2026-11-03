@@ -59,6 +59,14 @@ The server (`niminal server`) does the sound: it compiles instruments, effects a
 The alpha is a single `Niminal` folder (Apple Silicon, macOS 13+) with Tracker, Stage, both command-line tools, the VS Code extension and examples. No Rust, Node or installer needed.
 
 1. Download the latest dmg from [GitHub Releases](https://github.com/martineastwood/niminal/releases) and drag the `Niminal` folder onto Applications, so it ends up at `/Applications/Niminal`.
+   Or with Homebrew, which also puts `niminal` and `niminal-live` on your PATH and skips the macOS warning below:
+
+   ```sh
+   brew tap martineastwood/niminal
+   brew trust --cask martineastwood/niminal/niminal   # recent Homebrew only
+   brew install --cask martineastwood/niminal/niminal
+   ```
+
 2. The apps are ad-hoc signed and not notarized. If macOS blocks one on first use, approve it under **System Settings > Privacy & Security > Open Anyway**.
 3. Put the tools on your PATH (add the line to `~/.zprofile` to keep it):
 

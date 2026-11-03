@@ -5,6 +5,7 @@ Download **Niminal-<version>-macos-arm64.dmg** below. It includes Tracker, Stage
 ### Install and play
 
 1. Open the dmg and drag the entire **Niminal** folder onto the Applications shortcut.
+   With Homebrew instead: `brew tap martineastwood/niminal && brew trust --cask martineastwood/niminal/niminal && brew install --cask martineastwood/niminal/niminal`.
 2. Open **Niminal Tracker.app** or **Niminal Stage.app** from `/Applications/Niminal`. Connecting starts the audio engine if it is not running.
 
 Read **Getting Started.txt** inside the download for editor setup, examples, offline rendering, and upgrades. Copy examples into a writable project folder before editing them.
