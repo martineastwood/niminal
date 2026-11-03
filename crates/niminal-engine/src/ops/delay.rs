@@ -1,10 +1,11 @@
+use super::delay_time::DelayTime;
 use crate::denormals::flush32;
 use crate::opcode::{Opcode, Port, ProcessCtx, TAIL_LEVEL};
 
 /// A line that has only ever held silence counts as quiet from the start.
 const ALREADY_QUIET: usize = usize::MAX / 2;
 
-/// Feedback delay with linear interpolation. Output is the delayed signal
+/// Feedback delay with linear interpolation and a smoothly moving tape-style read head. Output is the delayed signal
 /// only; add the dry signal yourself for a mix.
 ///
 /// `damp` (a cutoff in hz, off at 0) puts a one-pole low-pass in the feedback path, so each echo is darker
@@ -27,6 +28,7 @@ pub struct Delay {
     in_flight: usize,
     /// The low-pass in the feedback path.
     lp: f32,
+    time: DelayTime,
 }
 
 impl Delay {
@@ -40,6 +42,7 @@ impl Delay {
             quiet_run: ALREADY_QUIET,
             in_flight: 0,
             lp: 0.0,
+            time: DelayTime::new(48_000.0),
         };
         d.prepare(48_000.0);
         d
@@ -53,6 +56,7 @@ impl Opcode for Delay {
         self.quiet_run = ALREADY_QUIET;
         self.in_flight = 0;
         self.lp = 0.0;
+        self.time.reset();
     }
     fn name(&self) -> &str {
         "delay"
@@ -74,6 +78,7 @@ impl Opcode for Delay {
 
     fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
+        self.time = DelayTime::new(sample_rate);
         let max = (self.max_seconds * sample_rate).round().max(1.0);
         self.max_samples = f64::from(max);
         // room for the longest delay, one sample of interpolation, and the write head
@@ -94,6 +99,7 @@ impl Opcode for Delay {
             self.quiet_run = old.quiet_run;
             self.in_flight = old.in_flight;
             self.lp = old.lp;
+            self.time = old.time;
         }
     }
 
@@ -111,6 +117,7 @@ impl Opcode for Delay {
                 exact
             }
             .clamp(1.0, longest);
+            let samples = self.time.next(samples);
             let whole = samples.floor();
             let frac = (samples - whole) as f32;
             let whole = whole as usize;
@@ -126,6 +133,7 @@ impl Opcode for Delay {
                 self.lp = flush32(delayed * (1.0 - a) + self.lp * a);
                 self.lp
             } else {
+                self.lp = delayed;
                 delayed
             };
             let written = flush32(inputs[0][i] + feedback * heard);

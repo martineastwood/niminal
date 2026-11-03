@@ -57,7 +57,9 @@ impl Default for Formant {
 
 fn bpf_coeffs(freq: f64, bw: f64, sr: f64) -> (f64, f64, f64, f64, f64) {
     let w0 = std::f64::consts::TAU * freq.clamp(20.0, sr * 0.45) / sr;
-    let alpha = w0.sin() * (w0 / (std::f64::consts::TAU * bw.max(1.0))).sinh();
+    // For a constant-peak digital bandpass, the -3 dB width in radians
+    // is 2 * atan(alpha). The table gives bandwidth in Hz, not octaves.
+    let alpha = (std::f64::consts::PI * bw.clamp(1.0, sr * 0.45) / sr).tan();
     let b0 = alpha;
     let b1 = 0.0;
     let b2 = -alpha;
@@ -103,7 +105,7 @@ impl Opcode for Formant {
 
             let pos = vowel * 4.0;
             let idx = (pos.floor() as usize).min(3);
-            let frac = pos - pos.floor();
+            let frac = pos - idx as f64;
             let v0 = &VOWELS[idx];
             let v1 = &VOWELS[idx + 1];
 

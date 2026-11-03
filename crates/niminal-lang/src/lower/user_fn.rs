@@ -63,7 +63,13 @@ impl Lower<'_> {
     }
 
     /// Check a value against a parameter, and fit it to the parameter's range.
-    pub(super) fn check_param(&mut self, callee: &str, p: &PParam, v: Datum, arg: &Expr) -> Res<Datum> {
+    pub(super) fn check_param(
+        &mut self,
+        callee: &str,
+        p: &PParam,
+        v: Datum,
+        arg: &Expr,
+    ) -> Res<Datum> {
         let name = &p.name.name;
         let span = arg.span;
         let mismatch = |found: &str| {
@@ -166,7 +172,12 @@ impl Lower<'_> {
 
     /// The arguments of a call to a user function, worked out in the caller's scope. A choice's name
     /// is its index.
-    pub(super) fn fn_args(&mut self, callee: &Ident, params: &[PParam], args: &[Arg]) -> Res<BoundFnArgs> {
+    pub(super) fn fn_args(
+        &mut self,
+        callee: &Ident,
+        params: &[PParam],
+        args: &[Arg],
+    ) -> Res<BoundFnArgs> {
         let names: Vec<&str> = params.iter().map(|p| p.name.name.as_str()).collect();
         let positional = funcs::positional(params.iter().map(PParam::required));
         let bound = funcs::bind(&callee.name, callee.span, &names, positional, args)?;
@@ -643,7 +654,11 @@ impl Lower<'_> {
         }
     }
 
-    pub(super) fn kernel_result(shape: KernelResult, sources: &[Vec<Src>], layout: Layout) -> Datum {
+    pub(super) fn kernel_result(
+        shape: KernelResult,
+        sources: &[Vec<Src>],
+        layout: Layout,
+    ) -> Datum {
         match shape {
             KernelResult::Scalar { index, unit } => Datum::Sig(Sig {
                 srcs: sources[index].clone().into(),
@@ -672,7 +687,13 @@ impl Lower<'_> {
 
     /// An instrument played inside another: its body runs as part of this voice. `gain:` is the
     /// note's gain, applied after it, as for any note.
-    pub(super) fn call_instr(&mut self, def: &InstrDef, name: &Ident, args: &[Arg], span: Span) -> Res<Datum> {
+    pub(super) fn call_instr(
+        &mut self,
+        def: &InstrDef,
+        name: &Ident,
+        args: &[Arg],
+        span: Span,
+    ) -> Res<Datum> {
         if self.mode != Mode::Instrument || self.in_fn {
             return Err(Diagnostic::new(
                 format!(
@@ -715,5 +736,4 @@ impl Lower<'_> {
     }
 
     // ---- built-in functions ----------------------------------------------
-
 }

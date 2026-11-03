@@ -333,7 +333,13 @@ impl Lower<'_> {
         self.select_value(&c, a, b, e.span)
     }
 
-    pub(super) fn select_value(&mut self, condition: &Sig, a: Datum, b: Datum, span: Span) -> Res<Datum> {
+    pub(super) fn select_value(
+        &mut self,
+        condition: &Sig,
+        a: Datum,
+        b: Datum,
+        span: Span,
+    ) -> Res<Datum> {
         match (a, b) {
             (Datum::Sig(a), Datum::Sig(b)) => {
                 self.select_sig(condition, a, b, span).map(Datum::Sig)
@@ -417,7 +423,13 @@ impl Lower<'_> {
     }
 
     /// `freq + 7st`: scale a frequency by 2^(st/12).
-    pub(super) fn transpose(&mut self, freq: &Sig, interval: &Sig, down: bool, span: Span) -> Res<Sig> {
+    pub(super) fn transpose(
+        &mut self,
+        freq: &Sig,
+        interval: &Sig,
+        down: bool,
+        span: Span,
+    ) -> Res<Sig> {
         let direction = if down { -1.0 } else { 1.0 };
         if let Some(st) = interval.konst {
             let ratio = Sig::constant(Unit::Num, 2f64.powf(direction * st / 12.0));
@@ -455,5 +467,4 @@ impl Lower<'_> {
     }
 
     // ---- calls ----------------------------------------------------------
-
 }

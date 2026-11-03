@@ -1,5 +1,6 @@
 //! Schroeder allpass: delay-based allpass filter for diffusion and phasing.
 
+use super::delay_time::DelayTime;
 use crate::denormals::flush32;
 use crate::opcode::{Opcode, Port, ProcessCtx, TAIL_LEVEL};
 
@@ -15,6 +16,7 @@ pub struct Allpass {
     sample_rate: f32,
     quiet_run: usize,
     in_flight: usize,
+    time: DelayTime,
 }
 
 impl Allpass {
@@ -26,6 +28,7 @@ impl Allpass {
             sample_rate: 48_000.0,
             quiet_run: 0,
             in_flight: 0,
+            time: DelayTime::new(48_000.0),
         };
         a.prepare(48_000.0);
         a
@@ -38,6 +41,7 @@ impl Opcode for Allpass {
         self.write = 0;
         self.quiet_run = 0;
         self.in_flight = 0;
+        self.time.reset();
     }
 
     fn name(&self) -> &str {
@@ -59,6 +63,7 @@ impl Opcode for Allpass {
 
     fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
+        self.time = DelayTime::new(sample_rate);
         let max = (self.max_seconds * sample_rate).round().max(1.0);
         self.buf = vec![0.0; max as usize + 3];
         self.write = 0;
@@ -75,6 +80,7 @@ impl Opcode for Allpass {
             self.write = old.write;
             self.quiet_run = old.quiet_run;
             self.in_flight = old.in_flight;
+            self.time = old.time;
         }
     }
 
@@ -91,6 +97,7 @@ impl Opcode for Allpass {
                 exact
             }
             .clamp(1.0, max_samples);
+            let samples = self.time.next(samples);
             let whole = samples.floor() as usize;
             let frac = (samples - samples.floor()) as f32;
 
@@ -103,7 +110,7 @@ impl Opcode for Allpass {
             // Schroeder allpass: y = -g*x + delayed + g*(delayed fed back)
             let x = inputs[0][i];
             let y = -g * x + delayed;
-            let written = flush32(x + g * delayed);
+            let written = flush32(x + g * y);
             self.buf[self.write] = written;
             self.write = (self.write + 1) % len;
             self.in_flight = samples.ceil() as usize + 1;

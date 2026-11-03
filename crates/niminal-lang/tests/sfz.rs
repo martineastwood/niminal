@@ -143,7 +143,12 @@ fn an_sfz_of_offsets_plays_each_piece_of_a_sample_on_its_own_key() {
     let dir = sliced("pieces");
     let p = program(&dir, "chops = sfz(\"pieces.sfz\")");
     // C4, C#4, D4, D#4
-    for (freq, level) in [(261.625_56, 0.1), (277.182_63, 0.2), (293.664_77, 0.3), (311.126_98, 0.4)] {
+    for (freq, level) in [
+        (261.625_56, 0.1),
+        (277.182_63, 0.2),
+        (293.664_77, 0.3),
+        (311.126_98, 0.4),
+    ] {
         let out = blocks(&mut voice(&p, "chops", &[("freq", freq)]), 100);
         assert!((out[200] - level).abs() < 1e-3, "{freq}: {}", out[200]);
         // at the recorded speed whatever the key, and the piece ends where the next begins

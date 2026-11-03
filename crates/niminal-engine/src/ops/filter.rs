@@ -79,7 +79,8 @@ impl Svf {
 
         let y = match self.mode {
             FilterMode::Low => v2,
-            FilterMode::Band => v1,
+            // Constant peak: resonance narrows the band without raising its level.
+            FilterMode::Band => self.k * v1,
             FilterMode::High => x - self.k * v1 - v2,
             FilterMode::Notch => x - self.k * v1,
         };

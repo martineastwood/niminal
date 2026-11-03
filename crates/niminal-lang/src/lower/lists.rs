@@ -3,7 +3,13 @@
 use super::*;
 
 impl Lower<'_> {
-    pub(super) fn extreme_value(&mut self, a: Datum, b: Datum, minimum: bool, span: Span) -> Res<Datum> {
+    pub(super) fn extreme_value(
+        &mut self,
+        a: Datum,
+        b: Datum,
+        minimum: bool,
+        span: Span,
+    ) -> Res<Datum> {
         self.zip_values(a, b, span, |this, a, b| {
             this.same_unit(&a, &b, if minimum { "min" } else { "max" }, span)?;
             if minimum {
@@ -268,7 +274,13 @@ impl Lower<'_> {
     }
 
     /// `(0..1).step(0.25)`: the values of a range in steps.
-    pub(super) fn step(&mut self, name: &Ident, args: &[Arg], range: Datum, span: Span) -> Res<Datum> {
+    pub(super) fn step(
+        &mut self,
+        name: &Ident,
+        args: &[Arg],
+        range: Datum,
+        span: Span,
+    ) -> Res<Datum> {
         let Datum::Range { lo, hi, inclusive } = range else {
             return Err(Diagnostic::new("`step` is called on a range", span)
                 .with_help("for example `(0..1).step(0.25)`"));
@@ -303,7 +315,13 @@ impl Lower<'_> {
 
     /// `xs.active(count)`: the first `count` entries sound and the rest are silent. `count` can change
     /// while playing, which a loop's length can't, so build the most there can be and switch the rest off.
-    pub(super) fn active(&mut self, name: &Ident, args: &[Arg], items: Vec<Datum>, span: Span) -> Res<Datum> {
+    pub(super) fn active(
+        &mut self,
+        name: &Ident,
+        args: &[Arg],
+        items: Vec<Datum>,
+        span: Span,
+    ) -> Res<Datum> {
         let [_, count] = args else {
             return Err(Diagnostic::new(
                 "`active` takes how many entries are on",
@@ -351,7 +369,13 @@ impl Lower<'_> {
     }
 
     /// `t.phase(p)`: read at normalized position 0..1.
-    pub(super) fn phase(&mut self, name: &Ident, args: &[Arg], list: Datum, span: Span) -> Res<Sig> {
+    pub(super) fn phase(
+        &mut self,
+        name: &Ident,
+        args: &[Arg],
+        list: Datum,
+        span: Span,
+    ) -> Res<Sig> {
         let mut pos = None;
         let mut interp = Interp::Linear;
         for a in &args[1..] {
@@ -913,5 +937,4 @@ impl Lower<'_> {
         }
         Ok(Datum::array(results))
     }
-
 }

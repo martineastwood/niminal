@@ -149,7 +149,13 @@ impl Kb<'_> {
     }
 
     /// Check a value against a parameter, and fit it to the parameter's rate and range.
-    pub(super) fn check_param(&mut self, callee: &str, param: &Param, v: &KVal, span: Span) -> Res<KVal> {
+    pub(super) fn check_param(
+        &mut self,
+        callee: &str,
+        param: &Param,
+        v: &KVal,
+        span: Span,
+    ) -> Res<KVal> {
         let name = &param.name.name;
         let mismatch = |found: &str| {
             Diagnostic::new(

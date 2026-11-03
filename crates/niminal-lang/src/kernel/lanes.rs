@@ -432,7 +432,13 @@ impl Kb<'_> {
     }
 
     /// `dot`, `fir`, `taps` and `matvec`: arrays in, one instruction.
-    pub(super) fn vector_call(&mut self, name: &Ident, args: &[Arg], l: KVal, span: Span) -> Res<KVal> {
+    pub(super) fn vector_call(
+        &mut self,
+        name: &Ident,
+        args: &[Arg],
+        l: KVal,
+        span: Span,
+    ) -> Res<KVal> {
         let op = name.name.as_str();
         let (params, positional): (&[&str], usize) = match op {
             "dot" => (&["a", "b"], 2),

@@ -288,7 +288,12 @@ impl Lower<'_> {
 
     /// The sound of an SFZ multisample: per channel layout, one player that chooses its regions
     /// when a note starts.
-    pub(super) fn sfz_signal(&mut self, name: &Ident, bank: &SfzBank, wires: &[(&str, Src)]) -> Res<Sig> {
+    pub(super) fn sfz_signal(
+        &mut self,
+        name: &Ident,
+        bank: &SfzBank,
+        wires: &[(&str, Src)],
+    ) -> Res<Sig> {
         let mut layouts = std::collections::BTreeMap::<usize, Vec<&SfzRegionDef>>::new();
         for def in &bank.regions {
             let channels = def.channels.len();
@@ -346,7 +351,12 @@ impl Lower<'_> {
         Ok(mix.expect("an SFZ file has at least one region"))
     }
 
-    pub(super) fn call_sampler(&mut self, sampler: &SamplerDef, name: &Ident, args: &[Arg]) -> Res<Datum> {
+    pub(super) fn call_sampler(
+        &mut self,
+        sampler: &SamplerDef,
+        name: &Ident,
+        args: &[Arg],
+    ) -> Res<Datum> {
         if self.mode != Mode::Instrument || self.in_fn {
             return Err(Diagnostic::new(
                 "a sampler can only be played inside an instrument",

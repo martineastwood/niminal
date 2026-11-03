@@ -46,20 +46,30 @@ fn unsafe_audio(audio: &[f32]) -> Option<String> {
     if audio.iter().any(|v| !v.is_finite()) {
         return Some("not finite".into());
     }
-    (peak(audio) > DEFAULT_CEILING + 1e-4).then(|| format!("peak {} is over the ceiling", peak(audio)))
+    (peak(audio) > DEFAULT_CEILING + 1e-4)
+        .then(|| format!("peak {} is over the ceiling", peak(audio)))
 }
 
 /// Effect bodies a user could write, each one hostile in a different way.
 const HOSTILE_EFFECTS: [(&str, &str); 14] = [
     ("runaway feedback", "in.delay(10ms, feedback: 5, max: 1sec)"),
-    ("negative delay time", "in + in.delay(0sec - 1sec, max: 1sec)"),
-    ("delay far past its maximum", "in.delay(1000000sec, feedback: 0.9, max: 1sec)"),
+    (
+        "negative delay time",
+        "in + in.delay(0sec - 1sec, max: 1sec)",
+    ),
+    (
+        "delay far past its maximum",
+        "in.delay(1000000sec, feedback: 0.9, max: 1sec)",
+    ),
     ("division by zero", "in / 0"),
     ("division by silence", "1 / (in - in)"),
     ("root of a negative", "pow(0 - 2, 0.5) + sqrt(0 - in)"),
     ("log of nothing", "log(in - in) * in"),
     ("huge gain", "in * 1000000000"),
-    ("ladder at extremes", "in.ladder(10hz, res: 100, drive: 1000000)"),
+    (
+        "ladder at extremes",
+        "in.ladder(10hz, res: 100, drive: 1000000)",
+    ),
     (
         "scatter at extremes",
         "scatter(in, 1, 1sec, slices: 1000000, seed: 0 - 1000000, reverse: 5, repeat: 5, drop: 0 - 5, detune: 1000, blend: 0sec, max: 2sec)",
@@ -145,7 +155,9 @@ fn a_long_session_of_redefinitions_and_tempo_changes_stays_finite_and_limited() 
                 let body = if rng.below(2) == 0 {
                     "in * 0.5".to_string()
                 } else {
-                    HOSTILE_EFFECTS[rng.below(HOSTILE_EFFECTS.len())].1.to_string()
+                    HOSTILE_EFFECTS[rng.below(HOSTILE_EFFECTS.len())]
+                        .1
+                        .to_string()
                 };
                 what = body.clone();
                 active = body.clone();

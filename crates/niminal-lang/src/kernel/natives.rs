@@ -5,7 +5,12 @@ use super::*;
 impl Kb<'_> {
     /// A call of a built-in opcode such as `lpf` or `osc`: it is run a sample at a time, with
     /// state of its own for each call.
-    pub(super) fn native(&mut self, name: &Ident, spec: &opcodes::OpSpec, args: &[Arg]) -> Res<KVal> {
+    pub(super) fn native(
+        &mut self,
+        name: &Ident,
+        spec: &opcodes::OpSpec,
+        args: &[Arg],
+    ) -> Res<KVal> {
         if self.force.is_some() {
             return Err(Diagnostic::new(
                 format!(

@@ -18,7 +18,12 @@ impl Kb<'_> {
         })
     }
 
-    pub(super) fn capture_arg(&mut self, value: KVal, wires: &mut Vec<NativeInput>, span: Span) -> Res<KArg> {
+    pub(super) fn capture_arg(
+        &mut self,
+        value: KVal,
+        wires: &mut Vec<NativeInput>,
+        span: Span,
+    ) -> Res<KArg> {
         Ok(match value {
             KVal::Buffer { selector, choices } => KArg::Buffer {
                 selector: Box::new(self.capture_arg(KVal::Num(selector), wires, span)?),

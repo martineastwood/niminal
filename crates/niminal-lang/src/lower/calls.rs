@@ -123,7 +123,11 @@ impl Lower<'_> {
     }
 
     /// Make free variables explicit ports; each fx decides when to read them.
-    pub(super) fn scope_kernel(&mut self, body: &[Stmt], span: Span) -> (FnDef, Vec<PParam>, BoundFnArgs) {
+    pub(super) fn scope_kernel(
+        &mut self,
+        body: &[Stmt],
+        span: Span,
+    ) -> (FnDef, Vec<PParam>, BoundFnArgs) {
         let mut def = funcs::lambda(&[], body, span);
         let capture_in =
             self.mode == Mode::Node && !self.scope.contains_key("in") && funcs::reads(&def, "in");
@@ -649,7 +653,12 @@ impl Lower<'_> {
         opcodes::WaveArg::from_tables(&tables).map_err(|m| Diagnostic::new(m, e.span))
     }
 
-    pub(super) fn builtin_value(&self, value: Datum, param: &opcodes::ParamSpec, arg: &Expr) -> Res<Val> {
+    pub(super) fn builtin_value(
+        &self,
+        value: Datum,
+        param: &opcodes::ParamSpec,
+        arg: &Expr,
+    ) -> Res<Val> {
         match value {
             Datum::Function { .. } => Err(Diagnostic::new(
                 "this argument needs a numeric value",
@@ -788,7 +797,12 @@ impl Lower<'_> {
         }
     }
 
-    pub(super) fn dispatch(&mut self, spec: &opcodes::OpSpec, vals: &[Option<Val>], span: Span) -> Res<Sig> {
+    pub(super) fn dispatch(
+        &mut self,
+        spec: &opcodes::OpSpec,
+        vals: &[Option<Val>],
+        span: Span,
+    ) -> Res<Sig> {
         match spec.build {
             Build::Pan => self.pan(spec, vals, span),
             Build::ToLayout => {
@@ -802,7 +816,12 @@ impl Lower<'_> {
     }
 
     /// Build an opcode once per channel of its widest argument.
-    pub(super) fn expand(&mut self, spec: &opcodes::OpSpec, vals: &[Option<Val>], span: Span) -> Res<Sig> {
+    pub(super) fn expand(
+        &mut self,
+        spec: &opcodes::OpSpec,
+        vals: &[Option<Val>],
+        span: Span,
+    ) -> Res<Sig> {
         let mut width = 1;
         let mut layout = Layout::Mono;
         for (param, val) in spec.params.iter().zip(vals) {
@@ -866,7 +885,12 @@ impl Lower<'_> {
     }
 
     /// `pan`: place a mono signal in the master's layout.
-    pub(super) fn pan(&mut self, spec: &opcodes::OpSpec, vals: &[Option<Val>], span: Span) -> Res<Sig> {
+    pub(super) fn pan(
+        &mut self,
+        spec: &opcodes::OpSpec,
+        vals: &[Option<Val>],
+        span: Span,
+    ) -> Res<Sig> {
         let mut wired: Vec<(&str, Src)> = Vec::new();
         for (param, val) in spec.params.iter().zip(vals) {
             let Some(Val::Sig(sig)) = val else { continue };
@@ -900,7 +924,13 @@ impl Lower<'_> {
         })
     }
 
-    pub(super) fn unit_mismatch(&self, param: &str, expected: Unit, found: Unit, arg: &Expr) -> Diagnostic {
+    pub(super) fn unit_mismatch(
+        &self,
+        param: &str,
+        expected: Unit,
+        found: Unit,
+        arg: &Expr,
+    ) -> Diagnostic {
         let mut d = Diagnostic::new(
             format!(
                 "`{param}` expects {}, found {}",
@@ -930,5 +960,4 @@ impl Lower<'_> {
     }
 
     // ---- envelopes -------------------------------------------------------
-
 }

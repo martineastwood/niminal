@@ -5,6 +5,9 @@ use niminal_engine::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, atomic::Ordering};
+
+/// How often a file player checks that its file has not changed under it.
+const FILE_CHECK_EVERY: std::time::Duration = std::time::Duration::from_millis(250);
 fn one() -> f64 {
     1.
 }
@@ -82,26 +85,39 @@ pub(crate) fn prepare(
     std::thread::Builder::new()
         .name("niminal-stream".into())
         .spawn(move || {
+            let mut checked = std::time::Instant::now();
+            // what the pages in the cache were last filled for; only this thread fills them
+            let mut filled = None;
             while Arc::strong_count(&worker) > 1 {
-                if std::fs::metadata(&path)
-                    .map(|m| (m.len(), m.modified().ok()))
-                    .ok()
-                    != Some(fingerprint)
-                {
-                    worker.failed.store(true, Ordering::Release);
-                    return;
-                }
-                let page = worker.requested.load(Ordering::Acquire) / STREAM_PAGE as u64;
-                let loop_start = worker.loop_start.load(Ordering::Relaxed);
-                let mut wanted = (page..page + 6).collect::<Vec<_>>();
-                if loop_start != u64::MAX {
-                    wanted.push(loop_start / STREAM_PAGE as u64);
-                }
-                for page in wanted {
-                    if !worker.cached(page) && fill(&mut reader, &worker, page, &channels).is_err()
+                if checked.elapsed() >= FILE_CHECK_EVERY {
+                    checked = std::time::Instant::now();
+                    if std::fs::metadata(&path)
+                        .map(|m| (m.len(), m.modified().ok()))
+                        .ok()
+                        != Some(fingerprint)
                     {
                         worker.failed.store(true, Ordering::Release);
                         return;
+                    }
+                }
+                let page = worker.requested.load(Ordering::Acquire) / STREAM_PAGE as u64;
+                let loop_start = worker.loop_start.load(Ordering::Relaxed);
+                if filled != Some((page, loop_start)) {
+                    let loop_page =
+                        (loop_start != u64::MAX).then(|| loop_start / STREAM_PAGE as u64);
+                    let mut changed = false;
+                    for page in (page..page + 6).chain(loop_page) {
+                        if !worker.cached(page) {
+                            if fill(&mut reader, &worker, page, &channels).is_err() {
+                                worker.failed.store(true, Ordering::Release);
+                                return;
+                            }
+                            changed = true;
+                        }
+                    }
+                    // a fill can evict a page wanted earlier in the pass, so look again after one
+                    if !changed {
+                        filled = Some((page, loop_start));
                     }
                 }
                 std::thread::sleep(std::time::Duration::from_millis(1));

@@ -171,7 +171,7 @@ fx room_reverb(
 }
 
 /// A stereo space with a dense, smooth tail. `size` sets the tank size and `decay` its feedback;
-/// changing size clears the tank. `damp` darkens the tail, `bandwidth` softens the input, and
+/// changing size smoothly bends the tail as on tape. `damp` darkens the tail, `bandwidth` softens the input, and
 /// `density` shapes diffusion. `early_mix` moves from early reflections to the late tail.
 fx studio_reverb(
   size: 0..1 = 0.5,

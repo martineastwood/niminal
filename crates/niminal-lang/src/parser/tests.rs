@@ -249,9 +249,7 @@ fn env_without_sustain_and_with_units_and_fractions() {
 #[test]
 fn env_steps_from_names_and_expressions() {
     let e = env_of("env[0 attack 1 | (release * 2).exp 0]");
-    assert!(
-        matches!(&e.segments[0].dur, EnvValue::Expr(n) if matches!(n.kind, ExprKind::Name(_)))
-    );
+    assert!(matches!(&e.segments[0].dur, EnvValue::Expr(n) if matches!(n.kind, ExprKind::Name(_))));
     assert!(
         matches!(&e.segments[1].dur, EnvValue::Expr(n) if matches!(n.kind, ExprKind::Binary { .. }))
     );
@@ -264,9 +262,7 @@ fn env_can_loop_but_not_with_a_sustain_point() {
     let e = env_of("env[0 5ms 1 5ms 0].loop");
     assert!(e.looped);
     assert_eq!(e.segments.len(), 2);
-    assert!(
-        err("instr a() { env[0 5ms 1 | 5ms 0].loop }").contains("can't have a sustain point")
-    );
+    assert!(err("instr a() { env[0 5ms 1 | 5ms 0].loop }").contains("can't have a sustain point"));
 }
 
 #[test]
@@ -378,9 +374,7 @@ fn channel_lists_destructuring_and_config() {
     );
     let Item::Config(c) = &items[0] else { panic!() };
     assert_eq!(c.entries[0].0.name, "channels");
-    assert!(
-        matches!(&c.entries[0].1.kind, ExprKind::Call { name, .. } if name.name == "surround")
-    );
+    assert!(matches!(&c.entries[0].1.kind, ExprKind::Call { name, .. } if name.name == "surround"));
     let Item::Instr(i) = &items[1] else { panic!() };
     assert!(matches!(&i.body[0], Stmt::Destructure { names, .. } if names.len() == 2));
     let Stmt::Expr(e) = &i.body[2] else { panic!() };

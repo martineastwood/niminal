@@ -1921,12 +1921,12 @@ impl RealtimeRenderer {
             if let Some(limiter) = &mut self.limiter {
                 limiter.process_block(&mut block[..self.channels], n);
             }
-            for (peak, channel) in self.state.peaks.iter().zip(&block[..self.channels]) {
-                let value = channel[..n].iter().fold(0.0f32, |m, s| m.max(s.abs()));
+            let peaks = self
+                .master_meter
+                .observe(&block[..self.channels], n, self.clock);
+            for (peak, value) in self.state.peaks.iter().zip(&peaks) {
                 peak.fetch_max(value.to_bits(), Ordering::Relaxed);
             }
-            self.master_meter
-                .observe(&block[..self.channels], n, self.clock);
             sink(&block[..self.channels], n);
             self.clock += n as u64;
             self.state.clock.store(self.clock, Ordering::Release);

@@ -1,7 +1,7 @@
 //! Parametric EQ: low shelf, high shelf, and peaking bell.
 //!
-//! All three use the RBJ (Audio EQ Cookbook) biquad topology with per-sample
-//! coefficient update so cutoff and gain can be modulated.
+//! RBJ cookbook responses realized as trapezoidal state variable filters,
+//! so cutoff and gain can be modulated without direct-form state transients.
 
 use crate::denormals::flush;
 use crate::opcode::{Opcode, Port, ProcessCtx};
@@ -20,16 +20,13 @@ pub enum EqMode {
 pub struct Eq {
     mode: EqMode,
     sample_rate: f32,
-    x1: f64,
-    x2: f64,
-    y1: f64,
-    y2: f64,
+    ic1: f64,
+    ic2: f64,
     cached_for: (f32, f32, f32),
-    b0: f64,
-    b1: f64,
-    b2: f64,
     a1: f64,
     a2: f64,
+    a3: f64,
+    mix: [f64; 3],
 }
 
 impl Eq {
@@ -37,16 +34,13 @@ impl Eq {
         let mut eq = Eq {
             mode,
             sample_rate: 48_000.0,
-            x1: 0.0,
-            x2: 0.0,
-            y1: 0.0,
-            y2: 0.0,
+            ic1: 0.0,
+            ic2: 0.0,
             cached_for: (f32::NAN, f32::NAN, f32::NAN),
-            b0: 1.0,
-            b1: 0.0,
-            b2: 0.0,
             a1: 0.0,
             a2: 0.0,
+            a3: 0.0,
+            mix: [1.0, 0.0, 0.0],
         };
         eq.update(1000.0, 1.0, eq.default_q());
         eq
@@ -68,57 +62,33 @@ impl Eq {
         let sr = f64::from(self.sample_rate);
         let fc = f64::from(cutoff).clamp(10.0, sr * 0.45);
         let a = f64::from(gain.max(1e-6)).sqrt();
-        let w0 = std::f64::consts::TAU * fc / sr;
-        let (sin_w0, cos_w0) = w0.sin_cos();
-        let alpha = sin_w0 / (2.0 * f64::from(q).max(0.1));
-
-        let (b0, b1, b2, a0, a1, a2) = match self.mode {
+        let mut g = (std::f64::consts::PI * fc / sr).tan();
+        let q = f64::from(q).max(0.1);
+        let k = match self.mode {
+            EqMode::Peak => 1.0 / (q * a),
+            _ => 1.0 / q,
+        };
+        self.mix = match self.mode {
             EqMode::LowShelf => {
-                let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
-                let b0 = a * ((a + 1.0) - (a - 1.0) * cos_w0 + two_sqrt_a_alpha);
-                let b1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cos_w0);
-                let b2 = a * ((a + 1.0) - (a - 1.0) * cos_w0 - two_sqrt_a_alpha);
-                let a0 = (a + 1.0) + (a - 1.0) * cos_w0 + two_sqrt_a_alpha;
-                let a1 = -2.0 * ((a - 1.0) + (a + 1.0) * cos_w0);
-                let a2 = (a + 1.0) + (a - 1.0) * cos_w0 - two_sqrt_a_alpha;
-                (b0, b1, b2, a0, a1, a2)
+                g /= a.sqrt();
+                [1.0, k * (a - 1.0), a * a - 1.0]
             }
             EqMode::HighShelf => {
-                let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
-                let b0 = a * ((a + 1.0) + (a - 1.0) * cos_w0 + two_sqrt_a_alpha);
-                let b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cos_w0);
-                let b2 = a * ((a + 1.0) + (a - 1.0) * cos_w0 - two_sqrt_a_alpha);
-                let a0 = (a + 1.0) - (a - 1.0) * cos_w0 + two_sqrt_a_alpha;
-                let a1 = 2.0 * ((a - 1.0) - (a + 1.0) * cos_w0);
-                let a2 = (a + 1.0) - (a - 1.0) * cos_w0 - two_sqrt_a_alpha;
-                (b0, b1, b2, a0, a1, a2)
+                g *= a.sqrt();
+                [a * a, k * (1.0 - a) * a, 1.0 - a * a]
             }
-            EqMode::Peak => {
-                let b0 = 1.0 + alpha * a;
-                let b1 = -2.0 * cos_w0;
-                let b2 = 1.0 - alpha * a;
-                let a0 = 1.0 + alpha / a;
-                let a1 = -2.0 * cos_w0;
-                let a2 = 1.0 - alpha / a;
-                (b0, b1, b2, a0, a1, a2)
-            }
+            EqMode::Peak => [1.0, k * (a * a - 1.0), 0.0],
         };
-
-        let inv_a0 = 1.0 / a0;
-        self.b0 = b0 * inv_a0;
-        self.b1 = b1 * inv_a0;
-        self.b2 = b2 * inv_a0;
-        self.a1 = a1 * inv_a0;
-        self.a2 = a2 * inv_a0;
+        self.a1 = 1.0 / (1.0 + g * (g + k));
+        self.a2 = g * self.a1;
+        self.a3 = g * self.a2;
     }
 }
 
 impl Opcode for Eq {
     fn reset(&mut self) {
-        self.x1 = 0.0;
-        self.x2 = 0.0;
-        self.y1 = 0.0;
-        self.y2 = 0.0;
+        self.ic1 = 0.0;
+        self.ic2 = 0.0;
     }
 
     fn name(&self) -> &'static str {
@@ -150,10 +120,8 @@ impl Opcode for Eq {
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {
         if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>() {
-            self.x1 = old.x1;
-            self.x2 = old.x2;
-            self.y1 = old.y1;
-            self.y2 = old.y2;
+            self.ic1 = old.ic1;
+            self.ic2 = old.ic2;
         }
     }
 
@@ -167,13 +135,12 @@ impl Opcode for Eq {
             };
             self.update(inputs[1][i], inputs[2][i], q);
             let x = f64::from(inputs[0][i]);
-            let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2
-                - self.a1 * self.y1
-                - self.a2 * self.y2;
-            self.x2 = self.x1;
-            self.x1 = x;
-            self.y2 = flush(self.y1);
-            self.y1 = flush(y);
+            let v3 = x - self.ic2;
+            let band = self.a1 * self.ic1 + self.a2 * v3;
+            let low = self.ic2 + self.a2 * self.ic1 + self.a3 * v3;
+            self.ic1 = flush(2.0 * band - self.ic1);
+            self.ic2 = flush(2.0 * low - self.ic2);
+            let y = self.mix[0] * x + self.mix[1] * band + self.mix[2] * low;
             *o = y as f32;
         }
     }

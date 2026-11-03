@@ -1,5 +1,6 @@
 //! A feedback delay network reverb: eight delay lines mixed by a Hadamard matrix.
 
+use super::delay_time::DelayTime;
 use crate::denormals::flush32 as flush;
 use crate::opcode::{Opcode, Port, ProcessCtx, TAIL_LEVEL};
 
@@ -23,7 +24,7 @@ const HADAMARD_SCALE: f32 = 0.353_553_4;
 
 /// A feedback delay network reverb. `time` is how long the tail takes to fall by 60db, `damp` the
 /// cutoff in hz of the low-pass in each line (highs die first, as in a room), and `size` stretches
-/// all the lines (0.5 to 2). It is wet only. The three are read once a block.
+/// all the lines (0.5 to 2). It is wet only. Controls are evaluated per sample; size moves the delay taps smoothly.
 #[derive(Clone)]
 pub struct Fdn {
     lines: Vec<Vec<f32>>,
@@ -37,6 +38,11 @@ pub struct Fdn {
     longest: usize,
     channel: usize,
     sample_rate: f32,
+    read_times: [DelayTime; 8],
+    cached_damp: f32,
+    pole: f32,
+    cached_feedback: (f32, [f32; 8]),
+    feedback: [f32; 8],
 }
 
 impl Fdn {
@@ -49,6 +55,11 @@ impl Fdn {
             longest: 0,
             channel,
             sample_rate: 48_000.0,
+            read_times: [DelayTime::new(48_000.0); 8],
+            cached_damp: f32::NAN,
+            pole: 0.0,
+            cached_feedback: (f32::NAN, [0.0; 8]),
+            feedback: [0.0; 8],
         };
         fdn.prepare(48_000.0);
         fdn
@@ -72,6 +83,7 @@ impl Opcode for Fdn {
             line.fill(0.0);
         }
         self.pos = [0; 8];
+        self.read_times = [DelayTime::new(self.sample_rate); 8];
         self.lowpass = [0.0; 8];
         self.quiet_run = self.longest;
     }
@@ -98,6 +110,9 @@ impl Opcode for Fdn {
 
     fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
+        self.read_times = [DelayTime::new(sample_rate); 8];
+        self.cached_damp = f32::NAN;
+        self.cached_feedback.0 = f32::NAN;
         // room for the longest line at the largest size, and a sample either side for interpolating
         self.lines = (0..8)
             .map(|i| vec![0.0; (self.base_length(i) * MAX_SIZE).ceil() as usize + 4])
@@ -116,6 +131,7 @@ impl Opcode for Fdn {
             std::mem::swap(&mut self.lines, &mut old.lines);
             self.pos = old.pos;
             self.lowpass = old.lowpass;
+            self.read_times = old.read_times;
             self.quiet_run = old.quiet_run;
         }
     }
@@ -125,21 +141,25 @@ impl Opcode for Fdn {
             return;
         }
         let sr = self.sample_rate.max(1.0);
-        let time = inputs[1][0].max(0.01);
-        let damp = inputs[2][0].clamp(20.0, sr * 0.45);
-        let size = inputs[3][0].clamp(0.25, MAX_SIZE);
-        let pole = (-std::f32::consts::TAU * damp / sr).exp();
-        // each line loses 60db over `time`, in proportion to its length
-        let mut delay = [0.0f32; 8];
-        let mut feedback = [0.0f32; 8];
-        for i in 0..8 {
-            delay[i] = (self.base_length(i) * size).max(2.0);
-            feedback[i] = (-6.9078 * delay[i] / (time * sr)).exp();
-        }
-        let whole: [usize; 8] = std::array::from_fn(|i| delay[i] as usize);
-        let fraction: [f32; 8] = std::array::from_fn(|i| delay[i] - whole[i] as f32);
         let quiet = TAIL_LEVEL / OUTPUT_BOUND;
         for (n, o) in out.iter_mut().enumerate() {
+            let time = inputs[1][n].max(0.01);
+            let damp = inputs[2][n].clamp(20.0, sr * 0.45);
+            let size = inputs[3][n].clamp(0.25, MAX_SIZE);
+            if damp != self.cached_damp {
+                self.pole = (-std::f32::consts::TAU * damp / sr).exp();
+                self.cached_damp = damp;
+            }
+            let delay: [f32; 8] = std::array::from_fn(|i| {
+                let target = (self.base_length(i) * size).max(2.0);
+                self.read_times[i].next(f64::from(target)) as f32
+            });
+            if (time, delay) != self.cached_feedback {
+                self.feedback = delay.map(|d| (-6.9078 * d / (time * sr)).exp());
+                self.cached_feedback = (time, delay);
+            }
+            let whole: [usize; 8] = delay.map(|d| d as usize);
+            let fraction: [f32; 8] = std::array::from_fn(|i| delay[i] - whole[i] as f32);
             let x = inputs[0][n] * GAIN;
             let mut read = [0.0f32; 8];
             for i in 0..8 {
@@ -164,10 +184,10 @@ impl Opcode for Fdn {
                 }
             }
             let mut loudest = x.abs();
-            for i in 0..8 {
+            for (i, mixed) in mixed.into_iter().enumerate() {
                 self.lowpass[i] =
-                    flush(self.lowpass[i] * pole + mixed[i] * HADAMARD_SCALE * (1.0 - pole));
-                let stored = flush(x + self.lowpass[i] * feedback[i]);
+                    flush(self.lowpass[i] * self.pole + mixed * HADAMARD_SCALE * (1.0 - self.pole));
+                let stored = flush(x + self.lowpass[i] * self.feedback[i]);
                 loudest = loudest.max(stored.abs());
                 self.lines[i][self.pos[i]] = stored;
                 self.pos[i] = (self.pos[i] + 1) % self.lines[i].len();

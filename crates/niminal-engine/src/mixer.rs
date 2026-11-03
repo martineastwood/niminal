@@ -26,15 +26,18 @@ pub struct Meter {
     waveform: std::sync::OnceLock<crate::Waveform>,
 }
 impl Meter {
-    pub fn observe(&self, blocks: &[Vec<f32>], frames: usize, sample: u64) {
+    /// Records the block and returns this block's peak for each channel.
+    pub fn observe(&self, blocks: &[Vec<f32>], frames: usize, sample: u64) -> [f32; MAX_CHANNELS] {
         if let Some(waveform) = self.waveform.get() {
             waveform.observe(blocks, frames, sample);
         }
         self.channels.store(blocks.len() as u32, Ordering::Relaxed);
-        for (peak, block) in self.peaks.iter().zip(blocks) {
-            let value = block[..frames].iter().fold(0.0_f32, |a, b| a.max(b.abs()));
-            peak.fetch_max(value.to_bits(), Ordering::Relaxed);
+        let mut values = [0.0_f32; MAX_CHANNELS];
+        for ((peak, block), out) in self.peaks.iter().zip(blocks).zip(&mut values) {
+            *out = block[..frames].iter().fold(0.0_f32, |a, b| a.max(b.abs()));
+            peak.fetch_max(out.to_bits(), Ordering::Relaxed);
         }
+        values
     }
     pub fn waveform(&self) -> &crate::Waveform {
         self.waveform.get_or_init(crate::Waveform::default)

@@ -7,24 +7,24 @@
 //! multichannel expansion. Conversions between layouts are emitted as gain and
 //! sum nodes.
 
-mod stmt;
-mod expr;
-mod lists;
 mod arith;
-mod io;
 mod calls;
-mod signals;
-mod user_fn;
-mod tables;
-mod entry;
-mod sampler;
 mod chain;
 mod check;
+mod entry;
+mod expr;
+mod io;
+mod lists;
+mod sampler;
+mod signals;
+mod stmt;
+mod tables;
+mod user_fn;
 
-pub(crate) use entry::*;
-pub(crate) use sampler::*;
 pub(crate) use chain::*;
 pub(crate) use check::*;
+pub(crate) use entry::*;
+pub(crate) use sampler::*;
 
 use std::collections::HashMap;
 use std::sync::Arc;

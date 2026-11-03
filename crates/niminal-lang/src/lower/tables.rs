@@ -4,7 +4,12 @@ use super::*;
 
 impl Lower<'_> {
     /// The values of a call such as `min(a, b)` or `a.mod(b)`, without names.
-    pub(super) fn plain_args(&mut self, name: &Ident, args: &[Arg], count: usize) -> Res<Vec<(Datum, Span)>> {
+    pub(super) fn plain_args(
+        &mut self,
+        name: &Ident,
+        args: &[Arg],
+        count: usize,
+    ) -> Res<Vec<(Datum, Span)>> {
         if args.len() != count {
             return Err(Diagnostic::new(
                 format!("`{}` takes {count} values", name.name),
@@ -34,7 +39,13 @@ impl Lower<'_> {
         })
     }
 
-    pub(super) fn combine_scalar(&mut self, name: &Ident, a: Sig, b: Sig, b_span: Span) -> Res<Sig> {
+    pub(super) fn combine_scalar(
+        &mut self,
+        name: &Ident,
+        a: Sig,
+        b: Sig,
+        b_span: Span,
+    ) -> Res<Sig> {
         match name.name.as_str() {
             "mod" => self.rem(a, b, b_span),
             "atan2" => {
@@ -575,5 +586,4 @@ impl Lower<'_> {
         }
         Ok(Datum::Array(out.into()))
     }
-
 }

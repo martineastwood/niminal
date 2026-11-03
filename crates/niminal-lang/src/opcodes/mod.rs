@@ -365,7 +365,7 @@ impl Registry {
             ),
             filter(
                 "bpf",
-                "A band-pass filter: lets frequencies around `cutoff` through. `res` narrows the band.",
+                "A band-pass filter: lets frequencies around `cutoff` through. `res` narrows the band; the peak stays at unity gain.",
                 |_| Ok(Box::new(Svf::new(FilterMode::Band))),
             ),
             filter(
@@ -381,7 +381,7 @@ impl Registry {
             ),
             OpSpec::new(
                 "delay",
-                "A delay line. `time` is how long to wait, `feedback` feeds the output back in, and `damp` (a cutoff in hz, off by default) darkens each echo as it goes round, like a tape delay. For several echoes, add several delays: `x + x.delay(120ms) * 0.6 + x.delay(250ms) * 0.3`, each with its own time and processing. A changing `time` needs `max:` to size the line (at most 30 seconds).",
+                "A delay line. `time` is how long to wait, `feedback` feeds the output back in, and `damp` (a cutoff in hz, off by default) darkens each echo as it goes round, like a tape delay. For several echoes, add several delays: `x + x.delay(120ms) * 0.6 + x.delay(250ms) * 0.3`, each with its own time and processing. Changes to `time` smoothly move the read head with a tape-style pitch bend. A changing `time` needs `max:` to size the line (at most 30 seconds).",
                 vec![
                     req("x", SIGNAL),
                     req("time", Kind::Signal(Unit::Time)),
@@ -409,7 +409,7 @@ impl Registry {
             ),
             OpSpec::new(
                 "mverb",
-                "Stereo figure-of-eight reverb. Takes mono or stereo `x` and returns stereo; `right:` can supply a separate right input. `size`, `decay`, `density`, `damp` and `bandwidth` run from 0 to 1; more `damp` darkens the tail. `predelay` is a time up to 200ms. `early_mix` blends early reflections (0) with the late tank (1, default 0.75). `mix` blends dry (0) with wet (1, the default), and `gain` sets output gain. Changing `size` clears the tank.",
+                "Stereo figure-of-eight reverb. Takes mono or stereo `x` and returns stereo; `right:` can supply a separate right input. `size`, `decay`, `density`, `damp` and `bandwidth` run from 0 to 1; more `damp` darkens the tail. `predelay` is a time up to 200ms. `early_mix` blends early reflections (0) with the late tank (1, default 0.75). `mix` blends dry (0) with wet (1, the default), and `gain` sets output gain. Changing `size` smoothly moves the taps with a tape-style pitch bend and preserves the tail.",
                 vec![
                     req("x", SIGNAL),
                     opt("right", SIGNAL),
@@ -427,7 +427,7 @@ impl Registry {
             ),
             OpSpec::new(
                 "fdn_reverb",
-                "A reverb from a feedback delay network of eight lines. `time` is how long the tail takes to fall by 60db, `damp` the cutoff of the low-pass in each line (highs die first, as in a room), and `size` stretches the lines (0.5 to 2). Wet only; the channels of a stereo signal are decorrelated.",
+                "A reverb from a feedback delay network of eight lines. `time` is how long the tail takes to fall by 60db, `damp` the cutoff of the low-pass in each line (highs die first, as in a room), and `size` stretches the lines (0.25 to 2) with smoothly moving taps. Wet only; the channels of a stereo signal are decorrelated.",
                 vec![
                     req("x", SIGNAL),
                     opt("time", Kind::Signal(Unit::Time)),
@@ -605,7 +605,7 @@ impl Registry {
             ),
             OpSpec::new(
                 "allpass",
-                "A Schroeder allpass delay: passes all frequencies at equal level but scrambles their phase. For reverb diffusion and custom reverb design.",
+                "A Schroeder allpass delay: at fixed integer delay, passes all frequencies at equal level but scrambles their phase. Fractional linear interpolation colors the highs. Changes to `time` smoothly bend pitch as on tape. For reverb diffusion and custom reverb design.",
                 vec![
                     req("x", SIGNAL),
                     req("time", Kind::Signal(Unit::Time)),
@@ -1049,7 +1049,7 @@ impl Registry {
             ),
             OpSpec::new(
                 "spectral_delay",
-                "Delays each frequency bin separately: `x.spectral_delay(time: 300ms, spread: 0.5, feedback: 0.4)`. With `spread` above 0 the lower bins are delayed less than the higher ones. A changing `time` needs `max:` (default 2 seconds, at most 30). `size:` is the FFT size as for `spectral_freeze`.",
+                "Delays each frequency bin separately: `x.spectral_delay(time: 300ms, spread: 0.5, feedback: 0.4)`. With `spread` above 0 the lower bins are delayed less than the higher ones. Changes to `time` smoothly move the read head with a tape-style pitch bend. A changing `time` needs `max:` (default 2 seconds, at most 30). `size:` is the FFT size as for `spectral_freeze`.",
                 vec![
                     req("x", SIGNAL),
                     opt("time", Kind::Signal(Unit::Time)),

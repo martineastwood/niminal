@@ -210,7 +210,12 @@ impl Lower<'_> {
     }
 
     /// Where each branch of an `if` is taken, inside whatever `outer` already says.
-    pub(super) fn branch_gates(&mut self, outer: Option<Src>, taken: &Sig, span: Span) -> Res<(Src, Src)> {
+    pub(super) fn branch_gates(
+        &mut self,
+        outer: Option<Src>,
+        taken: &Sig,
+        span: Span,
+    ) -> Res<(Src, Src)> {
         let zero = Sig::constant(Unit::Num, 0.0);
         let not_taken = self.compare(CmpOp::Eq, taken.clone(), zero, span)?;
         let (mut then_gate, mut else_gate) = (
@@ -681,5 +686,4 @@ impl Lower<'_> {
         }
         Ok(Sig::channels(srcs, to))
     }
-
 }

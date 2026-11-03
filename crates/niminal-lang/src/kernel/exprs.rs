@@ -396,7 +396,13 @@ impl Kb<'_> {
         }
     }
 
-    pub(super) fn extreme_value(&mut self, a: KVal, b: KVal, minimum: bool, span: Span) -> Res<KVal> {
+    pub(super) fn extreme_value(
+        &mut self,
+        a: KVal,
+        b: KVal,
+        minimum: bool,
+        span: Span,
+    ) -> Res<KVal> {
         let op = if minimum { Op::Min } else { Op::Max };
         if let Some(lane) = self.lane_binary(op, |a, b| (a == b).then_some(a), &a, &b, span)? {
             return Ok(lane);
@@ -454,7 +460,13 @@ impl Kb<'_> {
         })
     }
 
-    pub(super) fn select_value(&mut self, condition: Value, a: KVal, b: KVal, span: Span) -> Res<KVal> {
+    pub(super) fn select_value(
+        &mut self,
+        condition: Value,
+        a: KVal,
+        b: KVal,
+        span: Span,
+    ) -> Res<KVal> {
         if let (KVal::Num(a), KVal::Num(b)) = (&a, &b) {
             if a.unit != b.unit {
                 return Err(Diagnostic::new("both branches need the same unit", span));

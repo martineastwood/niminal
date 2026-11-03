@@ -12,6 +12,10 @@ use crate::opcode::{Opcode, Port, ProcessCtx};
 pub struct Compressor {
     envelope_db: f32,
     sample_rate: f32,
+    cached_for: (f32, f32, f32),
+    attack_coeff: f32,
+    release_coeff: f32,
+    knee_db: f32,
 }
 
 impl Default for Compressor {
@@ -19,6 +23,10 @@ impl Default for Compressor {
         Self {
             envelope_db: 0.0,
             sample_rate: 48_000.0,
+            cached_for: (f32::NAN, f32::NAN, f32::NAN),
+            attack_coeff: 0.0,
+            release_coeff: 0.0,
+            knee_db: 0.0,
         }
     }
 }
@@ -54,6 +62,7 @@ impl Opcode for Compressor {
 
     fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
+        self.cached_for = (f32::NAN, f32::NAN, f32::NAN);
     }
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {
@@ -67,11 +76,19 @@ impl Opcode for Compressor {
             return;
         }
         let sr = self.sample_rate.max(1.0);
-        let attack_coeff = (-1.0 / (inputs[3][0].max(0.0) * sr).max(1.0)).exp();
-        let release_coeff = (-1.0 / (inputs[4][0].max(0.0) * sr).max(1.0)).exp();
-        // The knee is represented as a linear gain at the opcode boundary.
-        let knee_db = 20.0 * inputs[7][0].max(1.0).log10();
         for (i, o) in out.iter_mut().enumerate() {
+            let controls = (
+                inputs[3][i].max(0.0),
+                inputs[4][i].max(0.0),
+                inputs[7][i].max(1.0),
+            );
+            if controls != self.cached_for {
+                self.attack_coeff = (-1.0 / (controls.0 * sr).max(1.0)).exp();
+                self.release_coeff = (-1.0 / (controls.1 * sr).max(1.0)).exp();
+                self.knee_db = 20.0 * controls.2.log10();
+                self.cached_for = controls;
+            }
+            let knee_db = self.knee_db;
             let x = inputs[0][i];
             let threshold = inputs[1][i].abs().max(1e-8);
             let ratio = inputs[2][i].max(1.0);
@@ -92,9 +109,9 @@ impl Opcode for Compressor {
                 (over_db + knee_db / 2.0).powi(2) / (2.0 * knee_db)
             };
             let coeff = if target_db > self.envelope_db {
-                attack_coeff
+                self.attack_coeff
             } else {
-                release_coeff
+                self.release_coeff
             };
             self.envelope_db = target_db + coeff * (self.envelope_db - target_db);
             let reduction_db = self.envelope_db * (1.0 / ratio - 1.0);

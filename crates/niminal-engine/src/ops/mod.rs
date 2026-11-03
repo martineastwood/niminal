@@ -12,6 +12,7 @@ mod convolve;
 mod custom;
 mod dc_block;
 mod delay;
+mod delay_time;
 mod distortion;
 mod env;
 mod eq;

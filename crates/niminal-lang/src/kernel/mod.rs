@@ -6,15 +6,15 @@
 //! at note start, once per block, or every sample. Functions the body calls are
 //! copied in, with their own state.
 
-mod emit;
-mod functions;
-mod stmts;
-mod exprs;
-mod scopes;
 mod calls;
-mod natives;
-mod lanes;
+mod emit;
+mod exprs;
+mod functions;
 mod helpers;
+mod lanes;
+mod natives;
+mod scopes;
+mod stmts;
 pub(crate) use helpers::*;
 
 use std::collections::{HashMap, HashSet};

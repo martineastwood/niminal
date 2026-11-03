@@ -532,7 +532,7 @@ fn render(
                 break;
             }
             // Lifecycle receipts are not exported, but must remain bounded for long projects.
-            session.take_voice_updates();
+            session.take_voice_updates(|_| false);
         }
         for (_, _, _, _, writer) in &mut outputs {
             if let Some(writer) = writer.take() {

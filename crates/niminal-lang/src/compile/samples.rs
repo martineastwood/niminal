@@ -4,7 +4,11 @@ use super::*;
 
 /// `mono bass(...) { legato = true  glide = 80ms  priority = lowest }` and
 /// `instr pad(...) { max = 8  steal = quietest  same_note = release  choke = group }`.
-pub(super) fn voice_options(def: &InstrDef, instrument: &mut Instrument, state: &mut SampleState) -> Res<()> {
+pub(super) fn voice_options(
+    def: &InstrDef,
+    instrument: &mut Instrument,
+    state: &mut SampleState,
+) -> Res<()> {
     let mut max = def.mono.then_some(1);
     let mono_only = |option: &Ident| {
         Diagnostic::new(

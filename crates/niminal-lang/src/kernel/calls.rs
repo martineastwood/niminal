@@ -473,7 +473,12 @@ impl Kb<'_> {
     }
 
     /// The values of a call such as `min(a, b)` or `a.mod(b)`, without names.
-    pub(super) fn plain_args(&mut self, name: &Ident, args: &[Arg], count: usize) -> Res<Vec<(KVal, Span)>> {
+    pub(super) fn plain_args(
+        &mut self,
+        name: &Ident,
+        args: &[Arg],
+        count: usize,
+    ) -> Res<Vec<(KVal, Span)>> {
         if args.len() != count {
             return Err(Diagnostic::new(
                 format!("`{}` takes {count} values", name.name),
@@ -503,7 +508,13 @@ impl Kb<'_> {
         })
     }
 
-    pub(super) fn combine_scalar(&mut self, name: &Ident, a: Value, b: Value, b_span: Span) -> Res<Value> {
+    pub(super) fn combine_scalar(
+        &mut self,
+        name: &Ident,
+        a: Value,
+        b: Value,
+        b_span: Span,
+    ) -> Res<Value> {
         match name.name.as_str() {
             "pow" => {
                 if a.unit != Unit::Num || b.unit != Unit::Num {

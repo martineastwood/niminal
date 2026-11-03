@@ -53,13 +53,18 @@ impl crate::Session {
                     .to_string()
             })
     }
-    pub fn take_voice_updates(&mut self) -> Vec<(u64, Value)> {
+    /// The updates for clients `wanted` says are listening; the rest are marked announced without
+    /// building their messages.
+    pub fn take_voice_updates(&mut self, wanted: impl Fn(u64) -> bool) -> Vec<(u64, Value)> {
         let mut updates = Vec::new();
         for note in &mut self.activities {
             let times = note.times();
             for i in 0..4 {
                 if times[i] != WAITING_SAMPLE && note.announced[i] == WAITING_SAMPLE {
                     note.announced[i] = times[i];
+                    if !wanted(note.activity.owner) {
+                        continue;
+                    }
                     let mut value = note.json();
                     value["state"] = json!(["started", "released", "ended", "dropped"][i]);
                     value["sample"] = json!(times[i]);

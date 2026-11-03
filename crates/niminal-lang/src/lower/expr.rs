@@ -347,7 +347,12 @@ impl Lower<'_> {
 
     /// Transpose nested values into scalar reads. Each read shares the same
     /// wrapping rules and takes constant time, regardless of array length.
-    pub(super) fn index_values(&mut self, items: Vec<Datum>, index: &Sig, span: Span) -> Res<Datum> {
+    pub(super) fn index_values(
+        &mut self,
+        items: Vec<Datum>,
+        index: &Sig,
+        span: Span,
+    ) -> Res<Datum> {
         let Some(first) = items.first() else {
             return Err(Diagnostic::new("this array is empty", span));
         };
@@ -419,7 +424,13 @@ impl Lower<'_> {
         }
     }
 
-    pub(super) fn read_values(&mut self, sigs: Vec<Sig>, pos: &Sig, interp: Interp, span: Span) -> Res<Sig> {
+    pub(super) fn read_values(
+        &mut self,
+        sigs: Vec<Sig>,
+        pos: &Sig,
+        interp: Interp,
+        span: Span,
+    ) -> Res<Sig> {
         let Some(first) = sigs.first() else {
             return Err(Diagnostic::new("this array is empty", span));
         };
@@ -592,5 +603,4 @@ impl Lower<'_> {
             src => Sig::signal(src, sig.unit),
         }
     }
-
 }

@@ -1,5 +1,6 @@
 //! Stereo figure-of-eight reverb with input diffusion and early reflections.
 
+use super::delay_time::DelayTime;
 use crate::denormals::flush32 as flush;
 use crate::opcode::{Opcode, Port, ProcessCtx, TAIL_LEVEL};
 
@@ -17,21 +18,27 @@ const PORTS: &[Port] = &[
     Port::optional("early_mix", 0.75),
 ];
 
-/// A delay whose read taps advance together. Tap positions are forward offsets
-/// from the write head, matching the tank's output tap geometry.
+/// Fixed-capacity history with smoothly moving read taps. Target taps retain
+/// the original forward-offset geometry within the effective delay length.
 #[derive(Clone)]
 struct Delay<const N: usize> {
     buffer: Vec<f32>,
-    indices: [usize; N],
+    write: usize,
+    taps: [usize; N],
+    read_times: [DelayTime; N],
+    distances: [f64; N],
     length: usize,
     peak: f32,
 }
 
 impl<const N: usize> Delay<N> {
-    fn new(capacity: usize) -> Self {
+    fn new(capacity: usize, sr: f32) -> Self {
         Self {
             buffer: vec![0.0; capacity.max(1)],
-            indices: [0; N],
+            write: 0,
+            taps: [0; N],
+            read_times: [DelayTime::new(sr); N],
+            distances: [1.0; N],
             length: 1,
             peak: 0.0,
         }
@@ -39,32 +46,49 @@ impl<const N: usize> Delay<N> {
 
     fn clear(&mut self) {
         self.buffer.fill(0.0);
-        self.indices.fill(0);
+        self.write = 0;
+        for time in &mut self.read_times {
+            time.reset();
+        }
         self.peak = 0.0;
     }
 
     fn configure(&mut self, length: usize, taps: [usize; N]) {
         self.clear();
+        self.retime(length, taps);
+        self.move_taps();
+    }
+
+    fn retime(&mut self, length: usize, taps: [usize; N]) {
         self.length = length.clamp(1, self.buffer.len());
-        self.indices = taps.map(|i| i.min(self.length - 1));
+        self.taps = taps.map(|i| i.min(self.length - 1));
+    }
+
+    fn move_taps(&mut self) {
+        for i in 0..N {
+            self.distances[i] = self.read_times[i].next((self.length - self.taps[i]) as f64);
+        }
     }
 
     fn tap(&self, index: usize) -> f32 {
-        self.buffer[self.indices[index]]
+        let distance = self.distances[index];
+        let whole = distance.floor() as usize;
+        let frac = (distance - whole as f64) as f32;
+        let len = self.buffer.len();
+        let index = (self.write + len - whole) % len;
+        let newer = self.buffer[index];
+        let older = self.buffer[(index + len - 1) % len];
+        newer + (older - newer) * frac
     }
 
     fn step(&mut self, input: f32, feedback: f32) -> f32 {
+        self.move_taps();
         let delayed = self.tap(0);
         let out = delayed - input * feedback;
         let stored = flush(input + out * feedback);
-        self.buffer[self.indices[0]] = stored;
+        self.buffer[self.write] = stored;
         self.peak = stored.abs();
-        for index in &mut self.indices {
-            *index += 1;
-            if *index >= self.length {
-                *index = 0;
-            }
-        }
+        self.write = (self.write + 1) % self.buffer.len();
         out
     }
 }
@@ -147,11 +171,11 @@ impl Mverb {
         let samples = |seconds: f64| (seconds * rate) as usize + 1;
         let mut this = Self {
             sr,
-            diffusers: [0.0048, 0.0036, 0.0127, 0.0093].map(|t| Delay::new(samples(t))),
-            allpasses: [0.020, 0.060, 0.030, 0.089].map(|t| Delay::new(samples(t))),
-            tank: [0.15, 0.12, 0.14, 0.11].map(|t| Delay::new(samples(t))),
-            early: [0.089, 0.069].map(|t| Delay::new(samples(t))),
-            predelay: Delay::new(samples(0.2)),
+            diffusers: [0.0048, 0.0036, 0.0127, 0.0093].map(|t| Delay::new(samples(t), sr)),
+            allpasses: [0.020, 0.060, 0.030, 0.089].map(|t| Delay::new(samples(t), sr)),
+            tank: [0.15, 0.12, 0.14, 0.11].map(|t| Delay::new(samples(t), sr)),
+            early: [0.089, 0.069].map(|t| Delay::new(samples(t), sr)),
+            predelay: Delay::new(samples(0.2), sr),
             bandwidth: std::array::from_fn(|_| Lowpass::default()),
             damping: std::array::from_fn(|_| Damping::default()),
             previous: [0.0; 2],
@@ -199,7 +223,11 @@ impl Mverb {
         .into_iter()
         .enumerate()
         {
-            self.allpasses[i].configure(samples(time), taps.map(samples));
+            if self.initialized {
+                self.allpasses[i].retime(samples(time), taps.map(samples));
+            } else {
+                self.allpasses[i].configure(samples(time), taps.map(samples));
+            }
         }
         for (i, (time, taps)) in [
             (0.15, [0.0, 0.067, 0.011, 0.121]),
@@ -210,7 +238,11 @@ impl Mverb {
         .into_iter()
         .enumerate()
         {
-            self.tank[i].configure(samples(time), taps.map(samples));
+            if self.initialized {
+                self.tank[i].retime(samples(time), taps.map(samples));
+            } else {
+                self.tank[i].configure(samples(time), taps.map(samples));
+            }
         }
     }
 
@@ -250,7 +282,16 @@ impl Mverb {
             self.control_counter = 0;
         }
         self.control_counter += 1;
-        self.predelay.length = (self.smooth[4] as usize).clamp(1, self.predelay.buffer.len());
+        // Match the standalone delay's near-integral sample snapping, so
+        // arithmetic rounding cannot select a neighboring delay length.
+        let requested = self.smooth[4];
+        let nearest = requested.round();
+        let samples = if (requested - nearest).abs() < 1e-3 {
+            nearest
+        } else {
+            requested
+        };
+        self.predelay.length = (samples as usize).clamp(1, self.predelay.buffer.len());
         let b = [self.bandwidth[0].step(left), self.bandwidth[1].step(right)];
         let mut early = [0.0; 2];
         for (side, out) in early.iter_mut().enumerate() {
@@ -358,10 +399,14 @@ impl Opcode for Mverb {
         // Restore the output tap positions, which clear() rewinds.
         self.set_size(self.size);
         let rate = f64::from(self.sr);
-        self.early[0].indices =
-            [0.0, 0.0199, 0.0219, 0.0354, 0.0389, 0.0414, 0.0692, 0.0].map(|t| (t * rate) as usize);
-        self.early[1].indices =
-            [0.0, 0.0099, 0.011, 0.0182, 0.0189, 0.0213, 0.0431, 0.0].map(|t| (t * rate) as usize);
+        self.early[0].configure(
+            (0.089 * rate) as usize,
+            [0.0, 0.0199, 0.0219, 0.0354, 0.0389, 0.0414, 0.0692, 0.0].map(|t| (t * rate) as usize),
+        );
+        self.early[1].configure(
+            (0.069 * rate) as usize,
+            [0.0, 0.0099, 0.011, 0.0182, 0.0189, 0.0213, 0.0431, 0.0].map(|t| (t * rate) as usize),
+        );
         self.quiet = self.tail_window;
     }
     fn carry_state(&mut self, old: &mut dyn Opcode) {
@@ -497,6 +542,41 @@ mod tests {
         for _ in 0..1000 {
             assert_eq!(carried.frame(&p), expected.frame(&p));
         }
+    }
+
+    #[test]
+    fn size_changes_preserve_history_with_bounded_read_head_motion() {
+        let mut r = Mverb::default();
+        let mut p = controls();
+        p[10] = 1.0;
+        p[0] = 1.0;
+        r.frame(&p);
+        p[0] = 0.0;
+        for _ in 0..12000 {
+            r.frame(&p);
+        }
+        let before = r.tank[0].buffer.clone();
+        let head = r.tank[0].distances;
+        p[7] = 1.0;
+        r.frame(&p);
+        // A size change must not erase the stored tail or rewrite the buffer.
+        let changed = before
+            .iter()
+            .zip(&r.tank[0].buffer)
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(changed <= 1, "size change rewrote {changed} stored samples");
+        for (a, b) in head.into_iter().zip(r.tank[0].distances) {
+            assert!((a - b).abs() <= 0.5);
+        }
+        let mut energy = 0.0;
+        for i in 0..48000 {
+            p[7] = if i % 2 == 0 { 0.0 } else { 1.0 };
+            let out = r.frame(&p);
+            assert!(out.iter().all(|x| x.is_finite() && x.abs() < 10.0));
+            energy += out[0] * out[0] + out[1] * out[1];
+        }
+        assert!(energy > 1e-8, "size automation erased the late tail");
     }
 
     #[test]

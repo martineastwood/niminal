@@ -238,8 +238,7 @@ fn function_arguments_are_checked_like_any_other() {
 
 #[test]
 fn function_body_errors() {
-    let body =
-        |b: &str| format!("fn f(x: num, amount: 0..1 = 0.5, cutoff: hz = 100hz) {{ {b} }}");
+    let body = |b: &str| format!("fn f(x: num, amount: 0..1 = 0.5, cutoff: hz = 100hz) {{ {b} }}");
     let state = |b: &str| body(&format!("state s = 0.0\n{b}"));
     assert_eq!(
         msg(&body("x * undefined_thing")),
@@ -314,8 +313,7 @@ fn state_and_untyped_parameters_belong_to_the_right_definitions() {
 
 #[test]
 fn a_broken_function_is_reported_once_even_if_it_is_used() {
-    let errs =
-        errors("\nfn bad(x) { x + undefined_thing }\ninstr a(f: hz) { osc(saw, f).bad }\n");
+    let errs = errors("\nfn bad(x) { x + undefined_thing }\ninstr a(f: hz) { osc(saw, f).bad }\n");
     assert_eq!(errs.len(), 1, "{errs:?}");
     assert_eq!(errs[0].message, "`undefined_thing` is not defined");
     // even when nothing calls it
@@ -338,9 +336,7 @@ fn rates_on_parameters_are_checked() {
         "`n` must be known while compiling"
     );
     assert_eq!(
-        msg(
-            "fn rep(x, n: const int = 2) { x * n }\ninstr a(f: hz) { osc(saw, f).rep(n: 2.5) }"
-        ),
+        msg("fn rep(x, n: const int = 2) { x * n }\ninstr a(f: hz) { osc(saw, f).rep(n: 2.5) }"),
         "`n` expects a whole number, found 2.5"
     );
     // Structural parameters need defaults; scalar parameters retain their rate.
@@ -428,8 +424,7 @@ fn a_tail_is_a_time() {
 fn settings_are_written_in_the_body_and_with_is_gone() {
     ok("mono a(freq: hz) { legato = true\nglide = 50ms\n osc(saw, freq) }");
     assert!(
-        msg("instr a(f: hz) { quantize = 1bar\n osc(saw, f) }")
-            .contains("belong to the client")
+        msg("instr a(f: hz) { quantize = 1bar\n osc(saw, f) }").contains("belong to the client")
     );
     assert_eq!(
         msg("instr a(f: hz) with(tail: 2sec) { osc(saw, f) }"),
@@ -627,9 +622,7 @@ fn feedback_between_nodes_is_an_error_naming_them() {
     assert!(d.help.unwrap().contains("`late`"));
 
     // a late send breaks the loop
-    ok(
-        "bus x\nbus y\nfx a { out = x.lpf(cutoff: 1khz).to(y) }\nfx b { out = y\n x += late(out) }",
-    );
+    ok("bus x\nbus y\nfx a { out = x.lpf(cutoff: 1khz).to(y) }\nfx b { out = y\n x += late(out) }");
     // outside a send, `prev` is one sample earlier
     ok("bus x\nfx a { out = prev(x) }");
     let d = first_error("bus x\nfx a { out = x.to(x) }");
@@ -717,9 +710,8 @@ fn pan_places_a_mono_signal_in_the_master_layout() {
         "config { channels: stereo }\ninstr a(f: hz, az: deg = 10deg) { osc(saw, f).pan(angle: az) }",
     );
 
-    let d = first_error(
-        "config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan(angle: 20) }",
-    );
+    let d =
+        first_error("config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan(angle: 20) }");
     assert_eq!(d.message, "`angle` expects an angle, found a plain number");
     assert_eq!(d.help.as_deref(), Some("did you mean `20deg`?"));
     assert_eq!(
@@ -738,21 +730,16 @@ fn pan_places_a_mono_signal_in_the_master_layout() {
 
 #[test]
 fn angles_follow_the_unit_rules() {
-    ok(
-        "config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan(angle: 20deg * 2 - 5deg) }",
-    );
+    ok("config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan(angle: 20deg * 2 - 5deg) }");
     assert_eq!(
-        msg(
-            "config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan(angle: 20deg + 1hz) }"
-        ),
+        msg("config { channels: stereo }\ninstr a(f: hz) { osc(saw, f).pan(angle: 20deg + 1hz) }"),
         "can't add an angle and hz"
     );
 }
 
 #[test]
 fn channel_lists_and_destructuring() {
-    let stereo =
-        |body: &str| format!("config {{ channels: stereo }}\ninstr a(f: hz) {{ {body} }}");
+    let stereo = |body: &str| format!("config {{ channels: stereo }}\ninstr a(f: hz) {{ {body} }}");
     let p = ok(&stereo("[osc(saw, f), osc(sine, f)]"));
     assert_eq!(p.instruments[0].graph.channels(), 2);
 

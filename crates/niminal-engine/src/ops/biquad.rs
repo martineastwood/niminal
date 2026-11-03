@@ -15,16 +15,19 @@ pub enum BiquadMode {
 }
 
 /// One biquad section. The named modes work out their coefficients from `cutoff` and `q` (the standard
-/// cookbook shapes) only when those change; `Raw` takes the coefficients as they are.
+/// cookbook shapes) only when those change, using a trapezoidal SVF realization
+/// for modulation. `Raw` takes the coefficients as they are.
 #[derive(Clone)]
 pub struct Biquad {
     mode: BiquadMode,
     sample_rate: f32,
-    // transposed direct form II
+    // Raw: transposed direct form II. Named: trapezoidal integrator memories.
     z1: f64,
     z2: f64,
     cached_for: (f32, f32),
     c: [f64; 5],
+    // Named sections use a TPT state variable topology for cutoff modulation.
+    svf: [f64; 4],
 }
 
 impl Biquad {
@@ -36,6 +39,7 @@ impl Biquad {
             z2: 0.0,
             cached_for: (f32::NAN, f32::NAN),
             c: [1.0, 0.0, 0.0, 0.0, 0.0],
+            svf: [0.0; 4],
         }
     }
 
@@ -45,19 +49,11 @@ impl Biquad {
         }
         self.cached_for = (cutoff, q);
         let sr = f64::from(self.sample_rate);
-        let w = std::f64::consts::TAU * f64::from(cutoff).clamp(1.0, sr * 0.49) / sr;
-        let alpha = w.sin() / (2.0 * f64::from(q).max(0.01));
-        let a0 = 1.0 + alpha;
-        let c = w.cos();
-        let (b0, b1, b2) = match self.mode {
-            BiquadMode::Low => ((1.0 - c) / 2.0, 1.0 - c, (1.0 - c) / 2.0),
-            BiquadMode::High => ((1.0 + c) / 2.0, -(1.0 + c), (1.0 + c) / 2.0),
-            BiquadMode::Band => (alpha, 0.0, -alpha),
-            BiquadMode::Notch => (1.0, -2.0 * c, 1.0),
-            BiquadMode::All => (1.0 - alpha, -2.0 * c, 1.0 + alpha),
-            BiquadMode::Raw => unreachable!("raw sections take their coefficients as inputs"),
-        };
-        self.c = [b0 / a0, b1 / a0, b2 / a0, -2.0 * c / a0, (1.0 - alpha) / a0];
+        let fc = f64::from(cutoff).clamp(1.0, sr * 0.49);
+        let g = (std::f64::consts::PI * fc / sr).tan();
+        let k = 1.0 / f64::from(q).max(0.01);
+        let a1 = 1.0 / (1.0 + g * (g + k));
+        self.svf = [a1, g * a1, g * g * a1, k];
     }
 
     #[inline(always)]
@@ -81,6 +77,21 @@ impl Biquad {
             ];
         } else {
             self.update(inputs[1], inputs[2]);
+            let [a1, a2, a3, k] = self.svf;
+            let x = f64::from(inputs[0]);
+            let v3 = x - self.z2;
+            let band = a1 * self.z1 + a2 * v3;
+            let low = self.z2 + a2 * self.z1 + a3 * v3;
+            self.z1 = flush(2.0 * band - self.z1);
+            self.z2 = flush(2.0 * low - self.z2);
+            return match self.mode {
+                BiquadMode::Low => low,
+                BiquadMode::High => x - k * band - low,
+                BiquadMode::Band => k * band,
+                BiquadMode::Notch => x - k * band,
+                BiquadMode::All => x - 2.0 * k * band,
+                BiquadMode::Raw => unreachable!(),
+            } as f32;
         }
         self.run(f64::from(inputs[0]))
     }

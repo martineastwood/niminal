@@ -1,15 +1,15 @@
 //! Program-level compilation: tempo, functions, instruments and notes.
 
-mod nodes;
-mod samples;
 mod config;
 mod literals;
+mod nodes;
+mod samples;
 #[cfg(test)]
 mod tests;
-use nodes::*;
-pub(crate) use samples::*;
 use config::*;
 pub use literals::*;
+use nodes::*;
+pub(crate) use samples::*;
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;

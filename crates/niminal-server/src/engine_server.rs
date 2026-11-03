@@ -895,7 +895,13 @@ impl EngineServer {
         for (client, params) in self.reports.poll(&self.session) {
             self.send_to_client_subscriber(client, "reports", "report", params);
         }
-        for (client, params) in self.session.take_voice_updates() {
+        let clients = &self.clients;
+        let listening = |client| {
+            clients
+                .get(&client)
+                .is_some_and(|c| c.greeted && c.topics.contains("voices"))
+        };
+        for (client, params) in self.session.take_voice_updates(listening) {
             self.send_to_client_subscriber(client, "voices", "voice", params);
         }
         self.session
