@@ -34,6 +34,8 @@ lead.start
 
 `space += out` sends a copy while the instrument also outputs to master. For an entirely wet signal, send a local signal to the bus and omit `out` and a final value. Several instruments can send to the same bus to share one fx instance. Declare separate buses and fx instances for independent effect state.
 
+A clip can send everything it plays to a bus without any change to its instrument, which is how a kit of `std/drums` presets (or any instrument that has no send of its own) reaches an fx: `send: space -8db` in the clip. The gain is optional. The clip's own sound still goes to master, and a clip made from another (`clip b = a.transpose(+5st)`) keeps the send. See `examples/clip_send.nml`.
+
 An fx can also generate audio or process `input(1)`. Fx output goes to master unless its final `out` is routed with `.to(bus)`. Declaration order does not matter.
 
 ## Execution order

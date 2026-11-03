@@ -254,8 +254,21 @@ pub fn project(
             | Item::If { .. } => {}
             Item::Clip(c) => {
                 if let Some(instrument) = instrument_of(c, items, 0) {
+                    let send = match entry_of(c, items, "send", 0) {
+                        Some(Expr {
+                            kind: ExprKind::Call { args, .. },
+                            ..
+                        }) => {
+                            let text = |e: &Expr| &source[e.span.start..e.span.end];
+                            let gain = args
+                                .get(1)
+                                .map_or(String::new(), |g| format!(".gain({})", text(&g.value)));
+                            format!("\n{} += in{gain}", text(&args[0].value))
+                        }
+                        _ => String::new(),
+                    };
                     pieces.push(derived(format!(
-                        "node {} {{ instrument = {} }}",
+                        "node {} {{ instrument = {}{send} }}",
                         c.name.name,
                         &source[instrument.span.start..instrument.span.end]
                     )));
@@ -504,25 +517,35 @@ fn is_gesture(clip: &niminal_lang::ast::NamedBlock, items: &[(Item, Span)], dept
         && items.iter().any(|(item, _)| matches!(item, Item::Clip(base) if base.name.name == root && is_gesture(base, items, depth + 1)))
 }
 
-/// The instrument a clip plays: its own `instrument:`, or its base's when it is made from another clip
+/// The entry `key` of a clip, or of its base when it is made from another clip
 /// (`clip bass_chorus = bass.transpose(+5st)`).
+fn entry_of<'a>(
+    clip: &'a niminal_lang::ast::NamedBlock,
+    items: &'a [(Item, Span)],
+    key: &str,
+    depth: usize,
+) -> Option<&'a Expr> {
+    if let Some((_, value)) = clip.entries.iter().find(|(n, _)| n.name == key) {
+        return Some(value);
+    }
+    let root = clip.base.as_deref()?.root_name()?;
+    // a clip made from itself, or a long chain of them, has no entry to find
+    if depth > 16 || root == clip.name.name {
+        return None;
+    }
+    items.iter().find_map(|(item, _)| match item {
+        Item::Clip(base) if base.name.name == root => entry_of(base, items, key, depth + 1),
+        _ => None,
+    })
+}
+
+/// The instrument a clip plays: its own `instrument:`, or its base's.
 fn instrument_of<'a>(
     clip: &'a niminal_lang::ast::NamedBlock,
     items: &'a [(Item, Span)],
     depth: usize,
 ) -> Option<&'a Expr> {
-    if let Some((_, instrument)) = clip.entries.iter().find(|(n, _)| n.name == "instrument") {
-        return Some(instrument);
-    }
-    let root = clip.base.as_deref()?.root_name()?;
-    // a clip made from itself, or a long chain of them, has no instrument to find
-    if depth > 16 || root == clip.name.name {
-        return None;
-    }
-    items.iter().find_map(|(item, _)| match item {
-        Item::Clip(base) if base.name.name == root => instrument_of(base, items, depth + 1),
-        _ => None,
-    })
+    entry_of(clip, items, "instrument", depth)
 }
 
 /// The musical units in `text`, each with what stands for it in seconds.

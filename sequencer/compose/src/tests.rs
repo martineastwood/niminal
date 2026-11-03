@@ -714,6 +714,16 @@ fn out_and_it_rules() {
 }
 
 #[test]
+fn clip_send_adds_a_bus_send_after_the_clip() {
+    let p = ok("bus space\ninstr pluck(freq: hz) { osc(saw, freq) }\nclip lead { instrument: pluck, send: space -8db }\nclip bare { instrument: pluck, send: space }\nclip child = lead.transpose(+5st)\n");
+    let node = |name: &str| p.nodes.iter().find(|n| n.name == name).unwrap();
+    assert_eq!(node("lead").def.chain.as_ref().unwrap().send_buses(), [0], "the clip's node sends to the bus");
+    assert_eq!(node("bare").def.chain.as_ref().unwrap().send_buses(), [0]);
+    assert_eq!(node("child").def.chain.as_ref().unwrap().send_buses(), [0], "a clip made from another keeps its send");
+    assert!(msg("bus space\ninstr pluck(freq: hz) { osc(saw, freq) }\nclip lead { instrument: pluck, send: nowhere }\n").contains("nowhere"));
+}
+
+#[test]
 fn bus_rules() {
     let with = |body: &str| format!("bus space\n{body}");
     assert_eq!(

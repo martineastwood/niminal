@@ -273,13 +273,10 @@ pub fn compile_with(
     }
     // Instrument selection is lowered to DSP nodes, leaving just the clip lanes.
     for item in &mut items {
-        if let Item::Clip(block) = item
-            && let Some(at) = block
+        if let Item::Clip(block) = item {
+            block
                 .entries
-                .iter()
-                .position(|(key, _)| key.name == "instrument")
-        {
-            block.entries.remove(at);
+                .retain(|(key, _)| !matches!(key.name.as_str(), "instrument" | "send"));
         }
     }
 

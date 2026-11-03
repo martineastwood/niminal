@@ -201,9 +201,13 @@ fn prepare_routing(parsed: &mut Vec<Item>) -> Res<BTreeMap<String, String>> {
                     ));
                 }
                 for stmt in &mut d.body {
+                    if matches!(stmt, Stmt::AddAssign { .. }) {
+                        // `space += in.gain(-8db)`: a send to a bus, checked when the node compiles
+                        continue;
+                    }
                     let Stmt::Bind { name, value } = stmt else {
                         return Err(Diagnostic::new(
-                            "a collection accepts instrument, output, gain and pan; put DSP in an fx",
+                            "a collection accepts instrument, output, gain, pan and sends; put DSP in an fx",
                             d.span,
                         ));
                     };

@@ -287,6 +287,36 @@ impl Parser {
                         span: key.span,
                     };
                     entries.push((key, value));
+                } else if !bare && key.name == "send" {
+                    // `send: space -8db`: a bus, then an optional gain
+                    self.expect(&Tok::Colon)?;
+                    let bus = self.ident("the name of a bus")?;
+                    let mut args = vec![Arg {
+                        name: None,
+                        receiver: false,
+                        value: Expr {
+                            kind: ExprKind::Name(bus.name),
+                            span: bus.span,
+                        },
+                    }];
+                    let mut span = bus.span;
+                    if !matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::RBrace) {
+                        let gain = self.expr()?;
+                        span = span.to(gain.span);
+                        args.push(Arg {
+                            name: None,
+                            receiver: false,
+                            value: gain,
+                        });
+                    }
+                    let name = key.clone();
+                    entries.push((
+                        key,
+                        Expr {
+                            kind: ExprKind::Call { name, args },
+                            span,
+                        },
+                    ));
                 } else {
                     self.expect(&Tok::Colon)?;
                     entries.push((key, self.expr()?));

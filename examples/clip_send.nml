@@ -1,0 +1,25 @@
+// A clip can send to a bus: `send: space -8db` adds a copy of everything the clip plays to the
+// bus (at -8db) while the clip's own sound still goes to the master.
+config { channels: stereo }
+tempo 124bpm
+use std/drums.{kick_808, snare_fat, hat_closed}
+
+bus space: stereo
+fx hall { out = space.reverb(room: 0.9, damp: 0.9) }
+
+drums = kit {
+  kick: kick_808
+  snare: snare_fat
+  hat: hat_closed
+}
+
+clip beat {
+  instrument: drums
+  send: space -8db
+  notes: grid {
+    kick:  x... x... x... x...
+    snare: .... x... .... x...
+    hat:   xxxx xxxx xxxx xxxx
+  }
+}
+beat.start
