@@ -107,3 +107,39 @@ instr bell(
   shimmer = osc(sine, freq * 3.5) * perc(decay: decay * 0.5) * 2
   osc(sine, freq, phase_mod: shimmer) * perc(decay: decay) * 0.3
 }
+
+// folder: acoustic/strings
+
+/// A sustained bowed string. Pressure and bow position reshape the stick-slip tone; speed drives the
+/// bow. Light pressure or extreme settings can whistle or stop speaking. Brightness sets string loss.
+instr bowed_string(
+  freq: hz = a3,
+  pressure: 0..1 = 0.7,
+  position: 0..1 = 0.25,
+  speed: 0..1 = 0.6,
+  brightness: 0..1 = 0.5,
+  attack: 5ms..1sec = 40ms,
+  release: 20ms..3sec = 200ms
+) {
+  level = env[0 attack 1 | release 0]
+  bowed(freq, pressure: pressure, position: position, velocity: speed * level,
+    brightness: brightness) * level * 0.8
+}
+
+// folder: acoustic/winds
+
+/// A sustained reed wind, with a clarinet-like bore. Pressure and stiffness change the reed response;
+/// breath adds air noise, and brightness changes the bore's losses. Some combinations choke or overblow.
+instr reed_wind(
+  freq: hz = a3,
+  pressure: 0..1 = 0.65,
+  stiffness: 0..1 = 0.5,
+  breath: 0..1 = 0.1,
+  brightness: 0..1 = 0.5,
+  attack: 5ms..1sec = 30ms,
+  release: 20ms..3sec = 180ms
+) {
+  level = env[0 attack 1 | release 0]
+  reed(freq, pressure: pressure * level, stiffness: stiffness, breath: breath,
+    brightness: brightness) * level * 0.35
+}

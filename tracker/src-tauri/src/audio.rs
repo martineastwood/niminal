@@ -231,8 +231,9 @@ fn bar_beats_of(song: &Song) -> f64 {
 }
 
 impl Worker {
-    /// Connects to the engine on `port`. The engine is the user's to run (`niminal server`).
+    /// Connects to the engine on `port`, starting one if none is running.
     fn connect(&mut self, port: u16, token: Option<&str>) -> Result<(Client, Value), String> {
+        niminal_ws::launch::ensure_server(port, token)?;
         Client::connect_as(port, token, "niminal-tracker")
     }
 

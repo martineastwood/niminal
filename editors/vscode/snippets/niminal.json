@@ -1,0 +1,24 @@
+{
+  "Bowed string instrument": {
+    "prefix": "instr-bowed",
+    "body": [
+      "instr ${1:strings}(freq: hz, pressure: 0..1 = 0.7, position: 0..1 = 0.25, brightness: 0..1 = 0.5) {",
+      "  level = env[0 40ms 1 | 200ms 0]",
+      "  bowed(freq, pressure: pressure, position: position, velocity: level * 0.6, brightness: brightness) * level * 0.8",
+      "}",
+      "$0"
+    ],
+    "description": "Sustained waveguide bowed string with pressure, bow position, brightness and a release envelope."
+  },
+  "Reed wind instrument": {
+    "prefix": "instr-reed",
+    "body": [
+      "instr ${1:wind}(freq: hz, pressure: 0..1 = 0.65, stiffness: 0..1 = 0.5, breath: 0..1 = 0.1, brightness: 0..1 = 0.5) {",
+      "  level = env[0 30ms 1 | 180ms 0]",
+      "  reed(freq, pressure: pressure * level, stiffness: stiffness, breath: breath, brightness: brightness) * level * 0.35",
+      "}",
+      "$0"
+    ],
+    "description": "Clarinet-like waveguide reed with blowing pressure, stiffness, breath noise and a release envelope."
+  }
+}

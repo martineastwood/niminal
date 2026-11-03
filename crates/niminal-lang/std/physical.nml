@@ -1,5 +1,5 @@
-// Models of struck and plucked things: `use std/physical`. `modal`, the bank of resonators they are made
-// of, is an opcode.
+// Struck and plucked helpers: `use std/physical`. Sustained `bowed` and `reed` sources,
+// and the `modal` resonator bank, are built-in opcodes and need no `use`.
 
 /// A plucked string (Karplus-Strong). Feed it a short burst of noise or an impulse; the burst circulates in
 /// a delay line of one period that loses a little each time round, so it settles into a tone at `freq`.

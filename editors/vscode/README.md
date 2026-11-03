@@ -61,6 +61,12 @@ Named controls (`ctl`), MIDI CC / learn, OSC in, and keyboard clips (`keys: midi
 
 See the [live coding guide](https://niminal.dev/guide/live-coding/) and [performance reference](https://niminal.dev/reference/language/performance/). Examples: `examples/live_controls.nml`, `examples/midi_osc.nml`.
 
+## Physical-model starters
+
+Type `instr-bowed` or `instr-reed` in a `.nml` file to insert a playable waveguide instrument with an excitation and release envelope. The shared language server supplies completion and hover for `bowed`, `reed`, and their named controls. Ready-made variants are available with `use std/instruments.{bowed_string, reed_wind}`; `examples/physical_models.nml` auditions both.
+
+After updating, install the current `niminal` and `niminal-live` binaries, run `npm run install-ext` here, and reload the VS Code window so its manifest and snippets refresh.
+
 ## Tests
 
 `npm test` runs the block finder and the protocol client against a real server (build it first with `cargo build`).

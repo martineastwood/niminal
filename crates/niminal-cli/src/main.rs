@@ -92,6 +92,10 @@ struct ServerArgs {
     /// Run without a sound card, at real speed, throwing the audio away.
     #[arg(long)]
     no_audio: bool,
+    /// Stop when no client has been connected for 10 seconds. The apps start the server this way, so it goes
+    /// when the last of them closes.
+    #[arg(long)]
+    exit_when_unused: bool,
     /// Record everything sent to the session here, to replay later. By default
     /// it goes in `~/.niminal/sessions`.
     #[arg(long)]
@@ -335,6 +339,7 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
         max_voices,
         verbose,
         no_audio,
+        exit_when_unused,
         log,
         token,
         listen,
@@ -469,8 +474,17 @@ fn run_server(args: ServerArgs) -> Result<(), String> {
     let mut last_reopen = std::time::Instant::now();
     let mut last_report = std::time::Instant::now();
     let mut last_stats = std::time::Instant::now();
+    let mut unused_since = Some(std::time::Instant::now());
     loop {
         std::thread::sleep(Duration::from_millis(250));
+        if exit_when_unused {
+            if engine_server.client_count() > 0 {
+                unused_since = None;
+            } else if unused_since.get_or_insert_with(std::time::Instant::now).elapsed() > Duration::from_secs(10) {
+                println!("no clients are connected, so the server is stopping");
+                return Ok(());
+            }
+        }
         if let Some((id, settings)) = audio_control.take_restart() {
             let prepared = (|| -> Result<Option<Output>, String> {
                 if settings.no_audio {

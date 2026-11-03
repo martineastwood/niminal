@@ -42,7 +42,7 @@ niminal has an **audio server** and **clients** that talk to it.
           niminal server      ← compiles instruments, plays the audio
 ```
 
-The server (`niminal server`) does the sound: it compiles instruments, effects and routing, and plays timestamped events. Clients decide what to play and when: tempo, clips, scenes and patterns live in the client. This is why **the server must be running first**: every client connects to it, and they reconnect automatically if you restart it.
+The server (`niminal server`) does the sound: it compiles instruments, effects and routing, and plays timestamped events. Clients decide what to play and when: tempo, clips, scenes and patterns live in the client. This is why every client connects to it (Tracker and Stage start it for you if it is not running; the VS Code extension needs it started first), and they reconnect automatically if you restart it.
 
 | Piece | What it is | Needs |
 | --- | --- | --- |
@@ -58,7 +58,7 @@ The server (`niminal server`) does the sound: it compiles instruments, effects a
 
 The alpha is a single `Niminal` folder (Apple Silicon, macOS 13+) with Tracker, Stage, both command-line tools, the VS Code extension and examples. No Rust, Node or installer needed.
 
-1. Download the latest zip from [GitHub Releases](https://github.com/martineastwood/niminal/releases) and copy the `Niminal` folder to `/Applications/Niminal`.
+1. Download the latest dmg from [GitHub Releases](https://github.com/martineastwood/niminal/releases) and drag the `Niminal` folder onto Applications, so it ends up at `/Applications/Niminal`.
 2. The apps are ad-hoc signed and not notarized. If macOS blocks one on first use, approve it under **System Settings > Privacy & Security > Open Anyway**.
 3. Put the tools on your PATH (add the line to `~/.zprofile` to keep it):
 

@@ -3,7 +3,7 @@ title: The pieces
 description: The server and the three ways to work with it — what each one does, and which parts of a file each one reads.
 ---
 
-niminal is one language, one audio server and three ways to work with it. You always run the server (`niminal server`); then you open the client you like. All of them connect to it on port 7401.
+niminal is one language, one audio server and three ways to work with it. The server (`niminal server`) does the sound. Tracker and Stage start it for you if it is not running; the VS Code extension and your own scripts need you to start it. All of them connect to it on port 7401.
 
 | Program | What it is | You use it when |
 | --- | --- | --- |

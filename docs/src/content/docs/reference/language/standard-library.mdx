@@ -53,6 +53,36 @@ use std/physical
 instr tom(freq: hz = 110hz) { (impulse(1hz) * 0.5).membrane(freq) }
 ```
 
+## Sustained bowed and reed instruments
+
+`bowed` and `reed` are native sources and need no import. Both keep a resonating waveguide alive while a nonlinear bow or reed excites it. Their controls run from 0 to 1 and ease over 2ms; moving a control does not restart the string or bore.
+
+For playable instruments with attack and release, take the presets:
+
+```nml
+use std/instruments.{bowed_string, reed_wind}
+
+bowed_string(freq: a3, pressure: 0.7, position: 0.25, speed: 0.6) for 2beats
+at +2beats reed_wind(freq: c4, pressure: 0.65, stiffness: 0.5, breath: 0.1) for 2beats
+```
+
+Tracker's preset browser places them in **acoustic/strings** and **acoustic/winds**. Stage's Lab exposes their ranged controls after evaluation. Pressure, speed and position change the bowed string's stick-slip behavior; pressure, stiffness and breath shape the clarinet-like reed tone. Brightness changes losses inside either resonator. Some extreme combinations whistle, overblow or stop speaking; pressure is an excitation control, not a volume fader.
+
+For custom instruments, envelope the excitation and output explicitly:
+
+```nml
+instr bowed_pad(freq: hz, pressure: 0..1 = 0.7) {
+  level = env[0 60ms 1 | 300ms 0]
+  bowed(freq, pressure: pressure, velocity: level * 0.6) * level * 0.8
+}
+```
+
+`bowed` supports 20 Hz up to the smaller of 3000 Hz and `sample_rate / 12`; `reed` supports 20 Hz up to the smaller of 4000 Hz and `sample_rate / 16`. Positive frequencies outside that range clamp to its bounds; nonpositive or non-finite frequencies produce silence. Other controls clamp to 0…1, with non-finite values treated as zero. A stopped excitation lets existing energy decay. Use an output envelope to finish a note promptly.
+
+The nonlinear models run at the session rate. `oversample(2) { ... }` or `oversample(4) { ... }` can reduce aliasing at extra CPU cost and conversion latency. These are compact synthetic string/wind models, with a loss filter rather than a sampled violin body or a complete acoustic instrument.
+
+<Example file="physical_models.nml" />
+
 ## std/delays
 
 For echoes at times of your own, add `delay`s: `x + x.delay(120ms) * 0.6 + x.delay(250ms) * 0.3`. Each is its own delay line, so each tap can have its own time, be modulated (`x.delay(250ms + lfo(0.3hz) * 5ms, max: 300ms)`), be filtered or be panned.

@@ -1,6 +1,7 @@
 //! JSON-RPC over WebSocket: one thread per client, and one that pushes a service's notifications
 //! out to them. The server is a service, and so is any client that serves an API of its own.
 
+pub mod launch;
 pub mod worker;
 
 use std::collections::{HashMap, VecDeque};
@@ -192,6 +193,7 @@ pub struct Server {
     port: u16,
     addr: std::net::SocketAddr,
     stop: Arc<AtomicBool>,
+    outboxes: Outboxes,
     threads: Vec<JoinHandle<()>>,
 }
 
@@ -278,8 +280,14 @@ impl Server {
             port,
             addr,
             stop,
+            outboxes,
             threads,
         })
+    }
+
+    /// How many clients are connected now.
+    pub fn client_count(&self) -> usize {
+        self.outboxes.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     /// The port actually listening (useful when asked for port 0).

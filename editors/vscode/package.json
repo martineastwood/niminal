@@ -2,7 +2,7 @@
   "name": "niminal",
   "displayName": "niminal",
   "description": "Live-code niminal: syntax highlighting and evaluation against a running niminal server.",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "niminal",
   "license": "MIT",
   "engines": {
@@ -385,7 +385,13 @@
           "when": "false"
         }
       ]
-    }
+    },
+    "snippets": [
+      {
+        "language": "niminal",
+        "path": "./snippets/niminal.json"
+      }
+    ]
   },
   "devDependencies": {
     "@vscode/vsce": "4.1.0"

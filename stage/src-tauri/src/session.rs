@@ -84,37 +84,16 @@ pub fn start_worker(shared: Arc<Shared>) {
         .expect("the stage worker starts");
 }
 
-/// The tools that accompany an app in the portable Niminal download.
-fn packaged_bin(exe: &Path) -> Option<PathBuf> {
-    let macos = exe.parent()?;
-    let contents = macos.parent()?;
-    let app = contents.parent()?;
-    if macos.file_name()? != "MacOS" || contents.file_name()? != "Contents" || app.extension()? != "app" {
-        return None;
-    }
-    Some(app.parent()?.join("bin"))
-}
-
-/// Find the matching tools in the macOS download, then development installations.
 fn find_binary(program: &str) -> Option<PathBuf> {
-    let name = if cfg!(windows) { format!("{program}.exe") } else { program.to_string() };
-    let exe = std::env::current_exe().ok();
-    let mut folders = Vec::new();
-    if cfg!(target_os = "macos") {
-        folders.extend(exe.as_deref().and_then(packaged_bin));
-        folders.push(PathBuf::from("/Applications/Niminal/bin"));
-    }
-    if let Some(paths) = std::env::var_os("PATH") { folders.extend(std::env::split_paths(&paths)); }
-    if let Some(home) = home() { folders.push(home.join(".cargo").join("bin")); }
-    if let Some(parent) = exe.as_deref().and_then(Path::parent) { folders.push(parent.to_path_buf()); }
-    folders.into_iter().map(|folder| folder.join(&name)).find(|path| path.is_file())
+    niminal_ws::launch::find_binary(program)
 }
 
-/// Open a session with the engine on `port`. The engine is the user's to run (`niminal server`).
+/// Open a session with the engine on `port`, starting one if none is running.
 pub fn connect(shared: &Shared, port: u16, token: Option<&str>) -> Result<(), String> {
     if lock(&shared.session).is_some() {
         return Ok(());
     }
+    niminal_ws::launch::ensure_server(port, token)?;
     let link = WsLink::connect(port, token, "niminal-stage")?;
     let hello = link.hello.clone();
     let EngineReply::Hello {
@@ -549,18 +528,4 @@ pub struct Snapshot {
     /// Controls that took a MIDI control change since the last snapshot, to be written into the code.
     pub learned: Vec<Learned>,
     pub midi: MidiStatus,
-}
-
-#[cfg(test)]
-mod package_tests {
-    use super::*;
-
-    #[test]
-    fn tools_follow_the_complete_download_even_when_it_is_moved() {
-        for root in ["/Applications/Niminal", "/Users/player/My Music/Niminal"] {
-            let exe = Path::new(root).join("Niminal Stage.app/Contents/MacOS/niminal-stage");
-            assert_eq!(packaged_bin(&exe), Some(Path::new(root).join("bin")));
-        }
-        assert_eq!(packaged_bin(Path::new("/repo/stage/src-tauri/target/debug/niminal-stage")), None);
-    }
 }

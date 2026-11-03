@@ -78,7 +78,7 @@ jobs:
         with:
           name: niminal-macos-arm64
           path: |
-            releases/*.zip
+            releases/*.dmg
             releases/*.sha256
           if-no-files-found: error
       - name: Publish GitHub prerelease
@@ -87,8 +87,8 @@ jobs:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           gh release create "v$RELEASE_VERSION" \
-            "releases/Niminal-$RELEASE_VERSION-macos-arm64.zip" \
-            "releases/Niminal-$RELEASE_VERSION-macos-arm64.zip.sha256" \
+            "releases/Niminal-$RELEASE_VERSION-macos-arm64.dmg" \
+            "releases/Niminal-$RELEASE_VERSION-macos-arm64.dmg.sha256" \
             --target "$GITHUB_SHA" \
             --title "Niminal $RELEASE_VERSION" \
             --prerelease \

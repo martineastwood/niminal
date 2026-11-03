@@ -19,7 +19,7 @@ npm run tauri -- dev
 
 ## Connecting to the server
 
-Stage does not start an engine; run `niminal server` yourself. Stage connects to port 7401 (change it with **port** in the top bar, and give a **token** if the server was started with `--token`), and the connection light in the top left shows whether it is up. **Connect** tries again.
+If no engine is listening, Stage starts `niminal server --exit-when-unused` (found beside the app in the macOS download, or on the PATH). It stops when the last client closes, and Tracker shares it. To choose an audio device, run `niminal server` yourself first. Stage connects to port 7401 (change it with **port** in the top bar, and give a **token** if the server was started with `--token`), and the connection light in the top left shows whether it is up. **Connect** tries again.
 
 Stage opens with a short demo piece that only defines things. Launch its scenes with the buttons above the lanes or with Cmd/Ctrl+1…9, or open your own file.
 

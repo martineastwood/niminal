@@ -1,0 +1,17 @@
+// Sustained physical models: first the bowed string, then the reed wind.
+// Render: niminal-live render examples/physical_models.nml --out physical_models.wav
+// Stage Lab: evaluate this file, then select bowed_string or reed_wind.
+// Tracker: the presets live in acoustic/strings and acoustic/winds.
+use std/instruments.{bowed_string, reed_wind}
+
+tempo 96bpm
+
+bowed_string(freq: a3) for 2beats
+at +2beats bowed_string(freq: c4, position: 0.6) for 2beats
+at +4beats bowed_string(freq: e4, pressure: 0.6, brightness: 0.8) for 2beats
+at +6beats bowed_string(freq: d4, speed: 0.75) for 2beats
+
+at +8beats reed_wind(freq: a3) for 2beats
+at +10beats reed_wind(freq: c4, brightness: 0.8) for 2beats
+at +12beats reed_wind(freq: e4, stiffness: 0.35, pressure: 0.7) for 2beats
+at +14beats reed_wind(freq: d4, breath: 0.5) for 2beats

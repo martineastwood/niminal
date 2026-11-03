@@ -13,7 +13,7 @@ npm ci
 npm run tauri -- dev
 ```
 
-Like Stage, it connects on startup, reconnects automatically if the engine goes away, and connects before applying a new instrument. It never starts an engine: run `niminal server` yourself, and the tracker connects to it on port 7401 once it is listening. An explicit Disconnect stays offline until you connect or create an instrument. `npm run dev` is a browser-only layout preview, with no LSP or audio connection.
+Like Stage, it connects on startup, reconnects automatically if the engine goes away, and connects before applying a new instrument. If no engine is listening on the port it starts `niminal server --exit-when-unused` (found beside the app in the macOS download, or on the PATH), so the engine goes when the last client closes and is shared with Stage. An engine you started yourself is used as it is. An explicit Disconnect stays offline until you connect or create an instrument. `npm run dev` is a browser-only layout preview, with no LSP or audio connection.
 
 No separately installed `niminal-live` is needed: the Rust backend embeds the same niminal LSP implementation used by `niminal-live lsp`, and CodeMirror talks JSON-RPC to it through an ordered Tauri transport. [ARCHITECTURE.md](ARCHITECTURE.md) describes how the tracker maps its tracks, strips and automation onto the engine.
 

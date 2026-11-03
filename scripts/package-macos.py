@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a complete, ad-hoc-signed Apple Silicon alpha download. Publishes nothing."""
+"""Build a complete, ad-hoc-signed Apple Silicon alpha download (a .dmg). Publishes nothing."""
 
 import argparse
 import hashlib
@@ -47,7 +47,7 @@ def main():
     target = ROOT / "target" / "macos-alpha"
     output = ROOT / "releases"
     output.mkdir(exist_ok=True)
-    archive = output / f"Niminal-{args.version}-macos-arm64.zip"
+    archive = output / f"Niminal-{args.version}-macos-arm64.dmg"
     if archive.exists():
         parser.error(f"{archive.name} already exists; choose a new version or move the previous archive")
     env = os.environ.copy()
@@ -88,7 +88,7 @@ def main():
         staged_extension.mkdir()
         for name in ["package.json", "package-lock.json", "README.md", "extension.js", "blocks.js", "project.js",
                      "panel.js", "learn.js", "live.js", "live-client.js", "binaries.js", "language-configuration.json",
-                     "score-language-configuration.json", "syntaxes", "media"]:
+                     "score-language-configuration.json", "syntaxes", "snippets", "media"]:
             source = extension / name
             if source.is_dir():
                 shutil.copytree(source, staged_extension / name)
@@ -122,8 +122,13 @@ def main():
         (bundle / "BUILD.json").write_text(json.dumps(manifest, indent=2) + "\n")
         # Verify the staged artifact, including dependencies after extracting the VSIX.
         run("python3", ROOT / "scripts" / "verify-macos-package.py", bundle, env=env)
-        run("ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", bundle, archive)
-    checksum = archive.with_suffix(".zip.sha256")
+        # A disk image with the folder beside an Applications shortcut: drag the folder across to install.
+        disk = temp / "disk"
+        disk.mkdir()
+        shutil.move(bundle, disk / "Niminal")
+        (disk / "Applications").symlink_to("/Applications")
+        run("hdiutil", "create", "-volname", "Niminal", "-srcfolder", disk, "-format", "UDZO", "-ov", archive)
+    checksum = archive.with_suffix(".dmg.sha256")
     checksum.write_text(f"{digest(archive)}  {archive.name}\n")
     print(f"\nCreated {archive}\nSHA-256: {digest(archive)}\nNo files have been published.")
 

@@ -396,7 +396,16 @@ fn the_instrument_library_compiles_and_every_instrument_sounds() {
     assert_eq!(
         names,
         [
-            "kick", "snare", "hat", "bass", "pluck", "pad", "lead", "bell"
+            "kick",
+            "snare",
+            "hat",
+            "bass",
+            "pluck",
+            "pad",
+            "lead",
+            "bell",
+            "bowed_string",
+            "reed_wind"
         ]
     );
     for instrument in &program.instruments {
@@ -1142,7 +1151,7 @@ fn the_preset_catalog_is_complete_and_its_json_is_current() {
             .iter()
             .filter(|p| p.kind == PresetKind::Instrument)
             .count(),
-        29
+        31
     );
     assert!(
         presets

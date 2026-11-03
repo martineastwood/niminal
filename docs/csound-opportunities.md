@@ -2,6 +2,8 @@
 
 Review date: 2026-11-03. Scope: the language, Stage, and Tracker. Recommendations below are product judgments based on the Csound manual and this repository; they are not a proposal for opcode compatibility or comprehensive parity. Costs are relative engineering scope, not time estimates.
 
+**Implementation update:** The bowed-string/reed item below is now implemented as `bowed` and `reed`, with `bowed_string` and `reed_wind` presets and VS Code starter snippets. See [`physical_models.nml`](../examples/physical_models.nml). The gap descriptions below record the original review.
+
 ## Recommendation
 
 Prioritize a small audio-analysis API and better ways to use the engine capabilities already present. Add two expressive physical models for new sounds. Keep the existing Niminal vocabulary, parameter metadata, deterministic rendering, and common engine shared by both UIs.

@@ -36,6 +36,7 @@ for (const entry of [
   "language-configuration.json",
   "score-language-configuration.json",
   "syntaxes",
+  "snippets",
   "media",
   "node_modules",
 ]) {

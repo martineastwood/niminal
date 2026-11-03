@@ -22,8 +22,8 @@ Tauri apps, packages the extension with its runtime dependencies, signs the
 executables, smoke-tests the staged download, and creates:
 
 ```text
-releases/Niminal-0.0.1-alpha.1-macos-arm64.zip
-releases/Niminal-0.0.1-alpha.1-macos-arm64.zip.sha256
+releases/Niminal-0.0.1-alpha.1-macos-arm64.dmg
+releases/Niminal-0.0.1-alpha.1-macos-arm64.dmg.sha256
 ```
 
 It shares Rust build outputs under `target/macos-alpha` and overrides
@@ -80,7 +80,7 @@ Download the ZIP through a browser on a second Mac or clean account without
 Rust, Node.js, a checkout or older Niminal binaries. This is important: local
 builds do not reproduce downloaded-file quarantine or a fresh user's PATH.
 
-- Check the SHA-256, unzip, and follow `Getting Started.txt` exactly.
+- Check the SHA-256, open the dmg, and follow `Getting Started.txt` exactly.
 - Exercise the normal Privacy & Security approval flow for both apps and CLI
   tools. Keep quarantine intact; do not disable Gatekeeper to pass this check.
 - Verify CLI startup and offline rendering before starting the engine.
@@ -96,7 +96,7 @@ builds do not reproduce downloaded-file quarantine or a fresh user's PATH.
 - Confirm the advertised macOS minimum on that OS, or narrow the support claim
   to the oldest OS actually validated. Also check Intel Macs are clearly excluded.
 
-To re-run the automated artifact checks after unzipping:
+To re-run the automated artifact checks after copying the folder out of the dmg:
 
 ```sh
 python3 scripts/verify-macos-package.py /path/to/Niminal

@@ -20,6 +20,7 @@ use niminal_engine::ops::{
 use crate::unit::Unit;
 
 mod granular;
+mod physical;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Kind {
@@ -1078,6 +1079,7 @@ impl Registry {
             ),
         ];
         let mut ops = ops;
+        ops.extend(physical::specs());
         for (name, doc, kind, controls) in [
             (
                 "spectral_thin",

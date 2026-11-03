@@ -279,3 +279,24 @@ fn stereo_reverb_controls_and_resets_do_not_allocate() {
         assert!(output.iter().flatten().all(|x| x.is_finite()));
     }
 }
+
+#[test]
+fn sustained_waveguides_and_resets_allocate_before_audio_only() {
+    for state in ["", "state unused = 0\n"] {
+        let source = format!(
+            "fn model() {{ {state} reset_on(impulse(3hz)) {{ bowed(220hz, position: phasor(0.5hz)) + reed(330hz, stiffness: phasor(0.7hz)) }} }}\ninstr a() {{ model() }}"
+        );
+        let program = niminal_lang::compile(&source).unwrap();
+        let mut voice = Voice::new(program.instruments[0].graph.clone(), 48000.);
+        let mut buses = Buses::new(&[]);
+        let mut output = vec![vec![0.; block_size()]; 1];
+        ALLOCATIONS.with(|count| count.set(0));
+        NODE.with(|node| node.set(true));
+        for _ in 0..800 {
+            voice.process_blocks(&mut output, block_size(), &mut buses);
+        }
+        NODE.with(|node| node.set(false));
+        assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+        assert!(output[0].iter().all(|x| x.is_finite()));
+    }
+}
