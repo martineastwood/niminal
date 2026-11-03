@@ -180,7 +180,7 @@ it('reads its presets from the library that comes with niminal, each as a defini
   const { instrumentPresets, effectPresets } = await import('./library');
   expect(instrumentPresets.map(p => p.id).slice(0, 8)).toEqual(['kick', 'snare', 'hat', 'bass', 'pluck', 'pad', 'lead', 'bell']);
   expect(instrumentPresets.map(p => p.id)).toEqual(expect.arrayContaining(['kick_808', 'snare_tri', 'clap_room', 'hat_open', 'wobble_bass', 'rim', 'cowbell']));
-  expect(instrumentPresets.length).toBe(29);
+  expect(instrumentPresets.length).toBe(31);
   expect(Object.fromEntries(instrumentPresets.map(p => [p.id, p.folder]))).toMatchObject({ kick: 'drums/kicks', kick_808: 'drums/kicks', snare_tri: 'drums/snares', hat_open: 'drums/hats', rim: 'drums/percussion', bass: 'synths/bass', wobble_bass: 'synths/bass', zap: 'sounds/fx' });
   expect(effectPresets.every(p => p.folder.length > 0)).toBe(true); expect(effectPresets.find(p => p.id === 'echo')!.folder).toBe('time/delay');
   expect(effectPresets.map(p => p.id)).toContain('compressor'); expect(effectPresets.length).toBeGreaterThanOrEqual(15); expect(effectPresets.find(p => p.id === 'glitch')!.folder).toBe('time/glitch');

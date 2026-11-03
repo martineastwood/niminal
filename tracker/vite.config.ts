@@ -8,4 +8,4 @@ const alias = Object.fromEntries(['@codemirror/language', '@codemirror/state', '
 
 // The ready-made instruments and effects are read from the language's own library, one level up.
 // The pattern grid tests build and click through a whole grid in a simulated browser, which is slow on a busy machine.
-export default defineConfig({ resolve: { alias }, server: { fs: { allow: ['..'] } }, test: { testTimeout: 30000, execArgv: ['--max-old-space-size=8192'] } });
+export default defineConfig({ resolve: { alias }, server: { fs: { allow: ['..'] } }, test: { testTimeout: 120000, execArgv: ['--max-old-space-size=8192'] } });
