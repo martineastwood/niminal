@@ -5,7 +5,7 @@ description: Every niminal subcommand and flag, and what it logs.
 
 **Compiled by niminal.** This page is the audio server: the program that makes the sound, and the only one you always need. It knows nothing of tempo, clips or patterns — those belong to a [sequencer](/reference/niminal-live/cli/) or to another [client](/reference/engine-api/).
 
-Install it from a clone of the [repo](https://github.com/martineastwood/niminal) (needs a [Rust toolchain](https://rustup.rs/)):
+The macOS download and the Homebrew cask (see [Getting started](/guide/getting-started/)) include it. To build it, install from a clone of the [repo](https://github.com/martineastwood/niminal) (needs a [Rust toolchain](https://rustup.rs/)):
 
 ```sh
 cargo install --path crates/niminal-cli
@@ -43,6 +43,7 @@ Default listen `127.0.0.1:7401`, stereo output. `--channels` supports 1, 2, 4, 6
 | `--render-fork MODE` | `auto` | When a node's voices are shared among the render threads: `auto`, `always`, `never`, or the microseconds of work a block needs before it is shared. The sound is the same whichever you choose. |
 | `--token TOKEN` | none | Require clients to give this token when they say hello. |
 | `--no-audio` | off | Run without a sound card, at real speed, throwing the audio away. |
+| `--exit-when-unused` | off | Stop when no client has been connected for 10 seconds. Tracker and Stage start the server this way, so it goes when the last of them closes. |
 | `--log PATH`, `--no-log` | `~/.niminal/sessions` | Where to record the session, or don't. |
 | `--listen ADDR` | `127.0.0.1` | Address to listen on (local only for now). |
 | `-v`, `-vv` | off | See below. |

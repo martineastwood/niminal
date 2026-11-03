@@ -9,6 +9,22 @@ niminal is in **alpha**. Syntax and behaviour can change; expect rough edges.
 
 ## Install
 
+### On a Mac (Apple Silicon, macOS 13+)
+
+Download the dmg from [GitHub Releases](https://github.com/martineastwood/niminal/releases) and drag the **Niminal** folder onto Applications. It holds Tracker, Stage, the `niminal` and `niminal-live` commands, the VS Code extension and the examples. Tracker and Stage start the audio server for you, and offer to put the commands on your PATH the first time they open.
+
+Or with Homebrew, which also links the commands:
+
+```sh
+brew tap martineastwood/niminal
+brew trust --cask martineastwood/niminal/niminal   # recent Homebrew only
+brew install --cask martineastwood/niminal/niminal
+```
+
+The apps are not notarized by Apple. If you used the dmg and macOS blocks one, approve it under **System Settings > Privacy & Security > Open Anyway**. Homebrew clears that warning for you.
+
+### From source
+
 You need a recent [Rust toolchain](https://rustup.rs/).
 
 From a clone of the [repo](https://github.com/martineastwood/niminal):

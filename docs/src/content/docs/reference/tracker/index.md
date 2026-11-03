@@ -15,17 +15,13 @@ The tracker is a desktop app: a keyboard-driven pattern grid, a mixer, and an ed
 
 ## Open it
 
-The installed macOS release opens with:
-
-```sh
-open "$HOME/Applications/niminal tracker.app"
-```
+In the macOS download, open **Niminal Tracker.app** from `/Applications/Niminal` (or from Finder or Spotlight).
 
 Elsewhere, build it from [`tracker/`](https://github.com/martineastwood/niminal/tree/main/tracker) in the repository (it needs the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/), Node.js and Rust).
 
 ## Connecting to the server
 
-The tracker does not start an engine; run `niminal server` yourself. When it opens, and every few seconds after, the tracker looks for one on port 7401 and connects as soon as it is listening, so the order you start them in doesn't matter. **Connect** in the footer reconnects. Closing the tracker leaves the engine running.
+If no engine is listening on port 7401, the tracker starts `niminal server --exit-when-unused` (found beside the app in the macOS download, or on your PATH). An engine you started yourself is used as it is, so run `niminal server` first to choose an audio device. Stage and the tracker share one engine, which stops about ten seconds after the last client closes. **Connect** in the footer reconnects, and the tracker keeps looking for an engine every few seconds.
 
 Click **▶ Pattern** to hear the current pattern. Entering a note in the grid plays it on the current instrument, through the track's effects, even while stopped.
 
