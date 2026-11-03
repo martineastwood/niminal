@@ -56,7 +56,7 @@ export const shortcutSections: ShortcutSection[] = [
     ['Cmd/Ctrl+Insert · Delete', 'New step · remove the step'],
   ] },
   { title: 'Code editor', rows: [
-    ['Cmd/Ctrl+Enter', 'Apply and audition'],
+    ['Cmd/Ctrl+Enter', 'Apply'],
     ['Cmd/Ctrl+= / −', 'Larger or smaller code font'],
     ['F6', 'Back to the grid'],
   ] },

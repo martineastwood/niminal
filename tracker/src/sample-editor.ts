@@ -39,7 +39,11 @@ export class SampleEditor {
   constructor(private readonly actions: PreparationActions & { edit(d: Definition, source: string): void; detect(file: string, max?: number, sensitivity?: number): Promise<number[]> }, private readonly draw: () => void) {
     this.root.className = 'sample-edit-tools';
     const row = () => { const r = document.createElement('div'); r.className = 'sample-toolbar'; this.root.append(r); return r; };
-    const view = row(), selection = row(), edits = row();
+    const view = row();
+    // selecting and editing are occasional work: folded away until wanted
+    const more = document.createElement('details'); more.className = 'prop-section';
+    const summary = document.createElement('summary'); summary.textContent = 'Select and edit'; more.append(summary); this.root.append(more);
+    const selection = row(), edits = row(); more.append(selection, edits);
     const button = (parent: HTMLElement, text: string, run: () => void) => { const b = document.createElement('button'); b.textContent = text; b.onclick = run; parent.append(b); return b; };
     button(view, 'Zoom +', () => this.zoom(0.5)); button(view, 'Zoom −', () => this.zoom(2));
     button(view, 'Show all', () => { this.viewStart = 0; this.viewEnd = 1; this.changed(); });

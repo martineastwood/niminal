@@ -44,7 +44,7 @@ export function writePads(source: string, pads: Pad[], members: string[]): strin
 }
 
 export class SamplePads {
-  readonly root = document.createElement('details');
+  readonly root = document.createElement('div');
   private revision = 0;
   constructor(private readonly actions: {
     edit(d: Definition, source: string): void;
@@ -61,7 +61,7 @@ export class SamplePads {
     this.root.hidden = !definition || !members.length;
     if (!definition || !members.length) return;
     const pads = readPads(definition.source, members.length);
-    const summary = document.createElement('summary'); summary.textContent = `${folder ? 'Kit key map' : 'Slice controls'} · ${members.length} keys`;
+    const summary = document.createElement('h3'); summary.className = 'sample-heading'; summary.textContent = `${folder ? 'Kit key map' : 'Slice controls'} · ${members.length} keys`;
     const table = document.createElement('table');
     const head = document.createElement('tr'); for (const name of ['Key', 'Sample', 'dB', 'Semitones', 'Choke', '']) { const th = document.createElement('th'); th.textContent = name; head.append(th); } table.append(head);
     const commit = () => this.actions.edit(definition, writePads(definition.source, pads, members));

@@ -109,3 +109,46 @@ fn a_mistake_in_the_file_is_reported_where_it_was_declared() {
     assert!(error_of(&dir, "piano = sfz(\"kit.sfz\").root(c4)").contains("isn't an option"));
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// A mono WAV of four equal pieces, each a constant level, with `pieces.sfz` cutting it one region per key from C4.
+fn sliced(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("niminal-sfz-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 48_000,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut w = hound::WavWriter::create(dir.join("break.wav"), spec).unwrap();
+    for level in [0.1f32, 0.2, 0.3, 0.4] {
+        (0..4800).for_each(|_| w.write_sample(level).unwrap());
+    }
+    w.finalize().unwrap();
+    // the shape the tracker writes for a cut sample: a region for each key, at the recorded pitch
+    std::fs::write(
+        dir.join("pieces.sfz"),
+        "<global> pitch_keytrack=0 loop_mode=no_loop\n\
+         <region> sample=break.wav lokey=60 hikey=60 offset=0 end=4799\n\
+         <region> sample=break.wav lokey=61 hikey=61 offset=4800 end=9599\n\
+         <region> sample=break.wav lokey=62 hikey=62 offset=9600 end=14399\n\
+         <region> sample=break.wav lokey=63 hikey=63 offset=14400 end=19199\n",
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn an_sfz_of_offsets_plays_each_piece_of_a_sample_on_its_own_key() {
+    let dir = sliced("pieces");
+    let p = program(&dir, "chops = sfz(\"pieces.sfz\")");
+    // C4, C#4, D4, D#4
+    for (freq, level) in [(261.625_56, 0.1), (277.182_63, 0.2), (293.664_77, 0.3), (311.126_98, 0.4)] {
+        let out = blocks(&mut voice(&p, "chops", &[("freq", freq)]), 100);
+        assert!((out[200] - level).abs() < 1e-3, "{freq}: {}", out[200]);
+        // at the recorded speed whatever the key, and the piece ends where the next begins
+        assert!((out[4700] - level).abs() < 1e-3, "{freq}: {}", out[4700]);
+        assert!(out[5000].abs() < 1e-3, "{freq}: {}", out[5000]);
+    }
+    std::fs::remove_dir_all(dir).ok();
+}

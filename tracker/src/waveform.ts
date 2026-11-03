@@ -1,4 +1,5 @@
 import { SamplePads, clearPads, readPads, writePads } from './sample-pads';
+import { SampleKeys } from './sample-keys';
 import { SampleEditor, type PreparationActions } from './sample-editor';
 import { readLoop, writeLoop, type SampleLoop } from './loops';
 import type { Definition } from './project';
@@ -26,6 +27,9 @@ export interface SampleActions extends PreparationActions {
   cut(definition: Definition, pieces: number[]): void;
   /** Asks whether a cut instrument may play its whole sample as one (which loses its pieces); true when it may. */
   uncut(definition: Definition): Promise<boolean>;
+  /** Starts the instrument playing a note (as `C-4`) until `noteOff` with the same key. */
+  noteOn?(definition: Definition, note: string, key: number): void;
+  noteOff?(key: number): void;
   /** The song's tempo now, in beats a minute. */
   tempo(): number;
   /** The shares of the sample at which its hits begin. */
@@ -41,6 +45,11 @@ const height = 150, reach = 6, ruleSteps = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 
 export class SamplePanel {
   private readonly sampleEditor: SampleEditor;
   private readonly pads: SamplePads;
+  private readonly keys: SampleKeys;
+  private readonly waveView = document.createElement('div');
+  private readonly tabBar = document.createElement('div');
+  private readonly tabs = {} as Record<'wave' | 'keys', HTMLButtonElement>;
+  private tab: 'wave' | 'keys' = 'wave';
   private selectionAnchor: number | null = null;
   private readonly canvas = document.createElement('canvas');
   private readonly title = document.createElement('span');
@@ -91,8 +100,15 @@ export class SamplePanel {
     const props = document.createElement('div'); props.className = 'sample-props';
     /** A row of the settings column: a label, and what sets it. */
     const prop = (name: string, ...controls: (Node | string)[]) => {
-      const row = document.createElement('label'); row.className = 'prop'; const text = document.createElement('span'); text.textContent = name; row.append(text, ...controls); props.append(row); return row;
+      const row = document.createElement('label'); row.className = 'prop'; const text = document.createElement('span'); text.textContent = name; row.append(text, ...controls); into.append(row); return row;
     };
+    /** The settings fall in collapsible sections; `into` is the one the next rows join. */
+    const section = (title: string, open = true) => {
+      const details = document.createElement('details'); details.className = 'prop-section'; details.open = open;
+      const summary = document.createElement('summary'); summary.textContent = title; details.append(summary); return details;
+    };
+    const timing = section('Tempo and length', false);
+    let into: HTMLElement = props;
     this.title.className = 'sample-title';
     const find = document.createElement('button'); find.textContent = 'Find hits'; find.title = 'Put a cut at each hit in the sample; a higher sensitivity finds softer hits';
     find.onclick = () => void this.findHits();
@@ -104,7 +120,10 @@ export class SamplePanel {
     const sensitivityLabel = document.createElement('label'); sensitivityLabel.append(this.sensitivity, '%');
     this.uncutButton.textContent = 'Play as one sample'; this.uncutButton.title = 'Remove the cuts: the instrument plays its whole sample again, which you can then loop';
     this.uncutButton.onclick = () => void this.playAsOne();
-    toolbar.append(this.title, find, sensitivityLabel, cut, equal, this.uncutButton);
+    const cutTools = document.createElement('div'); cutTools.className = 'tool-group';
+    const cutLabel = document.createElement('span'); cutLabel.className = 'tool-label'; cutLabel.textContent = 'Cut into pieces';
+    cutTools.append(cutLabel, find, sensitivityLabel, '·', equal, cut);
+    toolbar.append(this.title, cutTools, this.uncutButton);
 
     this.playbackMode.setAttribute('aria-label', 'Playback');
     for (const value of Object.keys(playbackNames) as Playback[]) {
@@ -137,6 +156,7 @@ export class SamplePanel {
     this.matchButton.onclick = () => void this.matchTempo();
     const matchRow = document.createElement('div'); matchRow.className = 'prop'; matchRow.append(document.createElement('span'), this.matchButton); props.append(matchRow);
 
+    into = timing;
     this.fitBox.type = 'checkbox'; this.fitBox.setAttribute('aria-label', 'Fit to tempo');
     this.fitBox.title = 'Play the sample in time with the song, at any tempo, without changing its pitch. The first time, the beat count is worked out from the hits in the sample';
     this.fitBox.onchange = () => { if (this.fitBox.checked) void this.applyFit(); else this.fit(0); };
@@ -166,6 +186,7 @@ export class SamplePanel {
     }
     this.stretchMode.onchange = () => this.commitStretch();
     prop('Algorithm', this.stretchMode);
+    into = props;
     this.release.type = 'number'; this.release.min = '0'; this.release.max = '2000'; this.release.step = '5'; this.release.value = '10';
     this.release.setAttribute('aria-label', 'Release milliseconds'); this.release.title = 'How long the sample takes to fade out when its note ends, to avoid a click; it matters for Hold and Loop';
     this.release.onchange = () => { const ms = this.release.valueAsNumber; if (Number.isFinite(ms) && ms >= 0 && ms <= 2000) this.rewrite(source => writeRelease(source, ms)); else this.showProps(); };
@@ -175,15 +196,23 @@ export class SamplePanel {
     for (const [value, text] of [['linear', 'Linear (rough, light)'], ['cubic', 'Cubic'], ['sinc', 'Sinc (best, more CPU)']]) { const option = document.createElement('option'); option.value = value; option.textContent = text; this.interpolation.append(option); }
     this.interpolation.onchange = () => this.rewrite(source => writeInterpolation(source, this.interpolation.value as Interpolation));
     prop('Interpolation', this.interpolation);
+    props.append(timing);
     this.fitButtons.push(this.fitBox);
     this.canvas.tabIndex = 0; this.canvas.className = 'sample-canvas'; this.canvas.setAttribute('aria-label', 'Sample waveform');
     this.hint.className = 'device-note';
     const stage = document.createElement('div'); stage.className = 'sample-stage'; stage.append(this.canvas);
-    const main = document.createElement('div'); main.className = 'sample-main'; main.append(toolbar, stage, this.hint);
+    const main = document.createElement('div'); main.className = 'sample-main';
     this.sampleEditor = new SampleEditor(actions, () => this.draw());
-    main.insertBefore(this.sampleEditor.root, stage);
+    // the tools sit under the waveform they work on, so the waveform gets the top of the panel
+    this.waveView.className = 'sample-view'; this.keys = new SampleKeys((note, key) => { if (this.definition) actions.noteOn?.(this.definition, note, key); }, key => actions.noteOff?.(key));
+    this.waveView.append(toolbar, stage, this.sampleEditor.root, this.keys.root, this.hint);
     this.pads = new SamplePads(actions);
-    main.append(this.pads.root);
+    this.tabBar.className = 'sample-tabs';
+    for (const [id, text, title] of [['wave', 'Waveform', 'The sample, its cuts and its editing tools'], ['keys', 'Keys', 'What each key plays: the samples of a kit, or the pieces of a cut sample']] as const) {
+      const tab = document.createElement('button'); tab.className = 'tab'; tab.textContent = text; tab.title = title; tab.onclick = () => this.showTab(id); this.tabs[id] = tab; this.tabBar.append(tab);
+    }
+    main.append(this.tabBar, this.waveView, this.pads.root);
+    this.showTab('wave');
     root.replaceChildren(main, props);
     this.canvas.onpointerdown = event => this.down(event);
     this.canvas.onpointermove = event => this.move(event);
@@ -194,6 +223,20 @@ export class SamplePanel {
     if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => this.draw()).observe(stage);
   }
 
+  /** Shows one of the tabs; Keys only exists while the instrument has keys to set up. */
+  private showTab(tab: 'wave' | 'keys') {
+    const keys = tab === 'keys' && !this.pads.root.hidden ? 'keys' : 'wave';
+    this.tab = keys;
+    this.waveView.hidden = keys !== 'wave'; this.pads.root.style.display = keys === 'keys' ? '' : 'none';
+    for (const id of ['wave', 'keys'] as const) this.tabs[id].setAttribute('aria-selected', String(id === keys));
+  }
+  /** Keeps the tabs in step with the instrument: no Keys tab without keys, and a kit with no single sample opens on its keys. */
+  private updateTabs() {
+    const hasKeys = !this.pads.root.hidden;
+    this.tabs.keys.hidden = !hasKeys; this.tabBar.hidden = !hasKeys;
+    this.showTab(hasKeys && (this.tab === 'keys' || !this.peaks) ? 'keys' : 'wave');
+  }
+
   /** Reads the current instrument again: its sample, and where its code cuts it. Does nothing while a marker is being dragged. */
   async refresh() {
     if (this.drag || this.loopDrag || this.selectionAnchor !== null) return;
@@ -201,7 +244,7 @@ export class SamplePanel {
     if (definition !== this.definition) { this.cache.clear(); this.detail = null; this.detailRequest = ''; this.detailRevision++; this.beatDraft = null; this.beats.value = '4'; }
     this.definition = definition;
     void this.sampleEditor.refresh(definition);
-    void this.pads.refresh(definition).catch(error => { this.hint.textContent = `Could not read kit: ${error}`; });
+    void this.pads.refresh(definition).then(() => this.updateTabs()).catch(error => { this.hint.textContent = `Could not read kit: ${error}`; });
     this.loop = readLoop(definition?.source ?? '');
     this.sampleEditor.root.hidden = !file;
     const wholeSample = !!file && !readCuts(definition?.source ?? '') && !readDetect(definition?.source ?? '') && /begin: 0\.\.1 = 0/.test(definition?.source ?? '') && !!definition?.source.includes('begin: begin');
@@ -213,7 +256,7 @@ export class SamplePanel {
     this.stretchMode.value = /stretch_mode: 0\.\.2 = ([012])/.exec(definition?.source ?? '')?.[1] ?? '0';
     this.stretchMode.disabled = this.stretch.disabled;
     for (const control of [this.beats, ...this.fitButtons]) control.disabled = this.stretch.disabled;
-    if (!definition || !file) { this.showFit(''); this.peaks = null; this.points = []; this.title.textContent = definition?.name ?? ''; this.hint.textContent = /\bkit\(/.test(definition?.source ?? '') ? 'Open the Kit key map below to audition, tune, group or replace its samples.' : 'Choose an instrument that plays a sample (drop an audio file on the right bar to import one) to see its waveform.'; this.draw(); return; }
+    if (!definition || !file) { this.showFit(''); this.peaks = null; this.points = []; this.title.textContent = definition?.name ?? ''; this.hint.textContent = /\bkit\(/.test(definition?.source ?? '') ? 'Open the Keys tab to audition, tune, group or replace its samples.' : 'Choose an instrument that plays a sample (drop an audio file on the right bar to import one) to see its waveform.'; this.draw(); return; }
     let peaks = this.cache.get(file);
     try { if (!peaks) { peaks = await this.actions.loadPeaks(file); this.cache.set(file, peaks); } }
     catch (error) { if (revision === this.revision) { this.peaks = null; this.hint.textContent = `Could not read ${file}: ${error}`; this.draw(); } return; }
@@ -222,15 +265,15 @@ export class SamplePanel {
     let found: number[] | null = null;
     // code that cuts at the hits it finds shows those cuts; moving one writes them all into the code as fixed places
     if (detect) { try { found = await this.actions.detect(file, detect.max, detect.sensitivity); } catch { found = null; } if (revision !== this.revision) return; }
-    if (found) void this.pads.refresh(definition, found);
-    this.peaks = peaks; this.points = readCuts(definition.source)?.points ?? found ?? []; this.showFit(definition.source);
+    if (found) void this.pads.refresh(definition, found).then(() => this.updateTabs());
+    this.peaks = peaks; this.points = readCuts(definition.source)?.points ?? found ?? []; this.keys.mark(this.points.length); this.showFit(definition.source);
     if (this.selected >= this.points.length) this.selected = -1;
     this.title.textContent = `${definition.name} · ${(peaks.frames / peaks.rate).toFixed(2)} s${this.points.length ? ` · ${this.points.length} pieces` : ''}`;
     this.hint.textContent = this.points.length
       ? 'Click a piece to hear it. Drag a marker to move a cut, double-click the waveform to add one, double-click a marker to remove it.'
       : this.loop.mode !== 'none' ? 'Drag the Start and End markers to set the sustain loop. Click to hear it. The intro plays once; the marked region repeats while the note is held.'
       : 'Click to hear the sample. Find hits or Cut equally make a new instrument that plays it in pieces, which you can then move here.';
-    this.hint.textContent += ' Shift-drag selects a range; drag its edges to adjust it. Frame boxes give exact boundaries.';
+    this.hint.textContent += ' Shift-drag selects a range, and the edge handles adjust it. The editing tools below act on it, and Hear selection plays it.';
     this.draw();
   }
 

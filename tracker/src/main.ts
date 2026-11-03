@@ -148,7 +148,7 @@ function documentUri(id: string) {
   return projectDir ? `file://${projectDir.split('/').map(encodeURIComponent).join('/')}/${id}.nml` : `file:///niminal-tracker/${id}.nml`;
 }
 function documentState(definition: Definition) {
-  return editorState(documentUri(definition.id), definition.source, source => { definition.source = source; save(`source:${definition.id}`); renderApplyStatus(); sampleChanged(); }, () => { void action(() => applyAndAudition(definition)); });
+  return editorState(documentUri(definition.id), definition.source, source => { definition.source = source; save(`source:${definition.id}`); renderApplyStatus(); sampleChanged(); }, () => { void action(() => applyDefinition(definition)); });
 }
 function refreshProjectDir() {
   projectDirReady = isTauri() ? invoke<string>('project_dir', { id: project.id }).then(dir => {
@@ -218,14 +218,6 @@ async function applyDefinition(definition: Definition) {
   appliedSources.set(definition.id, source);
   grid.render(); mixerView();
   renderApplyStatus();
-}
-/** Applies a definition, then plays a note through it: an instrument on the selected track, or the track's instrument through an effect. */
-async function applyAndAudition(definition: Definition) {
-  await applyDefinition(definition);
-  const track = Math.max(0, deviceTrack);
-  const instrument = definition.kind === 'instr' ? definition.id : currentInstrument;
-  if (definition.kind === 'fx' && !stripOf(project, deviceTrack).fx.some(d => d.definition === definition.id)) { status('Add this effect to the track to hear it'); return; }
-  await audition(instrument, 'C-3', track);
 }
 async function ensureSound(id: string) {
   const definition = definitionOf(id);
@@ -446,7 +438,7 @@ function loadPresetIntoSlot(definition: Definition, preset: Preset) {
 function changeSelectedSource(source: string) {
   const instrument = shown.instr!;
   replaceSource(instrument, source);
-  if (audioStatus.connected) void action(() => applyAndAudition(instrument));
+  if (audioStatus.connected) void action(async () => { await applyDefinition(instrument); await audition(instrument.id, 'C-3', Math.max(0, deviceTrack)); });
   else mixerView();
 }
 /** New instruments are ready to play even when the engine still needs to start. */
@@ -669,6 +661,8 @@ const samplePanel = new SamplePanel(element('sample'), {
   },
   edit: (definition, source) => { setDefinitionSource(definition, source); if (audioStatus.connected) void action(() => applyDefinition(definition)); },
   hear: (definition, piece) => { if (audioStatus.connected) void action(() => audition(definition.id, pieceKey(piece), noteTrack())); },
+  noteOn: (definition, note, key) => { if (audioStatus.connected) holdNote(1000 + key, definition.id, note, noteTrack()); },
+  noteOff: key => releaseNote(1000 + key),
   detect: (file, max = maxSlices, sensitivity = 0.5) => invoke('detect_slices', { id: project.id, file, max, sensitivity }),
   cut: (_, pieces) => sliceCurrent(pieces),
   tempo: () => Number(element<HTMLInputElement>('bpm').value) || 120,
@@ -931,7 +925,7 @@ element('connect').onclick = toggleConnection;
 element('play').onclick = () => { element('grid').focus(); void action(() => togglePlay('pattern')); };
 element('play-song').onclick = () => { element('grid').focus(); void action(() => togglePlay('song')); };
 element('stop').onclick = () => { element('grid').focus(); void action(stopPlayback); };
-for (const kind of ['instr', 'fx'] as const) element(`${kind}-apply`).onclick = () => { const definition = shown[kind]; if (definition) void action(() => applyAndAudition(definition)); };
+for (const kind of ['instr', 'fx'] as const) element(`${kind}-apply`).onclick = () => { const definition = shown[kind]; if (definition) void action(() => applyDefinition(definition)); };
 function timingInputs() {
   renderTiming();
   element<HTMLInputElement>('bpm').value = String(project.bpm);
@@ -1371,7 +1365,7 @@ const commands: Command[] = ([
   ['Undo', 'undo', 'Cmd/Ctrl+Z'], ['Redo', 'redo', 'Cmd/Ctrl+Shift+Z'],
   ['Add track', 'add-track'], ['Duplicate track', 'duplicate-track'], ['Select track', 'select-track', 'Cmd/Ctrl+Shift+A'], ['Cut track', 'cut-track'],
   ['Reverse selection', 'reverse-selection'], ['Randomize selection', 'randomize-selection'], ['Shuffle notes in selection', 'shuffle-selection'], ['Fill selection with slices', 'fill-slices'], ['Snap selection to scale', 'snap-scale'], ['Make chords from selection', 'make-chord'], ['Space notes evenly in selection', 'space-evenly'], ['Use selected instrument in selection', 'use-instrument'], ['New pattern', 'new-pattern'],
-  ['New instrument', 'new-instrument'], ['New effect', 'new-effect'], ['Apply and audition', 'apply', 'Cmd/Ctrl+Enter'],
+  ['New instrument', 'new-instrument'], ['New effect', 'new-effect'], ['Apply', 'apply', 'Cmd/Ctrl+Enter'],
   ['Show code', 'code', 'F6'], ['Show mixer', 'mixer'], ['Show sample', 'sample'], ['Show automation', 'automation'],
   ['Sound browser', 'browser', 'Cmd/Ctrl+B'],
   ['Show or hide the sequence bar', 'toggle-sequence', 'Cmd/Ctrl+\\'], ['Show or hide the right bar', 'toggle-side', 'Cmd/Ctrl+Shift+B'], ['Show or hide the bottom dock (track FX and automation)', 'toggle-dock', 'Cmd/Ctrl+J'], ['Focus mode: only the grid', 'focus-mode', 'Cmd/Ctrl+Shift+F'],

@@ -21,6 +21,7 @@ async function setup(cuts: number | number[] | null = 4) {
     loadPeaks: vi.fn(async () => ({ frames: 48000, rate: 48000, peaks: Array.from({ length: 200 }, (_, i) => (i % 2 ? 0.5 : -0.5)) })),
     edit: vi.fn((target: typeof definition, source: string) => { target.source = source; }),
     hear: vi.fn(),
+    preview: vi.fn(),
     detect: vi.fn(async () => [0, 0.1, 0.4]),
     cut: vi.fn(),
     tempo: vi.fn(() => 120),
