@@ -14,7 +14,10 @@ type Job<'a> = &'a (dyn Fn(usize) + Sync);
 
 /// How long an idle worker spins, looking for a new batch, before it parks. Blocks come one after
 /// another while there is audio to make, so waiting a little saves the cost of waking a thread.
-const SPIN: Duration = Duration::from_micros(200);
+/// Measured with paced 256-frame blocks on 3 workers: 50us keeps most of what longer spins save in
+/// wake-ups and uses 25-40% less CPU than 200us on light and medium loads; with no spin at all, every
+/// load saw a steady ~20ms worst block.
+const SPIN: Duration = Duration::from_micros(50);
 
 /// What the measured cost of sharing out a wave is multiplied by, to allow for threads that were
 /// asleep, which the measurement (made with warm threads) does not see.
