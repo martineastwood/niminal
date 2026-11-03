@@ -1517,7 +1517,7 @@ fn library_definitions(shelf: &str) -> Vec<&'static str> {
 #[test]
 fn library_instruments_expose_controls_and_sound_on_mono_and_stereo_engines() {
     let sources = library_definitions("std/instruments");
-    assert_eq!(sources.len(), 8);
+    assert_eq!(sources.len(), 10);
     for layout in [Layout::Mono, Layout::Stereo] {
         let engine = Arc::new(Mutex::new(EngineServer::new(Session::new(48000.0, layout).without_limiter())));
         let server = Server::start(engine.clone(), ServerConfig { port: 0, ..ServerConfig::default() }).unwrap();
