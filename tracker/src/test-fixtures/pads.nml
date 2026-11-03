@@ -1,0 +1,23 @@
+// tracker-pads: [{"member":1,"gain":-6,"tune":12,"choke":1},{"member":0,"gain":0,"tune":0,"choke":1}]
+/// Plays samples/hits.wav in 2 pieces: C-4 is the first, C#4 the next, and so on.
+/// gate: 0 plays the whole sample, 1 ends it when the note does (OFF, CUT or the next note), fading over release.
+chops_sample = sample("samples/hits.wav").root(c4)
+chops_slices = chops_sample.slices(2).choke(pad_group_1(s1, s0))
+instr chops(
+  pad_key: num = 0,
+  freq: hz,
+  sample: num = 0,
+  begin: 0..1 = 0,
+  rate: -4..4 = 1,
+  stretch: 0.25..4 = 1,
+  stretch_mode: 0..2 = 0,
+  from_bpm: 0..400 = 0,
+  gate: 0..1 = 1,
+  release: 0ms..2sec = 10ms
+) {
+  // tracker-pad-controls
+  pad_rate = [2, 1][pad_key.clamp(0..1)]
+  pad_gain = [0.50118723, 1][pad_key.clamp(0..1)]
+  // end-pad-controls
+  chops_slices(sample: sample, begin: begin, rate: rate * pad_rate, stretch: stretch, stretch_mode: stretch_mode) * (1 - gate + gate * env[1 | release 0]) * pad_gain
+}

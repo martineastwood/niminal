@@ -14,7 +14,7 @@ fn sync_lanes(song: &mut Song) {
 }
 
 /// Gives the engine the strips of a four-track song, as the tracker's first update does before anything sounds.
-fn build_strips(worker: &mut Worker) {
+pub(super) fn build_strips(worker: &mut Worker) {
     let mut song = test_song(None);
     for column in song.patterns.iter_mut().flat_map(|p| p.notes.iter_mut().flatten()) {
         column.inst.clear();
@@ -22,7 +22,7 @@ fn build_strips(worker: &mut Worker) {
     worker.command(Command::Update { song }).unwrap();
 }
 
-fn test_song(note: Option<&str>) -> Song {
+pub(super) fn test_song(note: Option<&str>) -> Song {
     Song {
         bpm: 125.0,
         rows_per_beat: 4,

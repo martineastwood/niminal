@@ -34,3 +34,10 @@ it('groups continuous source typing and slider gestures, with boundaries at othe
   history.record('new typing', 'source:tone', 350);
   expect(history.undo()).toBe('sou'); expect(history.canRedo).toBe(true);
 });
+
+it('retains both undo and redo snapshots for sample cleanup until history is reset', () => {
+  const history = new ProjectHistory('original.wav');
+  history.record('trimmed.wav'); history.record('reversed.wav'); history.undo();
+  expect(new Set(history.snapshots)).toEqual(new Set(['original.wav', 'trimmed.wav', 'reversed.wav']));
+  history.reset('another.wav'); expect(history.snapshots).toEqual(['another.wav']);
+});

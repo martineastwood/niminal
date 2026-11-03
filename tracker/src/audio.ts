@@ -7,6 +7,7 @@ export interface AudioStatus {
   instruments: Record<string, string>; effects: Record<string, string>; effect_parameters: EffectParameters; instrument_parameters: EffectParameters;
 }
 type Command =
+  | { op: 'preview_sample'; path: string; track: number | null; gain: number; start: number; end: number; repeat: boolean }
   | { op: 'connect'; port: number; token: string | null }
   | { op: 'disconnect' | 'stop' | 'audition_stop' }
   | { op: 'apply'; id: string; source: string; kind: 'instr' | 'fx'; dir: string | null }

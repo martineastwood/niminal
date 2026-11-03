@@ -8,6 +8,7 @@ mod mixer;
 mod modulation;
 mod pattern;
 mod slicing;
+mod sample_tools;
 mod sound;
 
 use std::{
@@ -122,11 +123,11 @@ async fn clean_samples(app: tauri::AppHandle, id: String, code: String) -> Resul
     if unused.is_empty() {
         return Ok(0);
     }
-    let shown = unused.iter().take(12).map(|f| f.trim_start_matches("samples/")).collect::<Vec<_>>().join("\n");
-    let more = if unused.len() > 12 { format!("\n…and {} more", unused.len() - 12) } else { String::new() };
+    let shown = unused.iter().map(|f| f.trim_start_matches("samples/")).collect::<Vec<_>>().join("\n");
+
     let answer = rfd::AsyncMessageDialog::new()
         .set_title("Remove unused samples")
-        .set_description(format!("Delete {} sample{} that no instrument plays? This cannot be undone.\n\n{shown}{more}", unused.len(), if unused.len() == 1 { "" } else { "s" }))
+        .set_description(format!("Delete {} sample{} that no instrument plays? This cannot be undone.\n\n{shown}", unused.len(), if unused.len() == 1 { "" } else { "s" }))
         .set_buttons(rfd::MessageButtons::YesNo)
         .show()
         .await;
@@ -144,10 +145,31 @@ async fn list_library(dir: String) -> Result<Vec<String>, String> {
     blocking(move || niminal_lang::files_under(std::path::Path::new(&dir), niminal_lang::is_audio)).await
 }
 
-/// A sample of the library as WAV bytes, for the window to audition.
 #[tauri::command]
-async fn read_sample(path: String) -> Result<tauri::ipc::Response, String> {
-    blocking(move || niminal_lang::audition_wav(std::path::Path::new(&path))).await?.map(tauri::ipc::Response::new)
+async fn analyze_sample(app: tauri::AppHandle, id: String, file: String) -> Result<sample_tools::Analysis, String> {
+    let dir = files::project_dir(&app_data(&app)?, &id)?;
+    blocking(move || sample_tools::analyze(&dir, &file)).await?
+}
+
+#[tauri::command]
+async fn prepare_sample(app: tauri::AppHandle, id: String, file: String, edit: sample_tools::Edit) -> Result<String, String> {
+    let dir = files::project_dir(&app_data(&app)?, &id)?;
+    blocking(move || sample_tools::prepare(&dir, &file, edit)).await?
+}
+
+#[tauri::command]
+async fn project_samples(app: tauri::AppHandle, id: String) -> Result<Vec<sample_tools::Asset>, String> {
+    let dir = files::project_dir(&app_data(&app)?, &id)?;
+    blocking(move || sample_tools::assets(&dir)).await
+}
+
+/// Import a replacement without overwriting audio that undo may still reference.
+#[tauri::command]
+async fn pick_sample(app: tauri::AppHandle, id: String) -> Result<Option<ImportedSample>, String> {
+    let Some(picked) = rfd::AsyncFileDialog::new().add_filter("Audio samples", niminal_lang::AUDIO_EXTENSIONS).pick_file().await else { return Ok(None); };
+    let dir = files::project_dir(&app_data(&app)?, &id)?;
+    let path = picked.path().to_path_buf();
+    blocking(move || import_files(&dir, &[path]).map(|mut files| files.pop())).await?
 }
 
 /// Asks for the folder the sample library shows.
@@ -196,9 +218,21 @@ async fn import_dropped_kit(app: tauri::AppHandle, id: String, paths: Vec<PathBu
 
 /// The waveform of an imported sample, for drawing.
 #[tauri::command]
-async fn sample_peaks(app: tauri::AppHandle, id: String, file: String, buckets: usize) -> Result<slicing::Peaks, String> {
+async fn sample_peaks(app: tauri::AppHandle, id: String, file: String, buckets: usize, start: Option<f64>, end: Option<f64>) -> Result<slicing::Peaks, String> {
     let dir = files::project_dir(&app_data(&app)?, &id)?;
-    blocking(move || slicing::peaks(&dir, &file, buckets)).await?
+    blocking(move || if let (Some(start), Some(end)) = (start, end) { slicing::peaks_range(&dir, &file, buckets, start, end) } else { slicing::peaks(&dir, &file, buckets) }).await?
+}
+
+#[tauri::command]
+async fn kit_members(app: tauri::AppHandle, id: String, folder: String) -> Result<Vec<String>, String> {
+    let dir = files::project_dir(&app_data(&app)?, &id)?;
+    blocking(move || sample_tools::kit_members(&dir, &folder)).await?
+}
+
+#[tauri::command]
+async fn replace_kit_member(app: tauri::AppHandle, id: String, folder: String, member: String, replacement: String) -> Result<String, String> {
+    let dir = files::project_dir(&app_data(&app)?, &id)?;
+    blocking(move || sample_tools::replace_kit_member(&dir, &folder, &member, &replacement)).await?
 }
 
 /// Opens a project's `project.json`, bringing along the `samples` folder beside it.
@@ -370,11 +404,16 @@ fn main() {
             import_dropped,
             list_library,
             clean_samples,
-            read_sample,
+            analyze_sample,
+            prepare_sample,
+            project_samples,
+            pick_sample,
             pick_library,
             import_kit,
             import_dropped_kit,
             sample_peaks,
+            kit_members,
+            replace_kit_member,
             export_path,
             detect_slices,
             open_project,

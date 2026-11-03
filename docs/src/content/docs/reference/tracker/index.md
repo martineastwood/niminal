@@ -58,4 +58,4 @@ Edits autosave locally. **Save** writes a project folder (`name.nimtracker/` wit
 
 ## Not there yet
 
-Curved envelope interpolation, and automatic loop-point selection.
+Curved envelope interpolation.

@@ -33,6 +33,7 @@ pub struct Status {
     pub instrument_parameters: crate::commands::EffectParameters,
     /// The pieces of each sliced sample instrument, by id: its notes pick one, counting up from C-4.
     pub instrument_slices: BTreeMap<String, usize>,
+    pub instrument_pad_maps: BTreeMap<String, Vec<usize>>,
 }
 
 #[derive(Deserialize)]
@@ -86,6 +87,8 @@ pub enum Command {
         #[serde(default)]
         commands: Vec<String>,
     },
+    /// Library and selected-region previews use the same protected engine output as music.
+    PreviewSample { path: String, track: Option<usize>, gain: f64, start: f64, end: f64, repeat: bool },
     Stop,
     /// Cuts off auditioned notes (the sound browser's preview) without touching playback.
     AuditionStop,
@@ -540,6 +543,7 @@ impl Worker {
                     .iter()
                     .filter_map(|(id, sound)| Some((id.clone(), sound.slices?)))
                     .collect();
+                self.status.instrument_pad_maps = self.sounds.iter().filter_map(|(id, sound)| Some((id.clone(), sound.pad_map.clone()?))).collect();
                 self.status.instrument_parameters = self
                     .sounds
                     .iter()
@@ -550,6 +554,7 @@ impl Worker {
                     playback.parameters = self.status.effect_parameters.clone();
                     playback.instrument_parameters = self.status.instrument_parameters.clone();
                     playback.instrument_slices = self.status.instrument_slices.clone();
+                    playback.instrument_pad_maps = self.status.instrument_pad_maps.clone();
                 }
             }
             Command::Play {
@@ -575,6 +580,7 @@ impl Worker {
                 playback.parameters = self.status.effect_parameters.clone();
                 playback.instrument_parameters = self.status.instrument_parameters.clone();
                 playback.instrument_slices = self.status.instrument_slices.clone();
+                playback.instrument_pad_maps = self.status.instrument_pad_maps.clone();
                 let begin = self.clock()? + (self.status.sample_rate * 0.15).round() as u64;
                 if mode == Mode::Pattern {
                     playback.start_at(start_row, begin, self.status.sample_rate);
@@ -629,6 +635,7 @@ impl Worker {
                 let target = self.status.instruments.get(&instrument).ok_or("Apply this instrument before playing MIDI")?.clone();
                 let slices = self.status.instrument_slices.get(&instrument).copied();
                 let Some(mut args) = note_args(&note, slices)? else { return Ok(()); };
+                crate::pattern::pad_args(&mut args, self.status.instrument_pad_maps.get(&instrument));
                 for parameter in self.status.instrument_parameters.get(&instrument).into_iter().flatten() {
                     if let Some(value) = self.instrument_values.get(&instrument).and_then(|v| v.get(&parameter.name)) {
                         args[&parameter.name] = parameter.argument(value.clamp(parameter.min, parameter.max));
@@ -661,6 +668,7 @@ impl Worker {
                 let Some(mut args) = note_args(&note, slices)? else {
                     return Ok(());
                 };
+                crate::pattern::pad_args(&mut args, self.status.instrument_pad_maps.get(&instrument));
                 let commands = commands_of(commands.iter().map(String::as_str));
                 let start = start_of(&commands);
                 fit_to_tempo(&mut args, self.status.instrument_parameters.get(&instrument).map_or(&[], Vec::as_slice), self.mixer_timing.0);
@@ -676,6 +684,21 @@ impl Worker {
                     })
                     .collect();
                 self.send_events(events)?;
+            }
+            Command::PreviewSample { path, track, gain, start, end, repeat } => {
+                if !gain.is_finite() || !(0.0..=1.0).contains(&gain) || !start.is_finite() || !end.is_finite()
+                    || start < 0.0 || end > 1.0 || start >= end || track.is_some_and(|t| t >= self.mixer.len()) {
+                    return Err("Invalid sample preview settings".into());
+                }
+                let seconds = crate::slicing::seconds(std::path::Path::new("."), &path)?;
+                let quoted = serde_json::to_string(&path).map_err(|e| e.to_string())?;
+                let source = format!("browser_sample_audio = sample({quoted}).root(c4){}\ninstr browser_sample_preview(freq: hz) {{ browser_sample_audio(freq: freq, begin: {start}, loop_start: {start}, loop_end: {end}, loop_crossfade: 3ms) * {gain} * env[1 | 3ms 0] }}", if repeat { ".loop(forward)" } else { "" });
+                self.command(Command::AuditionStop)?;
+                self.command(Command::Apply { id: "sample_preview".into(), source, kind: Kind::Instr, dir: None })?;
+                let duration = if repeat { 60.0 } else { seconds * (end - start) };
+                let destination = track.map(|t| format!("in_{t}"));
+                let id = crate::pattern::NOTE_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.send_events(vec![json!({"op":"note", "id":id, "at":"now", "tag":"tracker-audition", "target":"browser_sample_preview", "to":destination, "dur":format!("{duration}sec"), "args":{"freq":"c4"}})])?;
             }
             Command::Stop => self.stop()?,
             Command::AuditionStop => {
@@ -849,6 +872,7 @@ impl Worker {
         playback.parameters = self.status.effect_parameters.clone();
         playback.instrument_parameters = self.status.instrument_parameters.clone();
         playback.instrument_slices = self.status.instrument_slices.clone();
+        playback.instrument_pad_maps = self.status.instrument_pad_maps.clone();
 
         let source = self.sounds.values().map(|s| s.engine_source.as_str()).collect::<Vec<_>>().join("\n");
         let fx: Vec<_> = self
@@ -966,3 +990,7 @@ pub fn audio_status(audio: tauri::State<'_, Audio>) -> Status {
 #[cfg(test)]
 #[path = "audio_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "sample_audio_tests.rs"]
+mod sample_tests;

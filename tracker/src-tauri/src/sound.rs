@@ -54,6 +54,7 @@ pub struct Sound {
     /// For a sliced sample, how many pieces it has: the instrument has a `sample` parameter and the
     /// source slices one sample into a kit. Notes then pick the piece, from C-4 up.
     pub slices: Option<usize>,
+    pub pad_map: Option<Vec<usize>>,
 }
 
 impl Sound {
@@ -154,7 +155,7 @@ impl Sound {
         {
             for param in &instrument.params {
                 // Pitch, level and position come from the note itself, and so does the piece of a sliced sample.
-                if matches!(param.name.as_str(), "freq" | "gain" | "pan")
+                if matches!(param.name.as_str(), "freq" | "gain" | "pan" | "pad_key")
                     || slices.is_some() && param.name == "sample"
                     || parameters.len() == 15
                 {
@@ -184,12 +185,19 @@ impl Sound {
         } else {
             None
         };
+        let pad_map = if let Some(raw) = written.lines().find_map(|line| line.strip_prefix("// tracker-pads: ")) {
+            let pads: Vec<serde_json::Value> = serde_json::from_str(raw).map_err(|e| format!("Invalid tracker pad settings: {e}"))?;
+            let count = slices.ok_or("Pad settings need a playable sample kit")?;
+            if pads.len() != count { return Err("The kit's sample count changed; repair its files or reset its pad settings before applying".into()); }
+            Some(pads.iter().map(|p| p["member"].as_u64().and_then(|i| (i < count as u64).then_some(i as usize))).collect::<Option<Vec<_>>>().ok_or("A pad names a missing kit member")?)
+        } else { None };
         Ok(Self {
             target: definition.name.clone(),
             engine_source,
             fx_source,
             parameters,
             slices,
+            pad_map,
         })
     }
 }

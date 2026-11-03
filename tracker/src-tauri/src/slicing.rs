@@ -24,7 +24,16 @@ pub struct Peaks {
 
 /// The waveform of `file` (relative to the project folder `dir`) in `buckets` stretches.
 pub fn peaks(dir: &std::path::Path, file: &str, buckets: usize) -> Result<Peaks, String> {
+    peaks_range(dir, file, buckets, 0.0, 1.0)
+}
+
+pub fn peaks_range(dir: &std::path::Path, file: &str, buckets: usize, start: f64, end: f64) -> Result<Peaks, String> {
+    if !start.is_finite() || !end.is_finite() || start < 0.0 || end > 1.0 || start >= end { return Err("Invalid waveform range".into()); }
     let (mixed, rate) = mono(dir, file)?;
+    let frames = mixed.len();
+    let from = (start * frames as f64).floor() as usize;
+    let to = (end * frames as f64).ceil() as usize;
+    let mixed = &mixed[from.min(frames)..to.min(frames)];
     let buckets = buckets.clamp(1, 8192);
     let mut peaks = Vec::with_capacity(buckets * 2);
     for bucket in 0..buckets {
@@ -34,7 +43,7 @@ pub fn peaks(dir: &std::path::Path, file: &str, buckets: usize) -> Result<Peaks,
         peaks.push(part.iter().copied().fold(0.0, f32::min));
         peaks.push(part.iter().copied().fold(0.0, f32::max));
     }
-    Ok(Peaks { frames: mixed.len(), rate, peaks })
+    Ok(Peaks { frames, rate, peaks })
 }
 
 /// How long `file` plays, in seconds.
@@ -46,7 +55,7 @@ pub fn seconds(dir: &std::path::Path, file: &str) -> Result<f64, String> {
 fn mono(dir: &std::path::Path, file: &str) -> Result<(Vec<f32>, f32), String> {
     let channels = niminal_lang::Samples::new(dir).load(file)?;
     let first = channels.first().ok_or("The file has no audio")?;
-    let mixed = (0..first.len()).map(|i| channels.iter().map(|c| c.get(i)).sum::<f32>() / channels.len() as f32).collect();
+    let mixed = (0..first.len()).map(|i| channels.iter().map(|c| c.get(i)).filter(|v| v.is_finite()).max_by(|a, b| a.abs().total_cmp(&b.abs())).unwrap_or(0.0)).collect();
     Ok((mixed, first.sample_rate_or(48_000.0)))
 }
 

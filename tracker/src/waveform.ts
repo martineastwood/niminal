@@ -1,3 +1,5 @@
+import { SamplePads, clearPads, readPads, writePads } from './sample-pads';
+import { SampleEditor, type PreparationActions } from './sample-editor';
 import { readLoop, writeLoop, type SampleLoop } from './loops';
 import type { Definition } from './project';
 import { sampleFile } from './instruments';
@@ -9,10 +11,13 @@ import { unslice, addCut, cutNear, moveCut, pieceAt, pieceKey, readCuts, readDet
 /** A sample's waveform: its length, and the lowest and highest value of each of equal stretches of it (two numbers a stretch). */
 export interface Peaks { frames: number; rate: number; peaks: number[] }
 
-export interface SampleActions {
+export interface SampleActions extends PreparationActions {
   /** The instrument whose sample to show. */
   current(): Definition | null;
+  members?(folder: string): Promise<string[]>;
+  replacePad?(folder: string, member: string): Promise<string | null>;
   loadPeaks(file: string): Promise<Peaks>;
+  loadDetail?(file: string, start: number, end: number): Promise<Peaks>;
   /** Puts new code in an instrument and applies it. */
   edit(definition: Definition, source: string): void;
   /** Plays a piece of the instrument's sample (piece 0 when it is not cut). */
@@ -34,6 +39,9 @@ const height = 150, reach = 6, ruleSteps = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 
  * the waveform to add one, double-click a marker (or select it and press Delete) to remove it, and click to hear the piece under the pointer.
  */
 export class SamplePanel {
+  private readonly sampleEditor: SampleEditor;
+  private readonly pads: SamplePads;
+  private selectionAnchor: number | null = null;
   private readonly canvas = document.createElement('canvas');
   private readonly title = document.createElement('span');
   private readonly stretch = document.createElement('input');
@@ -74,6 +82,9 @@ export class SamplePanel {
   private drag: { index: number; moved: boolean } | null = null;
   private hovered = -1;
   private revision = 0;
+  private detail: { file: string; start: number; end: number; peaks: number[] } | null = null;
+  private detailRequest = '';
+  private detailRevision = 0;
 
   constructor(private readonly root: HTMLElement, private readonly actions: SampleActions) {
     const toolbar = document.createElement('div'); toolbar.className = 'sample-toolbar';
@@ -169,10 +180,15 @@ export class SamplePanel {
     this.hint.className = 'device-note';
     const stage = document.createElement('div'); stage.className = 'sample-stage'; stage.append(this.canvas);
     const main = document.createElement('div'); main.className = 'sample-main'; main.append(toolbar, stage, this.hint);
+    this.sampleEditor = new SampleEditor(actions, () => this.draw());
+    main.insertBefore(this.sampleEditor.root, stage);
+    this.pads = new SamplePads(actions);
+    main.append(this.pads.root);
     root.replaceChildren(main, props);
     this.canvas.onpointerdown = event => this.down(event);
     this.canvas.onpointermove = event => this.move(event);
     this.canvas.onpointerup = () => this.up();
+    this.canvas.onpointercancel = () => { this.selectionAnchor = null; this.drag = null; this.loopDrag = null; void this.refresh(); };
     this.canvas.ondblclick = event => this.doubleClick(event);
     this.canvas.onkeydown = event => { if ((event.key === 'Delete' || event.key === 'Backspace') && this.selected > 0) { event.preventDefault(); this.setPoints(removeCut(this.points, this.selected)); this.selected = -1; } };
     if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => this.draw()).observe(stage);
@@ -180,11 +196,14 @@ export class SamplePanel {
 
   /** Reads the current instrument again: its sample, and where its code cuts it. Does nothing while a marker is being dragged. */
   async refresh() {
-    if (this.drag || this.loopDrag) return;
+    if (this.drag || this.loopDrag || this.selectionAnchor !== null) return;
     const revision = ++this.revision, definition = this.actions.current(), file = definition && sampleFile(definition);
-    if (definition !== this.definition) { this.beatDraft = null; this.beats.value = '4'; }
+    if (definition !== this.definition) { this.cache.clear(); this.detail = null; this.detailRequest = ''; this.detailRevision++; this.beatDraft = null; this.beats.value = '4'; }
     this.definition = definition;
+    void this.sampleEditor.refresh(definition);
+    void this.pads.refresh(definition).catch(error => { this.hint.textContent = `Could not read kit: ${error}`; });
     this.loop = readLoop(definition?.source ?? '');
+    this.sampleEditor.root.hidden = !file;
     const wholeSample = !!file && !readCuts(definition?.source ?? '') && !readDetect(definition?.source ?? '') && /begin: 0\.\.1 = 0/.test(definition?.source ?? '') && !!definition?.source.includes('begin: begin');
     this.canLoop = wholeSample; this.cutUp = !!file && !!(readCuts(definition?.source ?? '') || readDetect(definition?.source ?? '')); this.showCutTools(); this.playback = definition ? readPlayback(definition.source) : null;
     this.showProps(definition?.source ?? '');
@@ -194,7 +213,7 @@ export class SamplePanel {
     this.stretchMode.value = /stretch_mode: 0\.\.2 = ([012])/.exec(definition?.source ?? '')?.[1] ?? '0';
     this.stretchMode.disabled = this.stretch.disabled;
     for (const control of [this.beats, ...this.fitButtons]) control.disabled = this.stretch.disabled;
-    if (!definition || !file) { this.showFit(''); this.peaks = null; this.points = []; this.title.textContent = definition?.name ?? ''; this.hint.textContent = 'Choose an instrument that plays a sample (drop an audio file on the right bar to import one) to see its waveform.'; this.draw(); return; }
+    if (!definition || !file) { this.showFit(''); this.peaks = null; this.points = []; this.title.textContent = definition?.name ?? ''; this.hint.textContent = /\bkit\(/.test(definition?.source ?? '') ? 'Open the Kit key map below to audition, tune, group or replace its samples.' : 'Choose an instrument that plays a sample (drop an audio file on the right bar to import one) to see its waveform.'; this.draw(); return; }
     let peaks = this.cache.get(file);
     try { if (!peaks) { peaks = await this.actions.loadPeaks(file); this.cache.set(file, peaks); } }
     catch (error) { if (revision === this.revision) { this.peaks = null; this.hint.textContent = `Could not read ${file}: ${error}`; this.draw(); } return; }
@@ -203,6 +222,7 @@ export class SamplePanel {
     let found: number[] | null = null;
     // code that cuts at the hits it finds shows those cuts; moving one writes them all into the code as fixed places
     if (detect) { try { found = await this.actions.detect(file, detect.max, detect.sensitivity); } catch { found = null; } if (revision !== this.revision) return; }
+    if (found) void this.pads.refresh(definition, found);
     this.peaks = peaks; this.points = readCuts(definition.source)?.points ?? found ?? []; this.showFit(definition.source);
     if (this.selected >= this.points.length) this.selected = -1;
     this.title.textContent = `${definition.name} · ${(peaks.frames / peaks.rate).toFixed(2)} s${this.points.length ? ` · ${this.points.length} pieces` : ''}`;
@@ -210,6 +230,7 @@ export class SamplePanel {
       ? 'Click a piece to hear it. Drag a marker to move a cut, double-click the waveform to add one, double-click a marker to remove it.'
       : this.loop.mode !== 'none' ? 'Drag the Start and End markers to set the sustain loop. Click to hear it. The intro plays once; the marked region repeats while the note is held.'
       : 'Click to hear the sample. Find hits or Cut equally make a new instrument that plays it in pieces, which you can then move here.';
+    this.hint.textContent += ' Shift-drag selects a range; drag its edges to adjust it. Frame boxes give exact boundaries.';
     this.draw();
   }
 
@@ -334,7 +355,7 @@ export class SamplePanel {
 
   /** Rewrites a cut instrument as a sampler of its whole sample, after asking; false when it is declined or cannot be. */
   private async playAsOne(): Promise<boolean> {
-    const definition = this.definition, whole = definition && unslice(definition.source);
+    const definition = this.definition, whole = definition && unslice(clearPads(definition.source));
     if (!definition || !whole || !(await this.actions.uncut(definition)) || this.definition !== definition) return false;
     this.actions.edit(definition, whole);
     this.cutUp = false; this.canLoop = true; this.points = []; this.selected = -1;
@@ -362,21 +383,27 @@ export class SamplePanel {
   }
 
   private share(event: MouseEvent) {
-    const box = this.canvas.getBoundingClientRect();
-    return { share: Math.min(1, Math.max(0, (event.clientX - box.left) / (box.width || 1))), near: reach / (box.width || 1) };
+    const box = this.canvas.getBoundingClientRect(), span = this.sampleEditor.viewEnd - this.sampleEditor.viewStart;
+    return { share: this.sampleEditor.viewStart + Math.min(1, Math.max(0, (event.clientX - box.left) / (box.width || 1))) * span, near: reach / (box.width || 1) * span };
   }
   private down(event: PointerEvent) {
     if (!this.definition || !this.peaks) return;
     const { share, near } = this.share(event), index = cutNear(this.points, share, near);
     this.canvas.focus();
+    if (event.shiftKey) { this.selectionAnchor = share; this.sampleEditor.select(share, share); this.canvas.setPointerCapture?.(event.pointerId); return; }
     const loop = this.loopNear(share, near);
     if (loop) { this.loopDrag = loop; this.canvas.setPointerCapture?.(event.pointerId); return; }
+    if (index < 0 && (this.sampleEditor.start > 0 || this.sampleEditor.end < 1)) {
+      const startDistance = Math.abs(share - this.sampleEditor.start), endDistance = Math.abs(share - this.sampleEditor.end);
+      if (Math.min(startDistance, endDistance) <= near) { this.selectionAnchor = startDistance <= endDistance ? this.sampleEditor.end : this.sampleEditor.start; this.canvas.setPointerCapture?.(event.pointerId); return; }
+    }
     if (index >= 0) { this.selected = index; this.drag = { index, moved: false }; this.canvas.setPointerCapture?.(event.pointerId); }
     else { this.selected = -1; this.actions.hear(this.definition, this.points.length ? pieceAt(this.points, share) : 0); }
     this.draw();
   }
   private move(event: PointerEvent) {
-    const { share, near } = this.share(event);
+    const position = this.share(event), share = this.sampleEditor.snap(position.share), near = position.near;
+    if (this.selectionAnchor !== null) { this.sampleEditor.select(this.selectionAnchor, share); return; }
     if (this.loopDrag) {
       const gap = 1 / (this.peaks?.frames || 1);
       this.loop[this.loopDrag] = this.loopDrag === 'start' ? Math.min(share, this.loop.end - gap) : Math.max(share, this.loop.start + gap);
@@ -390,6 +417,7 @@ export class SamplePanel {
     }
   }
   private up() {
+    if (this.selectionAnchor !== null) { this.selectionAnchor = null; return; }
     if (this.loopDrag) { this.loopDrag = null; this.commitLoop(); return; }
     const drag = this.drag; this.drag = null;
     if (drag?.moved) this.commit();
@@ -408,7 +436,8 @@ export class SamplePanel {
   }
   private commit() {
     if (!this.definition) return;
-    const source = writeCuts(this.definition.source, this.points);
+    let source = writeCuts(this.definition.source, this.points);
+    if (source.includes('// tracker-pads:')) source = writePads(source, readPads(source, this.points.length), this.points.map((_, i) => `s${i}`));
     if (source !== this.definition.source) this.actions.edit(this.definition, source);
     this.title.textContent = `${this.definition.name} · ${((this.peaks?.frames ?? 0) / (this.peaks?.rate || 1)).toFixed(2)} s · ${this.points.length} pieces`;
     this.draw();
@@ -416,22 +445,25 @@ export class SamplePanel {
   private async findHits() {
     const file = this.definition && sampleFile(this.definition);
     if (!this.definition || !file) { this.hint.textContent = 'Choose an instrument that plays a sample first.'; return; }
+    const definition = this.definition;
     try {
       const sensitivity = Math.min(100, Math.max(0, this.sensitivity.valueAsNumber || 50)) / 100, places = await this.actions.detect(file, 48, sensitivity);
+      if (this.definition !== definition || sampleFile(definition) !== file) return;
       if (places.length < 2) this.hint.textContent = 'No separate hits found in that sample.'; else this.setPoints(places.slice(0, 48));
     } catch (error) { this.hint.textContent = `Could not read the sample: ${error}`; }
   }
 
   /** A scale of seconds along the bottom, with a mark about every 70 pixels, at a round number of seconds. */
   private drawRuler(context: CanvasRenderingContext2D, width: number, ruler: number, ratio: number, colour: (name: string, fallback: string) => string) {
-    const seconds = this.peaks ? this.peaks.frames / this.peaks.rate : 0;
+    const total = this.peaks ? this.peaks.frames / this.peaks.rate : 0;
+    const start = this.sampleEditor.viewStart * total, seconds = (this.sampleEditor.viewEnd - this.sampleEditor.viewStart) * total;
     if (!seconds) return;
     const step = ruleSteps.find(candidate => candidate / seconds * width >= 70 * ratio) ?? ruleSteps.at(-1)!, top = this.canvas.height - ruler;
     context.fillStyle = colour('--bg-panel', '#16181b'); context.fillRect(0, top, width, ruler);
     context.strokeStyle = colour('--dim', '#666'); context.fillStyle = colour('--dim', '#888'); context.font = `${9 * ratio}px sans-serif`;
     context.beginPath();
-    for (let t = 0; t <= seconds + 1e-9; t += step) {
-      const x = Math.round(t / seconds * width) + 0.5;
+    for (let t = Math.ceil(start / step) * step; t <= start + seconds + 1e-9; t += step) {
+      const x = Math.round((t - start) / seconds * width) + 0.5;
       context.moveTo(x, top); context.lineTo(x, top + 4 * ratio);
       context.fillText(`${Number(t.toFixed(3))}s`, Math.min(x + 3, width - 30 * ratio), top + 11 * ratio);
     }
@@ -450,21 +482,45 @@ export class SamplePanel {
     context.strokeStyle = colour('--dim', '#666'); context.beginPath(); context.moveTo(0, middle); context.lineTo(width, middle); context.stroke();
     if (!this.peaks) return;
     this.drawRuler(context, width, ruler, ratio, colour);
-    const { peaks } = this.peaks, buckets = peaks.length / 2, scale = middle * 0.95;
+    const viewStart = this.sampleEditor.viewStart, span = this.sampleEditor.viewEnd - viewStart;
+    const at = (share: number) => (share - viewStart) / span * width;
+    const file = this.definition && sampleFile(this.definition);
+    const request = `${file}:${viewStart}:${span}`;
+    if (file && span < 1 && this.actions.loadDetail && request !== this.detailRequest) {
+      this.detailRequest = request;
+      const revision = ++this.detailRevision;
+      void this.actions.loadDetail(file, viewStart, viewStart + span).then(detail => {
+        if (revision !== this.detailRevision) return;
+        this.detail = { file, start: viewStart, end: viewStart + span, peaks: detail.peaks }; this.draw();
+      }).catch(error => { if (revision === this.detailRevision) this.hint.textContent = `Could not load waveform detail: ${error}`; });
+    }
+    const detail = this.detail && this.detail.file === file && this.detail.start === viewStart && this.detail.end === viewStart + span ? this.detail : null;
+    const peaks = detail?.peaks ?? this.peaks.peaks, buckets = peaks.length / 2, scale = middle * 0.95;
+    const bucketAt = (x: number) => detail ? x / width * buckets : (viewStart + x / width * span) * buckets;
     context.strokeStyle = colour('--accent', '#6af'); context.beginPath();
     for (let x = 0; x < width; x++) {
-      const from = Math.floor(x * buckets / width), to = Math.max(from + 1, Math.floor((x + 1) * buckets / width));
+      const from = Math.floor(bucketAt(x)), to = Math.max(from + 1, Math.floor(bucketAt(x + 1)));
       let low = 0, high = 0;
       for (let b = from; b < Math.min(to, buckets); b++) { low = Math.min(low, peaks[b * 2]); high = Math.max(high, peaks[b * 2 + 1]); }
       context.moveTo(x + 0.5, middle - high * scale); context.lineTo(x + 0.5, middle - low * scale - 1);
     }
     context.stroke();
+    context.fillStyle = colour('--accent', '#6af'); context.globalAlpha = 0.10;
+    context.fillRect(at(this.sampleEditor.start), 0, (this.sampleEditor.end - this.sampleEditor.start) / span * width, this.canvas.height - ruler); context.globalAlpha = 1;
     context.font = `${10 * ratio}px sans-serif`;
+    if (this.sampleEditor.start > 0 || this.sampleEditor.end < 1) {
+      context.strokeStyle = colour('--accent', '#6af');
+      for (const point of [this.sampleEditor.start, this.sampleEditor.end]) {
+        const x = at(point); context.beginPath(); context.moveTo(x, 15 * ratio); context.lineTo(x, this.canvas.height - ruler); context.stroke();
+        context.fillRect(x - 3 * ratio, middle - 6 * ratio, 6 * ratio, 12 * ratio);
+      }
+    }
     if (this.canLoop && this.loop.mode !== 'none') {
       context.fillStyle = colour('--accent', '#6af'); context.globalAlpha = 0.12;
-      context.fillRect(this.loop.start * width, 0, (this.loop.end - this.loop.start) * width, this.canvas.height); context.globalAlpha = 1;
+      context.fillRect(at(this.loop.start), 0, (this.loop.end - this.loop.start) / span * width, this.canvas.height); context.globalAlpha = 1;
       for (const [point, text] of [[this.loop.start, 'Start'], [this.loop.end, 'End']] as const) {
-        const x = Math.min(width - 1, Math.max(1, point * width));
+        if (point < viewStart || point > viewStart + span) continue;
+        const x = at(point);
         context.strokeStyle = colour('--accent-text', '#fff'); context.lineWidth = 2;
         context.beginPath(); context.moveTo(x, 0); context.lineTo(x, this.canvas.height); context.stroke(); context.lineWidth = 1;
         context.fillStyle = colour('--text', '#ddd'); context.fillText(text, Math.min(x + 4, width - 35 * ratio), 12 * ratio);
@@ -472,7 +528,8 @@ export class SamplePanel {
     }
     let labelled = -Infinity; // a note name is drawn only where there is room after the last one, so close cuts do not pile them up
     this.points.forEach((point, index) => {
-      const x = Math.round(point * width) + 0.5, active = index === this.selected || index === this.hovered;
+      if (point < viewStart || point > viewStart + span) return;
+      const x = Math.round(at(point)) + 0.5, active = index === this.selected || index === this.hovered;
       context.strokeStyle = active ? colour('--accent-text', '#fff') : colour('--text', '#ddd'); context.lineWidth = active ? 2 : 1;
       context.beginPath(); context.moveTo(x, 0); context.lineTo(x, this.canvas.height); context.stroke(); context.lineWidth = 1;
       if (active || x - labelled >= 30 * ratio) { context.fillStyle = colour('--text', '#ddd'); context.fillText(pieceKey(index), x + 3, 11 * ratio); labelled = x; }

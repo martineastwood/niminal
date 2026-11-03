@@ -945,6 +945,17 @@ pub fn note_args(note: &str, slices: Option<usize>) -> Result<Option<Value>, Str
         .then(|| json!({"freq": "c4", "sample": piece as u32})))
 }
 
+/// Keep the played key available to its gain/tuning controls while selecting a mapped member.
+pub fn pad_args(args: &mut Value, map: Option<&Vec<usize>>) {
+    if let Some(map) = map
+        && let Some(key) = args["sample"].as_u64()
+        && let Some(member) = map.get(key as usize)
+    {
+        args["pad_key"] = json!(key);
+        args["sample"] = json!(member);
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
@@ -960,6 +971,7 @@ pub struct Playback {
     pub instrument_parameters: crate::commands::EffectParameters,
     /// How many pieces each sliced sample instrument has, by instrument id.
     pub instrument_slices: BTreeMap<String, usize>,
+    pub instrument_pad_maps: BTreeMap<String, Vec<usize>>,
     /// Notes still sounding that instrument-parameter lanes change as they pass.
     sounding: Vec<Sounding>,
     /// Notes (row, track, column) that a glide has taken over, so they start no note of their own.
@@ -1006,6 +1018,7 @@ impl Playback {
             parameters: BTreeMap::new(),
             instrument_parameters: BTreeMap::new(),
             instrument_slices: BTreeMap::new(),
+            instrument_pad_maps: BTreeMap::new(),
             absorbed: Default::default(),
             rolls: RefCell::new(BTreeMap::new()),
             random: Cell::new(
@@ -1573,6 +1586,7 @@ impl Playback {
                     let Some(mut args) = note_args(note, slices)? else {
                         continue;
                     };
+                    pad_args(&mut args, self.instrument_pad_maps.get(id));
                     let held = if slices.is_some() { None } else { midi(note).map(|m| (id, m)) };
                     let hold = self.hold(self.next_row, index, column_index, delay, held);
                     absorbed.extend(hold.absorbed.iter().copied());

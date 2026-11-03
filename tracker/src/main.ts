@@ -1,3 +1,4 @@
+import { showSampleAssets, assetUsers } from './sample-assets';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { EditorView } from '@codemirror/view';
 import { MidiLearn } from './midi-mapping';
@@ -72,7 +73,7 @@ app.innerHTML = `
       </div>
     </div>
     <div class="col-resize" id="right-resize" tabindex="0" role="separator" aria-orientation="vertical" aria-label="Resize the right bar"></div>
-    <div id="right-bar"><section id="project-panel" aria-label="Project instruments"></section><section id="sound-browser" aria-label="Sound browser"></section></div>
+    <div id="right-bar"><section id="project-panel" aria-label="Project instruments"></section><section id="sound-browser" aria-label="Sound browser"></section><div id="sample-preview-controls" class="sample-toolbar"><label>Preview <input id="sample-preview-volume" type="range" min="0" max="100" value="50" aria-label="Sample preview volume"></label><label><input id="sample-preview-track" type="checkbox"> Track FX</label><button id="project-samples">Project samples…</button></div></div>
   </main>
   <footer><span id="status">Starting editor…</span><span class="spacer"></span><span id="audio-status"></span><label>Port <input id="engine-port" type="number" min="1" max="65535" value="7401"></label><input id="engine-token" type="password" placeholder="Token" aria-label="Engine token"><button id="connect">Connect</button><span id="save-status">Local autosave</span><span id="view-controls"><button id="toggle-sequence" aria-pressed="true" title="Show or hide the sequence bar (Cmd/Ctrl+\\)" aria-label="Sequence bar">◧</button><button id="toggle-side" aria-pressed="true" title="Show or hide the right bar (Cmd/Ctrl+Shift+B)" aria-label="Right bar">◨</button><button id="zoom-out" title="Smaller interface (Cmd/Ctrl+−)" aria-label="Smaller interface">A−</button><button id="zoom-level" title="Interface size; click for actual size" aria-label="Interface size"></button><button id="zoom-in" title="Larger interface (Cmd/Ctrl+=)" aria-label="Larger interface">A+</button><button id="open-palette" title="Command palette (Cmd/Ctrl+K)" aria-label="Command palette">⌘K</button></span></footer>`;
 
@@ -312,6 +313,7 @@ function followTrack() {
 /** Forgets a start that is still on its way, so it does not play once it is ready. */
 function cancelStart() { transportRevision++; starting = false; }
 async function stopPlayback() {
+  stopSample();
   receiveMidi({ kind: 'reset' });
   cancelStart();
   await audioCommand({ op: 'stop' });
@@ -487,26 +489,31 @@ async function chooseLibrary() {
   await refreshSamples();
   status(`${folder}: ${library.length} sample${library.length === 1 ? '' : 's'}${library.length >= 5000 ? ' (the first 5000)' : ''}`);
 }
-/** The library sample being heard. The window plays it, not the engine, so it can be cut off at any time. */
-let previewContext: AudioContext | null = null;
-let heard: { path: string; source: AudioBufferSourceNode } | null = null;
+/** Preview audio always passes through the engine's protected master output. */
+let heardSample: string | null = null;
+let heardRegion = { start: 0, end: 1, repeat: false };
 let previewRequest = 0;
-function stopSample() { previewRequest++; heard?.source.stop(); heard = null; }
-/** Plays a library sample; asking for the one already playing stops it instead. */
-async function toggleSample(path: string) {
-  const playing = heard?.path === path;
-  stopSample();
-  if (playing) return;
-  const request = previewRequest;
-  const context = previewContext ??= new AudioContext();
-  const buffer = await context.decodeAudioData(await invoke<ArrayBuffer>('read_sample', { path }));
-  if (request !== previewRequest) return;
-  const source = context.createBufferSource();
-  source.buffer = buffer; source.connect(context.destination);
-  source.onended = () => { if (heard?.source === source) heard = null; };
-  source.start();
-  heard = { path, source };
+function stopSample() {
+  previewRequest++; heardSample = null;
+  if (audioStatus.connected) void action(() => audioCommand({ op: 'audition_stop' }));
 }
+async function previewSample(path: string, start = 0, end = 1, repeat = false) {
+  const request = ++previewRequest;
+  await ensureConnected(); await syncSong();
+  if (request !== previewRequest) return;
+  await audioCommand({ op: 'preview_sample', path, start, end, repeat,
+    gain: Number(element<HTMLInputElement>('sample-preview-volume').value) / 100,
+    track: element<HTMLInputElement>('sample-preview-track').checked ? noteTrack() : null });
+  if (request === previewRequest) { heardSample = path; heardRegion = { start, end, repeat }; }
+}
+async function toggleSample(path: string) {
+  if (heardSample === path) { stopSample(); return; }
+  await previewSample(path);
+}
+element('sample-preview-volume').onchange = () => { if (heardSample) void action(() => previewSample(heardSample!, heardRegion.start, heardRegion.end, heardRegion.repeat)); };
+element('sample-preview-track').onchange = () => { if (heardSample) void action(() => previewSample(heardSample!, heardRegion.start, heardRegion.end, heardRegion.repeat)); };
+window.addEventListener('blur', stopSample);
+
 /** A sample copied into the project, and how long it plays. */
 type Imported = { file: string; seconds: number };
 /** A folder of samples copied into the project to play as a kit. */
@@ -645,7 +652,21 @@ function setDefinitionSource(definition: Definition, source: string) {
 }
 const samplePanel = new SamplePanel(element('sample'), {
   current: () => project.definitions.find(d => d.id === currentInstrument && d.kind === 'instr') ?? null,
-  loadPeaks: file => invoke('sample_peaks', { id: project.id, file, buckets: 2000 }),
+  loadPeaks: file => invoke('sample_peaks', { id: project.id, file, buckets: 8192 }),
+  loadDetail: (file, start, end) => invoke('sample_peaks', { id: project.id, file, start, end, buckets: 8192 }),
+  analyze: file => invoke('analyze_sample', { id: project.id, file }),
+  prepare: (file, edit) => invoke('prepare_sample', { id: project.id, file, edit }),
+  preview: (file, start, end, repeat) => { const id = project.id; void action(async () => { await projectDirReady; if (project.id === id) await previewSample(`${projectDir}/${file}`, start, end, repeat); }); },
+  stop: stopSample,
+  members: folder => invoke('kit_members', { id: project.id, folder }),
+  replacePad: async (folder, member) => {
+    const id = project.id;
+    try {
+      const picked = await invoke<Imported | null>('pick_sample', { id });
+      if (!picked || project.id !== id) return null;
+      return await invoke<string>('replace_kit_member', { id, folder, member, replacement: picked.file });
+    } catch (error) { status(`Could not replace kit member: ${error}`); return null; }
+  },
   edit: (definition, source) => { setDefinitionSource(definition, source); if (audioStatus.connected) void action(() => applyDefinition(definition)); },
   hear: (definition, piece) => { if (audioStatus.connected) void action(() => audition(definition.id, pieceKey(piece), noteTrack())); },
   detect: (file, max = maxSlices, sensitivity = 0.5) => invoke('detect_slices', { id: project.id, file, max, sensitivity }),
@@ -653,6 +674,38 @@ const samplePanel = new SamplePanel(element('sample'), {
   tempo: () => Number(element<HTMLInputElement>('bpm').value) || 120,
   uncut: definition => askToPlayAsOne(definition),
 });
+element('project-samples').onclick = () => {
+  if (!isTauri()) { status('Project sample management needs the desktop app'); return; }
+  const id = project.id;
+  void showSampleAssets({
+    list: () => invoke('project_samples', { id }),
+    definitions: () => project.id === id ? project.definitions : [],
+    preview: file => { void action(async () => { await projectDirReady; if (project.id === id) await previewSample(`${projectDir}/${file}`); }); },
+    stop: stopSample,
+    clean: async () => { if (project.id === id) await cleanSamples(); },
+    replace: async file => {
+      const imported = await invoke<Imported | null>('pick_sample', { id });
+      if (!imported || project.id !== id) return false;
+      const users = assetUsers(project.definitions, file);
+      const changes = new Map<Definition, string>();
+      const folder = file.slice(0, file.lastIndexOf('/')), member = file.split('/').at(-1)!.replace(/\.[^.]+$/, '');
+      let nextFolder: string | null = null;
+      if (users.some(d => d.source.includes(`kit("${folder}")`))) nextFolder = await invoke<string>('replace_kit_member', { id, folder, member, replacement: imported.file });
+      if (project.id !== id) return false;
+      for (const definition of users) {
+        let source = definition.source.replaceAll(`sample("${file}")`, () => `sample("${imported.file}")`);
+        if (nextFolder) source = source.replaceAll(`kit("${folder}")`, () => `kit("${nextFolder}")`);
+        changes.set(definition, source);
+      }
+      restoringHistory = true;
+      try { for (const [definition, source] of changes) setDefinitionSource(definition, source); }
+      finally { restoringHistory = false; }
+      save();
+      if (audioStatus.connected) for (const definition of users) await applyDefinition(definition);
+      looks.clear(); sampleChanged(); return true;
+    },
+  });
+};
 let sampleTimer = 0;
 /** Draws the Sample tab again shortly after the instrument or its code changes, if it is showing. */
 function sampleChanged() {
@@ -950,7 +1003,7 @@ const strings = (value: unknown): string[] => typeof value === 'string' ? [value
 async function cleanSamples() {
   if (!isTauri()) { status('Cleaning samples needs the desktop app'); return; }
   try {
-    const count = await invoke<number>('clean_samples', { id: project.id, code: strings(project).join('\n') });
+    const count = await invoke<number>('clean_samples', { id: project.id, code: projectHistory.snapshots.flatMap(raw => strings(JSON.parse(raw))).join('\n') });
     status(count ? `Removed ${count} unused sample${count === 1 ? '' : 's'}` : 'No unused samples removed');
   } catch (error) { status(`Could not clean samples: ${error}`); }
 }
@@ -995,6 +1048,7 @@ document.addEventListener('keydown', event => {
 });
 async function loadProject(raw: string) {
   const loaded = readProject(raw); dropUnusedPatterns(loaded);
+  stopSample(); looks.clear();
   receiveMidi({ kind: 'reset' });
   cancelStart();
   if (audioStatus.connected) await audioCommand({ op: 'disconnect' });

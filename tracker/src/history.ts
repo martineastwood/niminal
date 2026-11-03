@@ -16,6 +16,8 @@ export class ProjectHistory {
   private group: string | undefined;
   private recordedAt = 0;
   constructor(private current: string) {}
+  /** Retain audio referenced by undo and redo while cleaning project files. */
+  get snapshots(): readonly string[] { return [...this.past, this.current, ...this.future]; }
   get canUndo() { return this.past.length > 0; }
   get canRedo() { return this.future.length > 0; }
   record(value: string, group?: string, now = Date.now()) {

@@ -62,3 +62,27 @@ Every sampler row in the instrument list carries a small tag (**one-shot**, **ho
 ## Kits
 
 **Kit from audio files…** in the Add menu, File → Import Samples as a Kit…, or **Import as kit…** on the Samples tab asks for several WAV files and makes **one** instrument that plays them: they are copied into a folder of the project (`samples/<name>`, named for the folder they came from) and each file gets a key, counting up from **C-4** in the order of their names. The code lists the keys (`/// C-4 hat · C#4 kick · D-4 snare`), uses the language's `kit("samples/drums")`, and takes the same `begin`, `rate`, `gate` and `release` as any sampler, so **O**, **V** and **R** work on its hits. A kit holds 1 to 48 samples; sample names may use letters, digits and underscores, and a name that starts with a digit gets an `s` in front. Rename a file before importing to change which key it gets.
+
+## Preparing samples
+
+Open **Sample** for a sampler. **Shift-drag** across the waveform selects a range; drag either selection edge or enter exact **Start frame / End frame** values to adjust it. The readout shows seconds. **Zoom + / −**, **Show all**, **Zoom selection**, and the horizontal scrollbar change the view without changing the selected audio. Zoomed views load waveform detail from the source frames.
+
+Choose **Zero crossings** or **Transients** to snap nearby dragged selection edges, loop points and slice markers. Snapping has a small capture distance, so markers can still be placed between distant hits. **Hear selection** plays just the selected audio; **Repeat selection** repeats it for up to a minute, and **Stop preview** ends it.
+
+**Keep selection** trims to the selection. **Trim silence** removes leading and trailing audio below −60 dB relative to the sample's peak. **Reverse**, **Normalize −1 dB**, **Apply gain**, and **Apply fades** process the whole sample. Fade lengths are milliseconds. Each operation writes a new stereo-preserving WAV and changes the sampler's file reference; the original is retained. Project undo restores the previous reference, including its sound after Apply, as with other source edits.
+
+For an uncut sampler, **Suggest loop** searches for matching waveform boundaries in its sustain region and sets a forward loop with a 3 ms crossfade. It also selects that region so **Repeat selection** can audition the join. The suggestion is a starting point: adjust the loop markers and crossfade by ear. A sliced sampler must first **Play as one sample** to use a sustain loop.
+
+## Slice controls and kit key maps
+
+Below the waveform, expand **Slice controls** or **Kit key map**. Each key has a sample selector, gain in dB, tuning in semitones and a choke group. Click its note button to audition it. Changing the sample selector remaps that key without renaming files. Gain and tuning belong to the key; choke groups belong to the selected sample. Group **0** disables choking; samples with the same nonzero group end one another when played. Changes use project undo and apply to keyboard entry, MIDI, song playback and audio export.
+
+A folder kit also offers **Replace…** per key. It creates a new kit folder with the same member names and order, preserving the old audio for undo. Other instruments that used the previous kit folder keep it.
+
+## Preview level and project audio files
+
+At the bottom of the right bar, **Preview** sets sample-audition volume and **Track FX** routes it through the selected track's mixer and effects. With Track FX off it goes straight to the engine's protected master output. All sample previews use the engine and its limiter; an engine connection is required. Leaving the browser, stopping, or switching away from the window stops its preview.
+
+**Project samples…** opens the project's audio file list. Filter by filename or instrument to see duration, sample rate, channel count, format, instrument users, byte-identical duplicates and missing sample references. **Replace… / Relink…** imports replacement audio and updates users while retaining their sampler settings. Replacing a folder-kit member creates a new kit folder for its users instead of overwriting existing audio.
+
+**Review unused samples…** lists the exact files before deletion. Files referenced by the current project, retained originals, or undo/redo history are kept. The list describes audio under the project folder, separately from the external library folder used by the sound browser.
