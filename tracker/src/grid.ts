@@ -1,3 +1,4 @@
+import { DisplayClock } from './animation';
 import { maxLanes, patternTiming, patternSeconds, patternRow, patternSwing } from './project';
 import { targetKey } from './automation';
 import { describeAnyCommand } from './describe';
@@ -71,6 +72,9 @@ export class PatternGrid {
   /** Set while a blurred cell editor commits, so clicking away does not scroll the grid. */
   private keepView = false;
   private origin = 0;
+  private displayClock = new DisplayClock();
+  /** Fractional playback row for the envelope and transport displays. */
+  positionChanged: (row: number | null) => void = () => {};
   private shown = -1;
   private animation = 0;
   private playhead = document.createElement('div');
@@ -434,11 +438,13 @@ export class PatternGrid {
    */
   paint(row: number | null, phase: number | null = null, atMs = Date.now()) {
     const was = this.playing; this.playing = row;
-    if (row === null) { if (was !== null) this.resetMidi(); this.playhead.hidden = true; this.shown = -1; if (was !== null) this.placeFrame(); return; }
+    if (row === null) { if (was !== null) this.resetMidi(); this.playhead.hidden = true; this.shown = -1; this.positionChanged(null); if (was !== null) this.placeFrame(); return; }
     if (was === null) this.placeFrame();
     const t = patternTiming(this.project(), this.pattern());
     const swing = patternSwing(this.project(), this.pattern()), rows = this.pattern().rows, start = patternSeconds(t, row, swing, rows), end = patternSeconds(t, row+1, swing, rows);
-    this.origin = atMs - (start + (phase ?? 0) * (end-start)) * 1000;
+    const seconds = start + (phase ?? 0) * (end-start);
+    this.origin = atMs - seconds * 1000;
+    this.displayClock.anchor(seconds, atMs);
     this.animation ||= requestAnimationFrame(this.follow);
   }
   /** Recording while the pattern plays: the cursor rides the play position and notes land on the nearest row. */
@@ -450,15 +456,18 @@ export class PatternGrid {
   private follow = () => {
     this.animation = 0;
     if (this.playing === null) return;
-    const row = Math.min(Math.max(Math.floor(this.currentRow()), 0), this.pattern().rows - 1);
+    const position = Math.min(patternRow(patternTiming(this.project(), this.pattern()), this.displayClock.read(), this.pattern().rows, patternSwing(this.project(), this.pattern())), this.pattern().rows - 1e-6);
+    const row = Math.floor(position);
+    this.followRow(position);
+    this.positionChanged(position);
     if (row !== this.shown) {
-      this.shown = row; this.followRow(row);
+      this.shown = row;
       if (this.riding) { this.row = row; this.anchor = { row, column: this.column }; this.paintSelection(); }
     }
     this.animation = requestAnimationFrame(this.follow);
   };
   /**
-   * While playing, the pattern steps up one row at a time under a play bar that stays near the middle.
+   * While playing, fractional rows scroll continuously under a play bar that stays near the middle.
    * Padding above the first row and below the last lets the bar stay put at both ends.
    */
   private followRow(row: number) {
@@ -620,7 +629,7 @@ export class PatternGrid {
     const body = this.parent.clientHeight - header, above = Math.min(Math.round(body / 3), line * 10);
     if (above !== this.pad.top || body - above !== this.pad.bottom) this.setPad(above, body - above);
     const top = this.contentTop(row); if (top === null) return null;
-    const half = (this.parent.querySelector<HTMLElement>(`[data-row="${row}"]`)?.offsetHeight ?? 0) / 2;
+    const half = (this.parent.querySelector<HTMLElement>(`[data-row="${Math.floor(row)}"]`)?.offsetHeight ?? 0) / 2;
     this.parent.scrollTop = top + half - header - above;
     return top;
   }
@@ -630,8 +639,8 @@ export class PatternGrid {
   }
   private spacer(edge: 'top' | 'bottom') { const spacer = document.createElement('div'); spacer.className = 'grid-pad'; spacer.dataset.edge = edge; spacer.style.height = `${this.pad[edge]}px`; return spacer; }
   private contentTop(row: number) {
-    const line = this.parent.querySelector<HTMLElement>(`[data-row="${row}"]`); if (!line) return null;
-    return line.getBoundingClientRect().top - this.parent.getBoundingClientRect().top + this.parent.scrollTop;
+    const line = this.parent.querySelector<HTMLElement>(`[data-row="${Math.floor(row)}"]`); if (!line) return null;
+    return line.getBoundingClientRect().top - this.parent.getBoundingClientRect().top + this.parent.scrollTop + (row % 1) * line.offsetHeight;
   }
   private copy(event: ClipboardEvent) {
     if ((event.target as HTMLElement).closest('input')) return;

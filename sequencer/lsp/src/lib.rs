@@ -477,6 +477,9 @@ fn diagnostics(
                 .filter(|h| h.span.end <= expanded.root_len)
                 .map(|h| (h.span.end, h.rate))
                 .collect();
+            // an instrument called from others is lowered again for each of them, at the same place
+            hints.sort_by_key(|(end, _)| *end);
+            hints.dedup_by_key(|(end, _)| *end);
             Vec::new()
         }
         Ok(Err(errors)) => errors
@@ -723,6 +726,22 @@ mod tests {
             places,
             [(4, 6, "· control"), (5, 6, "· audio"), (10, 7, "· audio")]
         );
+    }
+
+    #[test]
+    fn inlay_hints_appear_once_for_an_instrument_other_instruments_call() {
+        let mut server = Server::new();
+        open(
+            &mut server,
+            "instr a(freq: hz) {\n  v = osc(sine, freq)\n  v\n}\ninstr b() { a(freq: 220hz) }\ninstr c() { a(freq: 330hz) }\n",
+        );
+        let hints = request(
+            &mut server,
+            1,
+            "textDocument/inlayHint",
+            json!({ "textDocument": { "uri": URI } }),
+        );
+        assert_eq!(hints.as_array().unwrap().len(), 1, "{hints}");
     }
 
     #[test]

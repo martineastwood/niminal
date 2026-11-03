@@ -1248,3 +1248,32 @@ it('records MIDI controls across pattern boundaries and on master/return lanes',
     expect(project.patterns[0].master_fx.find(l => l.target?.kind === 'pan')!.envelope!.points).toContainEqual({ row: 4, value: -0.2 });
   } finally { grid.paint(null); vi.restoreAllMocks(); }
 });
+
+it('scrolls at fractional rows between status polls, freezes stale playback and hides on stop', () => {
+  const { grid, parent } = setup();
+  const now = vi.spyOn(performance, 'now').mockReturnValue(0);
+  vi.spyOn(Date, 'now').mockReturnValue(1000);
+  let frame: FrameRequestCallback = () => {};
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1; });
+  const positions: (number | null)[] = [];
+  grid.positionChanged = row => positions.push(row);
+  try {
+    grid.follows = () => false;
+    for (const line of parent.querySelectorAll<HTMLElement>('.grid-row[data-row]')) {
+      Object.defineProperty(line, 'offsetHeight', { value: 20 });
+      line.getBoundingClientRect = () => ({ top: Number(line.dataset.row) * 20 - parent.scrollTop } as DOMRect);
+    }
+    grid.paint(2, 0, 1000); frame(0);
+    const scroll = parent.scrollTop;
+    const start = positions.at(-1)!;
+    now.mockReturnValue(30); frame(30);
+    const moved = positions.at(-1)!;
+    expect(moved).toBeGreaterThan(start);
+    expect(parent.scrollTop).toBeGreaterThan(scroll);
+    expect(moved % 1).toBeGreaterThan(0.01);
+    now.mockReturnValue(250); frame(250); const frozen = positions.at(-1);
+    now.mockReturnValue(5000); frame(5000); expect(positions.at(-1)).toBe(frozen);
+    grid.paint(null); expect(positions.at(-1)).toBeNull();
+    expect(parent.parentElement!.querySelector<HTMLElement>('.playhead')!.hidden).toBe(true);
+  } finally { grid.paint(null); vi.restoreAllMocks(); vi.unstubAllGlobals(); }
+});

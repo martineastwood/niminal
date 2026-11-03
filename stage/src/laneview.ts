@@ -1,3 +1,4 @@
+import { elapsedSince } from './animation';
 import { CLIP_COLOURS } from './highlight';
 import { mod, shortcuts } from './shortcuts';
 import { Bar } from './meters';
@@ -328,7 +329,7 @@ export class LaneView {
     if (!snapshot?.transport) return;
     const bpm = snapshot.transport.bpm;
     const beats = snapshot.beats_per_bar || 4;
-    const elapsed = (performance.now() - this.updatedAt) / 1000;
+    const elapsed = elapsedSince(this.updatedAt);
     for (const row of this.rows.values()) {
       const clip = row.clip;
       const queued = row.eta && this.queued.get(clip.name);

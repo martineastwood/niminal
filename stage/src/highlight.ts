@@ -1,3 +1,4 @@
+import { elapsedSince } from './animation';
 import { ChangeSet, StateEffect, StateEffectType, StateField, Text } from '@codemirror/state';
 import { Decoration, DecorationSet, EditorView } from '@codemirror/view';
 import { Problem, Snapshot, sinceOnset } from './live';
@@ -314,7 +315,7 @@ export class Highlighter {
     this.mark(view, snapshot);
     const beats = snapshot.beats_per_bar || 4;
     const secondsPerCycle = (60 / snapshot.transport.bpm) * beats;
-    const elapsed = (performance.now() - this.updatedAt) / 1000;
+    const elapsed = elapsedSince(this.updatedAt);
     const evals = view.state.field(drift);
     const ranges: { from: number; to: number; step: number; colour: string }[] = [];
 

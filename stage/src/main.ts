@@ -1,3 +1,4 @@
+import { elapsedSince, positionAt } from './animation';
 import { EditorState } from '@codemirror/state';
 import { redo, undo } from '@codemirror/commands';
 import { EditorView } from '@codemirror/view';
@@ -408,11 +409,11 @@ function flash(kind: 'landed' | 'sent' | 'refused') {
 }
 
 /** How long until the next change lands, counted in beats so it is felt rather than read. */
-function updateLanding(snapshot: Snapshot) {
+function updateLanding(snapshot: Snapshot, elapsed = 0) {
   const landing = $('landing');
   const on = snapshot.transport !== null && snapshot.sample_rate > 0 && snapshot.pending.length > 0;
   const next = Math.min(...snapshot.pending.map(p => p.lands_at));
-  landing.textContent = on ? `lands in ${beatsUntil(snapshot, next).toFixed(1)} beats` : '';
+  landing.textContent = on ? `lands in ${beatsUntil(snapshot, next, elapsed).toFixed(1)} beats` : '';
   landing.classList.toggle('on', on);
 }
 
@@ -420,9 +421,6 @@ function updateLanding(snapshot: Snapshot) {
 let pendingSignature = '';
 function updatePending(snapshot: Snapshot) {
   updateLanding(snapshot);
-  for (const eta of document.querySelectorAll<HTMLElement>('.scene .queued-eta')) {
-    eta.textContent = `in ${beatsUntil(snapshot, Number(eta.dataset.lands)).toFixed(1)}`;
-  }
   if (!snapshot.pending.length) {
     pending.replaceChildren();
     pending.classList.add('empty');
@@ -456,9 +454,17 @@ function updatePending(snapshot: Snapshot) {
       pending.append(row);
     }
   }
+  paintCountdowns(snapshot, 0);
+}
+
+function paintCountdowns(snapshot: Snapshot, elapsed: number) {
+  updateLanding(snapshot, elapsed);
+  for (const eta of document.querySelectorAll<HTMLElement>('.scene .queued-eta')) {
+    eta.textContent = `in ${beatsUntil(snapshot, Number(eta.dataset.lands), elapsed).toFixed(1)}`;
+  }
   for (const row of pending.querySelectorAll<HTMLElement>('.pending-row')) {
     const when = row.querySelector('.pending-when')!;
-    when.textContent = `in ${beatsUntil(snapshot, Number(row.dataset.lands)).toFixed(1)} beats`;
+    when.textContent = `in ${beatsUntil(snapshot, Number(row.dataset.lands), elapsed).toFixed(1)} beats`;
   }
 }
 
@@ -640,19 +646,25 @@ function updateTransport(snapshot: Snapshot) {
     $('beats').replaceChildren();
     return;
   }
-  bar.textContent = String(t.bar);
-  beat.textContent = t.beat.toFixed(2);
-  // one dot per beat as written (6/8 has six), while the engine counts quarter notes
-  const [top, unit] = snapshot.meter;
-  const count = Math.max(1, top || 4);
-  const dots = $('beats');
-  if (dots.children.length !== count) dots.replaceChildren(...Array.from({ length: count }, () => document.createElement('i')));
-  Array.from(dots.children).forEach((dot, i) => dot.classList.toggle('on', i === Math.floor(((t.beat - 1) * unit) / 4 + 1e-9)));
+  paintPosition(snapshot, 0);
   bpm.textContent = t.bpm.toFixed(1);
   meter.textContent = snapshot.meter.join('/');
   voices.textContent = String(t.voices);
   waiting.textContent = String(snapshot.pending.length);
   $('waiting-readout').hidden = snapshot.pending.length === 0;
+}
+
+function paintPosition(snapshot: Snapshot, elapsed: number) {
+  const position = positionAt(snapshot, elapsed);
+  if (!position) return;
+  bar.textContent = String(position.bar);
+  beat.textContent = position.beat.toFixed(2);
+  // one dot per beat as written (6/8 has six), while the engine counts quarter notes
+  const [top, unit] = snapshot.meter;
+  const count = Math.max(1, top || 4);
+  const dots = $('beats');
+  if (dots.children.length !== count) dots.replaceChildren(...Array.from({ length: count }, () => document.createElement('i')));
+  Array.from(dots.children).forEach((dot, i) => dot.classList.toggle('on', i === Math.floor(((position.beat - 1) * unit) / 4 + 1e-9)));
 }
 
 /** A refused evaluation is shown big at the top of the code, where it cannot be missed from across a room. */
@@ -898,7 +910,21 @@ async function refresh() {
   draw(snapshot);
 }
 
+let animationSnapshot: Snapshot | null = null;
+let animationUpdatedAt = 0;
+function animate() {
+  if (animationSnapshot?.transport) {
+    const elapsed = elapsedSince(animationUpdatedAt);
+    paintPosition(animationSnapshot, elapsed);
+    paintCountdowns(animationSnapshot, elapsed);
+  }
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
 function draw(snapshot: Snapshot) {
+  animationSnapshot = snapshot;
+  animationUpdatedAt = performance.now();
   // a mistake in drawing one part of the window must not stop the others, or the polling
   const parts: [string, () => void][] = [
     ['transport', () => updateTransport(snapshot)],

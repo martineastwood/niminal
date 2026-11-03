@@ -1171,6 +1171,10 @@ refreshProjectDir();
 envelopeEditor.projectHistory = { undo: undoProject, canUndo: () => projectHistory.canUndo, canRedo: () => projectHistory.canRedo };
 selectDefinition(selected, false); arrangement.reset(); grid.render(); mixerView(); patternControls(); timingInputs();
 showView('pattern'); showPanel('code', true); showFx();
+grid.positionChanged = row => {
+  envelopeEditor.paint(row);
+  if (row !== null) setText('play-position', `${audioStatus.sequence_position === null ? 'Loop' : `Step ${audioStatus.sequence_position + 1}`} · row ${Math.floor(row)}`);
+};
 const audioTimer = observeAudio(state => {
   if (wasPlaying && !state.playing || wasConnected && !state.connected) receiveMidi({ kind: 'reset' });
   wasConnected = state.connected;
@@ -1195,7 +1199,6 @@ const audioTimer = observeAudio(state => {
   }
   setText('play-position', state.playing && state.pattern_id ? `${state.sequence_position === null ? 'Loop' : `Step ${state.sequence_position + 1}`} · row ${state.row ?? '…'}` : '');
   setText('audio-status', audioError ?? state.error ?? (state.connected ? `${state.playing ? 'Playing' : 'Connected'} · ${state.sample_rate / 1000} kHz${state.skipped_rows ? ` · ${state.skipped_rows} skipped rows` : ''}${state.late_events ? ` · ${state.late_events} late events` : ''}` : 'Engine not connected'));
-  envelopeEditor.paint(state.pattern_id === arrangement.pattern.id ? state.row : null);
   grid.paint(state.pattern_id === arrangement.pattern.id ? state.row : null, state.row_phase, state.row_at_ms); renderApplyStatus();
 });
 void connectLanguageServer(status);
