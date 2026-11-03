@@ -63,6 +63,11 @@ function bar(lane: Lane, event: LaneEvent, window: number, notes: boolean) {
   return node;
 }
 
+/** Set text only when it differs, so an unchanged label costs no layout. */
+function setText(node: HTMLElement, value: string) {
+  if (node.textContent !== value) node.textContent = value;
+}
+
 /** The clip lanes, with a playhead and the sounding notes lit as they play. */
 export class LaneView {
   private rows = new Map<string, Row>();
@@ -333,9 +338,9 @@ export class LaneView {
     for (const row of this.rows.values()) {
       const clip = row.clip;
       const queued = row.eta && this.queued.get(clip.name);
-      if (row.eta && queued) row.eta.textContent = `${queued.kind === 'start' ? '▶' : '■'} in ${beatsUntil(snapshot, queued.landsAt, elapsed).toFixed(1)}`;
+      if (row.eta && queued) setText(row.eta, `${queued.kind === 'start' ? '▶' : '■'} in ${beatsUntil(snapshot, queued.landsAt, elapsed).toFixed(1)}`);
       if (!clip.running || clip.cycles == null) {
-        row.playhead.style.opacity = '0';
+        if (row.playhead.style.opacity !== '0') row.playhead.style.opacity = '0';
         for (const node of row.active) node.classList.remove('active');
         row.active.clear();
         continue;
@@ -350,8 +355,9 @@ export class LaneView {
         void row.element.offsetWidth;
         row.element.classList.add('pulse');
       }
-      row.playhead.style.opacity = '1';
-      row.playhead.style.left = `${(phase / window) * 100}%`;
+      if (row.playhead.style.opacity !== '1') row.playhead.style.opacity = '1';
+      const left = `${((phase / window) * 100).toFixed(2)}%`;
+      if (row.playhead.style.left !== left) row.playhead.style.left = left;
       const active = new Set<HTMLElement>();
       for (const note of row.events) {
         if (isSounding(clip, note, cycles)) active.add(note.element);

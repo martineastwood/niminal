@@ -215,6 +215,7 @@ export class Highlighter {
   private shown = '';
   private headed = '';
   private headedDoc: unknown = null;
+  private markedSnapshot: Snapshot | null = null;
 
   constructor(private view: () => EditorView | undefined) {
     const frame = () => {
@@ -228,6 +229,7 @@ export class Highlighter {
   reset() {
     this.shown = '';
     this.headed = '';
+    this.markedSnapshot = null;
   }
 
   update(snapshot: Snapshot) {
@@ -264,6 +266,8 @@ export class Highlighter {
 
   /** Mark each `clip name` and `scene name` line with what the clip or scene is doing. */
   private mark(view: EditorView, snapshot: Snapshot) {
+    if (snapshot === this.markedSnapshot && view.state.doc === this.headedDoc) return;
+    this.markedSnapshot = snapshot;
     const states = new Map<string, { kind: string; classes: string; colour: string }>();
     const waiting = (name: string) => snapshot.pending.some(p => p.changes.some(c => c.startsWith(`${name}.`)));
     snapshot.clips.forEach((clip, index) => {

@@ -413,7 +413,7 @@ function updateLanding(snapshot: Snapshot, elapsed = 0) {
   const landing = $('landing');
   const on = snapshot.transport !== null && snapshot.sample_rate > 0 && snapshot.pending.length > 0;
   const next = Math.min(...snapshot.pending.map(p => p.lands_at));
-  landing.textContent = on ? `lands in ${beatsUntil(snapshot, next, elapsed).toFixed(1)} beats` : '';
+  setText(landing, on ? `lands in ${beatsUntil(snapshot, next, elapsed).toFixed(1)} beats` : '');
   landing.classList.toggle('on', on);
 }
 
@@ -460,11 +460,11 @@ function updatePending(snapshot: Snapshot) {
 function paintCountdowns(snapshot: Snapshot, elapsed: number) {
   updateLanding(snapshot, elapsed);
   for (const eta of document.querySelectorAll<HTMLElement>('.scene .queued-eta')) {
-    eta.textContent = `in ${beatsUntil(snapshot, Number(eta.dataset.lands), elapsed).toFixed(1)}`;
+    setText(eta, `in ${beatsUntil(snapshot, Number(eta.dataset.lands), elapsed).toFixed(1)}`);
   }
   for (const row of pending.querySelectorAll<HTMLElement>('.pending-row')) {
     const when = row.querySelector('.pending-when')!;
-    when.textContent = `in ${beatsUntil(snapshot, Number(row.dataset.lands), elapsed).toFixed(1)} beats`;
+    setText(when as HTMLElement, `in ${beatsUntil(snapshot, Number(row.dataset.lands), elapsed).toFixed(1)} beats`);
   }
 }
 
@@ -490,6 +490,11 @@ function updateNotices(snapshot: Snapshot) {
   row.className = 'notice';
   row.textContent = latest;
   notices.replaceChildren(row);
+}
+
+/** Set text only when it differs, so an unchanged label costs no layout. */
+function setText(node: HTMLElement, value: string) {
+  if (node.textContent !== value) node.textContent = value;
 }
 
 /** The output meter: one bar per channel (up to two), stepped and drawn every frame. */
@@ -657,14 +662,15 @@ function updateTransport(snapshot: Snapshot) {
 function paintPosition(snapshot: Snapshot, elapsed: number) {
   const position = positionAt(snapshot, elapsed);
   if (!position) return;
-  bar.textContent = String(position.bar);
-  beat.textContent = position.beat.toFixed(2);
+  setText(bar, String(position.bar));
+  setText(beat, position.beat.toFixed(2));
   // one dot per beat as written (6/8 has six), while the engine counts quarter notes
   const [top, unit] = snapshot.meter;
   const count = Math.max(1, top || 4);
   const dots = $('beats');
   if (dots.children.length !== count) dots.replaceChildren(...Array.from({ length: count }, () => document.createElement('i')));
-  Array.from(dots.children).forEach((dot, i) => dot.classList.toggle('on', i === Math.floor(((position.beat - 1) * unit) / 4 + 1e-9)));
+  const lit = Math.floor(((position.beat - 1) * unit) / 4 + 1e-9);
+  Array.from(dots.children).forEach((dot, i) => dot.classList.toggle('on', i === lit));
 }
 
 /** A refused evaluation is shown big at the top of the code, where it cannot be missed from across a room. */
@@ -980,7 +986,8 @@ async function poll() {
       // still not there
     }
   }
-  setTimeout(poll, 90);
+  // a hidden window draws nothing, so it only needs to keep its place
+  setTimeout(poll, document.hidden ? 500 : 90);
 }
 
 $('banner').addEventListener('click', () => showBanner([]));

@@ -21,6 +21,8 @@ export class Bar {
   private heldFor = 0;
   private fill: HTMLElement;
   private tick: HTMLElement;
+  /** What the last draw wrote, so an idle meter touches nothing. */
+  private drawn = '';
 
   constructor(className = '') {
     this.element = document.createElement('div');
@@ -56,6 +58,9 @@ export class Bar {
   }
 
   draw() {
+    const state = `${this.level.toFixed(3)}|${this.hold.toFixed(3)}|${this.clipped}`;
+    if (state === this.drawn) return;
+    this.drawn = state;
     this.fill.style.transform = `scaleX(${this.level.toFixed(3)})`;
     this.tick.style.left = `${(this.hold * 100).toFixed(1)}%`;
     this.tick.style.opacity = this.hold > 0.01 ? '1' : '0';
