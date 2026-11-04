@@ -607,10 +607,8 @@ fn constants() {
     );
     assert_eq!(p.instruments[0].graph.channels(), 1);
     assert_eq!(msg("const k = 1\nconst k = 2"), "`k` is defined twice");
-    assert_eq!(
-        msg("const k = 1\ninstr a(f: hz) { k = 2\n osc(saw, f) }"),
-        "`k` is already the name of a constant, so it can't be used for a local"
-    );
+    // a local hides a constant of the same name
+    ok("const k = 1\ninstr a(f: hz) { k = 2\n osc(saw, f * k) }");
 }
 
 #[test]

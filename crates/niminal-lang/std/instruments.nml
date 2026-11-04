@@ -13,9 +13,9 @@ instr kick(
   decay: 80ms..1sec = 300ms
 ) {
   sweep = env[(freq * (2 + punch * 4)) 40ms freq]
-  body = osc(sine, sweep) * perc(decay: decay)
+  thump = osc(sine, sweep) * perc(decay: decay)
   click = noise().hpf(cutoff: 2khz) * env[1 3ms 0] * 0.3 * punch
-  (body + click).tanh * 0.9
+  (thump + click).tanh * 0.9
 }
 
 // folder: drums/snares
