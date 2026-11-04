@@ -274,23 +274,15 @@ fn run_render(args: RenderArgs) -> Result<(), String> {
         .map(|f| position_seconds(f, bar_seconds))
         .transpose()?
         .unwrap_or(0.0);
-    let options = RenderOptions {
-        limiter: !no_limiter,
-        until,
-        arrangement,
-        stems,
-        input: audio.clone(),
-    };
-
     // a clip's `then:` runs when its last pass ends, which only a session does
-    let hands_over = options.arrangement.is_none() && !program.schedule().finishes().is_empty();
+    let hands_over = arrangement.is_none() && !program.schedule().finishes().is_empty();
     if !ramps.is_empty() || hands_over {
         let why = if ramps.is_empty() {
             "a `then:`"
         } else {
             "a tempo ramp"
         };
-        if options.arrangement.is_some() || score.is_some() || from.is_some() || to.is_some() {
+        if arrangement.is_some() || score.is_some() || from.is_some() || to.is_some() {
             return Err(format!(
                 "error: a file with {why} renders as it is played: --arrangement, --score, --from and --to aren't available for it"
             ));
@@ -317,6 +309,14 @@ fn run_render(args: RenderArgs) -> Result<(), String> {
         .map_err(|e| format!("error: {e}"))?;
         return write_output(&rendered, out, stems);
     }
+
+    let options = RenderOptions {
+        limiter: !no_limiter,
+        until,
+        arrangement,
+        stems,
+        input: audio,
+    };
 
     let mut rendered =
         render(&program, &score_events, &options).map_err(|e| format!("error: {e}"))?;

@@ -741,10 +741,6 @@ impl Graph {
         self.params.iter().position(|p| p.name == name)
     }
 
-    pub fn param_names(&self) -> impl Iterator<Item = &str> {
-        self.params.iter().map(|p| p.name.as_str())
-    }
-
     /// Number of DSP nodes that contribute audio or observable effects.
     /// What each node is, in execution order, for `explain`.
     pub fn describe(&self, sample_rate: f32) -> Vec<NodeReport> {

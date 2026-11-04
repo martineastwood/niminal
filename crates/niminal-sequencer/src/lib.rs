@@ -2,8 +2,10 @@
 //! commands and keyboards, played by sending timestamped events to the engine through its public API.
 //!
 //! A [`Live`] knows nothing of the engine's insides. It reads the engine's clock through an
-//! [`EngineLink`], and a little ahead of it sends the notes, parameter changes, definitions that its project says are due.
+//! [`InProcess`] connection, and a little ahead of it sends the notes, parameter changes, definitions that its project says are due.
 
+pub mod clock;
+pub mod input;
 mod keyboard;
 mod link;
 mod live;
@@ -14,7 +16,7 @@ mod quantize;
 mod service;
 mod sync;
 
-pub use link::{EngineLink, InProcess};
+pub use link::InProcess;
 pub use live::{
     Accepted, Begin, CancelDone, CancelJob, ClipStatus, ControlSignal, EvalDone, EvalJob, Landed,
     Levels, Live, ParsedEval, PendingInfo, SceneStatus, Transport,

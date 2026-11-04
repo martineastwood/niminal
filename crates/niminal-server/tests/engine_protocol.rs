@@ -269,10 +269,14 @@ fn local_and_network_clients_keep_their_own_notifications() {
     }
     let local_messages = server.notifications_for(local);
     assert_eq!(local_messages.len(), 1);
-    assert_eq!(local_messages[0].0, local);
+    assert_eq!(local_messages[0].0, "clock");
     let network_messages = server.notifications();
     assert_eq!(network_messages.len(), 1);
     assert_eq!(network_messages[0].0, network);
+    let network_message: Value = serde_json::from_str(&network_messages[0].1).unwrap();
+    assert_eq!(network_message["jsonrpc"], "2.0");
+    assert_eq!(network_message["method"], local_messages[0].0);
+    assert_eq!(network_message["params"], local_messages[0].1);
 
     server.session_mut().process(4801);
     let network_messages = server.notifications();
@@ -280,7 +284,11 @@ fn local_and_network_clients_keep_their_own_notifications() {
     assert_eq!(network_messages[0].0, network);
     let local_messages = server.notifications_for(local);
     assert_eq!(local_messages.len(), 1);
-    assert_eq!(local_messages[0].0, local);
+    assert_eq!(local_messages[0].0, "clock");
+    let network_message: Value = serde_json::from_str(&network_messages[0].1).unwrap();
+    assert_eq!(network_message["jsonrpc"], "2.0");
+    assert_eq!(network_message["method"], local_messages[0].0);
+    assert_eq!(network_message["params"], local_messages[0].1);
     assert!(server.notifications().is_empty());
     assert!(server.notifications_for(local).is_empty());
 }

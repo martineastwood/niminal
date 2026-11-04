@@ -3,7 +3,7 @@
 //!
 //! This is a harness, not a client: it holds the engine's `Session` to step its clock and read its output, which
 //! the wire protocol doesn't offer. Only `niminal render` and tests use it. The sequencer itself ([`crate::Live`])
-//! reaches the engine only through an [`EngineLink`](crate::EngineLink), as any other frontend would.
+//! reaches the engine only through an [`InProcess`] connection using the public requests.
 
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -40,7 +40,7 @@ impl Offline {
         let engine = Arc::new(Mutex::new(EngineServer::new(session)));
         let link = InProcess::new(engine.clone());
         let client = link.client_id();
-        let live = Live::new(Box::new(link), sample_rate, layout);
+        let live = Live::new(link, sample_rate, layout);
         Offline {
             live,
             engine,

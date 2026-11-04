@@ -26,7 +26,7 @@ use niminal_server::{
 };
 
 use crate::keyboard::Keyboard;
-use crate::link::EngineLink;
+use crate::link::InProcess;
 use crate::log::{Expression, LiveInput, LiveLogEntry};
 use crate::quantize::{Grid, QuantizeDefaults};
 use crate::sync::{ClockIn, ClockOut, Follow};
@@ -233,7 +233,7 @@ struct Asked {
 }
 
 pub struct Live {
-    link: Box<dyn EngineLink>,
+    link: InProcess,
     /// Whether the engine has been told the tempo yet, so that the first count of beats starts from the origin.
     tempo_sent: std::cell::Cell<bool>,
     /// The controls the engine keeps to a number of beats, as they were last told.
@@ -349,15 +349,6 @@ impl Live {
         self.clock_in.set(on);
     }
 
-    pub fn follows_clock(&self) -> bool {
-        self.clock_in.is_on()
-    }
-
-    /// Whether the clock being followed has started and not stopped.
-    pub fn clock_running(&self) -> bool {
-        self.clock_in.is_running()
-    }
-
     /// The clock messages to send since this was last called, in order, each for the sample at which
     /// the output plays it.
     pub fn take_clock_out(&mut self) -> Vec<ClockMessage> {
@@ -420,7 +411,7 @@ impl Live {
     }
 
     /// A sequencer for an engine that outputs `layout` at `sample_rate`.
-    pub fn new(link: Box<dyn EngineLink>, sample_rate: f32, layout: Layout) -> Live {
+    pub fn new(link: InProcess, sample_rate: f32, layout: Layout) -> Live {
         let program = compile_with("", &options(layout, &Samples::default()))
             .expect("an empty project compiles");
         let schedule = program.schedule();

@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use midir::{Ignore, MidiInput, MidiInputConnection};
-use niminal_sequencer::{ControlSignal, LiveServer, Realtime};
+use crate::{ControlSignal, LiveServer, Realtime};
 
 use niminal_ws::lock;
 use niminal_ws::worker::Worker;

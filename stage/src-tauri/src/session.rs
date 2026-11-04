@@ -14,7 +14,7 @@ use niminal_sequencer::{
     Accepted, Begin, ClipStatus, InProcess, Landed, Levels, Live, LiveServer, ParsedEval, PendingInfo,
     SceneStatus, Transport,
 };
-use niminal_cli::input::LiveShared;
+use niminal_sequencer::input::LiveShared;
 use niminal_ws::{Server, ServerConfig};
 use serde::Serialize;
 
@@ -38,7 +38,7 @@ pub struct Shared {
     /// Why the engine is not running, if it is not.
     engine_error: Mutex<Option<String>>,
     /// The OSC input that is open, and the port it listens on.
-    osc: Mutex<Option<(niminal_cli::input::OscInput, u16)>>,
+    osc: Mutex<Option<niminal_sequencer::input::OscInput>>,
     /// Held while the engine is being started, so two requests to start it start it once.
     starting: Mutex<()>,
     /// Things that went wrong inside the stage, which the window hears of once.
@@ -66,7 +66,7 @@ struct Tools {
 
 #[derive(Default)]
 struct Clock {
-    out: Option<niminal_cli::clock::ClockOutput>,
+    out: Option<niminal_sequencer::clock::ClockOutput>,
     /// Held so that the input stays open until it is replaced.
     _input: Vec<midir::MidiInputConnection<()>>,
 }
@@ -156,7 +156,7 @@ fn work(shared: &Shared, last_tick: &mut Instant) {
             session.notifications();
         }
         if let Some(out) = &lock(&shared.clock).out {
-            niminal_cli::clock::pump_clock_out(session.live_mut(), out);
+            niminal_sequencer::clock::pump_clock_out(session.live_mut(), out);
         }
     }
 }
@@ -237,8 +237,8 @@ pub fn osc_listen(shared: &Shared, port: Option<u16>) -> Result<(), String> {
     let mut osc = lock(&shared.osc);
     *osc = None;
     if let Some(port) = port {
-        let input = niminal_cli::input::OscInput::start(live, port)?;
-        *osc = Some((input, port));
+        let input = niminal_sequencer::input::OscInput::start(live, port)?;
+        *osc = Some(input);
     }
     Ok(())
 }
@@ -248,7 +248,7 @@ pub fn settings_now(shared: &Shared) -> Settings {
     Settings {
         audio: lock(&shared.audio).clone(),
         tools_port: *lock(&shared.tools_port),
-        osc_port: lock(&shared.osc).as_ref().map(|(_, port)| *port),
+        osc_port: lock(&shared.osc).as_ref().map(niminal_sequencer::input::OscInput::port),
     }
 }
 
@@ -276,7 +276,7 @@ fn connect_with(shared: &Shared, port: u16, token: Option<&str>) -> Result<(), S
         Err(e) => return Err(e),
     };
     let engine = host.engine();
-    let mut live = Live::new(Box::new(InProcess::new(engine.clone())), host.sample_rate() as f32, host.layout())
+    let mut live = Live::new(InProcess::new(engine.clone()), host.sample_rate() as f32, host.layout())
         .with_clock_sync(Duration::from_millis(100));
     live.set_metering(true);
     *lock(&shared.host) = Some(host);
@@ -362,7 +362,7 @@ pub fn audio_state(shared: &Shared) -> Result<AudioState, String> {
         choice: lock(&shared.audio).clone(),
         sample_rate: host.sample_rate(),
         output: host.output_description().trim_start_matches("audio to ").to_string(),
-        osc_port: lock(&shared.osc).as_ref().map(|(_, port)| *port),
+        osc_port: lock(&shared.osc).as_ref().map(niminal_sequencer::input::OscInput::port),
     })
 }
 
@@ -384,7 +384,7 @@ pub fn apply_audio(shared: &Shared, choice: AudioChoice) -> Result<AudioState, S
         },
     };
     let engine = host.engine();
-    let mut fresh = Live::new(Box::new(InProcess::new(engine.clone())), host.sample_rate() as f32, host.layout())
+    let mut fresh = Live::new(InProcess::new(engine.clone()), host.sample_rate() as f32, host.layout())
         .with_clock_sync(Duration::from_millis(100));
     fresh.set_metering(true);
     lock(&live).replace_live(fresh);
@@ -406,7 +406,7 @@ pub fn open_midi(shared: &Arc<Shared>, filter: &str) -> Result<Vec<String>, Stri
     midi.names.clear();
     let last = midi.last.clone();
     let session = shared.clone();
-    let opened = niminal_cli::input::open_midi(filter, move |signal| {
+    let opened = niminal_sequencer::input::open_midi(filter, move |signal| {
         *lock(&last) = describe(signal);
         if let Some(mut server) = sequencer(&session) {
             server.live_mut().control_input(signal);
@@ -448,12 +448,12 @@ pub fn set_clock_out(shared: &Shared, name: Option<&str>) -> Result<(), String> 
             None => {
                 live.set_clock_out(false);
                 if let Some(out) = &clock.out {
-                    niminal_cli::clock::pump_clock_out(live, out);
+                    niminal_sequencer::clock::pump_clock_out(live, out);
                 }
                 clock.out = None;
             }
             Some(name) => {
-                clock.out = Some(niminal_cli::clock::ClockOutput::open(name)?);
+                clock.out = Some(niminal_sequencer::clock::ClockOutput::open(name)?);
                 live.set_clock_out(true);
             }
         }
@@ -469,7 +469,7 @@ pub fn set_clock_in(shared: &Arc<Shared>, name: Option<&str>) -> Result<(), Stri
         live.set_clock_in(false);
         let Some(name) = name else { return Ok(()) };
         let target = shared.clone();
-        let (connections, _) = niminal_cli::input::open_clock_in(name, move |message, arrived| {
+        let (connections, _) = niminal_sequencer::input::open_clock_in(name, move |message, arrived| {
             if let Some(mut server) = sequencer(&target) {
                 server.live_mut().midi_clock(message, arrived);
             }
@@ -605,7 +605,7 @@ pub fn snapshot(shared: &Shared) -> Snapshot {
         notices: tap.notices.into_iter().chain(lock(&shared.faults).drain(..)).collect(),
         tools_problem: lock(&shared.tools_problem).clone(),
         tools_port: *lock(&shared.tools_port),
-        osc_port: lock(&shared.osc).as_ref().map(|(_, port)| *port),
+        osc_port: lock(&shared.osc).as_ref().map(niminal_sequencer::input::OscInput::port),
         engine_error: None,
         master: if tap.peaks.is_empty() { vec![0.0; live.channels()] } else { tap.peaks },
         levels: live.take_levels(),
@@ -899,7 +899,10 @@ mod tests {
         assert!(osc_listen(&shared, Some(0)).is_err(), "there is nothing to hear it before the engine starts");
         connect_with(&shared, 0, None).unwrap();
         osc_listen(&shared, Some(0)).expect("a free UDP port opens");
-        assert!(settings_now(&shared).osc_port.is_some());
+        let port = settings_now(&shared).osc_port.expect("the bound OSC port is reported");
+        assert_ne!(port, 0, "port 0 is replaced by the allocated port");
+        assert_eq!(snapshot(&shared).osc_port, Some(port));
+        assert_eq!(audio_state(&shared).unwrap().osc_port, Some(port));
         osc_listen(&shared, None).unwrap();
         assert_eq!(settings_now(&shared).osc_port, None);
     }

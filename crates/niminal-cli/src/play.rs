@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 use clap::Args;
 use niminal_host::host::{Host, HostConfig};
 use niminal_sequencer::{Begin, InProcess, Live, LiveServer, ParsedEval};
-use niminal_cli::input::{LiveShared, OscInput};
+use niminal_sequencer::input::{LiveShared, OscInput};
 use niminal_server::Problem;
 use niminal_ws::lock;
 
@@ -61,7 +61,7 @@ pub fn run_play(args: PlayArgs) -> Result<(), String> {
         log: niminal_host::host::new_session_log(),
         ..Default::default()
     })?;
-    let live = Live::new(Box::new(InProcess::new(host.engine())), host.sample_rate() as f32, host.layout())
+    let live = Live::new(InProcess::new(host.engine()), host.sample_rate() as f32, host.layout())
         .with_clock_sync(Duration::from_millis(100));
     let live: LiveShared = Arc::new(Mutex::new(LiveServer::new(live)));
 
@@ -69,13 +69,13 @@ pub fn run_play(args: PlayArgs) -> Result<(), String> {
         .as_deref()
         .map(|filter| {
             let live = live.clone();
-            niminal_cli::input::open_midi(filter, move |signal| {
+            niminal_sequencer::input::open_midi(filter, move |signal| {
                 lock(&live).live_mut().control_input(signal);
             })
         })
         .transpose()?;
     let _osc: Option<OscInput> = osc_port.map(|port| OscInput::start(live.clone(), port)).transpose()?;
-    let clock_out = clock_out.as_deref().map(niminal_cli::clock::ClockOutput::open).transpose()?;
+    let clock_out = clock_out.as_deref().map(niminal_sequencer::clock::ClockOutput::open).transpose()?;
     if clock_out.is_some() {
         lock(&live).live_mut().set_clock_out(true);
     }
@@ -84,7 +84,7 @@ pub fn run_play(args: PlayArgs) -> Result<(), String> {
         .map(|filter| {
             lock(&live).live_mut().set_clock_in(true);
             let live = live.clone();
-            niminal_cli::input::open_clock_in(filter, move |message, arrived| {
+            niminal_sequencer::input::open_clock_in(filter, move |message, arrived| {
                 lock(&live).live_mut().midi_clock(message, arrived);
             })
         })
@@ -104,7 +104,7 @@ pub fn run_play(args: PlayArgs) -> Result<(), String> {
             let mut server = lock(&live);
             server.advance();
             if let Some(out) = &clock_out {
-                niminal_cli::clock::pump_clock_out(server.live_mut(), out);
+                niminal_sequencer::clock::pump_clock_out(server.live_mut(), out);
             }
             // what the sequencer has to say (a refused change, a note about a control) is told here
             server.notifications();

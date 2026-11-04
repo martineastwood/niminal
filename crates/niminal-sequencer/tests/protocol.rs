@@ -30,7 +30,7 @@ impl DerefMut for Server {
 impl Server {
     fn new(session: Session) -> Server {
         let engine = Arc::new(Mutex::new(EngineServer::new(session)));
-        let live = Live::new(Box::new(InProcess::new(engine.clone())), SR, Layout::Mono);
+        let live = Live::new(InProcess::new(engine.clone()), SR, Layout::Mono);
         Server {
             server: LiveServer::new(live),
             engine,

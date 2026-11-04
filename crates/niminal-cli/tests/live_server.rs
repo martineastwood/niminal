@@ -5,7 +5,7 @@ use std::time::Duration;
 use niminal_host::audio::{NullClock, Shared};
 use niminal_lang::Layout;
 use niminal_sequencer::{InProcess, Live, LiveServer};
-use niminal_cli::input::LiveShared;
+use niminal_sequencer::input::LiveShared;
 use niminal_server::{EngineServer, RealtimeConfig, Session};
 use niminal_ws::worker::Worker;
 use niminal_ws::{Client, Server, ServerConfig, lock};
@@ -44,7 +44,7 @@ fn start_at(token: Option<&str>, speed: f64, lookahead: f64) -> Running {
     let engine_server = Server::start(engine.clone(), engine_config).unwrap();
     let link = InProcess::new(engine.clone());
     let live: LiveShared = Arc::new(Mutex::new(LiveServer::new(
-        Live::new(Box::new(link), 48_000.0, Layout::Mono).with_lookahead(lookahead),
+        Live::new(link, 48_000.0, Layout::Mono).with_lookahead(lookahead),
     )));
     let config = ServerConfig {
         port: 0,
@@ -256,7 +256,7 @@ fn websocket_controls_reach_the_live_renderer_and_appear_in_status() {
 
 #[test]
 fn osc_over_udp_moves_a_bound_control_and_is_logged() {
-    use niminal_cli::input::OscInput;
+    use niminal_sequencer::input::OscInput;
     let r = start(None);
     let mut c = connect(&r);
     c.call("eval", json!({

@@ -579,22 +579,6 @@ pub fn devices() -> serde_json::Value {
     };
     serde_json::json!({"inputs":list(true),"outputs":list(false)})
 }
-pub fn validate_input(id: &str, rate: u32) -> Result<(), String> {
-    let device = select_device(true, Some(id))?;
-    let supported = device
-        .supported_input_configs()
-        .map_err(|e| e.to_string())?
-        .any(|c| {
-            c.sample_format() == cpal::SampleFormat::F32
-                && rate >= c.min_sample_rate()
-                && rate <= c.max_sample_rate()
-        });
-    if supported {
-        Ok(())
-    } else {
-        Err("input device does not support the requested sample rate".into())
-    }
-}
 
 #[cfg(test)]
 mod tests {

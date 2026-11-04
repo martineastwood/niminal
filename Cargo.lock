@@ -747,7 +747,6 @@ version = "0.0.1"
 dependencies = [
  "clap",
  "hound",
- "midir",
  "niminal-compose",
  "niminal-engine",
  "niminal-host",
@@ -834,6 +833,7 @@ name = "niminal-sequencer"
 version = "0.0.1"
 dependencies = [
  "hound",
+ "midir",
  "niminal-compose",
  "niminal-engine",
  "niminal-lang",

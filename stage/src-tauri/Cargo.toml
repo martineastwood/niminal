@@ -18,7 +18,6 @@ niminal-host = { path = "../../crates/niminal-host" }
 niminal-compose = { path = "../../crates/niminal-compose" }
 niminal-lang = { path = "../../crates/niminal-lang" }
 niminal-sequencer = { path = "../../crates/niminal-sequencer" }
-niminal-cli = { path = "../../crates/niminal-cli" }
 midir = "0.11"
 niminal-lsp = { path = "../../crates/niminal-lsp" }
 niminal-server = { path = "../../crates/niminal-server" }

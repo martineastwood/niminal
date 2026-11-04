@@ -178,14 +178,6 @@ impl ClockIn {
         };
     }
 
-    pub fn is_on(&self) -> bool {
-        self.on
-    }
-
-    pub fn is_running(&self) -> bool {
-        self.running
-    }
-
     /// A message arrived when the output was at `sample`.
     pub fn message(&mut self, message: Realtime, sample: f64, grid: &Grid) -> Option<Follow> {
         if !self.on {

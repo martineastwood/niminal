@@ -1053,30 +1053,6 @@ impl Mixer {
         }
     }
 
-    /// Set a parameter of a sounding note by name, as a keyboard's pitch bend does. A note that has
-    /// ended, or an instrument without the parameter, ignores it. Allocates nothing.
-    pub fn set_voice_param(&mut self, id: VoiceId, name: &str, value: f32) {
-        let ends = |(s, v): &(u64, Voice)| *s == id.serial || v.holds(id.serial);
-        for node in &mut self.nodes {
-            if let Some((_, v)) = node.voices.iter_mut().find(|n| ends(n)) {
-                v.set_param_by_name(name, value);
-                return;
-            }
-        }
-    }
-
-    /// Move a parameter of a sounding note, by its index, to `value` over `frames` (at once if 0). A note
-    /// that has ended is ignored. Allocates nothing.
-    pub fn set_voice_param_index(&mut self, id: VoiceId, index: usize, value: f32, frames: u64) {
-        let ends = |(s, v): &(u64, Voice)| *s == id.serial || v.holds(id.serial);
-        for node in &mut self.nodes {
-            if let Some((_, v)) = node.voices.iter_mut().find(|n| ends(n)) {
-                v.set_param_glide(index, value, frames, GlideCurve::Linear);
-                return;
-            }
-        }
-    }
-
     pub fn swap_voice_buffers(&mut self, id: VoiceId, key: u64, banks: &mut [crate::BufferBank]) {
         for node in &mut self.nodes {
             if let Some((_, voice)) = node
@@ -1163,23 +1139,6 @@ impl Mixer {
             nodes: vec![Vec::new(); self.nodes.len()],
             buses: vec![Vec::new(); self.bus_channels.len()],
         });
-    }
-
-    /// Fill the captured stems with silence up to `len` samples each, for stretches the caller skipped
-    /// mixing because nothing could be heard.
-    pub fn pad_stems(&mut self, len: usize) {
-        if let Some(stems) = &mut self.stems {
-            for channel in stems
-                .nodes
-                .iter_mut()
-                .chain(stems.buses.iter_mut())
-                .flatten()
-            {
-                if channel.len() < len {
-                    channel.resize(len, 0.0);
-                }
-            }
-        }
     }
 
     /// The stems captured so far, which are no longer kept.

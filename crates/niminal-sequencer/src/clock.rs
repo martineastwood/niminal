@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use midir::{MidiOutput, MidiOutputConnection};
-use niminal_sequencer::{Live, Realtime};
+use crate::{Live, Realtime};
 use niminal_ws::worker::Worker;
 
 /// A tick later than this is dropped rather than sent in a burst with the ones after it.

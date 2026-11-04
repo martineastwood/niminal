@@ -286,7 +286,7 @@ pub struct EngineServer {
     next_client: ClientId,
     last_clock: Option<u64>,
     clock_every: u64,
-    outbox: Vec<(ClientId, String)>,
+    outbox: Vec<(ClientId, String, Value)>,
     reports: crate::reports::Reports,
     /// Verbosity and where log lines go. A separate thread prints them, so a slow terminal never holds up the engine.
     trace: Option<(u8, std::sync::mpsc::Sender<String>)>,
@@ -324,14 +324,6 @@ impl EngineServer {
     pub fn is_connected(&self, client: u64) -> bool {
         self.clients.contains_key(&client)
     }
-    pub fn reset_session(&mut self, session: Session) {
-        self.clients.clear();
-        self.outbox.clear();
-        self.reports = Default::default();
-        self.session = session;
-        self.last_clock = None;
-        self.clock_every = (self.session.sample_rate() / 10.) as u64;
-    }
     pub fn session(&self) -> &Session {
         &self.session
     }
@@ -359,7 +351,7 @@ impl EngineServer {
     pub fn disconnect(&mut self, client: ClientId) {
         self.trace(1, || format!("client {client} disconnected"));
         self.clients.remove(&client);
-        self.outbox.retain(|(id, _)| *id != client);
+        self.outbox.retain(|(id, _, _)| *id != client);
         self.session.drop_client(client);
     }
 
@@ -580,10 +572,9 @@ impl EngineServer {
     }
 
     fn send_to_subscribers(&mut self, topic: &str, method: &str, params: Value) {
-        let text = json!({"jsonrpc": "2.0", "method": method, "params": params}).to_string();
         for (id, client) in &self.clients {
             if client.greeted && client.topics.contains(topic) {
-                self.outbox.push((*id, text.clone()));
+                self.outbox.push((*id, method.to_string(), params.clone()));
             }
         }
     }
@@ -594,15 +585,19 @@ impl EngineServer {
     pub fn notifications(&mut self) -> Vec<(ClientId, String)> {
         self.collect_notifications();
         self.outbox
-            .extract_if(.., |(id, _)| self.clients.get(id).is_none_or(|c| !c.local))
+            .extract_if(.., |(id, _, _)| self.clients.get(id).is_none_or(|c| !c.local))
+            .map(|(id, method, params)| {
+                (id, json!({"jsonrpc": "2.0", "method": method, "params": params}).to_string())
+            })
             .collect()
     }
 
     /// Collect only this in-process client's messages, preserving those for network clients.
-    pub fn notifications_for(&mut self, client: ClientId) -> Vec<(ClientId, String)> {
+    pub fn notifications_for(&mut self, client: ClientId) -> Vec<(String, Value)> {
         self.collect_notifications();
         self.outbox
-            .extract_if(.., |(id, _)| *id == client)
+            .extract_if(.., |(id, _, _)| *id == client)
+            .map(|(_, method, params)| (method, params))
             .collect()
     }
 
@@ -620,7 +615,8 @@ impl EngineServer {
         {
             self.outbox.push((
                 client,
-                json!({"jsonrpc": "2.0", "method": method, "params": params}).to_string(),
+                method.to_string(),
+                params,
             ));
         }
     }
@@ -651,7 +647,11 @@ impl EngineServer {
                 if state.topics.contains("notices")
                     && (!notice.contains("__client_") || notice.contains(&prefix))
                 {
-                    self.outbox.push((client,json!({"jsonrpc":"2.0","method":"notice","params":{"message":notice.replace(&prefix,"")}}).to_string()));
+                    self.outbox.push((
+                        client,
+                        "notice".into(),
+                        json!({"message": notice.replace(&prefix, "")}),
+                    ));
                 }
             }
         }
@@ -683,7 +683,11 @@ impl EngineServer {
                             .filter(|r| r["client"].as_u64() == Some(client))
                             .cloned()
                             .collect();
-                        self.outbox.push((client,json!({"jsonrpc":"2.0","method":"meters","params":{"peaks":peaks,"routing":own}}).to_string()));
+                        self.outbox.push((
+                            client,
+                            "meters".into(),
+                            json!({"peaks": peaks, "routing": own}),
+                        ));
                     }
                 }
             }

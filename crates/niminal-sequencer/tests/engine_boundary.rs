@@ -34,12 +34,12 @@ fn two_live_clients_keep_independent_tempos_and_musical_clock_controls() {
         Session::new(48_000.0, Layout::Mono).without_limiter(),
     )));
     let mut a = Live::new(
-        Box::new(InProcess::new(engine.clone())),
+        InProcess::new(engine.clone()),
         48_000.0,
         Layout::Mono,
     );
     let mut b = Live::new(
-        Box::new(InProcess::new(engine.clone())),
+        InProcess::new(engine.clone()),
         48_000.0,
         Layout::Mono,
     );
@@ -74,7 +74,7 @@ fn metering_reports_how_loud_each_node_is_by_name() {
         Session::new(48_000.0, Layout::Mono).without_limiter(),
     )));
     let mut live = Live::new(
-        Box::new(InProcess::new(engine.clone())),
+        InProcess::new(engine.clone()),
         48_000.0,
         Layout::Mono,
     );
