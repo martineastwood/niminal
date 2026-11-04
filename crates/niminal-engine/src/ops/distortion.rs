@@ -9,7 +9,7 @@ use crate::opcode::{Opcode, Port, ProcessCtx};
 /// blends wet with dry. The asymmetry that gives the even harmonics also shifts the signal
 /// off zero, so a high-pass at 10Hz takes that offset out before the tone filter.
 ///
-/// It is not oversampled, so a bright signal pushed hard folds harmonics back down; wrap it in
+/// It is not oversampled itself, so a bright signal pushed hard folds harmonics back down; wrap it in
 /// `oversample(4) { ... }` for that.
 #[derive(Clone)]
 pub struct Distortion {

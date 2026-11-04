@@ -34,9 +34,21 @@ pub enum Wave {
 const LEVEL_SIZE: usize = 2048;
 /// The most harmonics a table keeps.
 const MAX_HARMONICS: usize = 1024;
+/// Copies of a table kept per octave of pitch.
+const LEVELS_PER_OCTAVE: f64 = 4.0;
+
+static SAW_TABLE: LazyLock<Wavetable> = LazyLock::new(|| {
+    // 2t - 1 = -(2/pi) * sum of sin(2 pi h t) / h. Taken from the series, not from sampled points,
+    // so the table holds no aliasing of its own.
+    let parts: Vec<(f64, f64)> = (1..=MAX_HARMONICS)
+        .map(|h| (0.0, -2.0 / (std::f64::consts::PI * h as f64)))
+        .collect();
+    Wavetable::from_parts(0.0, &parts, true)
+});
 
 /// One cycle of a wave, kept as copies with fewer and fewer harmonics so it can be played at any
-/// pitch without aliasing. Level `k` holds the first `top >> k` harmonics.
+/// pitch without aliasing. Level `k` holds the first `top` harmonics scaled down by a quarter of an octave per
+/// level.
 pub struct Wavetable {
     levels: Vec<Box<[f32]>>,
     top: usize,
@@ -65,23 +77,44 @@ impl Wavetable {
                 (2.0 * a / n as f64, 2.0 * b / n as f64)
             })
             .collect();
+        Self::from_parts(dc, &parts, false)
+    }
+
+    /// Build every level from a constant and the (cosine, sine) amounts of each harmonic, lowest first.
+    /// `taper` fades the top third of each level's harmonics out, which keeps a wave with jumps in it from
+    /// overshooting at them.
+    fn from_parts(dc: f64, parts: &[(f64, f64)], taper: bool) -> Self {
+        let top = parts.len();
+        let angle = |k: usize, size: usize| std::f64::consts::TAU * (k % size) as f64 / size as f64;
         let (cos_l, sin_l): (Vec<f64>, Vec<f64>) = (0..LEVEL_SIZE)
             .map(|k| angle(k, LEVEL_SIZE).sin_cos())
             .map(|(s, c)| (c, s))
             .unzip();
-        let count = top.ilog2() as usize + 1;
+        let count = (LEVELS_PER_OCTAVE * (top as f64).log2()).floor() as usize + 1;
         let levels = (0..count)
             .map(|k| {
-                let keep = top >> k;
+                let keep = ((top as f64 / (k as f64 / LEVELS_PER_OCTAVE).exp2()) as usize).max(1);
+                let fade_from = keep as f64 * 2.0 / 3.0;
+                // The harmonics this level plays, with their taper applied; silent ones are skipped.
+                let used: Vec<(usize, f64, f64)> = parts[..keep]
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(j, &(a, b))| {
+                        let h = j + 1;
+                        let weight = if taper && keep >= 3 && h as f64 > fade_from {
+                            let x = (h as f64 - fade_from) / (keep as f64 - fade_from);
+                            0.5 + 0.5 * (std::f64::consts::PI * x.min(1.0)).cos()
+                        } else {
+                            1.0
+                        };
+                        (a.abs() > 1e-9 || b.abs() > 1e-9).then_some((h, a * weight, b * weight))
+                    })
+                    .collect();
                 let mut level: Vec<f32> = (0..LEVEL_SIZE)
                     .map(|i| {
-                        let sum: f64 = parts[..keep]
+                        let sum: f64 = used
                             .iter()
-                            .enumerate()
-                            .map(|(j, (a, b))| {
-                                a * cos_l[(j + 1) * i % LEVEL_SIZE]
-                                    + b * sin_l[(j + 1) * i % LEVEL_SIZE]
-                            })
+                            .map(|&(h, a, b)| a * cos_l[h * i % LEVEL_SIZE] + b * sin_l[h * i % LEVEL_SIZE])
                             .sum();
                         (dc + sum) as f32
                     })
@@ -95,13 +128,16 @@ impl Wavetable {
 
     /// The wave at phase `t` (in cycles, 0 to 1) for a note that advances `inc` cycles a sample.
     fn read(&self, t: f64, inc: f64) -> f32 {
-        let octaves = fast_log2(self.top as f64 * 2.0 * inc.abs()) + 1.0;
-        let p = octaves.clamp(0.0, (self.levels.len() - 1) as f64);
+        // The level that keeps the harmonics up to the Nyquist limit, and one more level of margin.
+        let octaves = fast_log2(self.top as f64 * 2.0 * inc.abs());
+        let p = (octaves * LEVELS_PER_OCTAVE + 1.0).clamp(0.0, (self.levels.len() - 1) as f64);
         let a = p as usize;
         let b = (a + 1).min(self.levels.len() - 1);
         let w = (p - a as f64) as f32;
-        let pos = t * LEVEL_SIZE as f64;
-        let i = pos as usize;
+        // A phase that rounds up to exactly 1 (or anything else out of range) reads the last interval, not past it.
+        let t = if t.is_finite() { t } else { 0.0 };
+        let pos = (t * LEVEL_SIZE as f64).clamp(0.0, LEVEL_SIZE as f64);
+        let i = (pos as usize).min(LEVEL_SIZE - 1);
         let f = (pos - i as f64) as f32;
         let at = |level: &[f32]| level[i] + (level[i + 1] - level[i]) * f;
         let low = at(&self.levels[a]);
@@ -109,8 +145,9 @@ impl Wavetable {
     }
 }
 
-/// Oscillator. Saw and pulse are band-limited with PolyBLEP; the triangle is
-/// corrected at its slope discontinuities with PolyBLAMP.
+/// Oscillator. Saw and pulse are read from band-limited tables (a pulse is two saws), with PolyBLEP
+/// corrections where hard sync restarts them; the triangle is corrected at its slope discontinuities
+/// with PolyBLAMP.
 ///
 /// `phase_mod` is added to the phase in cycles, so a sine modulated by another
 /// sine gives phase-modulation FM. The default starting phase is zero; `phase`
@@ -132,6 +169,16 @@ pub struct Osc {
 
 impl Osc {
     pub fn new(wave: Wave) -> Self {
+        // Build the shared table now, while a program is being defined, not in the audio callback.
+        match wave {
+            Wave::Sine => {
+                LazyLock::force(&SINE_TABLE);
+            }
+            Wave::Saw | Wave::Square | Wave::Pulse => {
+                LazyLock::force(&SAW_TABLE);
+            }
+            Wave::Tri => {}
+        }
         Osc {
             wave,
             table: None,
@@ -160,18 +207,6 @@ impl Osc {
             bank: Some(bank),
             ..Osc::new(Wave::Sine)
         }
-    }
-}
-
-fn poly_blep(t: f64, dt: f64) -> f64 {
-    if t < dt {
-        let x = t / dt;
-        x + x - x * x - 1.0
-    } else if t > 1.0 - dt {
-        let x = (t - 1.0) / dt;
-        x * x + x + x + 1.0
-    } else {
-        0.0
     }
 }
 
@@ -229,8 +264,16 @@ impl Opcode for Osc {
 
     fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
-        if self.wave == Wave::Sine && self.table.is_none() && self.bank.is_none() {
-            LazyLock::force(&SINE_TABLE);
+        if self.table.is_none() && self.bank.is_none() {
+            match self.wave {
+                Wave::Sine => {
+                    LazyLock::force(&SINE_TABLE);
+                }
+                Wave::Saw | Wave::Square | Wave::Pulse => {
+                    LazyLock::force(&SAW_TABLE);
+                }
+                Wave::Tri => {}
+            }
         }
     }
 
@@ -305,13 +348,12 @@ impl Osc {
         } else {
             f64::from(width).clamp(0.01, 0.99)
         };
-        let (previous_pm, previous_width) = self.modulation.unwrap_or((pm, width));
+        let (previous_pm, _) = self.modulation.unwrap_or((pm, width));
         self.modulation = Some((pm, width));
         // Local phase velocity includes PM, and the falling pulse edge moves with width.
         // Abrupt/arbitrary modulation still benefits from an explicit oversample scope.
         let effective_inc = inc + pm - previous_pm;
         let dt = effective_inc.abs().min(0.5);
-        let width_dt = (effective_inc - (width - previous_width)).abs().min(0.5);
         let t = wrap(self.phase + pm);
 
         if let Some(bank) = &self.bank {
@@ -337,10 +379,15 @@ impl Osc {
                 self.phase = wrap(self.phase + inc);
                 return SINE_TABLE.read(t, effective_inc);
             }
-            Wave::Saw => 2.0 * t - 1.0 - poly_blep(t, dt),
+            Wave::Saw => {
+                self.phase = wrap(self.phase + inc);
+                return SAW_TABLE.read(t, effective_inc);
+            }
             Wave::Square | Wave::Pulse => {
-                let naive = if t < width { 1.0 } else { -1.0 };
-                naive + poly_blep(t, dt) - poly_blep(wrap(t - width), width_dt)
+                // A pulse is one saw minus another shifted by its width, plus the offset that width leaves.
+                self.phase = wrap(self.phase + inc);
+                let shifted = SAW_TABLE.read(wrap(t - width), effective_inc);
+                return (2.0 * width - 1.0) as f32 - (SAW_TABLE.read(t, effective_inc) - shifted);
             }
             Wave::Tri => {
                 let naive = if t < 0.25 {
@@ -546,6 +593,21 @@ impl Osc {
 mod tests {
     use super::*;
     use crate::ops::Phasor;
+
+    #[test]
+    fn a_table_read_at_the_edge_of_the_cycle_stays_inside_the_table() {
+        // `wrap(phase - width)` rounds to exactly 1.0 when the phase is one ulp short of the width.
+        let nearly_one = 1.0 - f64::EPSILON / 2.0;
+        for t in [0.0, 1.0, nearly_one, 1.0 + 1e-12, -1e-17, 2.0, -3.0, f64::NAN, f64::INFINITY] {
+            for inc in [0.0, 1e-4, 0.01, 0.2, 0.5, -0.3, f64::NAN] {
+                for table in [&SAW_TABLE, &SINE_TABLE] {
+                    let v = table.read(t, inc);
+                    assert!(v.is_finite() && v.abs() < 2.5, "t {t} inc {inc}: {v}");
+                }
+            }
+        }
+        assert!((SAW_TABLE.read(1.0, 0.001) - SAW_TABLE.read(0.0, 0.001)).abs() < 1e-3);
+    }
 
     fn cycle(n: usize, f: impl Fn(f64) -> f64) -> Vec<f64> {
         (0..n).map(|i| f(i as f64 / n as f64)).collect()

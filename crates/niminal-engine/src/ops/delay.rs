@@ -5,7 +5,7 @@ use crate::opcode::{Opcode, Port, ProcessCtx, TAIL_LEVEL};
 /// A line that has only ever held silence counts as quiet from the start.
 const ALREADY_QUIET: usize = usize::MAX / 2;
 
-/// Feedback delay with linear interpolation and a smoothly moving tape-style read head. Output is the delayed signal
+/// Feedback delay with cubic interpolation and a smoothly moving tape-style read head. Output is the delayed signal
 /// only; add the dry signal yourself for a mix.
 ///
 /// `damp` (a cutoff in hz, off at 0) puts a one-pole low-pass in the feedback path, so each echo is darker
@@ -81,8 +81,8 @@ impl Opcode for Delay {
         self.time = DelayTime::new(sample_rate);
         let max = (self.max_seconds * sample_rate).round().max(1.0);
         self.max_samples = f64::from(max);
-        // room for the longest delay, one sample of interpolation, and the write head
-        self.buf = vec![0.0; max as usize + 3];
+        // room for the longest delay, two samples of interpolation, and the write head
+        self.buf = vec![0.0; max as usize + 4];
         self.write = 0;
         self.quiet_run = ALREADY_QUIET;
         self.in_flight = 0;
@@ -122,9 +122,22 @@ impl Opcode for Delay {
             let frac = (samples - whole) as f32;
             let whole = whole as usize;
 
-            let newer = self.buf[(self.write + len - whole) % len];
-            let older = self.buf[(self.write + len - whole - 1) % len];
-            let delayed = newer + (older - newer) * frac;
+            let at = |back: usize| self.buf[(self.write + len - back) % len];
+            let (newer, older) = (at(whole), at(whole + 1));
+            let delayed = if whole >= 2 {
+                // Cubic (Catmull-Rom) through the four nearest samples: linear interpolation would
+                // dull the top end by up to 6db at 16khz and more as the time moves.
+                let (before, after) = (at(whole - 1), at(whole + 2));
+                let t = frac;
+                newer
+                    + 0.5
+                        * t
+                        * (older - before
+                            + t * (2.0 * before - 5.0 * newer + 4.0 * older - after
+                                + t * (3.0 * (newer - older) + after - before)))
+            } else {
+                newer + (older - newer) * frac
+            };
 
             let feedback = inputs[2][i].clamp(0.0, 0.995);
             let damp = inputs[3][i];

@@ -197,7 +197,7 @@ fn nonlinear_opcodes_run_natively_and_allow_explicit_oversampling() {
         for factor in [2, 4, 8] {
             let mut wrapped = Oversample::new(op.box_clone(), factor);
             wrapped.prepare(48000.0);
-            assert_eq!(wrapped.latency(), 16);
+            assert_eq!(wrapped.latency(), 25);
         }
     }
 }

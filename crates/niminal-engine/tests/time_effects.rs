@@ -73,14 +73,12 @@ fn feedback_repeats_decaying_echoes() {
 
 #[test]
 fn fractional_times_interpolate_between_samples() {
-    // 10.5 samples: the impulse is shared between two neighbouring samples
+    // 10.5 samples: the impulse is shared between the neighbouring samples by cubic interpolation
     let out = render(&delay_graph(1.0, 10.5 / 48_000.0, 0.0), 100, None, 32);
-    assert!(
-        (out[10] - 0.5).abs() < 1e-4 && (out[11] - 0.5).abs() < 1e-4,
-        "{} {}",
-        out[10],
-        out[11]
-    );
+    for (n, expected) in [(9, -0.0625), (10, 0.5625), (11, 0.5625), (12, -0.0625)] {
+        assert!((out[n] - expected).abs() < 1e-4, "sample {n}: {}", out[n]);
+    }
+    assert!((out.iter().sum::<f32>() - 1.0).abs() < 1e-4, "keeps its level");
 }
 
 #[test]

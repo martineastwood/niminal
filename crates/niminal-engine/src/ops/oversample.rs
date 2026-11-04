@@ -16,25 +16,44 @@ impl Fir {
         self.history.fill(0.0);
         self.pos = 0;
     }
-    fn step(&mut self, x: f32, taps: &[f32]) -> f32 {
+    fn push(&mut self, x: f32) {
         self.history[self.pos] = x;
-        let mut y = 0.0;
-        let mut index = self.pos;
-        for &tap in taps {
-            y += tap * self.history[index];
-            index = if index == 0 {
-                self.history.len() - 1
-            } else {
-                index - 1
-            };
-        }
         self.pos = (self.pos + 1) % self.history.len();
+    }
+    /// The sum of `taps[first + k * stride]` times the sample pushed `first + k * stride` pushes ago
+    /// (0 is the latest).
+    fn dot(&self, taps: &[f32], first: usize, stride: usize) -> f32 {
+        let len = self.history.len();
+        let mut y = 0.0;
+        let mut index = (self.pos + len - 1 - first) % len;
+        let mut k = first;
+        while k < taps.len() {
+            y += taps[k] * self.history[index];
+            index = if index >= stride {
+                index - stride
+            } else {
+                index + len - stride
+            };
+            k += stride;
+        }
         y
     }
 }
 
+/// The zeroth-order modified Bessel function, by its power series.
+fn bessel_i0(x: f64) -> f64 {
+    let (mut term, mut sum) = (1.0, 1.0);
+    for k in 1..50 {
+        term *= (x / (2.0 * f64::from(k))).powi(2);
+        sum += term;
+    }
+    sum
+}
+
 /// Band-limited rate conversion around DSP effects running at 2x, 4x or 8x.
-/// Both FIRs have eight base-rate samples of group delay.
+/// Both filters are Kaiser-windowed sincs (80dB down) that are flat to 0.4 of the base rate, and the
+/// stopband starts at 0.6 of it, so what folds back lands above the audible passband. Together they
+/// have 25 base-rate samples of delay.
 pub struct Oversample {
     op: Box<dyn Opcode>,
     factor: usize,
@@ -52,8 +71,10 @@ pub struct Oversample {
 impl Oversample {
     pub fn new(op: Box<dyn Opcode>, factor: usize) -> Self {
         assert!([2, 4, 8].contains(&factor));
-        let len = 16 * factor + 1;
-        let cutoff = 0.45 / factor as f64;
+        let len = 25 * factor + 1;
+        // Half the base rate, in cycles per sample at the oversampled rate: the middle of the transition.
+        let cutoff = 0.5 / factor as f64;
+        let beta = 0.1102 * (80.0 - 8.7);
         let mut taps: Vec<f32> = (0..len)
             .map(|i| {
                 let x = i as f64 - (len / 2) as f64;
@@ -62,8 +83,8 @@ impl Oversample {
                 } else {
                     (2.0 * PI * cutoff * x).sin() / (PI * x)
                 };
-                let window = 0.42 - 0.5 * (2.0 * PI * i as f64 / (len - 1) as f64).cos()
-                    + 0.08 * (4.0 * PI * i as f64 / (len - 1) as f64).cos();
+                let r = 2.0 * i as f64 / (len - 1) as f64 - 1.0;
+                let window = bessel_i0(beta * (1.0 - r * r).max(0.0).sqrt()) / bessel_i0(beta);
                 (sinc * window) as f32
             })
             .collect();
@@ -159,7 +180,7 @@ impl Opcode for Oversample {
         self.op.input_is_init(index)
     }
     fn latency(&self) -> usize {
-        16 + self.op.latency().div_ceil(self.factor)
+        (self.taps.len() - 1) / self.factor + self.op.latency().div_ceil(self.factor)
     }
     fn process(&mut self, _: &ProcessCtx, _: &[&[f32]], _: &mut [f32]) {
         unreachable!("oversampling uses graph slots")
@@ -194,21 +215,22 @@ impl Opcode for Oversample {
             for phase in 0..self.factor {
                 for ((fir, input), &index) in self.up.iter_mut().zip(&mut self.inputs).zip(indices)
                 {
-                    let x = if phase == 0 {
+                    // Only every factor-th input is not zero, so only those taps count.
+                    fir.push(if phase == 0 {
                         slots[index][i] * self.factor as f32
                     } else {
                         0.0
-                    };
-                    input[0] = fir.step(x, &self.up_taps);
+                    });
+                    input[0] = fir.dot(&self.up_taps, phase, self.factor);
                 }
                 self.op
                     .process_slots(&sub, &self.inputs, &self.indices, &mut self.scratch, 1);
                 for ((fir, scratch), out) in
                     self.down.iter_mut().zip(&self.scratch).zip(outs.iter_mut())
                 {
-                    let y = fir.step(scratch[0], &self.taps);
+                    fir.push(scratch[0]);
                     if phase == 0 {
-                        out[i] = y;
+                        out[i] = fir.dot(&self.taps, 0, 1);
                     }
                 }
             }

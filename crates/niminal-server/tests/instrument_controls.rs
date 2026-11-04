@@ -177,7 +177,7 @@ fn parallel_nodes_and_bus_sends_are_latency_compensated() {
             })
             .collect();
         s.send_events(1, notes).unwrap();
-        assert_eq!(s.program().processing_latency(), 16);
+        assert_eq!(s.program().processing_latency(), 25);
         let output = s.process(4096);
         let rms = (output[0][1000..].iter().map(|v| v * v).sum::<f32>() / 3096.0).sqrt();
         assert!(rms < 0.005, "parallel paths cancel: {rms}");

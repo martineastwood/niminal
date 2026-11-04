@@ -221,7 +221,9 @@ fn stateful_native_callbacks_freeze_on_untaken_branches() {
     let source = "fn f(t, make: fn) { state unused = 0\nif t < 4 { make() } else { 0 } }\ninstr a() { f((note.time.num * sample_rate.num + 0.5).floor.mod(8), fn() { osc(saw, 1khz) }) }";
     let out = render(source, 16, 7);
     assert_eq!(&out[4..8], &[0.; 4]);
-    assert!((out[8] - (-1.0 + 2.0 * 4.0 / 48.0)).abs() < 1e-6);
+    // The ramp at a quarter of the way up (frozen phase) is -0.833; had the phase run on it would be -0.667.
+    // A saw band-limited to 24 harmonics ripples a few hundredths around the ideal ramp.
+    assert!((out[8] - (-1.0 + 2.0 * 4.0 / 48.0)).abs() < 0.05, "{}", out[8]);
 }
 
 #[test]
