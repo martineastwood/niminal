@@ -49,7 +49,7 @@ runners cannot guarantee its 5ms scheduler tolerance. Run it explicitly when
 checking MIDI timing locally:
 
 ```sh
-(cd sequencer && cargo test -p niminal-live-cli --lib clock::tests::messages_leave_when_their_time_comes -- --ignored)
+cargo test -p niminal-cli --lib clock::tests::messages_leave_when_their_time_comes -- --ignored
 ```
 
 ## Download contents

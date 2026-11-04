@@ -1,6 +1,5 @@
-pub mod audio;
-pub mod host;
-pub mod midi_out;
-pub mod osc_out;
+//! The pieces of the `niminal` command that tests and other tools can use.
+
+pub mod clock;
+pub mod input;
 pub mod render;
-pub mod replay;

@@ -6,7 +6,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const root = path.join(__dirname, "..");
-const niminal = process.env.NIMINAL_BIN ?? path.join(root, "../../sequencer/target/debug/niminal");
+const niminal = process.env.NIMINAL_BIN ?? path.join(root, "../../target/debug/niminal");
 
 test("the contributed physical-model starters compile with the language", () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));

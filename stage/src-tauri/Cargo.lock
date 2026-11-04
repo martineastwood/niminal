@@ -2302,15 +2302,18 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 name = "niminal-cli"
 version = "0.0.1"
 dependencies = [
- "cpal",
+ "clap",
  "hound",
- "libc",
  "midir",
+ "niminal-compose",
  "niminal-engine",
+ "niminal-host",
  "niminal-lang",
+ "niminal-lsp",
+ "niminal-score",
+ "niminal-sequencer",
  "niminal-server",
  "niminal-ws",
- "rtrb",
  "serde_json",
 ]
 
@@ -2336,46 +2339,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "niminal-host"
+version = "0.0.1"
+dependencies = [
+ "cpal",
+ "hound",
+ "libc",
+ "midir",
+ "niminal-engine",
+ "niminal-lang",
+ "niminal-server",
+ "niminal-ws",
+ "rtrb",
+ "serde_json",
+]
+
+[[package]]
 name = "niminal-lang"
 version = "0.0.1"
 dependencies = [
  "hound",
  "niminal-engine",
  "niminal-score",
-]
-
-[[package]]
-name = "niminal-live"
-version = "0.0.1"
-dependencies = [
- "niminal-compose",
- "niminal-engine",
- "niminal-lang",
- "niminal-pattern",
- "niminal-score",
- "niminal-server",
- "niminal-ws",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "niminal-live-cli"
-version = "0.0.1"
-dependencies = [
- "clap",
- "hound",
- "midir",
- "niminal-cli",
- "niminal-compose",
- "niminal-engine",
- "niminal-lang",
- "niminal-live",
- "niminal-lsp",
- "niminal-score",
- "niminal-server",
- "niminal-ws",
- "serde_json",
 ]
 
 [[package]]
@@ -2395,6 +2380,21 @@ version = "0.0.1"
 name = "niminal-score"
 version = "0.0.1"
 dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "niminal-sequencer"
+version = "0.0.1"
+dependencies = [
+ "niminal-compose",
+ "niminal-engine",
+ "niminal-lang",
+ "niminal-pattern",
+ "niminal-score",
+ "niminal-server",
+ "niminal-ws",
  "serde",
  "serde_json",
 ]
@@ -2420,10 +2420,10 @@ dependencies = [
  "midir",
  "niminal-cli",
  "niminal-compose",
+ "niminal-host",
  "niminal-lang",
- "niminal-live",
- "niminal-live-cli",
  "niminal-lsp",
+ "niminal-sequencer",
  "niminal-server",
  "niminal-ws",
  "rfd",

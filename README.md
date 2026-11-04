@@ -78,7 +78,7 @@ The bundled `Getting Started.txt` covers the same steps, plus upgrading and unin
 You need a recent [Rust toolchain](https://rustup.rs/). From a clone of this repo:
 
 ```sh
-cargo install --path sequencer/live-cli      # niminal: play, render, server, replay and the language server
+cargo install --path crates/niminal-cli      # niminal: play, render, server, replay and the language server
 ```
 
 To build Stage from source you also need Node.js and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). See [stage/](stage/).
@@ -132,15 +132,21 @@ For MIDI / OSC control, start the live client with `--midi` and/or `--osc-port` 
 
 ## Repository layout
 
+One Rust workspace (`crates/`), the Stage app, the editor extension, and the docs. [`AGENTS.md`](AGENTS.md) has the full map, the commands to run and the rules for changing the engine.
+
 | Path | Purpose |
 | --- | --- |
-| `crates/niminal-cli` | `niminal` command-line tool |
-| `crates/niminal-server` | The engine: an audio server that plays events stamped in absolute samples |
-| `sequencer/live` | The live sequencer: clips, scenes, quantize, keyboards; plays through the engine in-process |
+| `crates/niminal-engine` | The DSP: graph, voices, mixer, every opcode |
+| `crates/niminal-lang` | The `.nml` language for sound: parser, unit checker, compilers, standard library |
+| `crates/niminal-server` | The engine as a service: sessions, events stamped in absolute samples, routing, the real-time renderer |
+| `crates/niminal-compose`, `-pattern`, `-sequencer` | The sequencer: clips, scenes, patterns, quantized changes; plays through the engine in-process |
+| `crates/niminal-host` | Runs the engine inside a program: sound card, render threads, session log |
+| `crates/niminal-cli` | The `niminal` command: `play`, `render`, `server`, `replay`, the language server |
+| `crates/niminal-lsp`, `-ws`, `-score` | The language server, JSON-RPC over WebSocket, and the score model |
 | `stage/` | Niminal Stage, the desktop app: the engine and the sequencer, with an editor and lanes |
-| `crates/niminal-*` | Language, DSP, LSP, and related libraries |
+| `editors/vscode/` | The editor extension |
+| `clients/js/` | A JavaScript client of the engine API |
 | `examples/` | Example `.nml` pieces |
-| `editors/vscode/` | Editor extension |
 | `docs/` | [niminal.dev](https://niminal.dev) site source |
 
 ## Feedback

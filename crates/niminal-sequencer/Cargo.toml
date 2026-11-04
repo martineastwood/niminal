@@ -1,0 +1,21 @@
+[package]
+name = "niminal-sequencer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The niminal live sequencer: clips, scenes, quantized changes and keyboards, driving the engine through its public event API"
+
+[dependencies]
+niminal-ws = { path = "../niminal-ws" }
+niminal-pattern = { path = "../niminal-pattern" }
+niminal-engine = { path = "../niminal-engine" }
+niminal-lang = { path = "../niminal-lang" }
+niminal-compose = { path = "../niminal-compose" }
+niminal-score = { path = "../niminal-score" }
+niminal-server = { path = "../niminal-server" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+hound = "3"
+rtrb = "0.3"

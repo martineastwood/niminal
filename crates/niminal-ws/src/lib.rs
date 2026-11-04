@@ -444,7 +444,7 @@ pub struct Client {
 
 impl Client {
     pub fn connect(port: u16, token: Option<&str>) -> Result<Client, String> {
-        Ok(Client::connect_as(port, token, "niminal-cli")?.0)
+        Ok(Client::connect_as(port, token, "niminal-host")?.0)
     }
 
     /// Connect and say hello as `name`, returning the server's reply to the hello too.

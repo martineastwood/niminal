@@ -8,13 +8,13 @@ use std::time::{Duration, Instant};
 
 use crate::audio::{self, AudioChoice, AudioState};
 use crate::settings::{self, Settings};
-use niminal_cli::host::{Host, HostConfig};
+use niminal_host::host::{Host, HostConfig};
 use niminal_lang::Problem;
-use niminal_live::{
+use niminal_sequencer::{
     Accepted, Begin, ClipStatus, InProcess, Landed, Levels, Live, LiveServer, ParsedEval, PendingInfo,
     SceneStatus, Transport,
 };
-use niminal_live_cli::input::LiveShared;
+use niminal_cli::input::LiveShared;
 use niminal_ws::{Server, ServerConfig};
 use serde::Serialize;
 
@@ -38,7 +38,7 @@ pub struct Shared {
     /// Why the engine is not running, if it is not.
     engine_error: Mutex<Option<String>>,
     /// The OSC input that is open, and the port it listens on.
-    osc: Mutex<Option<(niminal_live_cli::input::OscInput, u16)>>,
+    osc: Mutex<Option<(niminal_cli::input::OscInput, u16)>>,
     /// Held while the engine is being started, so two requests to start it start it once.
     starting: Mutex<()>,
     /// Things that went wrong inside the stage, which the window hears of once.
@@ -66,7 +66,7 @@ struct Tools {
 
 #[derive(Default)]
 struct Clock {
-    out: Option<niminal_live_cli::clock::ClockOutput>,
+    out: Option<niminal_cli::clock::ClockOutput>,
     /// Held so that the input stays open until it is replaced.
     _input: Vec<midir::MidiInputConnection<()>>,
 }
@@ -156,7 +156,7 @@ fn work(shared: &Shared, last_tick: &mut Instant) {
             session.notifications();
         }
         if let Some(out) = &lock(&shared.clock).out {
-            niminal_live_cli::clock::pump_clock_out(session.live_mut(), out);
+            niminal_cli::clock::pump_clock_out(session.live_mut(), out);
         }
     }
 }
@@ -197,7 +197,7 @@ fn host_config(choice: &AudioChoice, no_audio: bool) -> HostConfig {
         buffer_size: choice.buffer_size,
         sample_rate: choice.sample_rate,
         no_audio,
-        log: niminal_cli::host::new_session_log(),
+        log: niminal_host::host::new_session_log(),
         ..Default::default()
     }
 }
@@ -237,7 +237,7 @@ pub fn osc_listen(shared: &Shared, port: Option<u16>) -> Result<(), String> {
     let mut osc = lock(&shared.osc);
     *osc = None;
     if let Some(port) = port {
-        let input = niminal_live_cli::input::OscInput::start(live, port)?;
+        let input = niminal_cli::input::OscInput::start(live, port)?;
         *osc = Some((input, port));
     }
     Ok(())
@@ -290,7 +290,7 @@ fn connect_with(shared: &Shared, port: u16, token: Option<&str>) -> Result<(), S
 
 /// Let other tools on this machine reach the stage, on `port` and the one above it. Not being able to (another
 /// program may have a port) does not stop the stage from playing; the window is told why.
-fn retarget_tools(shared: &Shared, engine: &niminal_cli::audio::Shared, live: &LiveShared, port: u16, token: Option<&str>) {
+fn retarget_tools(shared: &Shared, engine: &niminal_host::audio::Shared, live: &LiveShared, port: u16, token: Option<&str>) {
     let wanted = Some((port, token.map(str::to_string)));
     let same = *lock(&shared.tools_at) == wanted;
     let (have_live, have_engine) = {
@@ -334,7 +334,7 @@ fn open_live_tool(shared: &Shared, live: &LiveShared) {
     }
 }
 
-fn open_engine_tool(shared: &Shared, engine: &niminal_cli::audio::Shared) {
+fn open_engine_tool(shared: &Shared, engine: &niminal_host::audio::Shared) {
     let config = tools_config(shared, 1);
     let port = config.port;
     match Server::start(engine.clone(), config) {
@@ -406,7 +406,7 @@ pub fn open_midi(shared: &Arc<Shared>, filter: &str) -> Result<Vec<String>, Stri
     midi.names.clear();
     let last = midi.last.clone();
     let session = shared.clone();
-    let opened = niminal_live_cli::input::open_midi(filter, move |signal| {
+    let opened = niminal_cli::input::open_midi(filter, move |signal| {
         *lock(&last) = describe(signal);
         if let Some(mut server) = sequencer(&session) {
             server.live_mut().control_input(signal);
@@ -448,12 +448,12 @@ pub fn set_clock_out(shared: &Shared, name: Option<&str>) -> Result<(), String> 
             None => {
                 live.set_clock_out(false);
                 if let Some(out) = &clock.out {
-                    niminal_live_cli::clock::pump_clock_out(live, out);
+                    niminal_cli::clock::pump_clock_out(live, out);
                 }
                 clock.out = None;
             }
             Some(name) => {
-                clock.out = Some(niminal_live_cli::clock::ClockOutput::open(name)?);
+                clock.out = Some(niminal_cli::clock::ClockOutput::open(name)?);
                 live.set_clock_out(true);
             }
         }
@@ -469,7 +469,7 @@ pub fn set_clock_in(shared: &Arc<Shared>, name: Option<&str>) -> Result<(), Stri
         live.set_clock_in(false);
         let Some(name) = name else { return Ok(()) };
         let target = shared.clone();
-        let (connections, _) = niminal_live_cli::input::open_clock_in(name, move |message, arrived| {
+        let (connections, _) = niminal_cli::input::open_clock_in(name, move |message, arrived| {
             if let Some(mut server) = sequencer(&target) {
                 server.live_mut().midi_clock(message, arrived);
             }
@@ -480,8 +480,8 @@ pub fn set_clock_in(shared: &Arc<Shared>, name: Option<&str>) -> Result<(), Stri
     })?
 }
 
-fn describe(signal: &niminal_live::ControlSignal) -> Option<String> {
-    use niminal_live::ControlSignal::*;
+fn describe(signal: &niminal_sequencer::ControlSignal) -> Option<String> {
+    use niminal_sequencer::ControlSignal::*;
     match signal {
         MidiCc { cc, channel, value } => Some(format!("cc {cc} = {value} · ch {channel}")),
         MidiNote { note, velocity, .. } if *velocity > 0 => Some(format!("note {note}")),
@@ -515,12 +515,12 @@ pub fn render_take(shared: &Shared, from: u64, to: u64, out: &Path) -> Result<St
     let entries = niminal_server::from_lines(&text).map_err(|e| format!("{}: {e}", log.display()))?;
     let sample_rate = rate.round() as u32;
     let seconds = |sample: u64| sample as f64 / f64::from(rate);
-    let audio = niminal_cli::replay::replay(&entries, channels as u16, sample_rate, true)?;
-    let audio = niminal_cli::replay::slice(audio, seconds(from), Some(seconds(to)), sample_rate);
+    let audio = niminal_host::replay::replay(&entries, channels as u16, sample_rate, true)?;
+    let audio = niminal_host::replay::slice(audio, seconds(from), Some(seconds(to)), sample_rate);
     if audio.first().is_none_or(Vec::is_empty) {
         return Err("That part of the session made no sound.".into());
     }
-    niminal_cli::render::write_wav(out, &audio, sample_rate).map_err(|e| format!("Could not write {}: {e}", out.display()))?;
+    niminal_host::render::write_wav(out, &audio, sample_rate).map_err(|e| format!("Could not write {}: {e}", out.display()))?;
     Ok(format!(
         "replayed {} inputs: wrote {} ({:.2}s)",
         entries.len(),

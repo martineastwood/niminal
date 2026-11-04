@@ -4,7 +4,6 @@ node_modules/
 **/.vite/vitest/
 *.wav
 .DS_Store
-AGENTS.md
 *.log
 score/
 !examples/**/*.wav

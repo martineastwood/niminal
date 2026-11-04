@@ -1,27 +1,28 @@
 #!/bin/sh
-# Runs what CI runs, so a push doesn't find the failures first. Use before pushing.
-# Clippy only by default (most CI failures); `--test` adds the test suites.
-# The engine's workspace and the sequencer's have separate build directories, so they run side by side.
+# Runs what CI runs, so a push doesn't find the failures first.
+#   scripts/check.sh                  clippy on the whole Rust workspace (what most CI failures are)
+#   scripts/check.sh --test           ...and every Rust test
+#   scripts/check.sh --apps           ...and Stage (clippy, cargo test, tsc, vitest) and the extension's tests
+# The options combine: `scripts/check.sh --test --apps` is everything.
 set -e
 cd "$(dirname "$0")/.."
-log=$(mktemp -d)
-trap 'rm -rf "$log"' EXIT
+test=0
+apps=0
+for arg in "$@"; do
+  case "$arg" in
+    --test) test=1 ;;
+    --apps) apps=1 ;;
+    *) echo "unknown option $arg" >&2; exit 2 ;;
+  esac
+done
 
-engine() {
-  cargo clippy --workspace --all-targets -- -D warnings
-  if [ "$1" = "--test" ]; then cargo test --workspace; fi
-}
-sequencer() {
-  cd sequencer
-  cargo clippy --all-targets -- -D warnings
-  if [ "$1" = "--test" ]; then cargo test; fi
-}
+cargo clippy --workspace --all-targets -- -D warnings
+if [ $test = 1 ]; then cargo test --workspace; fi
 
-(engine "$@") >"$log/engine" 2>&1 & engine_pid=$!
-(sequencer "$@") >"$log/sequencer" 2>&1 & sequencer_pid=$!
-failed=0
-wait $engine_pid || failed=1
-echo "== engine workspace"; cat "$log/engine"
-wait $sequencer_pid || failed=1
-echo "== sequencer workspace"; cat "$log/sequencer"
-exit $failed
+if [ $apps = 1 ]; then
+  (cd stage/src-tauri && cargo clippy --all-targets -- -D warnings)
+  if [ $test = 1 ]; then (cd stage/src-tauri && cargo test); fi
+  (cd stage && npx tsc --noEmit)
+  if [ $test = 1 ]; then (cd stage && npx vitest run); fi
+  if [ $test = 1 ]; then (cd editors/vscode && npm test); fi
+fi

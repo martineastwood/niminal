@@ -14,13 +14,13 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-niminal-cli = { path = "../../crates/niminal-cli" }
-niminal-compose = { path = "../../sequencer/compose" }
+niminal-host = { path = "../../crates/niminal-host" }
+niminal-compose = { path = "../../crates/niminal-compose" }
 niminal-lang = { path = "../../crates/niminal-lang" }
-niminal-live = { path = "../../sequencer/live" }
-niminal-live-cli = { path = "../../sequencer/live-cli" }
+niminal-sequencer = { path = "../../crates/niminal-sequencer" }
+niminal-cli = { path = "../../crates/niminal-cli" }
 midir = "0.11"
-niminal-lsp = { path = "../../sequencer/lsp" }
+niminal-lsp = { path = "../../crates/niminal-lsp" }
 niminal-server = { path = "../../crates/niminal-server" }
 niminal-ws = { path = "../../crates/niminal-ws" }
 rfd = "0.17"

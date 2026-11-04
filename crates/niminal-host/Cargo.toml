@@ -1,0 +1,23 @@
+[package]
+name = "niminal-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Hosting the niminal engine in a program: the sound card, the render threads, the session log and replay"
+
+[dependencies]
+niminal-engine = { path = "../niminal-engine" }
+niminal-lang = { path = "../niminal-lang" }
+hound = "3"
+niminal-server = { path = "../niminal-server" }
+niminal-ws = { path = "../niminal-ws" }
+cpal = "0.18"
+serde_json = "1"
+rtrb = "0.3"
+midir = "0.11"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+niminal-score = { path = "../niminal-score" }

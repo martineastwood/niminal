@@ -1,0 +1,11 @@
+[package]
+name = "niminal-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The niminal language server: diagnostics, completion, hover and go-to-definition over stdio"
+
+[dependencies]
+niminal-lang = { path = "../niminal-lang" }
+niminal-compose = { path = "../niminal-compose" }
+serde_json = "1"

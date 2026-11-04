@@ -52,9 +52,8 @@ jobs:
         with:
           workspaces: |
             .
-            sequencer
             stage/src-tauri
-      - name: Check engine and sequencer
+      - name: Check the Rust workspace
         run: scripts/check.sh --test
       - name: Test desktop frontends and editor extension
         env:

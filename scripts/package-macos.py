@@ -55,7 +55,7 @@ def main():
     env.pop("CARGO_ENCODED_RUSTFLAGS", None)
     env.update(RUSTFLAGS="-C target-cpu=apple-m1", CARGO_TARGET_DIR=str(target),
                MACOSX_DEPLOYMENT_TARGET="13.0", NIMINAL_RELEASE_VERSION=args.version, APPLE_SIGNING_IDENTITY="-")
-    run("cargo", "build", "--locked", "--release", "-p", "niminal-live-cli", cwd=ROOT / "sequencer", env=env)
+    run("cargo", "build", "--locked", "--release", "-p", "niminal-cli", cwd=ROOT, env=env)
     apps = []
     for folder, name in [("stage", "Niminal Stage")]:
         run("npm", "ci", cwd=ROOT / folder)

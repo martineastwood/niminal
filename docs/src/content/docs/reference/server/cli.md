@@ -8,7 +8,7 @@ description: Every niminal subcommand and flag.
 The macOS download puts `niminal` in `/Applications/Niminal/bin` (the Homebrew cask puts it on your PATH). To build it from a clone of the [repo](https://github.com/martineastwood/niminal) (needs a [Rust toolchain](https://rustup.rs/)):
 
 ```sh
-cargo install --path sequencer/live-cli
+cargo install --path crates/niminal-cli
 ```
 
 `niminal <command> --help` lists every flag.

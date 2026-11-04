@@ -40,7 +40,7 @@ pub struct AudioState {
 
 /// The output devices there are, read from the engine's own listing.
 pub fn devices() -> Vec<Device> {
-    let listing = niminal_cli::audio::devices();
+    let listing = niminal_host::audio::devices();
     let mut seen = std::collections::BTreeSet::new();
     listing["outputs"]
         .as_array()
