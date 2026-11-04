@@ -202,6 +202,9 @@ fn main() -> ExitCode {
             .and_then(|()| run_replay(&args)),
         Command::Server(mut args) => {
             install_crash_log();
+            if let Some(release) = option_env!("NIMINAL_RELEASE_VERSION") {
+                niminal_server::set_release(release);
+            }
             if args.log.is_none() && !args.no_log {
                 args.log = state_dir().map(|state| {
                     let dir = state.join("sessions");

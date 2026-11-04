@@ -100,6 +100,8 @@ niminal keeps its logs in `~/.niminal/`:
 | `server.log` | What the server printed when an app or the editor started it; `server.log.old` is the run before |
 | `sessions/` | A log of each session, newest kept |
 
+If an app says that a niminal server from another release is already running, an older install left its server running. Quit it with `pkill -f "niminal server"` in a terminal and open the app again; the app starts a new one.
+
 If you report a problem, [open an issue](https://github.com/martineastwood/niminal/issues/new?template=bug_report.md) with the version from `niminal --version`, a minimal `.nml` file that shows it, and any of these files.
 
 ## Next

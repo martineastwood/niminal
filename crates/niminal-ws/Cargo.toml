@@ -9,3 +9,6 @@ description = "JSON-RPC over WebSocket: the server that fronts the server, and a
 niminal-server = { path = "../niminal-server" }
 serde_json = "1"
 tungstenite = "0.30"
+
+[dev-dependencies]
+niminal-lang = { path = "../niminal-lang" }

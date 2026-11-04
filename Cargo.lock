@@ -802,6 +802,7 @@ dependencies = [
 name = "niminal-ws"
 version = "0.0.1"
 dependencies = [
+ "niminal-lang",
  "niminal-server",
  "serde_json",
  "tungstenite",

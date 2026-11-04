@@ -33,7 +33,7 @@ pub use audio_in::AudioInput;
 pub use clock::ClockProbe;
 pub use engine_server::{
     ClientId, ENGINE_TOPICS, EngineError, EngineReply, EngineRequest, EngineServer,
-    PROTOCOL_VERSION, clock_json, problem_json,
+    PROTOCOL_VERSION, clock_json, problem_json, set_release,
 };
 pub use events::{At, Cancelled, Op, Sent, TransactionReceipt};
 pub use log::{LogEntry, LogInput, from_lines, to_lines};

@@ -45,6 +45,28 @@ fn listening(port: u16) -> bool {
     TcpStream::connect_timeout(&SocketAddr::from((Ipv4Addr::LOCALHOST, port)), Duration::from_millis(200)).is_ok()
 }
 
+/// A server that is already running is left as it is, but a released app will not use one from another release:
+/// an older install could be left running, with an older compiler and a different idea of the language. A
+/// development build, which has no release, uses whatever it finds.
+fn check_release(port: u16, token: Option<&str>, own: Option<&str>) -> Result<(), String> {
+    let Some(own) = own else { return Ok(()) };
+    let (_client, hello) = crate::Client::connect_as(port, token, "niminal-launch")?;
+    release_mismatch(own, hello["release"].as_str()).map_or(Ok(()), Err)
+}
+
+/// Why a server of release `theirs` (`None` if it does not say, as before releases said) can't be used by an
+/// app of release `own`.
+pub fn release_mismatch(own: &str, theirs: Option<&str>) -> Option<String> {
+    let running = match theirs {
+        Some(release) if release == own => return None,
+        Some(release) => format!("is release {release}"),
+        None => "is from an older release".to_string(),
+    };
+    Some(format!(
+        "A niminal server that {running} is already running, and this app is release {own}. Quit it, then open the app again: run `pkill -f \"niminal server\"` in a terminal."
+    ))
+}
+
 /// Record a panic of `app` (with its `version`) in `~/.niminal/crash.log`, beside the ones `niminal` writes, as
 /// well as reporting it as before. So a crash in an app can be looked at afterwards.
 pub fn install_crash_log(app: &'static str, version: &'static str) {
@@ -75,7 +97,7 @@ pub fn install_crash_log(app: &'static str, version: &'static str) {
 /// never left running on its own. A server that was already running is left as it is.
 pub fn ensure_server(port: u16, token: Option<&str>) -> Result<(), String> {
     if listening(port) {
-        return Ok(());
+        return check_release(port, token, option_env!("NIMINAL_RELEASE_VERSION"));
     }
     let binary = find_binary("niminal").ok_or("Could not find the niminal program to start the server with.")?;
     let log = home().map(|home| home.join(".niminal")).and_then(|dir| {

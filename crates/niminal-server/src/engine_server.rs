@@ -19,6 +19,16 @@ pub const PROTOCOL_VERSION: u64 = 5;
 
 pub type ClientId = u64;
 
+/// The release this server is part of (`0.0.1-alpha.10`), told to every client in the `hello` reply. Set by
+/// the program that runs the server; a development build has none. An app of the same release checks it, to
+/// notice a server left running from an older install.
+static RELEASE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Say which release this server is, in its `hello` reply.
+pub fn set_release(release: &str) {
+    let _ = RELEASE.set(release.to_string());
+}
+
 pub(crate) const PARSE_ERROR: i64 = -32700;
 pub(crate) const INVALID_REQUEST: i64 = -32600;
 pub(crate) const METHOD_NOT_FOUND: i64 = -32601;
@@ -358,6 +368,7 @@ impl EngineReply {
                 client_id,
             } => json!({
                 "protocol": PROTOCOL_VERSION,
+                "release": RELEASE.get(),
                 "client_id": client_id,
                 "sample_rate": sample_rate,
                 "channels": channels,

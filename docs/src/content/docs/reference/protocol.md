@@ -46,6 +46,7 @@ Limits: up to **16** clients; maximum message size **64 MiB** (large `eval` sour
 ```json
 {
   "protocol": 5,
+  "release": "0.0.1-alpha.10",
   "sample_rate": 48000,
   "channels": 2,
   "topics": ["landed", "pending", "transport", "meters", "notices", "learned"],
@@ -53,7 +54,9 @@ Limits: up to **16** clients; maximum message size **64 MiB** (large `eval` sour
 }
 ```
 
-**`protocol`** must be **`4`** (`PROTOCOL_VERSION` in the server). A mismatch returns error code **-32000**.
+**`protocol`** must be **`5`** (`PROTOCOL_VERSION` in the server). A mismatch returns error code **-32000**.
+
+**`release`** is the release of the download the server is part of, such as `0.0.1-alpha.10`, or `null` for a build made from source. Tracker and Stage compare it with their own and will not use a server left running from another release.
 
 ## Chairs
 
