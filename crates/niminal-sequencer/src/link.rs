@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use niminal_server::{
     ClientId, EngineError, EngineReply, EngineRequest, EngineServer, PROTOCOL_VERSION,
 };
+use niminal_ws::lock;
 use serde_json::Value;
 
 /// An engine in this process, which the link talks to without any text in between.
@@ -46,10 +47,6 @@ impl InProcess {
     pub fn notifications(&mut self) -> Vec<(String, Value)> {
         lock(&self.server).notifications_for(self.client)
     }
-}
-
-fn lock(server: &Mutex<EngineServer>) -> std::sync::MutexGuard<'_, EngineServer> {
-    server.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl Drop for InProcess {

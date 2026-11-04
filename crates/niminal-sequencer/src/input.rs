@@ -15,18 +15,11 @@ use niminal_ws::worker::Worker;
 /// A key down with velocity 0 is a key up.
 pub fn parse_midi(bytes: &[u8]) -> Option<ControlSignal<'static>> {
     match bytes {
-        [status @ 0x90..=0x9F, note, velocity] if *note < 128 && *velocity < 128 => {
+        [status @ 0x80..=0x9F, note, velocity] if *note < 128 && *velocity < 128 => {
             Some(ControlSignal::MidiNote {
                 note: *note,
                 channel: (status & 0x0F) + 1,
-                velocity: *velocity,
-            })
-        }
-        [status @ 0x80..=0x8F, note, velocity] if *note < 128 && *velocity < 128 => {
-            Some(ControlSignal::MidiNote {
-                note: *note,
-                channel: (status & 0x0F) + 1,
-                velocity: 0,
+                velocity: if *status >= 0x90 { *velocity } else { 0 },
             })
         }
         [status @ 0xA0..=0xAF, note, value] if *note < 128 && *value < 128 => {
