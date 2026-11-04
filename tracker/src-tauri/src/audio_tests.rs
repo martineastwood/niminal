@@ -1066,7 +1066,7 @@ fn device_chain_runs_in_order_and_can_be_edited_while_playing() {
     for (id, source, kind) in [
         ("tone", "instr flat(freq: hz) { 0.1 }", Kind::Instr),
         ("half", "fx half { out = in * 0.5 }", Kind::Fx),
-        ("clip", "fx clip { out = in.clamp(-0.05..0.05) }", Kind::Fx),
+        ("squash", "fx squash { out = in.clamp(-0.05..0.05) }", Kind::Fx),
     ] {
         worker
             .command(Command::Apply {
@@ -1104,7 +1104,7 @@ fn device_chain_runs_in_order_and_can_be_edited_while_playing() {
             .unwrap();
     };
     // Halve then clip leaves 0.05; clip then halve leaves 0.025, so order is audible.
-    song.tracks[0].fx = vec![device("a", "half"), device("b", "clip")];
+    song.tracks[0].fx = vec![device("a", "half"), device("b", "squash")];
     update(&mut worker, &song);
     assert!((render_note(&mut worker) / dry - 0.5).abs() < 0.001);
     song.tracks[0].fx.reverse();

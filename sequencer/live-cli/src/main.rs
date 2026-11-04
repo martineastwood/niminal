@@ -44,6 +44,9 @@ struct RenderArgs {
     /// Turn off the master limiter (offline renders only).
     #[arg(long)]
     no_limiter: bool,
+    /// Samples per DSP block, a power of two from 16 to 1024, as for `niminal server`.
+    #[arg(long, default_value_t = niminal_engine::DEFAULT_BLOCK)]
+    block_size: usize,
     /// Samples between the runs of a `control { ... }` scope, from 1 to 1024.
     #[arg(long, default_value_t = niminal_engine::DEFAULT_CONTROL_STEP)]
     control_step: usize,
@@ -362,9 +365,11 @@ fn run_render(args: RenderArgs) -> Result<(), String> {
         seconds,
         from,
         to,
+        block_size,
         control_step,
         ..
     } = args;
+    niminal_engine::set_block_size(block_size).map_err(|e| format!("error: {e}"))?;
     niminal_engine::set_control_step(control_step).map_err(|e| format!("error: {e}"))?;
     let file = file.as_path();
     let (score, input, from, to) = (

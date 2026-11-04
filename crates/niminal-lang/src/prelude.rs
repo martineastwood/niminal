@@ -92,11 +92,11 @@ fn apply(x, make: fn, when: 0..1, blend: sec = 3ms) {
 /// the tempo controls are declared, and not to every program like the rest.
 const CLOCK_SOURCE: &str = "
 control fn synced_lfo(beats: num = 1, shape: (sine | tri | saw | square) = sine, phase: num = 0) {
-  at = fract(clock.beat / beats + phase)
-  if shape == sine { sin(at * 2 * pi) }
-  else if shape == tri { abs(fract(at + 0.75) - 0.5) * 4 - 1 }
-  else if shape == saw { fract(at + 0.5) * 2 - 1 }
-  else { (at < 0.5) * 2 - 1 }
+  pos = fract(clock.beat / beats + phase)
+  if shape == sine { sin(pos * 2 * pi) }
+  else if shape == tri { abs(fract(pos + 0.75) - 0.5) * 4 - 1 }
+  else if shape == saw { fract(pos + 0.5) * 2 - 1 }
+  else { (pos < 0.5) * 2 - 1 }
 }
 control fn snap_division(length: sec) {
   beats = max(length / clock.beat_length, 0.01)

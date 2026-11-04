@@ -670,7 +670,7 @@ fn buses_and_nodes_compile() {
 #[test]
 fn routing_a_node_to_a_bus() {
     let p = ok(
-        "\nbus fx\nclip a { instrument: i }\nfx b { out = fx }\ninstr i(f: hz) { voice = osc(sine, f)\nfx += voice }\na(f: 100hz) for 1beat",
+        "\nbus wet\nclip a { instrument: i }\nfx b { out = wet }\ninstr i(f: hz) { voice = osc(sine, f)\nwet += voice }\na(f: 100hz) for 1beat",
     );
     assert_eq!(p.nodes[1].def.voice_sends, [0]);
     assert_eq!(

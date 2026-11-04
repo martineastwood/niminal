@@ -32,6 +32,9 @@ struct ReplayArgs {
     /// Turn off the master limiter.
     #[arg(long)]
     no_limiter: bool,
+    /// The `--block-size` the server that recorded the log ran with.
+    #[arg(long, default_value_t = niminal_engine::DEFAULT_BLOCK)]
+    block_size: usize,
     /// The `--control-step` the server that recorded the log ran with.
     #[arg(long, default_value_t = niminal_engine::DEFAULT_CONTROL_STEP)]
     control_step: usize,
@@ -193,7 +196,8 @@ fn run_presets(args: &PresetsArgs) -> Result<(), String> {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Replay(args) => niminal_engine::set_control_step(args.control_step)
+        Command::Replay(args) => niminal_engine::set_block_size(args.block_size)
+            .and_then(|()| niminal_engine::set_control_step(args.control_step))
             .map_err(|e| format!("error: {e}"))
             .and_then(|()| run_replay(&args)),
         Command::Server(mut args) => {

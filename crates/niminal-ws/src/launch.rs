@@ -55,6 +55,8 @@ pub fn ensure_server(port: u16, token: Option<&str>) -> Result<(), String> {
     let binary = find_binary("niminal").ok_or("Could not find the niminal program to start the server with.")?;
     let log = home().map(|home| home.join(".niminal")).and_then(|dir| {
         std::fs::create_dir_all(&dir).ok()?;
+        // the last run's log is kept as server.log.old, so what a crashed server said survives a restart
+        let _ = std::fs::rename(dir.join("server.log"), dir.join("server.log.old"));
         File::create(dir.join("server.log")).ok()
     });
     let mut command = Command::new(binary);

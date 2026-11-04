@@ -5,20 +5,22 @@ description: Names that cannot be used as identifiers in niminal.
 
 **Read by both programs.** These are names the whole language keeps, whichever program reads the file.
 
-None of these can be used as a name.
+**Never a name.** None of these can be the name of anything you define: a constant, function, instrument, clip, scene, parameter, local variable or loop variable. The error says "`name` is a reserved word".
 
 | Kind | Names |
 | --- | --- |
-| Declarations | `instr`, `mono`, `fn`, `const`, `state`, `bus`, `buffer`, `sample`, `kit`, `sfz`, `ctl`, `macro`, `node`, `fx`, `clip`, `scene`, `arrangement`, `config`, `use`, `as` |
-| Performance and score | `start`, `stop`, `play`, `mute`, `unmute`, `solo`, `unsolo`, `undo`, `clear`, `set`, `hush`, `panic`, `reset`, `new`, `capture`, `last`, `tempo`, `meter`, `at`, `for`, `over`, `next`, `now`, `on`, `cycle` |
-| Control flow | `if`, `else`, `match`, `for`, `in`, `reset_on`, `after`, `spawn`, `oversample` |
-| Logic | `and`, `or`, `not`, `true`, `false` |
-| Rates | `const`, `init`, `control` |
-| Literal prefixes | `env[...]`, `grid[...]`, `grid { ... }` |
-| Units | `num`, `int`, `sec`, `ms`, `samples`, `hz`, `khz`, `db`, `st`, `ct`, `deg`, `bpm`, `beat`, `beats`, `bar`, `bars`, `%` |
-| Implicit names | `out`, `in`, `it`, `note`, `clock` |
-| Constants | `pi`, `sample_rate` |
-| Universal controls | `pan`, `gain`, `to`, `dur`, `nudge` |
+| Control flow | `if`, `else`, `match`, `for`, `in`, `after`, `spawn`, `oversample`, `reset_on` |
+| Logic and rates | `and`, `or`, `not`, `true`, `false`, `init`, `control`, `state`, `const`, `fn` |
+| Names the language provides | `out`, `it`, `note`, `clock`, `instrument`, `env`, `grid`, `pi`, `sample_rate` |
+
+**Not the name of a top-level definition.** These begin a declaration or a line at the top level of a file, so a constant, instrument, clip, scene, bus or the like can't be called one. Inside an instrument, function or effect they are free, so `instr voice(sample)` and a local called `at` or `capture` are fine.
+
+| Kind | Names |
+| --- | --- |
+| Declarations | `instr`, `mono`, `def`, `bus`, `buffer`, `sample`, `kit`, `sfz`, `ctl`, `macro`, `node`, `fx`, `clip`, `scene`, `arrangement`, `config`, `use`, `as`, `midi_out`, `events` |
+| Statements that begin a line | `tempo`, `meter`, `at`, `on`, `hush`, `panic`, `reset`, `new`, `unsolo`, `capture` |
+
+Words that only mean something after a dot or an `@` are free to use as names: `start`, `stop`, `mute`, `unmute`, `solo`, `play`, `undo`, `clear`, `set`, `last`, `next`, `now`, `over` and `cycle` (so `clip next { ... }` and `next.start` work). So are the unit words (`hz`, `bar`, `beat`, ...) and the universal controls (`pan`, `to`, `dur`, `nudge`), with two exceptions: a unit word can't be the name of a *function* (below), and an instrument's own `gain` parameter must be in db, as every note's is.
 
 ## Built-in functions
 

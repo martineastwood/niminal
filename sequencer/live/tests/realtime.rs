@@ -195,7 +195,7 @@ fn quantized_definitions_and_notes_land_inside_prepared_windows() {
     let mut r = s.start_realtime(RealtimeConfig::default());
     let mut out = vec![0.0; 24_512];
     measured(&mut r, 128, &mut out[..128]);
-    let accepted = s.eval("instr new(freq: hz) { osc(saw, freq) }\nclip newnode { instrument: new }\nnewnode.__update([c4])", Some("next beat")).unwrap();
+    let accepted = s.eval("instr fresh(freq: hz) { osc(saw, freq) }\nclip newnode { instrument: fresh }\nnewnode.__update([c4])", Some("next beat")).unwrap();
     assert_eq!(accepted.lands_at, 24_000);
     let mut pos = 128;
     while pos < out.len() {

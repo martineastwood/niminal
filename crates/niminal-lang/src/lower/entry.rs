@@ -9,14 +9,8 @@ pub(crate) fn compile_control(
     registry: &Registry,
     names: &Names,
 ) -> Res<ControlDef> {
-    if matches!(
-        name.name.as_str(),
-        "out" | "in" | "it" | "instrument" | "state" | "ctl"
-    ) {
-        return Err(Diagnostic::new(
-            format!("`{}` is a reserved word", name.name),
-            name.span,
-        ));
+    if crate::names::is_reserved(&name.name) {
+        return Err(super::reserved(name));
     }
     let mut lower = Lower::new(registry, names, tempo);
     let mut initial = value.clone();

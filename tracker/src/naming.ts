@@ -1,6 +1,14 @@
 import type { Definition, Project } from './project';
 
-const reserved = new Set(['in', 'out', 'fn', 'def', 'instr', 'fx', 'if', 'else', 'for', 'let', 'state', 'use', 'clip', 'scene', 'bus', 'tempo', 'config', 'note']);
+/** The names the language refuses for anything you define: `EVERYWHERE` and `TOP_LEVEL` in `crates/niminal-lang/src/names.rs`, which a test keeps in step. */
+export const reserved = new Set([
+  'if', 'else', 'match', 'for', 'in', 'after', 'spawn', 'oversample', 'reset_on', 'and',
+  'or', 'not', 'true', 'false', 'init', 'control', 'state', 'const', 'fn', 'out',
+  'it', 'note', 'clock', 'instrument', 'env', 'grid', 'pi', 'sample_rate', 'instr', 'mono',
+  'def', 'bus', 'buffer', 'sample', 'kit', 'sfz', 'ctl', 'macro', 'node', 'fx',
+  'clip', 'scene', 'arrangement', 'config', 'use', 'as', 'midi_out', 'events', 'tempo', 'meter',
+  'at', 'on', 'hush', 'panic', 'reset', 'new', 'unsolo', 'capture',
+]);
 
 /** A name as it is written in code: lower case words joined by `_`, starting with a letter. */
 export function slug(name: string) {

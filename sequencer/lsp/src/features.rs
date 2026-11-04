@@ -282,7 +282,8 @@ fn check_new_name(old: &str, new: &str, symbols: &[Symbol]) -> Result<(), String
         || builtin_ops().iter().any(|o| o.name == new)
         || pattern_ops().iter().any(|o| o.name == new)
         || waves().any(|w| w == new)
-        || RESERVED_WORDS.contains(&new);
+        || RESERVED_WORDS.contains(&new)
+        || niminal_lang::is_reserved(new);
     if taken && new != old {
         return Err(format!("`{new}` is already a name in use"));
     }

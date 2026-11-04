@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
-import { renameDefinition, slug } from './naming';
+import { readFileSync } from 'node:fs';
+import { renameDefinition, reserved, slug } from './naming';
 import { addInstrument, addInstrumentFromPreset } from './instruments';
 import { instrumentPresets } from './library';
 import { newProject } from './project';
@@ -22,4 +23,13 @@ it('renames an instrument and its code together, keeping the code names unique',
 it('names an instrument from a preset after the preset, or after the preset and track', () => {
   const project = newProject(), pluck = instrumentPresets.find(p => p.id === 'pluck')!;
   expect(addInstrumentFromPreset(project, pluck, 'Bass pluck').source).toContain('instr bass_pluck(');
+});
+
+it('refuses to name code with exactly the words the compiler reserves', () => {
+  const source = readFileSync(new URL('../../crates/niminal-lang/src/names.rs', import.meta.url), 'utf8');
+  const words = [...source.matchAll(/pub const (?:EVERYWHERE|TOP_LEVEL)[^=]*=\s*&\[([^\]]*)\]/g)]
+    .flatMap(m => [...m[1].replace(/\/\/.*$/gm, '').matchAll(/"([^"]+)"/g)].map(w => w[1]));
+  expect(words.length).toBeGreaterThan(40);
+  expect([...reserved].sort()).toEqual([...words].sort());
+  for (const word of ['Sample', 'New', 'Macro', 'Clip']) expect(slug(word)).toBe(`my_${word.toLowerCase()}`);
 });

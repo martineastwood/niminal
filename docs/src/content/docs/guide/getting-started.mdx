@@ -11,7 +11,7 @@ niminal is in **alpha**. Syntax and behaviour can change; expect rough edges.
 
 ### On a Mac (Apple Silicon, macOS 13+)
 
-Download the dmg from [GitHub Releases](https://github.com/martineastwood/niminal/releases) and drag the **Niminal** folder onto Applications. It holds Tracker, Stage, the `niminal` and `niminal-live` commands, the VS Code extension and the examples. Tracker and Stage start the audio server for you, and offer to put the commands on your PATH the first time they open.
+Download the dmg from [GitHub Releases](https://github.com/martineastwood/niminal/releases) and drag the **Niminal** folder onto Applications. It holds Tracker, Stage, the `niminal` and `niminal-live` commands, the VS Code extension and the examples. Tracker and Stage start the audio server for you, and offer to put the commands on your PATH the first time they open (or later, with **File > Install Command Line Tools…**).
 
 Or with Homebrew, which also links the commands:
 
@@ -89,6 +89,18 @@ niminal-live send 'chorus.start' --quantize "next 4bars"
 ```
 
 See [Live coding](/guide/live-coding/) for quantization, MIDI, and session replay.
+
+## If something goes wrong
+
+niminal keeps its logs in `~/.niminal/`:
+
+| File | What it holds |
+| --- | --- |
+| `crash.log` | A panic in `niminal`, with the build and a backtrace |
+| `server.log` | What the server printed when an app or the editor started it; `server.log.old` is the run before |
+| `sessions/` | A log of each session, newest kept |
+
+If you report a problem, [open an issue](https://github.com/martineastwood/niminal/issues/new?template=bug_report.md) with the version from `niminal --version`, a minimal `.nml` file that shows it, and any of these files.
 
 ## Next
 

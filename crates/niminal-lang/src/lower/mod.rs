@@ -316,31 +316,15 @@ impl Names {
                 name.span,
             ));
         }
-        if matches!(
-            name.name.as_str(),
-            "out"
-                | "in"
-                | "it"
-                | "instrument"
-                | "state"
-                | "note"
-                | "clock"
-                | "true"
-                | "false"
-                | "pi"
-                | "sample_rate"
-                | "reset_on"
-                | "spawn"
-                | "oversample"
-                | "control"
-        ) {
-            return Err(Diagnostic::new(
-                format!("`{}` is a reserved word", name.name),
-                name.span,
-            ));
+        if crate::names::is_reserved_local(&name.name) {
+            return Err(reserved(name));
         }
         Ok(())
     }
+}
+
+pub(crate) fn reserved(name: &Ident) -> Diagnostic {
+    Diagnostic::new(format!("`{}` is a reserved word", name.name), name.span)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

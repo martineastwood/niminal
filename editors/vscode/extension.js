@@ -233,6 +233,8 @@ async function startBackgroundServer() {
   const dir = nodePath.join(os.homedir(), ".niminal");
   fs.mkdirSync(dir, { recursive: true });
   const logPath = nodePath.join(dir, "server.log");
+  // the last run's log is kept as server.log.old, so what a crashed server said survives a restart
+  try { fs.renameSync(logPath, `${logPath}.old`); } catch {}
   const log = fs.openSync(logPath, "w");
   const child = spawn(path, backgroundServerArgs(port, token), { detached: true, stdio: ["ignore", log, log] });
   fs.closeSync(log);

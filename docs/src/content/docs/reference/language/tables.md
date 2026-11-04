@@ -102,12 +102,12 @@ pad = sample(organ).root(c4).loop(forward)
 buffer take = 4bars
 buffer scratch = zeros(48000)
 
-instr recorder() {
-  take.record(input(1), loop: true)
+fx recorder {
+  out = take.record(input(1), loop: true)
 }
 
-instr scrub(pos) {
-  take.at(pos * sample_rate)
+instr scrub(pos: 0..1 = 0) {
+  take.at(pos * sample_rate.num)
 }
 ```
 

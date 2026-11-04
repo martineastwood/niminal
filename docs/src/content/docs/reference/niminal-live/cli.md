@@ -30,7 +30,7 @@ cargo install --path sequencer/live-cli    # niminal-live
 
 `--out` is required. Live pieces without a fixed end use `--bars` or `--seconds`. Offline renders can use `--no-limiter`. `niminal-live render file.nml --score events.nms --out out.wav` plays a [score](/reference/score-model/) against the file's instruments, and `--input take.wav` plays a WAV file into the file's fx, for as long as the file lasts unless you say otherwise with `--bars` or `--seconds`.
 
-Pass the same `--block-size` and `--control-step` the server runs with when you want a render to match what you hear — both are fixed at server start-up and not recorded in session logs.
+Pass the same `--block-size` and `--control-step` the server runs with when you want a render to match what you hear; both are fixed at server start-up and not recorded in session logs.
 
 ## Gallery
 

@@ -71,6 +71,7 @@ fn parse_with(src: &str, dsp: bool) -> Result<Vec<(Item, Span)>, Diagnostic> {
         }
         let start = p.span();
         let item = p.item()?;
+        check_defined_name(&item)?;
         items.push((item, start.to(p.prev_span())));
         if !matches!(p.peek(), Tok::Newline | Tok::Eof) {
             return Err(p.unexpected("end of statement"));
@@ -214,4 +215,29 @@ impl Parser {
     fn is_keyword(&self, kw: &str) -> bool {
         matches!(self.peek(), Tok::Ident(s) if s == kw)
     }
+}
+
+/// The name an item defines, if it must not be a reserved word.
+fn check_defined_name(item: &Item) -> Result<(), Diagnostic> {
+    let name = match item {
+        Item::Instr(d) => &d.name,
+        Item::Control { name, .. } | Item::Const { name, .. } | Item::Bind { name, .. } => name,
+        Item::Fn(d) | Item::Def(d) => &d.name,
+        Item::Bus(d) => &d.name,
+        Item::Buffer(d) => &d.name,
+        Item::Node(d) | Item::Fx(d) => &d.name,
+        Item::Sample(d) => &d.name,
+        Item::MidiOut(d) => &d.name,
+        Item::Arrangement(d) => &d.name,
+        Item::Clip(d) | Item::Scene(d) | Item::Macro(d) => &d.name,
+        Item::For { var, .. } => var,
+        _ => return Ok(()),
+    };
+    if crate::names::is_reserved(&name.name) {
+        return Err(Diagnostic::new(
+            format!("`{}` is a reserved word", name.name),
+            name.span,
+        ));
+    }
+    Ok(())
 }

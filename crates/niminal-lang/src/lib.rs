@@ -24,6 +24,8 @@ mod lexer;
 mod lower;
 mod modules;
 mod namespace;
+mod names;
+pub use names::{EVERYWHERE, TOP_LEVEL, is_reserved, is_reserved_local};
 mod opcodes;
 mod parser;
 mod prelude;

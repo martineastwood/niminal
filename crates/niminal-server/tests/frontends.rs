@@ -126,12 +126,12 @@ fn running_voice_binds_new_stereo_buffer_in_realtime() {
         &mut s,
         a,
         "buffers.alloc",
-        json!({"name":"new","frames":8,"channels":2}),
+        json!({"name":"fresh","frames":8,"channels":2}),
     );
     send(
         &mut s,
         a,
-        json!([{"op":"buffer_write","name":"new","at":49,"values":[0.25,0.5]},{"op":"bind_buffer","id":1,"param":"source","buffer":"new","at":49}]),
+        json!([{"op":"buffer_write","name":"fresh","at":49,"values":[0.25,0.5]},{"op":"bind_buffer","id":1,"param":"source","buffer":"fresh","at":49}]),
     );
     s.session_mut().prepare_realtime();
     let mut out = Vec::new();
