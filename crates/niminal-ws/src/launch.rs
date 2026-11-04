@@ -120,6 +120,67 @@ pub fn offer_cli_install(force: bool, ask: impl Fn(&str) -> bool, tell: impl Fn(
     }
 }
 
+/// The editors on this Mac that take VS Code extensions, with their command line programs. The apps' own
+/// copies come first because the `code` command is rarely on the PATH of a program opened from Finder.
+fn editors() -> Vec<(&'static str, PathBuf)> {
+    let apps = [
+        ("VS Code", "Visual Studio Code.app/Contents/Resources/app/bin/code", "code"),
+        ("Cursor", "Cursor.app/Contents/Resources/app/bin/cursor", "cursor"),
+    ];
+    let mut found = Vec::new();
+    for (name, inside, program) in apps {
+        let mut places = vec![PathBuf::from("/Applications").join(inside)];
+        places.extend(home().map(|home| home.join("Applications").join(inside)));
+        places.extend(std::env::var_os("PATH").into_iter().flat_map(|paths| std::env::split_paths(&paths).map(|dir| dir.join(program)).collect::<Vec<_>>()));
+        if let Some(path) = places.into_iter().find(|path| path.is_file()) {
+            found.push((name, path));
+        }
+    }
+    found
+}
+
+/// Offer to install the niminal extension from the download into VS Code and Cursor. Unless `force` is set
+/// (the menu item) it asks once, and only when an editor is installed.
+pub fn offer_vscode_install(force: bool, ask: impl Fn(&str) -> bool, tell: impl Fn(&str)) {
+    let Some(vsix) = download_bin().and_then(|bin| Some(bin.parent()?.join("niminal-vscode.vsix"))).filter(|vsix| vsix.is_file()) else {
+        if force {
+            tell("The VS Code extension comes with the Niminal download; this copy of the app is not part of one.");
+        }
+        return;
+    };
+    let editors = editors();
+    if editors.is_empty() {
+        if force {
+            tell(&format!("VS Code and Cursor were not found. In your editor, run \"Extensions: Install from VSIX...\" and choose:\n\n{}", vsix.display()));
+        }
+        return;
+    }
+    let marker = home().map(|home| home.join(".niminal").join("vscode-offered"));
+    if !force && marker.as_ref().is_none_or(|m| m.exists()) {
+        return;
+    }
+    if let Some(marker) = &marker {
+        let _ = std::fs::create_dir_all(marker.parent().unwrap_or(Path::new(".")));
+        let _ = std::fs::write(marker, "");
+    }
+    let names: Vec<&str> = editors.iter().map(|(name, _)| *name).collect();
+    if !ask(&format!("Install the niminal extension into {}?\n\nIt adds syntax colours, errors, and playing from the editor.", names.join(" and "))) {
+        return;
+    }
+    let results: Vec<String> = editors
+        .iter()
+        .map(|(name, program)| {
+            let output = Command::new(program).arg("--install-extension").arg(&vsix).arg("--force").output();
+            match output {
+                Ok(out) if out.status.success() => format!("{name}: installed"),
+                Ok(out) => format!("{name}: {}", String::from_utf8_lossy(&out.stderr).trim()),
+                Err(e) => format!("{name}: {e}"),
+            }
+        })
+        .collect();
+    tell(&format!("{}\n\nReload the editor window to use it.", results.join("\n")));
+}
+
 fn link_cli(bin: &Path) -> Result<(), String> {
     let bin = bin.to_str().filter(|b| !b.contains(['"', '\\', '\''])).ok_or("the download's folder has a quote or backslash in its path")?;
     let links: Vec<String> = PROGRAMS.iter().map(|name| format!("ln -sf '{bin}/{name}' {LINK_DIR}/{name}")).collect();

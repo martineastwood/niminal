@@ -67,11 +67,13 @@ More examples live under `examples/` — kits and grids (`drums.nml`, `breakbeat
 
 The [VS Code / Cursor extension](/reference/editor/) brings live coding to your own editor: highlighting, diagnostics while you type, and evaluate-while-playing. [Stage](/reference/stage/) does the same in a window of its own, with scenes, lanes and meters beside the code.
 
+With the macOS download, choose **File > Install VS Code Extension…** in Tracker or Stage (they also offer it the first time they open). Otherwise, from a clone of the repo:
+
 ```sh
 cd editors/vscode && npm install && node install.js   # --cursor for Cursor
 ```
 
-Reload the window. Start the audio server — **niminal: Start Server in a Terminal** in the command palette, or `niminal server` in a terminal — then open a `.nml` file and press **Cmd+Enter** (macOS) or **Ctrl+Enter** to evaluate the block around the cursor. The status bar shows the bar and tempo, and the sidebar lists scenes and clips. The language server (`niminal-live lsp`) works without a server for hover, completion, and errors.
+Reload the window and open a `.nml` file and press **Cmd+Enter** (macOS) or **Ctrl+Enter** to evaluate the block around the cursor. The status bar shows the bar and tempo, and the sidebar lists scenes and clips. The extension starts the audio server if none is running, and it stops when the last client closes. The language server (`niminal-live lsp`) works without a server for hover, completion, and errors.
 
 ## Live coding from a terminal
 

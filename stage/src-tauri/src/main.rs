@@ -360,6 +360,7 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&item("close-tab", "Close Tab", Some("CmdOrCtrl+W"))?)
         .separator()
         .item(&item("install-cli", "Install Command Line Tools…", None)?)
+        .item(&item("install-vscode", "Install VS Code Extension…", None)?)
         .build()?;
     let edit = SubmenuBuilder::new(app, "Edit")
         .item(&item("undo", "Undo", Some("CmdOrCtrl+Z"))?)
@@ -395,16 +396,22 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     menu.items(&[&file, &edit, &view]).build()
 }
 
+fn ask(text: &str) -> bool {
+    rfd::MessageDialog::new().set_title("niminal").set_description(text).set_buttons(rfd::MessageButtons::YesNo).show() == rfd::MessageDialogResult::Yes
+}
+
+fn tell(text: &str) {
+    rfd::MessageDialog::new().set_title("niminal").set_description(text).show();
+}
+
 /// Asks about linking the command line tools (see `niminal_ws::launch::offer_cli_install`).
 fn offer_cli_install(force: bool) {
-    let ask = |text: &str| {
-        rfd::MessageDialog::new().set_title("niminal").set_description(text).set_buttons(rfd::MessageButtons::YesNo).show()
-            == rfd::MessageDialogResult::Yes
-    };
-    let tell = |text: &str| {
-        rfd::MessageDialog::new().set_title("niminal").set_description(text).show();
-    };
     niminal_ws::launch::offer_cli_install(force, ask, tell);
+}
+
+/// Asks about installing the VS Code extension (see `niminal_ws::launch::offer_vscode_install`).
+fn offer_vscode_install(force: bool) {
+    niminal_ws::launch::offer_vscode_install(force, ask, tell);
 }
 
 fn main() {
@@ -415,12 +422,17 @@ fn main() {
         .on_menu_event(|app, event| {
             if event.id().as_ref() == "install-cli" {
                 std::thread::spawn(|| offer_cli_install(true));
+            } else if event.id().as_ref() == "install-vscode" {
+                std::thread::spawn(|| offer_vscode_install(true));
             } else {
                 let _ = app.emit("menu", event.id().as_ref());
             }
         })
         .setup(|_| {
-            std::thread::spawn(|| offer_cli_install(false));
+            std::thread::spawn(|| {
+                offer_cli_install(false);
+                offer_vscode_install(false);
+            });
             Ok(())
         })
         .manage(AppState {

@@ -112,8 +112,8 @@ It listens on port 7401. Ctrl+C stops it. See `niminal server --help` for audio 
 With the server running, pick one:
 
 - **Stage**: open Niminal Stage, open a `.nml` file (try `examples/groove.nml`) and it connects. Stage has the sequencer built in, so it needs only the server.
-- **Tracker**: open Niminal Tracker, create a project, choose an instrument and enter notes in the grid. It connects on startup and never starts a server itself.
-- **VS Code / Cursor**: install the extension from `niminal-vscode.vsix` (or `editors/vscode`), open a `.nml` file and press **Cmd+Enter** (**Ctrl+Enter**) to evaluate a block, **Cmd+.** to hush. Diagnostics, hover and completion work even without the server.
+- **Tracker**: open Niminal Tracker, create a project, choose an instrument and enter notes in the grid. It connects on startup, starting the server if none is running.
+- **VS Code / Cursor**: choose **File > Install VS Code Extension…** in Tracker or Stage (or accept the offer the first time they open), or install `niminal-vscode.vsix` yourself (or `editors/vscode`). Then open a `.nml` file and press **Cmd+Enter** (**Ctrl+Enter**) to evaluate a block, **Cmd+.** to hush. The extension starts the server if none is running. Diagnostics, hover and completion work even without it.
 - **Terminal**:
 
   ```sh

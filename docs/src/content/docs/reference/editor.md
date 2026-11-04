@@ -30,7 +30,7 @@ After installing a new `niminal-live` binary, run **Restart Language Server** in
 
 ## VS Code / Cursor extension
 
-From the repo root:
+With the macOS download, choose **File > Install VS Code Extension…** in Tracker or Stage (they also offer it the first time they open). From the repo root:
 
 ```sh
 cd editors/vscode && npm install && node install.js
@@ -43,7 +43,7 @@ cargo install --path crates/niminal-cli   # niminal, the server
 cargo install --path sequencer/live-cli    # niminal-live, the live sequencer and language server
 ```
 
-Start a server in a terminal, or use **niminal: Start Server in a Terminal** from the command palette:
+The extension starts `niminal server --exit-when-unused` in the background if none is listening on the port (its messages go to `~/.niminal/server.log`), and it stops when its last client closes. To watch the server or choose an audio device, start one yourself in a terminal, or use **niminal: Start Server in a Terminal** from the command palette:
 
 ```sh
 niminal server

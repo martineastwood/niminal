@@ -27,4 +27,9 @@ function serverCommand(binary, port, token, platform = process.platform) {
   return `${platform === "win32" ? "& " : ""}${quote(binary)} server --port ${Number(port)}${token ? ` --token ${quote(token)}` : ""}`;
 }
 
-module.exports = { findBinary, serverCommand };
+/** The arguments for a server started in the background: it stops itself when the last client has gone. */
+function backgroundServerArgs(port, token) {
+  return ["server", "--port", String(Number(port)), "--exit-when-unused", ...(token ? ["--token", token] : [])];
+}
+
+module.exports = { findBinary, serverCommand, backgroundServerArgs };

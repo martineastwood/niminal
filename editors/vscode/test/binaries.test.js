@@ -1,7 +1,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
-const { findBinary, serverCommand } = require("../binaries");
+const { findBinary, serverCommand, backgroundServerArgs } = require("../binaries");
 
 test("Finder-launched VS Code discovers the macOS tools without PATH", () => {
   assert.equal(findBinary("niminal-live", "niminal-live", {
@@ -27,4 +27,9 @@ test("terminal command preserves paths and tokens as literal shell arguments", (
   const text = command.replace("'printf'", "node -e 'process.stdout.write(JSON.stringify(process.argv.slice(1)))' --");
   const args = JSON.parse(execFileSync("/bin/sh", ["-c", text], { encoding: "utf8" }));
   assert.deepEqual(args, ["server", "--port", "7401", "--token", value]);
+});
+
+test("a background server stops itself when unused, and takes the port and token", () => {
+  assert.deepEqual(backgroundServerArgs(7402, null), ["server", "--port", "7402", "--exit-when-unused"]);
+  assert.deepEqual(backgroundServerArgs("7402", "a b"), ["server", "--port", "7402", "--exit-when-unused", "--token", "a b"]);
 });

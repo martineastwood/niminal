@@ -60,13 +60,15 @@ Stage: open Niminal Stage.app, open a .nml file and connect to the engine.
 Stage finds the tools in the enclosing Niminal/bin folder, including when opened
 from Finder. Replay and sample-gallery features also use these tools.
 
-VS Code / Cursor (optional): choose "Extensions: Install from VSIX..." in the
-command palette, select niminal-vscode.vsix and reload the editor. The extension
+VS Code / Cursor (optional): in Tracker or Stage choose File > Install VS Code
+Extension... (they also offer it the first time they open), then reload the
+editor. Or choose "Extensions: Install from VSIX..." in the command palette and
+select niminal-vscode.vsix. The extension
 finds tools in /Applications/Niminal/bin automatically. If you install elsewhere,
 set niminal.path and niminal.livePath to the full paths of the two binaries.
 Editing diagnostics, completion and hover need niminal-live but no running
-server. Live playback needs the server. "niminal: Start Server in a Terminal"
-can start it from the editor. Cmd+Enter evaluates a block; Cmd+. hushes playback.
+server. Live playback needs the server, which the extension starts if none is
+running (it stops when the last client closes). Cmd+Enter evaluates a block; Cmd+. hushes playback.
 
 5. Try an example or render offline
 

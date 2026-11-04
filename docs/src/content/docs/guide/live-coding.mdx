@@ -11,6 +11,8 @@ Either way, code compiles immediately and the sound changes on a musical boundar
 
 ### Install it once
 
+With the macOS download, choose **File > Install VS Code Extension…** in Tracker or Stage, and you can skip this section. Otherwise:
+
 ```sh
 cargo install --path crates/niminal-cli   # niminal: the audio server
 cargo install --path sequencer/live-cli    # niminal-live: live sequencer and language server
@@ -21,7 +23,7 @@ Reload the window. If the binaries aren't on your `PATH`, set `niminal.path` and
 
 ### Start playing
 
-Start the audio server with **niminal: Start Server in a Terminal** in the command palette (or `niminal server` in any terminal), open a `.nml` file such as `examples/groove.nml`, and press **Cmd+Enter** / **Ctrl+Enter**.
+Open a `.nml` file such as `examples/groove.nml`, and press **Cmd+Enter** / **Ctrl+Enter**. The first evaluation starts the audio server if none is running; it stops when its last client closes. To watch its messages or choose an audio device, run `niminal server` in a terminal first (or use **niminal: Start Server in a Terminal**).
 
 | Key (mac / other) | Action |
 | --- | --- |

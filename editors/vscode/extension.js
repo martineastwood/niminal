@@ -1,9 +1,13 @@
 const vscode = require("vscode");
 const net = require("node:net");
+const fs = require("node:fs");
+const os = require("node:os");
+const nodePath = require("node:path");
+const { spawn } = require("node:child_process");
 const { LanguageClient } = require("vscode-languageclient/node");
 const { LiveClient: Client } = require("./live-client");
 const { startLive } = require("./live");
-const { findBinary, serverCommand } = require("./binaries");
+const { findBinary, serverCommand, backgroundServerArgs } = require("./binaries");
 const { blockAround } = require("./blocks");
 const { clipDescription, sceneDescription, silencers } = require("./panel");
 const { rewriteLearned } = require("./learn");
@@ -211,10 +215,37 @@ async function ensureConnected() {
     // A server that is listening but won't talk is not helped by starting another one:
     // say what it said instead of asking for a server that is already there.
     if (await listening(settings().port)) return reportConnectError(e);
-    const choice = await vscode.window.showErrorMessage(`niminal: ${e.message}`, "Start Server");
-    if (choice === "Start Server") return startServer();
-    return null;
+    // Nothing is listening: start a server in the background, as Tracker and Stage do.
+    try {
+      return await startBackgroundServer();
+    } catch (started) {
+      const choice = await vscode.window.showErrorMessage(`niminal: ${started.message}`, "Start Server in a Terminal");
+      if (choice === "Start Server in a Terminal") return startServer();
+      return null;
+    }
   }
+}
+
+/** Start `niminal server --exit-when-unused` on its own, so it goes when the last client closes, then connect.
+ *  Its messages go to ~/.niminal/server.log. */
+async function startBackgroundServer() {
+  const { port, token, path } = settings();
+  const dir = nodePath.join(os.homedir(), ".niminal");
+  fs.mkdirSync(dir, { recursive: true });
+  const logPath = nodePath.join(dir, "server.log");
+  const log = fs.openSync(logPath, "w");
+  const child = spawn(path, backgroundServerArgs(port, token), { detached: true, stdio: ["ignore", log, log] });
+  fs.closeSync(log);
+  const failed = new Promise((_, reject) => {
+    child.once("error", (e) => reject(new Error(`could not start ${path}: ${e.message}. Set niminal.path to the niminal program.`)));
+    child.once("exit", (code) => reject(new Error(`the server stopped as it started (exit ${code}); ${logPath} says why`)));
+  });
+  failed.catch(() => {});
+  child.unref();
+  channel.appendLine(`starting a server on port ${port} that stops when its last client does`);
+  await Promise.race([waitForServer(port, 15000, `nothing answered on port ${port}; ${logPath} may say why`), failed]);
+  child.removeAllListeners("exit");
+  return connect();
 }
 
 /** Show the server's complaints about code that began at `firstLine` of `document`. */
@@ -318,13 +349,13 @@ function listening(port, timeout = 500) {
 }
 
 /** Wait for a server to answer on `port`, turning a timeout into something readable. */
-async function waitForServer(port, timeout = 20000) {
+async function waitForServer(port, timeout = 20000, failure = `nothing answered on port ${port}; the server terminal says why`) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     if (await listening(port)) return;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error(`nothing answered on port ${port}; the server terminal says why`);
+  throw new Error(failure);
 }
 
 function reportConnectError(e) {
