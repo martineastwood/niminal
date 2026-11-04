@@ -226,7 +226,9 @@ body.resizing, body.resizing * { user-select: none; cursor: col-resize !importan
 .clip-empty { padding: 2px 0 calc(4px * var(--z)) calc(56px * var(--z)); color: var(--dim); font-style: italic; }
 
 .clip-gates { position: absolute; top: calc(24px * var(--z)); bottom: 0; left: calc(62px * var(--z)); right: calc(6px * var(--z)); pointer-events: none; }
-.playhead { position: absolute; top: 2px; bottom: calc(6px * var(--z)); width: 1px; background: var(--accent-text); opacity: 0; will-change: left; }
+/* as wide as the lanes and moved by a percentage of its own width, so it slides without layout; the line is its left edge */
+.playhead { position: absolute; top: 2px; bottom: calc(6px * var(--z)); left: 0; width: 100%; opacity: 0; will-change: transform; }
+.playhead::before { content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 1px; background: var(--accent-text); }
 .playhead-dot { display: none; }
 
 /* ---- pending and notices --------------------------------------------------------------------- */
@@ -266,9 +268,9 @@ footer .hint { color: var(--faint); }
 }
 .cm-hit-2 { background-color: color-mix(in srgb, var(--hit) 32%, transparent); }
 .cm-hit-3 { background-color: color-mix(in srgb, var(--hit) 48%, transparent); }
-.cm-hit-4 { background-color: color-mix(in srgb, var(--hit) 64%, transparent); }
-.cm-hit-5 { background-color: color-mix(in srgb, var(--hit) 80%, transparent); box-shadow: 0 0 calc(8px * var(--z)) var(--hit); }
-.cm-hit-6 { background-color: var(--hit); color: #14161a; box-shadow: 0 0 calc(10px * var(--z)) var(--hit); }
+.cm-hit-4 { background-color: color-mix(in srgb, var(--hit) 64%, transparent); box-shadow: 0 0 4px color-mix(in srgb, var(--hit) 60%, transparent); }
+.cm-hit-5 { background-color: color-mix(in srgb, var(--hit) 80%, transparent); box-shadow: 0 0 6px var(--hit); }
+.cm-hit-6 { background-color: var(--hit); color: #14161a; box-shadow: 0 0 8px var(--hit); }
 
 /* What an evaluation did: queued (amber), landed on the beat (green), or refused (red). */
 .landing {
@@ -313,11 +315,6 @@ footer .hint { color: var(--faint); }
 .clip.pulse .clip-head { animation: clip-pulse 0.6s ease-out; }
 @keyframes clip-pulse { from { background: color-mix(in srgb, var(--clip, var(--accent)) 38%, transparent); } to { background: transparent; } }
 .clip.running .clip-name { color: color-mix(in srgb, var(--clip, var(--accent)) 55%, #fff); }
-
-/* notes in the code glow and fade, which reads on a compressed video where subtle greys do not */
-.cm-hit-4 { box-shadow: 0 0 6px color-mix(in srgb, var(--hit) 60%, transparent); }
-.cm-hit-5 { box-shadow: 0 0 12px var(--hit); }
-.cm-hit-6 { box-shadow: 0 0 10px var(--hit), 0 0 26px color-mix(in srgb, var(--hit) 70%, transparent); }
 
 /* ---- sidebar hidden -------------------------------------------------------------------------- */
 

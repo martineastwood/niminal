@@ -1,4 +1,5 @@
 import { elapsedSince } from './animation';
+import { onFrame, wake } from './frames';
 import { ChangeSet, StateEffect, StateEffectType, StateField, Text } from '@codemirror/state';
 import { Decoration, DecorationSet, EditorView } from '@codemirror/view';
 import { Problem, Snapshot, sinceOnset } from './live';
@@ -218,11 +219,10 @@ export class Highlighter {
   private markedSnapshot: Snapshot | null = null;
 
   constructor(private view: () => EditorView | undefined) {
-    const frame = () => {
+    onFrame(() => {
       this.paint();
-      requestAnimationFrame(frame);
-    };
-    requestAnimationFrame(frame);
+      return !!this.snapshot?.transport && (this.shown !== '' || this.snapshot.clips.some(clip => clip.running));
+    });
   }
 
   /** The editor now shows another tab: forget what was drawn so the next frame draws this one's. */
@@ -236,6 +236,7 @@ export class Highlighter {
     this.snapshot = snapshot;
     this.updatedAt = performance.now();
     this.settle(snapshot);
+    wake();
   }
 
   /** Turn the lines of each evaluation that landed green, and forget those that are no longer waiting. */

@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use niminal_lang::Layout;
 use niminal_server::{EngineServer, Session};
+use niminal_ws::lock;
 
 use crate::link::InProcess;
 use crate::live::Live;
@@ -56,7 +57,7 @@ impl Offline {
 
     /// The engine, for what the sequencer doesn't own: its clock, its log, its meters.
     pub fn engine(&self) -> MutexGuard<'_, EngineServer> {
-        self.engine.lock().unwrap_or_else(|e| e.into_inner())
+        lock(&self.engine)
     }
 
     /// What the engine was sent, with when, as a log that replays to the same audio.

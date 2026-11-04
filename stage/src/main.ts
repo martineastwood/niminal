@@ -1,4 +1,5 @@
 import { elapsedSince, positionAt } from './animation';
+import { onFrame, wake } from './frames';
 import { EditorState } from '@codemirror/state';
 import { redo, undo } from '@codemirror/commands';
 import { EditorView } from '@codemirror/view';
@@ -495,7 +496,7 @@ function setText(node: HTMLElement, value: string) {
 /** The output meter: one bar per channel (up to two), stepped and drawn every frame. */
 const masterBars: Bar[] = [];
 let masterAt = performance.now();
-function masterFrame() {
+function masterFrame(): boolean {
   const now = performance.now();
   const passed = Math.min((now - masterAt) / 1000, 0.25);
   masterAt = now;
@@ -503,9 +504,9 @@ function masterFrame() {
     bar.step(passed);
     bar.draw();
   }
-  requestAnimationFrame(masterFrame);
+  return masterBars.some(bar => !bar.settled);
 }
-requestAnimationFrame(masterFrame);
+onFrame(masterFrame);
 
 /** The MIDI chip, and the controls that learned a control change written back into the code that asked. */
 let lastMidi: string | null = null;
@@ -654,18 +655,26 @@ function updateTransport(snapshot: Snapshot) {
   $('waiting-readout').hidden = snapshot.pending.length === 0;
 }
 
+let litDot = -1;
 function paintPosition(snapshot: Snapshot, elapsed: number) {
   const position = positionAt(snapshot, elapsed);
   if (!position) return;
   setText(bar, String(position.bar));
-  setText(beat, position.beat.toFixed(2));
+  // whole beats only: a finer readout changes every frame and repaints the window 60 times a second
+  setText(beat, String(Math.floor(position.beat)));
   // one dot per beat as written (6/8 has six), while the engine counts quarter notes
   const [top, unit] = snapshot.meter;
   const count = Math.max(1, top || 4);
   const dots = $('beats');
-  if (dots.children.length !== count) dots.replaceChildren(...Array.from({ length: count }, () => document.createElement('i')));
+  if (dots.children.length !== count) {
+    dots.replaceChildren(...Array.from({ length: count }, () => document.createElement('i')));
+    litDot = -1;
+  }
   const lit = Math.floor(((position.beat - 1) * unit) / 4 + 1e-9);
-  Array.from(dots.children).forEach((dot, i) => dot.classList.toggle('on', i === lit));
+  if (litDot !== lit) {
+    litDot = lit;
+    Array.from(dots.children).forEach((dot, i) => dot.classList.toggle('on', i === lit));
+  }
 }
 
 /** A refused evaluation is shown big at the top of the code, where it cannot be missed from across a room. */
@@ -878,7 +887,7 @@ async function checkDisk() {
     checkingDisk = false;
   }
 }
-setInterval(() => void checkDisk(), 1500);
+setInterval(() => void (document.hasFocus() && checkDisk()), 1500);
 window.addEventListener('focus', () => void checkDisk());
 
 async function saveFile(tab = current) {
@@ -976,18 +985,26 @@ async function refresh() {
 
 let animationSnapshot: Snapshot | null = null;
 let animationUpdatedAt = 0;
-function animate() {
+let moving = false;
+function animate(): boolean {
   if (animationSnapshot?.transport) {
     const elapsed = elapsedSince(animationUpdatedAt);
     paintPosition(animationSnapshot, elapsed);
     paintCountdowns(animationSnapshot, elapsed);
   }
-  requestAnimationFrame(animate);
+  return isMoving(animationSnapshot);
 }
-requestAnimationFrame(animate);
+onFrame(animate);
+
+/** Whether the window has anything that moves between polls: a clip playing or a change counting down. */
+function isMoving(snapshot: Snapshot | null) {
+  return !!snapshot?.transport && (snapshot.pending.length > 0 || snapshot.clips.some(clip => clip.running));
+}
 
 function draw(snapshot: Snapshot) {
   animationSnapshot = snapshot;
+  moving = isMoving(snapshot);
+  wake();
   animationUpdatedAt = performance.now();
   // a mistake in drawing one part of the window must not stop the others, or the polling
   const parts: [string, () => void][] = [
@@ -1046,7 +1063,7 @@ async function poll() {
     }
   }
   // a hidden window draws nothing, so it only needs to keep its place
-  setTimeout(poll, document.hidden ? 500 : 90);
+  setTimeout(poll, document.hidden ? 500 : moving ? 90 : 250);
 }
 
 $('banner').addEventListener('click', () => showBanner([]));

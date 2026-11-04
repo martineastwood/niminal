@@ -23,9 +23,10 @@ export class HealthWatch {
 
   /** Take a reading; returns what is wrong now (empty when the engine is fine) and when it was last wrong. */
   update(health: Health | null | undefined, now: number) {
-    if (health && this.last) {
-      const rose = LABELS.filter(([key]) => health[key] > this.last![key]).map(
-        ([key, label]) => `${health[key] - this.last![key]} ${label}`,
+    const last = this.last;
+    if (health && last) {
+      const rose = LABELS.filter(([key]) => health[key] > last[key]).map(
+        ([key, label]) => `${health[key] - last[key]} ${label}`,
       );
       if (rose.length) {
         this.until = now + TROUBLE_FOR;

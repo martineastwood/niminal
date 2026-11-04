@@ -268,14 +268,12 @@ fn name_stems(
         channels.iter_mut().for_each(|c| c.resize(len, 0.0));
         let silent = channels.iter().flatten().all(|s| *s == 0.0);
         // the implicit node has no name; say what it is
-        match (i, name.is_empty()) {
+        let name = match (i, name.is_empty()) {
             (0, true) if silent => continue,
-            (0, true) => stems.push(Stem {
-                name: "direct".into(),
-                channels,
-            }),
-            _ => stems.push(Stem { name, channels }),
-        }
+            (0, true) => "direct".into(),
+            _ => name,
+        };
+        stems.push(Stem { name, channels });
     }
     stems
 }

@@ -52,6 +52,11 @@ export class Bar {
     if (this.heldFor > HOLD) this.hold = Math.max(this.level, this.hold - FALL * seconds);
   }
 
+  /** Fully fallen, so there is nothing left to animate. */
+  get settled() {
+    return this.level === 0 && this.hold === 0;
+  }
+
   reset() {
     this.clipped = false;
     this.hold = this.level;

@@ -321,11 +321,9 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
         let s = match &item {
             Item::Control { name, .. } => simple_def(text, offset, format!("ctl:{}", name.name)),
             Item::Instr(d) => {
-                let dq = d
-                    .options
-                    .iter()
-                    .find(|a| a.name.as_ref().is_some_and(|n| n.name == "quantize"))
-                    .and_then(|a| crate::perform::quantum_of(&a.value).ok());
+                let dq = crate::perform::definition_quantum(&d.options)
+                    .ok()
+                    .flatten();
                 definition(
                     text,
                     offset,
@@ -400,29 +398,19 @@ pub fn analyze(source: &str) -> Result<Vec<Statement>, Diagnostic> {
                     ..Default::default()
                 },
             ),
-            Item::Clip(b) => {
+            Item::Clip(b) | Item::Scene(b) => {
+                let kind = if matches!(item, Item::Clip(_)) {
+                    "clip"
+                } else {
+                    "scene"
+                };
                 let dq = crate::perform::definition_quantum(&b.options)
                     .ok()
                     .flatten();
                 definition(
                     text,
                     offset,
-                    format!("clip:{}", b.name.name),
-                    DefParts {
-                        binding: Some(b.name.name.clone()),
-                        definition_quantize: dq,
-                        ..Default::default()
-                    },
-                )
-            }
-            Item::Scene(b) => {
-                let dq = crate::perform::definition_quantum(&b.options)
-                    .ok()
-                    .flatten();
-                definition(
-                    text,
-                    offset,
-                    format!("scene:{}", b.name.name),
+                    format!("{kind}:{}", b.name.name),
                     DefParts {
                         binding: Some(b.name.name.clone()),
                         definition_quantize: dq,

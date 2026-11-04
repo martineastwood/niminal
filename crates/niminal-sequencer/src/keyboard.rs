@@ -38,13 +38,11 @@ impl Keyboard {
     /// A key went down: the notes of the same key that are still sounding, to be let go of first.
     pub fn restrike(&mut self, channel: u8, note: u8) -> Vec<u32> {
         let mut keys = self.down.remove(&(channel, note)).unwrap_or_default();
-        self.sustained.retain(|&(c, n, key)| {
-            let same = c == channel && n == note;
-            if same {
-                keys.push(key);
-            }
-            !same
-        });
+        keys.extend(
+            self.sustained
+                .extract_if(.., |(c, n, _)| *c == channel && *n == note)
+                .map(|(_, _, key)| key),
+        );
         keys
     }
 
@@ -69,14 +67,10 @@ impl Keyboard {
             return Vec::new();
         }
         self.pedals.remove(&channel);
-        let mut released = Vec::new();
-        self.sustained.retain(|&(c, _, key)| {
-            if c == channel {
-                released.push(key);
-            }
-            c != channel
-        });
-        released
+        self.sustained
+            .extract_if(.., |(c, _, _)| *c == channel)
+            .map(|(_, _, key)| key)
+            .collect()
     }
 
     /// Notes on `channel` (only those of MIDI note `note`, if given) that are down or held by the pedal.
@@ -148,6 +142,22 @@ mod tests {
         keyboard.hold(2, 64, vec![3]);
         assert_eq!(keyboard.lift(2, 64), (vec![3], 1));
         assert_eq!(keyboard.lift(2, 64), (vec![], 0));
+    }
+
+    #[test]
+    fn restrike_and_pedal_release_only_the_matching_sustained_keys() {
+        let mut keyboard = Keyboard::default();
+        for (channel, note, keys) in [(1, 60, vec![1, 2]), (2, 60, vec![3]), (1, 64, vec![4])] {
+            keyboard.pedal(channel, true);
+            keyboard.hold(channel, note, keys);
+            keyboard.lift(channel, note);
+        }
+        keyboard.hold(1, 60, vec![5]);
+        assert_eq!(keyboard.restrike(1, 60), vec![5, 1, 2]);
+        assert_eq!(keyboard.keys_of(1, None), vec![4]);
+        assert_eq!(keyboard.pedal(1, false), vec![4]);
+        assert_eq!(keyboard.keys_of(2, None), vec![3]);
+        assert_eq!(keyboard.pedal(2, false), vec![3]);
     }
 
     #[test]

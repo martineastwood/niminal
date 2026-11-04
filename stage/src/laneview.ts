@@ -1,4 +1,5 @@
 import { elapsedSince } from './animation';
+import { onFrame, wake } from './frames';
 import { CLIP_COLOURS } from './highlight';
 import { mod, shortcuts } from './shortcuts';
 import { Bar } from './meters';
@@ -84,16 +85,20 @@ export class LaneView {
     private root: HTMLElement,
     private onAction: ActionHandler,
   ) {
-    const frame = () => {
+    onFrame(() => {
       this.paint();
-      requestAnimationFrame(frame);
-    };
-    requestAnimationFrame(frame);
+      return (
+        [...this.rows.values()].some(row => row.clip.running || row.active.size > 0 || !row.bar.settled) ||
+        [...this.buses.values()].some(bar => !bar.settled) ||
+        !!this.snapshot?.pending.length
+      );
+    });
   }
 
   update(snapshot: Snapshot) {
     this.snapshot = snapshot;
     this.updatedAt = performance.now();
+    wake();
     this.queued = queuedStates(snapshot);
     const signature = JSON.stringify([
       snapshot.connected,
@@ -360,8 +365,8 @@ export class LaneView {
         row.element.classList.add('pulse');
       }
       if (row.playhead.style.opacity !== '1') row.playhead.style.opacity = '1';
-      const left = `${((phase / window) * 100).toFixed(2)}%`;
-      if (row.playhead.style.left !== left) row.playhead.style.left = left;
+      const shift = `translateX(${((phase / window) * 100).toFixed(2)}%)`;
+      if (row.playhead.style.transform !== shift) row.playhead.style.transform = shift;
       const active = new Set<HTMLElement>();
       for (const note of row.events) {
         if (isSounding(clip, note, cycles)) active.add(note.element);
