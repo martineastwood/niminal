@@ -10,6 +10,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # The repo builds for the machine it is on (.cargo/config.toml). Runners differ, and a cached build tool made on
+  # one can crash with an illegal instruction on another, so CI builds for a plain x86-64 instead.
+  RUSTFLAGS: -C target-cpu=x86-64-v2
 
 jobs:
   # Clippy and the engine tests are one job per workspace so a failure in one doesn't hide the other.
