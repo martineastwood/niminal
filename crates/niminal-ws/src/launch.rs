@@ -45,6 +45,31 @@ fn listening(port: u16) -> bool {
     TcpStream::connect_timeout(&SocketAddr::from((Ipv4Addr::LOCALHOST, port)), Duration::from_millis(200)).is_ok()
 }
 
+/// Record a panic of `app` (with its `version`) in `~/.niminal/crash.log`, beside the ones `niminal` writes, as
+/// well as reporting it as before. So a crash in an app can be looked at afterwards.
+pub fn install_crash_log(app: &'static str, version: &'static str) {
+    let log = home().map(|home| home.join(".niminal"));
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        previous(info);
+        let Some(dir) = &log else { return };
+        let _ = std::fs::create_dir_all(dir);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let thread = std::thread::current();
+        let report = format!(
+            "[{now}] {app} {version} panicked in thread `{}`: {info}\n{}\n",
+            thread.name().unwrap_or("?"),
+            std::backtrace::Backtrace::force_capture()
+        );
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
+            use std::io::Write;
+            let _ = file.write_all(report.as_bytes());
+        }
+    }));
+}
+
 /// Make sure a server is listening on `port`, starting one if not. It is started to stop itself when its last
 /// client goes (`--exit-when-unused`), so no app owns it: closing one app leaves it for the others, and it is
 /// never left running on its own. A server that was already running is left as it is.

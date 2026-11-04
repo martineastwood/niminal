@@ -407,6 +407,7 @@ fn offer_vscode_install(force: bool) {
 }
 
 fn main() {
+    niminal_ws::launch::install_crash_log("niminal-tracker", env!("CARGO_PKG_VERSION"));
     let app = tauri::Builder::default()
         .menu(menu)
         .on_menu_event(|app, event| {

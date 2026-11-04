@@ -415,6 +415,7 @@ fn offer_vscode_install(force: bool) {
 }
 
 fn main() {
+    niminal_ws::launch::install_crash_log("niminal-stage", env!("CARGO_PKG_VERSION"));
     let shared = Arc::new(session::Shared::new());
     session::start_worker(shared.clone());
     tauri::Builder::default()
