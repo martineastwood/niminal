@@ -1,6 +1,6 @@
 // A plucked minor chord becomes inharmonic; a cutoff then protects the bass underneath it.
 // shift adds Hz rather than transposing in semitones: the original harmonic ratios change.
-// niminal-live render examples/spectral_shift.nml --out /tmp/spectral_shift.wav
+// niminal render examples/spectral_shift.nml --out /tmp/spectral_shift.wav
 config { channels: stereo }
 tempo 100bpm
 

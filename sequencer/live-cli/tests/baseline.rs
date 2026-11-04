@@ -146,7 +146,7 @@ fn examples_render_as_they_did() {
     for file in files {
         let out = dir.join("out.wav");
         let _ = std::fs::remove_file(&out);
-        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_niminal-live"));
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_niminal"));
         command.arg("render").arg(&file);
         if file.file_name().is_some_and(|name| name == "song.nml") {
             command.arg("song");

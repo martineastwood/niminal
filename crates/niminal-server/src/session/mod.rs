@@ -388,13 +388,6 @@ impl Session {
             bytes,
         )
     }
-    pub fn set_buffer_budget(&mut self, client: u64, bytes: usize) -> Result<(), String> {
-        if bytes < self.buffer_budget(client).1 {
-            return Err("budget is below retained buffer storage".into());
-        }
-        self.buffer_budgets.insert(client, bytes);
-        Ok(())
-    }
     pub fn buffer_is_hidden(&self, name: &str) -> bool {
         self.hidden_buffers.contains(name)
     }
@@ -404,9 +397,6 @@ impl Session {
             input: LogInput::FreeBuffer { name: name.clone() },
         });
         self.hidden_buffers.insert(name);
-    }
-    pub fn publish_buffer(&mut self, name: &str) {
-        self.hidden_buffers.remove(name);
     }
     pub fn sample_files_for(&self, client: u64) -> &Samples {
         self.client_samples.get(&client).unwrap_or(&self.samples)
@@ -509,17 +499,6 @@ impl Session {
         self.master_meter.clone()
     }
 
-    pub fn endpoint_meter(
-        &self,
-        client: u64,
-        endpoint: &crate::Endpoint,
-    ) -> Result<Arc<niminal_engine::Meter>, String> {
-        if matches!(endpoint, crate::Endpoint::Master) {
-            Ok(self.master_meter())
-        } else {
-            self.routing.meter(client, endpoint)
-        }
-    }
 
     pub fn routing_meters(&self, take: bool) -> serde_json::Value {
         self.routing.meters(take, None)

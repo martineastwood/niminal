@@ -1,6 +1,6 @@
 // Sparse plucks call; their delayed harmonics answer and move across the stereo field.
 // Evaluate the whole file; + times restart the phrase whenever you submit it.
-// niminal-live render examples/spectral_delay.nml --out /tmp/spectral_delay.wav
+// niminal render examples/spectral_delay.nml --out /tmp/spectral_delay.wav
 config { channels: stereo }
 tempo 100bpm
 

@@ -7,7 +7,7 @@ fn render(name: &str, source: &str) -> Vec<f32> {
     std::fs::create_dir_all(&dir).unwrap();
     let (file, out) = (dir.join("ramp.nml"), dir.join("ramp.wav"));
     std::fs::write(&file, source).unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_niminal-live"))
+    let run = Command::new(env!("CARGO_BIN_EXE_niminal"))
         .args(["render"])
         .arg(&file)
         .args(["--bars", "3", "--out"])

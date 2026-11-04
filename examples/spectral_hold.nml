@@ -1,6 +1,6 @@
 // One breathing, gently bending source: live, magnitude held, frequency held, then both held.
 // Unlike spectral_memory, this captures magnitude and frequency independently at each rising gate.
-// niminal-live render examples/spectral_hold.nml --out /tmp/spectral_hold.wav
+// niminal render examples/spectral_hold.nml --out /tmp/spectral_hold.wav
 config { channels: stereo }
 tempo 100bpm
 

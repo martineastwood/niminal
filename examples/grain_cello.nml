@@ -1,6 +1,6 @@
 // A bowed, cello-like voice made only from a cloud of long sawtooth grains.
 // Evaluate the whole file. Each + time is relative to this submission.
-// niminal-live render examples/grain_cello.nml --out /tmp/grain_cello.wav
+// niminal render examples/grain_cello.nml --out /tmp/grain_cello.wav
 config { channels: stereo }
 tempo 72bpm
 

@@ -1,70 +1,22 @@
-//! Finding the `niminal` programs that come with an app, and starting a server for the apps when none is running.
+//! What an app needs of the macOS download it comes in: recording its crashes, and offering the editor extension.
 
-use std::fs::File;
-use std::net::{Ipv4Addr, SocketAddr, TcpStream};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
 
-/// The tools that sit beside an app in the macOS download: `Niminal/bin` next to `Niminal/Some App.app`.
-fn packaged_bin(exe: &Path) -> Option<PathBuf> {
+/// The folder of the macOS download that the app is part of: `Niminal` beside `Niminal/Some App.app`, where
+/// the VS Code extension sits.
+fn download_folder(exe: &Path) -> Option<PathBuf> {
     let macos = exe.parent()?;
     let contents = macos.parent()?;
     let app = contents.parent()?;
     if macos.file_name()? != "MacOS" || contents.file_name()? != "Contents" || app.extension()? != "app" {
         return None;
     }
-    Some(app.parent()?.join("bin"))
+    Some(app.parent()?.to_path_buf())
 }
 
 fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
-}
-
-/// Find `program` in the macOS download that the calling app is part of, then on the PATH and in the places
-/// development builds go.
-pub fn find_binary(program: &str) -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok();
-    let mut folders = Vec::new();
-    folders.extend(exe.as_deref().and_then(packaged_bin));
-    folders.push(PathBuf::from("/Applications/Niminal/bin"));
-    if let Some(paths) = std::env::var_os("PATH") {
-        folders.extend(std::env::split_paths(&paths));
-    }
-    if let Some(home) = home() {
-        folders.push(home.join(".cargo").join("bin"));
-    }
-    if let Some(parent) = exe.as_deref().and_then(Path::parent) {
-        folders.push(parent.to_path_buf());
-    }
-    folders.into_iter().map(|folder| folder.join(program)).find(|path| path.is_file())
-}
-
-fn listening(port: u16) -> bool {
-    TcpStream::connect_timeout(&SocketAddr::from((Ipv4Addr::LOCALHOST, port)), Duration::from_millis(200)).is_ok()
-}
-
-/// A server that is already running is left as it is, but a released app will not use one from another release:
-/// an older install could be left running, with an older compiler and a different idea of the language. A
-/// development build, which has no release, uses whatever it finds.
-fn check_release(port: u16, token: Option<&str>, own: Option<&str>) -> Result<(), String> {
-    let Some(own) = own else { return Ok(()) };
-    let (_client, hello) = crate::Client::connect_as(port, token, "niminal-launch")?;
-    release_mismatch(own, hello["release"].as_str()).map_or(Ok(()), Err)
-}
-
-/// Why a server of release `theirs` (`None` if it does not say, as before releases said) can't be used by an
-/// app of release `own`.
-pub fn release_mismatch(own: &str, theirs: Option<&str>) -> Option<String> {
-    let running = match theirs {
-        Some(release) if release == own => return None,
-        Some(release) => format!("is release {release}"),
-        None => "is from an older release".to_string(),
-    };
-    Some(format!(
-        "A niminal server that {running} is already running, and this app is release {own}. Quit it, then open the app again: run `pkill -f \"niminal server\"` in a terminal."
-    ))
 }
 
 /// Record a panic of `app` (with its `version`) in `~/.niminal/crash.log`, beside the ones `niminal` writes, as
@@ -88,85 +40,9 @@ pub fn install_crash_log(app: &'static str, version: &'static str) {
         if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
             use std::io::Write;
             let _ = file.write_all(report.as_bytes());
+            eprintln!("{app}: details are in {}", dir.join("crash.log").display());
         }
     }));
-}
-
-/// Make sure a server is listening on `port`, starting one if not. It is started to stop itself when its last
-/// client goes (`--exit-when-unused`), so no app owns it: closing one app leaves it for the others, and it is
-/// never left running on its own. A server that was already running is left as it is.
-pub fn ensure_server(port: u16, token: Option<&str>) -> Result<(), String> {
-    if listening(port) {
-        return check_release(port, token, option_env!("NIMINAL_RELEASE_VERSION"));
-    }
-    let binary = find_binary("niminal").ok_or("Could not find the niminal program to start the server with.")?;
-    let log = home().map(|home| home.join(".niminal")).and_then(|dir| {
-        std::fs::create_dir_all(&dir).ok()?;
-        // the last run's log is kept as server.log.old, so what a crashed server said survives a restart
-        let _ = std::fs::rename(dir.join("server.log"), dir.join("server.log.old"));
-        File::create(dir.join("server.log")).ok()
-    });
-    let mut command = Command::new(binary);
-    command.args(["server", "--port", &port.to_string(), "--exit-when-unused"]);
-    if let Some(token) = token {
-        command.args(["--token", token]);
-    }
-    command.stdin(Stdio::null()).stdout(Stdio::null());
-    command.stderr(log.map_or_else(Stdio::null, Stdio::from));
-    // its own process group, so a Ctrl+C in the terminal an app was started from does not take it down
-    let mut child = command.process_group(0).spawn().map_err(|e| format!("Could not start the niminal server: {e}"))?;
-    let started = Instant::now();
-    while started.elapsed() < Duration::from_secs(8) {
-        if listening(port) {
-            return Ok(());
-        }
-        if let Ok(Some(status)) = child.try_wait() {
-            return Err(format!("The niminal server stopped as it started ({status}). ~/.niminal/server.log says why."));
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    Err("The niminal server did not start in time. ~/.niminal/server.log may say why.".into())
-}
-
-const LINK_DIR: &str = "/usr/local/bin";
-const PROGRAMS: [&str; 2] = ["niminal", "niminal-live"];
-
-/// The `bin` folder of the macOS download the calling app is part of.
-fn download_bin() -> Option<PathBuf> {
-    packaged_bin(&std::env::current_exe().ok()?)
-}
-
-fn cli_linked(bin: &Path) -> bool {
-    PROGRAMS.iter().all(|name| std::fs::read_link(Path::new(LINK_DIR).join(name)).is_ok_and(|to| to == bin.join(name)))
-}
-
-/// Offer to link `niminal` and `niminal-live` into `/usr/local/bin`, so Terminal and editors find them.
-/// Unless `force` is set (the menu item) it asks once, and only from the macOS download with the tools not
-/// linked yet. `ask` shows a yes/no question and `tell` shows a message.
-pub fn offer_cli_install(force: bool, ask: impl Fn(&str) -> bool, tell: impl Fn(&str)) {
-    let Some(bin) = download_bin() else {
-        if force {
-            tell("The command line tools are linked from the Niminal download; this copy of the app is not part of one.");
-        }
-        return;
-    };
-    let marker = home().map(|home| home.join(".niminal").join("cli-offered"));
-    if !force && (cli_linked(&bin) || marker.as_ref().is_none_or(|m| m.exists())) {
-        return;
-    }
-    if let Some(dir) = marker.as_ref().and_then(|m| m.parent()) {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if let Some(marker) = &marker {
-        let _ = std::fs::write(marker, "");
-    }
-    if !ask("Install the niminal and niminal-live commands?\n\nThis links them into /usr/local/bin so Terminal and editors can find them. macOS will ask for your password.") {
-        return;
-    }
-    match link_cli(&bin) {
-        Ok(()) => tell("Installed. Open a new Terminal window and run: niminal --version"),
-        Err(message) => tell(&format!("Could not install the command line tools: {message}")),
-    }
 }
 
 /// The editors on this Mac that take VS Code extensions, with their command line programs. The apps' own
@@ -191,7 +67,7 @@ fn editors() -> Vec<(&'static str, PathBuf)> {
 /// Offer to install the niminal extension from the download into VS Code and Cursor. Unless `force` is set
 /// (the menu item) it asks once, and only when an editor is installed.
 pub fn offer_vscode_install(force: bool, ask: impl Fn(&str) -> bool, tell: impl Fn(&str)) {
-    let Some(vsix) = download_bin().and_then(|bin| Some(bin.parent()?.join("niminal-vscode.vsix"))).filter(|vsix| vsix.is_file()) else {
+    let Some(vsix) = std::env::current_exe().ok().and_then(|exe| Some(download_folder(&exe)?.join("niminal-vscode.vsix"))).filter(|vsix| vsix.is_file()) else {
         if force {
             tell("The VS Code extension comes with the Niminal download; this copy of the app is not part of one.");
         }
@@ -230,24 +106,16 @@ pub fn offer_vscode_install(force: bool, ask: impl Fn(&str) -> bool, tell: impl 
     tell(&format!("{}\n\nReload the editor window to use it.", results.join("\n")));
 }
 
-fn link_cli(bin: &Path) -> Result<(), String> {
-    let bin = bin.to_str().filter(|b| !b.contains(['"', '\\', '\''])).ok_or("the download's folder has a quote or backslash in its path")?;
-    let links: Vec<String> = PROGRAMS.iter().map(|name| format!("ln -sf '{bin}/{name}' {LINK_DIR}/{name}")).collect();
-    let script = format!("do shell script \"mkdir -p {LINK_DIR} && {}\" with administrator privileges", links.join(" && "));
-    let output = Command::new("osascript").arg("-e").arg(script).output().map_err(|e| e.to_string())?;
-    if output.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&output.stderr).trim().to_string()) }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn tools_follow_the_complete_download_even_when_it_is_moved() {
+    fn the_extension_is_found_beside_the_app_however_the_download_was_placed() {
         for root in ["/Applications/Niminal", "/Users/player/My Music/Niminal"] {
             let exe = Path::new(root).join("Niminal Stage.app/Contents/MacOS/niminal-stage");
-            assert_eq!(packaged_bin(&exe), Some(Path::new(root).join("bin")));
+            assert_eq!(download_folder(&exe), Some(PathBuf::from(root)));
         }
-        assert_eq!(packaged_bin(Path::new("/repo/stage/src-tauri/target/debug/niminal-stage")), None);
+        assert_eq!(download_folder(Path::new("/repo/stage/src-tauri/target/debug/niminal-stage")), None);
     }
 }

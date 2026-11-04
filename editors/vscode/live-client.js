@@ -1,4 +1,4 @@
-// The client of `niminal-live live`, the sequencer this extension starts: it speaks niminal-live's own API
+// The client of the live sequencer Stage serves: it speaks the sequencer's own API
 // (clips, scenes, quantized edits) over the generic connection that niminal-client provides.
 const { Client } = require("niminal-client");
 

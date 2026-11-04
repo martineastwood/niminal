@@ -1,6 +1,6 @@
 // Hear a warm harmonic source, dissolve it into a few strong bins, then play inside its spectrum.
 // spectral_thin counts FFT bins, not harmonics. spectral_arp focuses a moving group of bins.
-// niminal-live render examples/spectral_select.nml --out /tmp/spectral_select.wav
+// niminal render examples/spectral_select.nml --out /tmp/spectral_select.wav
 config { channels: stereo }
 tempo 100bpm
 

@@ -3,25 +3,25 @@ title: Sequencer protocol
 description: JSON-RPC 2.0 over WebSocket for live evaluation, clips and scenes, and the state of a live session.
 ---
 
-**Read by niminal-live.** This is the sequencer's API, not the server's: what a program uses to start clips, set tempo and make quantized changes.
+**Read by Niminal Stage.** This is the sequencer's API, not the engine's: what a program uses to start clips, set tempo and make quantized changes.
 
-`niminal server` is the generic audio server on port 7401: its API is the [Engine API](/reference/engine-api/). Clips, scenes, lanes, transforms, looping and quantized edits belong to the **live sequencer client**, which owns tempo, meter and musical position and turns them into events stamped in absolute samples.
+The engine's own API is the [Engine API](/reference/engine-api/). Clips, scenes, lanes, transforms, looping and quantized edits belong to the **sequencer**, which owns tempo, meter and musical position and turns them into events stamped in absolute samples.
 
-VS Code starts and owns a private `niminal-live live --port 0 --parent-stdio` process, connected to the configured server. Closing the editor stops its sequencer. For terminal use, start `niminal-live live [FILE]`: its live-control API defaults to `ws://127.0.0.1:7400/`, with `--engine-port 7401` selecting the server. Each live process owns its own performance state. Other clients can use the generic engine directly without using these abstractions.
+Niminal Stage has the sequencer inside it and serves this API on its **tools port** (7400 by default, set in the top bar). The VS Code extension connects there, so what it evaluates is the same performance Stage shows. A program of your own can connect to the same port. The engine's API is on the next port up (7401), and `niminal server` serves it on its own.
 
-This page describes the live client's **JSON-RPC 2.0** protocol over **WebSocket**. It is separate from **`niminal-live lsp`**, which speaks LSP on stdio for editing.
+This page describes the live client's **JSON-RPC 2.0** protocol over **WebSocket**. It is separate from the language server (`niminal-stage lsp`), which speaks LSP on stdio for editing.
 
 ## Connection
 
 1. Open a WebSocket to the server.
 2. Send **`hello`** as the first request (within about three seconds, or the connection may time out).
-3. If the server was started with **`--token`**, the first message must be `hello` and **`params.token`** must match. Until then, other requests get a protocol error.
+3. If a token was set for the tools port, the first message must be `hello` and **`params.token`** must match. Until then, other requests get a protocol error.
 4. Subscribe to topics if you want push updates (optional).
 5. Send requests with an **`id`**; the server replies with the same **`id`**. Requests **without** an `id` are notifications and get **no reply** (used for `panic`).
 
-Clients share a **chair**: the performance (clips, scenes, mute and solo, what is playing, pending changes) belongs to the chair, not to a connection, and disconnecting a client does not stop playback. A client sits in `main` unless its `hello` names another chair, so by default all clients share one session. Other chairs are seated on demand (up to eight), each over an engine connection of its own, so its definitions, buffers and note ids are private too. See [Chairs](#chairs). A program that wants to send timed events rather than code should talk to the [engine](/reference/engine-api/) instead, or as well.
+All clients share one performance: the clips, scenes, mute and solo, what is playing and pending changes belong to the sequencer, not to a connection, and disconnecting a client does not stop playback.
 
-Limits: up to **16** clients; maximum message size **64 MiB** (large `eval` sources, and the events of a long `render.start`).
+Limits: up to **16** clients; maximum message size **64 MiB** (large `eval` sources).
 
 ## Handshake: `hello`
 
@@ -35,8 +35,7 @@ Limits: up to **16** clients; maximum message size **64 MiB** (large `eval` sour
   "params": {
     "protocol": 5,
     "client": "my-app",
-    "token": "optional-if-server-requires-it",
-    "chair": "optional-name-of-a-chair"
+    "token": "optional-if-stage-requires-it"
   }
 }
 ```
@@ -49,22 +48,13 @@ Limits: up to **16** clients; maximum message size **64 MiB** (large `eval` sour
   "release": "0.0.1-alpha.10",
   "sample_rate": 48000,
   "channels": 2,
-  "topics": ["landed", "pending", "transport", "meters", "notices", "learned"],
-  "chair": "main"
+  "topics": ["landed", "pending", "transport", "meters", "notices", "learned"]
 }
 ```
 
 **`protocol`** must be **`5`** (`PROTOCOL_VERSION` in the server). A mismatch returns error code **-32000**.
 
-**`release`** is the release of the download the server is part of, such as `0.0.1-alpha.10`, or `null` for a build made from source. Tracker and Stage compare it with their own and will not use a server left running from another release.
-
-## Chairs
-
-A chair is one player's seat in a shared room: a full sequencer with clips, scenes, mute, solo, quantized changes and a connection to the engine of its own. Name one in `hello` with `chair` and it is created if it is new; clients that name the same chair share it, as clients of one session always did. Everything a client does (`eval`, `launch`, `mute`, `status`, `cancel`, `hush`, `panic`) and every notification it receives is about its own chair. `hush` and `panic` silence only that chair, so a mistake on one chair does not stop the others.
-
-- **Tempo.** A new chair starts at the tempo and meter that `main` has when the chair is created, and keeps its own from there. Bars of chairs at the same tempo and meter line up, because they count from the same sample. Chairs do not follow each other's later changes: the engine has no tempo, so one chair is the tempo authority by agreement, and the others evaluate the same `tempo` line when it changes.
-- **Controls.** The keyboard, MIDI and OSC controls of `niminal-live live` play in `main`.
-- **Limits.** Up to eight chairs. A server that was not started with chairs (the in-process one used by `niminal-live render`) has only `main` and refuses another name.
+**`release`** is the release of the download the server is part of, such as `0.0.1-alpha.10`, or `null` for a build made from source. The VS Code extension compares it with its own and warns when they are not the same release.
 
 ## Subscriptions
 
@@ -209,4 +199,4 @@ The [language spec](https://github.com/martineastwood/niminal/blob/main/niminal%
 ← {"jsonrpc":"2.0","method":"landed","params":{"id":2,"at":96000,"changes":["t.transpose(+12st)"],...}}
 ```
 
-See [Command line](/reference/niminal-live/cli/) (`send`, `repl`), [Editor and LSP](/reference/editor/), and [Live coding](/guide/live-coding/).
+See [Command line](/reference/server/cli/), [Editor and LSP](/reference/editor/), and [Live coding](/guide/live-coding/).

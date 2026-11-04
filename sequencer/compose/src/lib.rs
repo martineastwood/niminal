@@ -40,6 +40,5 @@ pub use performance::{
 };
 pub use schedule::{ControlSet, Finish, Found, PartState, Schedule, ScheduleError};
 pub use score_file::{
-    ArrangementDef, ArrangementSection, ClipDef, ClipEvent, Project, SceneDef, ScoreError,
-    ScoreFile, Section, VERSION, VERSION_2,
+    ClipDef, ClipEvent, SceneDef, ScoreError, Section, VERSION,
 };

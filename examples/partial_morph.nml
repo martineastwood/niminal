@@ -1,7 +1,7 @@
 // Hear two sources, then follow their harmonics as a bowed A3 becomes a breathing, vowel-like C4.
 // Unlike spectral_morph.nml, matching partials can glide between different FFT regions.
 // Evaluate the whole file in VS Code; + times restart the demonstration from this submission.
-// niminal-live render examples/partial_morph.nml --out /tmp/partial_morph.wav
+// niminal render examples/partial_morph.nml --out /tmp/partial_morph.wav
 config { channels: stereo }
 tempo 100bpm
 

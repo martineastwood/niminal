@@ -1,6 +1,6 @@
 // One bowed gesture becomes a held note, a forward/reverse scan, then a looping minor chord.
 // Evaluate the whole file: one voice owns one capture for the entire performance.
-// niminal-live render examples/spectral_memory.nml --out /tmp/spectral_memory.wav
+// niminal render examples/spectral_memory.nml --out /tmp/spectral_memory.wav
 use std/spectral
 
 config { channels: stereo }

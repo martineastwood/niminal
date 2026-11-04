@@ -3,7 +3,7 @@ title: niminal stage
 description: A desktop app for live coding — code on one side, scenes, lanes and meters on the other.
 ---
 
-**Read by niminal-live.** Stage is a desktop app for performing a `.nml` file. It has the live sequencer and the language server built in, so a running `niminal server` is the only other program it needs.
+**Read by Niminal Stage.** Stage is a desktop app for performing a `.nml` file. It has the audio engine, the live sequencer and the language server built in, so it needs nothing else running.
 
 You write code in the editor, evaluate it, and watch the same music in the lanes beside it: the scenes you can launch, the clips that are playing, and each note lighting up in the code as it sounds.
 
@@ -17,9 +17,13 @@ npm ci
 npm run tauri -- dev
 ```
 
-## Connecting to the server
+## The engine, the sound card and other tools
 
-If no engine is listening, Stage starts `niminal server --exit-when-unused` (found beside the app in the macOS download, or on the PATH). It stops when the last client closes, and Tracker shares it. To choose an audio device, run `niminal server` yourself first. Stage connects to port 7401 (change it with **port** in the top bar, and give a **token** if the server was started with `--token`), and the connection light in the top left shows whether it is up. **Connect** tries again.
+The audio engine runs inside Stage and starts with it, so there is nothing to start first. The connection light in the top left shows that it is up. If it could not start (no sound card, say) the lanes say why and Stage tries again every few seconds; **Restart** tries now.
+
+**Audio** in the top bar chooses the output device, the sample rate (only the rates the card supports) and the buffer size (smaller is lower latency and less forgiving). Applying them starts the engine again on them, so what is playing stops and your clips and scenes are cleared; evaluate your code again afterwards. If the new settings don't work, the previous ones are put back and the message says why. The choice is remembered. The panel also has an **OSC in port**: a UDP port on this machine that controls bound with `osc_in` listen to.
+
+Other tools reach Stage on its **tools port** (7400 by default, with an optional **token**, set in the top bar and applied with **Apply**). The VS Code extension plays through Stage there, and other sequencers reach the engine on the next port up (7401). If a port is taken, for example by a `niminal server`, the top bar says so; choose another and press **Apply**.
 
 Stage opens with a short demo piece that only defines things. Launch its scenes with the buttons above the lanes or with Cmd/Ctrl+1…9, or open your own file.
 
@@ -56,28 +60,8 @@ Hold **Alt** and drag a number in the code sideways to change it; the block it i
 
 **Rec** marks the start of a take; press it again to end the take. Then:
 
-- **Render WAV** plays the server's session log over that stretch to a WAV file. It uses the `niminal` program, so it must be installed, and the server must have been writing a log (the default).
+- **Render WAV** plays the engine's session log over that stretch to a WAV file, at the sample rate the engine ran at.
 - **Save script** writes everything you evaluated during the take, in order, with when.
-
-## Lab
-
-**Lab** (or Shift+Cmd/Ctrl+B) replaces the clips and scenes strip with a place to try one instrument. Evaluate the file, press **Refresh**, and pick an instrument that has a `freq` parameter. Hold the on-screen keys, or the computer keys A W S E D F T G Y H U J K (Z and X move the octave), and **Hold** keeps a note sounding while you work.
-
-Every parameter written with a range gets a fader, and it moves the sounding note as you drag:
-
-```nml
-instr cello(freq: hz, density: 5hz..80hz = 30hz, grain: 40ms..1sec = 500ms, room: 0..1 = 0.5) { ... }
-```
-
-Frequencies and times move in even ratios, and levels in db. Double-click a fader to return it to its default. `examples/grain_cello.nml` is a good one to start with. The Lab plays through a clip called `__lab`, which the clip list hides.
-
-### Gallery
-
-The **Gallery** tab makes many versions of one sample. Choose a sample, tick the families you want, pick how many (few, enough or lots) and press **Make**. Each version is a tile coloured by family: click it to hear it, click again to stop, and press **Open** to put its code in a tab. **Remix** makes a new set from the same sample. The versions are written to `~/.niminal/gallery/<sample name>`, and need the `niminal-live` program installed (see [the command line](/reference/niminal-live/cli/#gallery)).
-
-### Drums
-
-The **Drums** tab makes a drum grid from a theme. Pick a theme, move **density** (how busy) and **chaos** (how far it wanders), and press **Another** for a new grid with the same settings. Each drum has its own small slider to make it busier or sparser than the rest. **Hear** plays it through the shelf's drums, and changes you make while it plays are heard as you make them; press **Stop** to end it. **Insert call** puts `drum_grid(theme: …, seed: …)` in the editor at the cursor, for a clip's `notes:`, and **Insert grid** puts the grid in as text to edit by hand. See [generated grids](/reference/language/patterns/#generated-grids).
 
 ## Views and files
 
@@ -85,7 +69,6 @@ The **Drums** tab makes a drum grid from a theme. Pick a theme, move **density**
 | --- | --- |
 | Shift+Cmd/Ctrl+L | Browse files |
 | Cmd/Ctrl+B | Show or hide the sidebar |
-| Shift+Cmd/Ctrl+B | The Lab: play an instrument and move its parameters |
 | Shift+Cmd/Ctrl+P | Performance mode: just the code and what is playing |
 | Cmd/Ctrl + and − | Text size (or pinch) |
 | Cmd/Ctrl+O, Cmd/Ctrl+S | Open and save a file |

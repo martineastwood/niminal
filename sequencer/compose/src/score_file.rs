@@ -33,7 +33,7 @@ impl fmt::Display for ScoreError {
             ScoreError::UnsupportedVersion(v) => {
                 write!(
                     f,
-                    "score format version {v} is not supported (this build reads versions {VERSION} and 2)"
+                    "score format version {v} is not supported (this build reads version {VERSION})"
                 )
             }
             ScoreError::Message(m) => f.write_str(m),
@@ -60,10 +60,16 @@ struct File {
 
 impl Section {
     pub fn from_json(json: &str) -> Result<Section, ScoreError> {
-        let file: File = serde_json::from_str(json)?;
-        if file.version != VERSION {
-            return Err(ScoreError::UnsupportedVersion(file.version));
+        // the version first, so a file of another format is told so rather than for its first unknown field
+        let value: serde_json::Value = serde_json::from_str(json)?;
+        let version = value
+            .get("version")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| ScoreError::Message("score needs a `version` field".into()))?;
+        if version != u64::from(VERSION) {
+            return Err(ScoreError::UnsupportedVersion(version as u32));
         }
+        let file: File = serde_json::from_value(value)?;
         Ok(Section {
             name: file.section,
             length: file.length,
@@ -138,9 +144,6 @@ mod tests {
     }
 }
 
-/// The project (`.nms` v2) format version.
-pub const VERSION_2: u32 = 2;
-
 /// One note inside a clip: a value (pitch, sample name, …) at a time, for a length.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -189,141 +192,6 @@ fn is_true(v: &bool) -> bool {
 pub struct SceneDef {
     pub name: String,
     pub clips: Vec<String>,
-}
-
-/// One scene in an arrangement, and how long it lasts.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ArrangementSection {
-    pub scene: String,
-    pub length: Time,
-}
-
-/// Scenes in order for an offline render.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ArrangementDef {
-    pub name: String,
-    pub sections: Vec<ArrangementSection>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tempos: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub meters: Option<Vec<String>>,
-}
-
-/// A v2 `.nms` project: clips, scenes and an optional arrangement.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Project {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub clips: Vec<ClipDef>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub scenes: Vec<SceneDef>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub arrangement: Option<ArrangementDef>,
-}
-
-/// What `from_json` returns: a v1 section or a v2 project.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ScoreFile {
-    Section(Section),
-    Project(Project),
-}
-
-impl ScoreFile {
-    /// Read a `.nms` file: version 1 is a single section, version 2 a project.
-    pub fn from_json(json: &str) -> Result<ScoreFile, ScoreError> {
-        let value: serde_json::Value = serde_json::from_str(json)?;
-        let version = value
-            .get("version")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| ScoreError::Message("score needs a `version` field".into()))?;
-        match version {
-            v if v == VERSION as u64 => {
-                let file: SectionFile = serde_json::from_value(value)?;
-                Ok(ScoreFile::Section(Section {
-                    name: file.section,
-                    length: file.length,
-                    events: file.events,
-                }))
-            }
-            v if v == VERSION_2 as u64 => {
-                let file: ProjectFile = serde_json::from_value(value)?;
-                Ok(ScoreFile::Project(file.into_project()))
-            }
-            v => Err(ScoreError::UnsupportedVersion(v as u32)),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SectionFile {
-    version: u32,
-    section: String,
-    length: Time,
-    events: Vec<Event>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProjectFile {
-    version: u32,
-    #[serde(default)]
-    clips: Vec<ClipDef>,
-    #[serde(default)]
-    scenes: Vec<SceneDef>,
-    #[serde(default)]
-    arrangement: Option<ArrangementDef>,
-}
-
-impl ProjectFile {
-    fn into_project(self) -> Project {
-        Project {
-            clips: self.clips,
-            scenes: self.scenes,
-            arrangement: self.arrangement,
-        }
-    }
-}
-
-impl Project {
-    pub fn from_json(json: &str) -> Result<Project, ScoreError> {
-        match ScoreFile::from_json(json)? {
-            ScoreFile::Project(p) => Ok(p),
-            ScoreFile::Section(_) => Err(ScoreError::Message(
-                "expected a version 2 project, got a version 1 section".into(),
-            )),
-        }
-    }
-
-    pub fn to_json(&self) -> String {
-        let file = ProjectFile {
-            version: VERSION_2,
-            clips: self.clips.clone(),
-            scenes: self.scenes.clone(),
-            arrangement: self.arrangement.clone(),
-        };
-        serde_json::to_string_pretty(&file).expect("a project always serializes")
-    }
-
-    /// Canonical `.nml` for every clip, scene and arrangement in the project.
-    pub fn to_source(&self) -> String {
-        let mut out = String::new();
-        for clip in &self.clips {
-            out.push_str(&clip.to_source());
-            out.push('\n');
-        }
-        for scene in &self.scenes {
-            out.push_str(&scene.to_source());
-            out.push('\n');
-        }
-        if let Some(arr) = &self.arrangement {
-            out.push_str(&arr.to_source());
-            out.push('\n');
-        }
-        out
-    }
 }
 
 impl ClipDef {
@@ -384,25 +252,6 @@ impl SceneDef {
     }
 }
 
-impl ArrangementDef {
-    /// Canonical `.nml` text for this arrangement.
-    pub fn to_source(&self) -> String {
-        let sections: Vec<String> = self
-            .sections
-            .iter()
-            .map(|s| format!("{}.over({})", s.scene, s.length))
-            .collect();
-        let mut lines = vec![format!("  sections: [{}]", sections.join(" "))];
-        if let Some(tempos) = &self.tempos {
-            lines.push(format!("  tempo: [{}]", tempos.join(" ")));
-        }
-        if let Some(meters) = &self.meters {
-            lines.push(format!("  meter: [{}]", meters.join(" ")));
-        }
-        format!("arrangement {} {{\n{}\n}}", self.name, lines.join("\n"))
-    }
-}
-
 #[cfg(test)]
 mod project_tests {
     use super::*;
@@ -440,61 +289,25 @@ mod project_tests {
     }
 
     #[test]
-    fn scene_to_source_and_project_round_trip() {
-        let project = Project {
-            clips: vec![ClipDef {
-                name: "bassline".into(),
-                instrument: None,
-                length: None,
-                r#loop: true,
-                lanes: BTreeMap::from([("notes".into(), "c2 ~ eb2".into())]),
-                events: Vec::new(),
-            }],
-            scenes: vec![SceneDef {
-                name: "verse".into(),
-                clips: vec!["bassline".into()],
-            }],
-            arrangement: Some(ArrangementDef {
-                name: "song".into(),
-                sections: vec![ArrangementSection {
-                    scene: "verse".into(),
-                    length: Time::Bars(8.0),
-                }],
-                tempos: Some(vec!["110bpm".into()]),
-                meters: None,
-            }),
+    fn a_scene_is_written_as_code() {
+        let scene = SceneDef {
+            name: "verse".into(),
+            clips: vec!["bassline".into(), "drums".into()],
         };
-        let json = project.to_json();
-        let back = Project::from_json(&json).unwrap();
-        assert_eq!(back, project);
-        let src = project.to_source();
-        assert!(src.contains("clip bassline"), "{src}");
-        assert!(src.contains("scene verse { bassline }"), "{src}");
-        assert!(src.contains("arrangement song"), "{src}");
-        assert!(src.contains("verse.over(8bars)"), "{src}");
+        assert!(scene.to_source().contains("scene verse { bassline, drums }"), "{}", scene.to_source());
     }
 
     #[test]
-    fn score_file_reads_v1_and_v2() {
+    fn only_version_1_sections_are_read() {
         let v1 = r#"{
             "version": 1,
             "section": "phi",
             "length": "4beats",
             "events": [{ "at": "0beat", "dur": "1beat", "target": "lead" }]
         }"#;
-        match ScoreFile::from_json(v1).unwrap() {
-            ScoreFile::Section(s) => assert_eq!(s.name, "phi"),
-            other => panic!("expected section, got {other:?}"),
-        }
-
-        let v2 = r#"{
-            "version": 2,
-            "clips": [{ "name": "riff", "lanes": { "notes": "[c4]" } }],
-            "scenes": []
-        }"#;
-        match ScoreFile::from_json(v2).unwrap() {
-            ScoreFile::Project(p) => assert_eq!(p.clips[0].name, "riff"),
-            other => panic!("expected project, got {other:?}"),
-        }
+        assert_eq!(Section::from_json(v1).unwrap().name, "phi");
+        let v2 = r#"{ "version": 2, "clips": [{ "name": "riff", "lanes": { "notes": "[c4]" } }], "scenes": [] }"#;
+        let e = Section::from_json(v2).unwrap_err().to_string();
+        assert!(e.contains("version 2"), "{e}");
     }
 }

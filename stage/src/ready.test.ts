@@ -21,6 +21,10 @@ function snapshot(overrides: Partial<Snapshot>): Snapshot {
     health: null,
     learned: [],
     midi: { inputs: [], last: null },
+    tools_problem: null,
+    tools_port: 7400,
+    osc_port: null,
+    engine_error: null,
     ...overrides,
   };
 }
@@ -42,11 +46,11 @@ const clip = (running: boolean): Clip => ({
 describe('the ready screen', () => {
   const root = () => document.createElement('div');
 
-  it('says there is no engine, and offers to connect', () => {
+  it('says the engine is not running, and offers to restart it', () => {
     const el = root();
     const actions: string[] = [];
     new LaneView(el, action => actions.push(action)).update(snapshot({ connected: false }));
-    expect(el.textContent).toContain('No engine yet');
+    expect(el.textContent).toContain('The engine is not running');
     el.querySelector<HTMLButtonElement>('button[data-action="connect"]')!.click();
     expect(actions).toEqual(['connect']);
   });

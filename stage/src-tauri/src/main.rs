@@ -1,7 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod audio;
 mod project;
 mod session;
+mod settings;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -23,10 +25,34 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) 
     tauri::async_runtime::spawn_blocking(work).await.map_err(|e| e.to_string())
 }
 
+/// Start the engine again, if it could not start when the program opened (no sound card, say).
 #[tauri::command]
-async fn connect(state: State<'_, AppState>, port: u16, token: Option<String>) -> Result<(), String> {
+async fn engine_start(state: State<'_, AppState>) -> Result<(), String> {
     let shared = state.shared.clone();
-    blocking(move || session::connect(&shared, port, token.as_deref())).await?
+    blocking(move || session::start(&shared)).await?
+}
+
+/// Listen for OSC on UDP `port`, or stop listening with none. The port is kept for next time.
+#[tauri::command]
+async fn osc_listen(state: State<'_, AppState>, port: Option<u16>) -> Result<(), String> {
+    let shared = state.shared.clone();
+    blocking(move || {
+        session::osc_listen(&shared, port)?;
+        settings::save(&session::settings_now(&shared))
+    })
+    .await?
+}
+
+/// Reach other tools on `port` (and the engine's own socket one above it), asking for `token`. The port is kept
+/// for next time.
+#[tauri::command]
+async fn tools_apply(state: State<'_, AppState>, port: u16, token: Option<String>) -> Result<(), String> {
+    let shared = state.shared.clone();
+    blocking(move || {
+        session::tools_apply(&shared, port, token.as_deref().filter(|t| !t.is_empty()))?;
+        settings::save(&session::settings_now(&shared))
+    })
+    .await?
 }
 
 /// Listen to the MIDI inputs whose names contain `filter` (all of them when empty); returns their names.
@@ -56,10 +82,28 @@ async fn clock_in(state: State<'_, AppState>, name: Option<String>) -> Result<()
     blocking(move || session::set_clock_in(&shared, name.as_deref())).await?
 }
 
+/// The sound cards there are, and what the stage is playing through.
 #[tauri::command]
-async fn disconnect(state: State<'_, AppState>) -> Result<(), String> {
+async fn audio_state(state: State<'_, AppState>) -> Result<audio::AudioState, String> {
     let shared = state.shared.clone();
-    blocking(move || session::disconnect(&shared)).await
+    blocking(move || session::audio_state(&shared)).await?
+}
+
+/// Play through other audio settings. This starts the engine again, so what was defined and playing is cleared.
+/// What works is remembered for next time.
+#[tauri::command]
+async fn audio_apply(
+    state: State<'_, AppState>,
+    output: Option<String>,
+    buffer_size: Option<u32>,
+    sample_rate: Option<u32>,
+) -> Result<audio::AudioState, String> {
+    let shared = state.shared.clone();
+    let choice = audio::AudioChoice { output: output.filter(|o| !o.is_empty()), buffer_size, sample_rate };
+    let shared_for_save = state.shared.clone();
+    let state = blocking(move || session::apply_audio(&shared, choice)).await??;
+    settings::save(&session::settings_now(&shared_for_save))?;
+    Ok(state)
 }
 
 #[tauri::command]
@@ -122,25 +166,6 @@ async fn perform(
 async fn cancel(state: State<'_, AppState>, id: Option<u64>) -> Result<usize, String> {
     let shared = state.shared.clone();
     blocking(move || session::cancel(&shared, id)).await?
-}
-
-/// The instruments, with the parameters each takes, for the Lab's faders.
-#[tauri::command]
-async fn lab_instruments(state: State<'_, AppState>) -> Result<Vec<session::LabInstrument>, String> {
-    let shared = state.shared.clone();
-    blocking(move || session::lab_instruments(&shared)).await?
-}
-
-#[tauri::command]
-async fn lab_key(state: State<'_, AppState>, note: u8, velocity: u8) -> Result<usize, String> {
-    let shared = state.shared.clone();
-    blocking(move || session::lab_key(&shared, note, velocity)).await?
-}
-
-#[tauri::command]
-async fn lab_param(state: State<'_, AppState>, name: String, value: f64) -> Result<usize, String> {
-    let shared = state.shared.clone();
-    blocking(move || session::lab_param(&shared, &name, value)).await?
 }
 
 /// A `.nml` file the window opened.
@@ -274,50 +299,6 @@ async fn confirm(message: String) -> bool {
         == rfd::MessageDialogResult::Yes
 }
 
-/// Ask for an audio file; its path, or nothing if the dialog was closed.
-#[tauri::command]
-async fn pick_sample() -> Result<Option<String>, String> {
-    Ok(rfd::AsyncFileDialog::new()
-        .add_filter("Audio", &["wav", "flac", "mp3", "ogg", "aif", "aiff", "m4a", "aac"])
-        .pick_file()
-        .await
-        .map(|file| file.path().to_string_lossy().into_owned()))
-}
-
-/// Make versions of a sample for the Lab's gallery. This takes a few seconds.
-#[tauri::command]
-async fn gallery_make(sample: String, families: Vec<String>, amount: String, seed: u64) -> Result<session::GalleryMade, String> {
-    blocking(move || session::gallery_make(Path::new(&sample), &families, &amount, seed)).await?
-}
-
-/// The themes of the Lab's drum generator.
-#[tauri::command]
-fn drums_themes() -> Vec<&'static str> {
-    niminal_compose::drums::themes()
-}
-
-#[derive(serde::Serialize)]
-struct DrumRow {
-    name: &'static str,
-    steps: String,
-}
-
-/// A drum grid for a theme and its settings, for the Lab to show and to write out as code.
-#[tauri::command]
-fn drums_make(theme: String, density: f64, chaos: f64, seed: u64, per_drum: Vec<(String, f64)>) -> Result<Vec<DrumRow>, String> {
-    let rows = niminal_compose::drums::generate(&niminal_compose::drums::Request {
-        theme: &theme,
-        density,
-        chaos,
-        seed,
-        per_drum: &per_drum,
-    })?;
-    Ok(rows
-        .into_iter()
-        .map(|r| DrumRow { name: r.name, steps: r.steps.iter().collect() })
-        .collect())
-}
-
 /// Ask for a folder; its path, or nothing if the dialog was closed.
 #[tauri::command]
 async fn pick_folder() -> Result<Option<String>, String> {
@@ -327,7 +308,7 @@ async fn pick_folder() -> Result<Option<String>, String> {
         .map(|folder| folder.path().to_string_lossy().into_owned()))
 }
 
-/// The same LSP implementation as `niminal-live lsp`, without a child process. Compilation stays off the
+/// The same LSP implementation as `niminal lsp`, without a child process. Compilation stays off the
 /// window thread and the frontend keeps messages in document order.
 #[tauri::command]
 async fn lsp_message(
@@ -359,7 +340,6 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .separator()
         .item(&item("close-tab", "Close Tab", Some("CmdOrCtrl+W"))?)
         .separator()
-        .item(&item("install-cli", "Install Command Line Tools…", None)?)
         .item(&item("install-vscode", "Install VS Code Extension…", None)?)
         .build()?;
     let edit = SubmenuBuilder::new(app, "Edit")
@@ -374,7 +354,6 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let view = SubmenuBuilder::new(app, "View")
         .item(&item("browse", "Browse (⇧⌘L)", None)?)
         .item(&item("sidebar", "Sidebar (⌘B)", None)?)
-        .item(&item("lab", "Lab (⇧⌘B)", None)?)
         .item(&item("perform", "Performance Mode (⇧⌘P)", None)?)
         .separator()
         .item(&item("zoom-in", "Bigger Text (⌘+)", None)?)
@@ -404,11 +383,6 @@ fn tell(text: &str) {
     rfd::MessageDialog::new().set_title("niminal").set_description(text).show();
 }
 
-/// Asks about linking the command line tools (see `niminal_ws::launch::offer_cli_install`).
-fn offer_cli_install(force: bool) {
-    niminal_ws::launch::offer_cli_install(force, ask, tell);
-}
-
 /// Asks about installing the VS Code extension (see `niminal_ws::launch::offer_vscode_install`).
 fn offer_vscode_install(force: bool) {
     niminal_ws::launch::offer_vscode_install(force, ask, tell);
@@ -416,33 +390,45 @@ fn offer_vscode_install(force: bool) {
 
 fn main() {
     niminal_ws::launch::install_crash_log("niminal-stage", env!("CARGO_PKG_VERSION"));
+    if let Some(release) = option_env!("NIMINAL_RELEASE_VERSION") {
+        niminal_server::set_release(release);
+    }
     let shared = Arc::new(session::Shared::new());
     session::start_worker(shared.clone());
     tauri::Builder::default()
         .menu(menu)
         .on_menu_event(|app, event| {
-            if event.id().as_ref() == "install-cli" {
-                std::thread::spawn(|| offer_cli_install(true));
-            } else if event.id().as_ref() == "install-vscode" {
+            if event.id().as_ref() == "install-vscode" {
                 std::thread::spawn(|| offer_vscode_install(true));
             } else {
                 let _ = app.emit("menu", event.id().as_ref());
             }
         })
-        .setup(|_| {
-            std::thread::spawn(|| {
-                offer_cli_install(false);
-                offer_vscode_install(false);
-            });
-            Ok(())
+        .setup({
+            let shared = shared.clone();
+            move |_| {
+                // the engine starts with the program: nothing needs asking for it
+                std::thread::spawn(move || {
+                    if let Err(e) = session::start(&shared) {
+                        eprintln!("niminal: the engine did not start: {e}");
+                    }
+                });
+                std::thread::spawn(|| {
+                    offer_vscode_install(false);
+                });
+                Ok(())
+            }
         })
         .manage(AppState {
             shared: shared.clone(),
             lsp: Arc::default(),
         })
         .invoke_handler(tauri::generate_handler![
-            connect,
-            disconnect,
+            engine_start,
+            tools_apply,
+            osc_listen,
+            audio_state,
+            audio_apply,
             midi_open,
             midi_ports,
             clock_out,
@@ -452,13 +438,6 @@ fn main() {
             perform,
             cancel,
             confirm,
-            pick_sample,
-            gallery_make,
-            drums_themes,
-            drums_make,
-            lab_instruments,
-            lab_key,
-            lab_param,
             open_file,
             open_project,
             save_file,

@@ -1,6 +1,6 @@
 // A short spectral miniature: clear harmony blooms into a wash, airy pulses enter, a detail freezes.
 // Evaluate the whole file; all + times are relative to when you submit it.
-// niminal-live render examples/spectral.nml --out /tmp/spectral.wav
+// niminal render examples/spectral.nml --out /tmp/spectral.wav
 use std/spectral
 
 config { channels: stereo }

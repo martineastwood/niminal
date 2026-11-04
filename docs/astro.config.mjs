@@ -55,27 +55,16 @@ export default defineConfig({
           { slug: 'reference/reserved-words' },
           { slug: 'reference/opcodes' },
         ] },
-        { label: 'niminal (server)', items: [
+        { label: 'niminal (command line)', items: [
           { label: 'Command line', slug: 'reference/server/cli' },
           { label: 'Engine API', slug: 'reference/engine-api' },
         ] },
-        { label: 'niminal-live (sequencer)', items: [
-          { label: 'Command line', slug: 'reference/niminal-live/cli' },
+        { label: 'Sequencer', items: [
           { label: 'Sequencer protocol', slug: 'reference/protocol' },
           { label: 'Editor and LSP', slug: 'reference/editor' },
         ] },
         { label: 'Stage', items: [
           { label: 'niminal stage', slug: 'reference/stage' },
-        ] },
-        { label: 'Tracker', items: [
-          { label: 'Overview', slug: 'reference/tracker' },
-          { label: 'The grid', slug: 'reference/tracker/grid' },
-          { label: 'Patterns, sequence and timing', slug: 'reference/tracker/sequence' },
-          { label: 'Instruments and effects', slug: 'reference/tracker/instruments' },
-          { label: 'Track commands, automation and envelopes', slug: 'reference/tracker/automation' },
-          { label: 'Mixer, returns and sends', slug: 'reference/tracker/mixer' },
-          { label: 'Selecting and editing', slug: 'reference/tracker/editing' },
-          { label: 'Interface, size and keyboard', slug: 'reference/tracker/interface' },
         ] },
       ],
     }),

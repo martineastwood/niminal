@@ -1,22 +1,18 @@
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
 
 use clap::{Args, Parser, Subcommand};
-use niminal_compose::ScoreFile;
-use niminal_live::{Live, LiveServer};
-use niminal_live_cli::input::LiveShared;
+use engine_commands::{ReplayArgs, ServerArgs};
+use play::PlayArgs;
 use niminal_live_cli::render::{
     End, RenderOptions, SAMPLE_RATE, render, render_session, write_wav,
 };
-use niminal_live_cli::report::{render_error, render_problems};
-use niminal_ws::{Client, Server, ServerConfig, lock};
-use serde_json::json;
+
+mod engine_commands;
+mod play;
 
 #[derive(Parser)]
-#[command(name = "niminal-live", version = option_env!("NIMINAL_RELEASE_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")))]
+#[command(name = "niminal", version = option_env!("NIMINAL_RELEASE_VERSION").unwrap_or(concat!(env!("CARGO_PKG_VERSION"), " (", env!("NIMINAL_BUILD"), ")")))]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -64,102 +60,20 @@ struct RenderArgs {
     to: Option<String>,
 }
 
-#[derive(Args)]
-struct DrumsArgs {
-    /// The groove: techno, house, two_step, halftime, breaks, boom_bap, trap or dnb.
-    #[arg(long, default_value = "techno")]
-    theme: String,
-    /// How busy it is, 0 (nothing or only the anchors) to 1 (every step the theme wants).
-    #[arg(long, default_value_t = 0.7)]
-    density: f64,
-    /// How far it wanders from the theme, 0 to 1.
-    #[arg(long, default_value_t = 0.0)]
-    chaos: f64,
-    /// The same seed makes the same grid.
-    #[arg(long, default_value_t = 1)]
-    seed: u64,
-    /// Make a drum busier or sparser than the rest, as `hat=0.5` (below 1 sparser, above 1 busier).
-    #[arg(long = "drum", value_name = "NAME=SCALE")]
-    per_drum: Vec<String>,
-    /// Name the grid, to paste it as `name = grid { ... }`.
-    #[arg(long)]
-    name: Option<String>,
-}
-
-#[derive(Args)]
-struct GalleryArgs {
-    /// The sample to make versions of.
-    sample: PathBuf,
-    /// A folder for the versions: a `.nml` and a `.wav` for each, and `gallery.json` listing them.
-    #[arg(long)]
-    out: PathBuf,
-    /// Only these kinds of recipe, such as `players,manglers` (all of them without this).
-    #[arg(long, value_delimiter = ',')]
-    families: Vec<String>,
-    /// How many versions of each recipe to make.
-    #[arg(long, value_enum, default_value_t = niminal_live_cli::gallery::Amount::Enough)]
-    amount: niminal_live_cli::gallery::Amount,
-    /// The same seed makes the same versions.
-    #[arg(long, default_value_t = 1)]
-    seed: u64,
-}
-
-/// A live performance client of the generic server.
-#[derive(Args)]
-struct LiveArgs {
-    /// A project to load and watch.
-    file: Option<PathBuf>,
-    /// Private live-control port (0 chooses a free port).
-    #[arg(long, default_value_t = 7400)]
-    port: u16,
-    /// The generic server to connect to.
-    #[arg(long, default_value_t = 7401)]
-    engine_port: u16,
-    #[arg(long)]
-    token: Option<String>,
-    /// Exit when the owning editor closes stdin.
-    #[arg(long)]
-    parent_stdio: bool,
-    /// Take MIDI control changes from every input whose name contains this
-    /// (give an empty name for all inputs), for `ctl x = midi.cc(n)`.
-    #[arg(long, value_name = "NAME", num_args = 0..=1, default_missing_value = "")]
-    midi: Option<String>,
-    /// Take OSC over UDP on this local port, for `ctl x = osc_in("/address")`.
-    #[arg(long, value_name = "PORT")]
-    osc_port: Option<u16>,
-    /// Send MIDI clock (24 a beat, with start and stop) to the output whose name contains this,
-    /// making an output of that name if there is none.
-    #[arg(long, value_name = "NAME")]
-    clock_out: Option<String>,
-    /// Follow the MIDI clock of the input whose name contains this: its tempo, and the bar line at its start.
-    #[arg(long, value_name = "NAME")]
-    clock_in: Option<String>,
-}
-
 #[derive(Subcommand)]
 enum Command {
+    /// Play a file through the sound card, and again each time it changes.
+    Play(PlayArgs),
+    /// Run the audio engine as a server, for testing and for clients of your own.
+    Server(ServerArgs),
+    /// Re-render a session to a WAV file from the log a server recorded.
+    Replay(ReplayArgs),
+    /// List the sound cards, with the ids `--out-device` and `--in-device` take.
+    Devices,
+    /// Print the built-in opcode reference as Markdown, for the docs site.
+    Docs,
     /// Render a piece to a WAV file.
     Render(RenderArgs),
-    /// Make many versions of a sample, each a short piece of code, and render them to listen to.
-    Gallery(GalleryArgs),
-    /// Make a drum grid from a theme, as code to paste into a piece.
-    Drums(DrumsArgs),
-    /// Run the live sequencer as a client of the niminal server.
-    Live(LiveArgs),
-    /// Send code to a running live sequencer.
-    Send {
-        /// The code to evaluate. With no code and no --file, it is read from the standard input.
-        code: Option<String>,
-        #[arg(long, conflicts_with = "code")]
-        file: Option<PathBuf>,
-        #[arg(long, default_value_t = 7400)]
-        port: u16,
-        /// When it should land, as in `now` or `next 4bars`.
-        #[arg(long)]
-        quantize: Option<String>,
-        #[arg(long)]
-        token: Option<String>,
-    },
     /// Show what each instrument runs every sample and what runs once per block.
     Explain {
         /// The `.nml` file to compile.
@@ -170,99 +84,6 @@ enum Command {
     },
     /// Run the language server (LSP over stdin and stdout) for an editor.
     Lsp,
-    /// Type code at a running live sequencer, one statement at a time.
-    Repl {
-        #[arg(long, default_value_t = 7400)]
-        port: u16,
-        /// When each statement should land, as in `now` or `next 4bars`.
-        #[arg(long)]
-        quantize: Option<String>,
-        #[arg(long)]
-        token: Option<String>,
-    },
-}
-
-fn run_drums(args: DrumsArgs) -> Result<(), String> {
-    use niminal_compose::drums;
-    let mut per_drum = Vec::new();
-    for item in &args.per_drum {
-        let (name, scale) = item
-            .split_once('=')
-            .and_then(|(n, s)| Some((n.to_string(), s.parse::<f64>().ok()?)))
-            .ok_or_else(|| format!("error: `--drum {item}`: write it as `hat=0.5`"))?;
-        per_drum.push((name, scale));
-    }
-    let rows = drums::generate(&drums::Request {
-        theme: &args.theme,
-        density: args.density,
-        chaos: args.chaos,
-        seed: args.seed,
-        per_drum: &per_drum,
-    })
-    .map_err(|e| format!("error: {e}"))?;
-    let grid = drums::grid_text(&rows);
-    match args.name {
-        Some(name) => println!("{name} = {grid}"),
-        None => println!("{grid}"),
-    }
-    Ok(())
-}
-
-fn run_gallery(args: GalleryArgs) -> Result<(), String> {
-    use niminal_live_cli::gallery;
-    let known = gallery::families();
-    if let Some(bad) = args.families.iter().find(|f| !known.contains(f)) {
-        return Err(format!(
-            "error: no family `{bad}`; the families are {}",
-            known.join(", ")
-        ));
-    }
-    let sample = args
-        .sample
-        .canonicalize()
-        .map_err(|e| format!("error: {}: {e}", args.sample.display()))?;
-    std::fs::create_dir_all(&args.out)
-        .map_err(|e| format!("error: {}: {e}", args.out.display()))?;
-    let versions = gallery::generate(
-        &sample.to_string_lossy(),
-        &args.families,
-        args.amount,
-        args.seed,
-    );
-    #[derive(Parser)]
-    struct Render {
-        #[command(flatten)]
-        args: RenderArgs,
-    }
-    let (mut made, mut index) = (0, Vec::new());
-    for version in &versions {
-        let file = args.out.join(format!("{}.nml", version.name));
-        let wav = args.out.join(format!("{}.wav", version.name));
-        std::fs::write(&file, &version.source)
-            .map_err(|e| format!("error: {}: {e}", file.display()))?;
-        let render = Render::parse_from([
-            "render".as_ref(),
-            file.as_os_str(),
-            "--out".as_ref(),
-            wav.as_os_str(),
-        ]);
-        match run_render(render.args) {
-            Ok(()) => {
-                made += 1;
-                index.push(version.json());
-            }
-            Err(message) => eprintln!("skipped {}: {message}", version.name),
-        }
-    }
-    let list = serde_json::to_string_pretty(&index).map_err(|e| e.to_string())?;
-    std::fs::write(args.out.join("gallery.json"), list)
-        .map_err(|e| format!("error: gallery.json: {e}"))?;
-    eprintln!(
-        "made {made} of {} versions in {}",
-        versions.len(),
-        args.out.display()
-    );
-    Ok(())
 }
 
 fn run_explain(file: &Path, control_step: usize) -> Result<(), String> {
@@ -290,10 +111,30 @@ fn run_explain(file: &Path, control_step: usize) -> Result<(), String> {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
+        Command::Play(args) => play::run_play(args),
+        Command::Server(mut args) => {
+            niminal_ws::launch::install_crash_log("niminal", env!("NIMINAL_BUILD"));
+            if let Some(release) = option_env!("NIMINAL_RELEASE_VERSION") {
+                niminal_server::set_release(release);
+            }
+            if args.log.is_none() && !args.no_log {
+                args.log = niminal_cli::host::new_session_log();
+            }
+            engine_commands::run_server(args)
+        }
+        Command::Replay(args) => niminal_engine::set_block_size(args.block_size)
+            .and_then(|()| niminal_engine::set_control_step(args.control_step))
+            .map_err(|e| format!("error: {e}"))
+            .and_then(|()| engine_commands::run_replay(&args)),
+        Command::Devices => {
+            engine_commands::print_devices();
+            Ok(())
+        }
+        Command::Docs => {
+            print!("{}", engine_commands::opcode_reference());
+            Ok(())
+        }
         Command::Render(args) => run_render(args),
-        Command::Gallery(args) => run_gallery(args),
-        Command::Drums(args) => run_drums(args),
-        Command::Live(args) => run_live(args),
         Command::Explain { file, control_step } => run_explain(&file, control_step),
         Command::Lsp => {
             if niminal_lsp::run(std::io::stdin().lock(), std::io::stdout().lock()) == 0 {
@@ -302,24 +143,6 @@ fn main() -> ExitCode {
                 Err(String::new())
             }
         }
-        Command::Send {
-            code,
-            file,
-            port,
-            quantize,
-            token,
-        } => run_send(
-            code,
-            file.as_deref(),
-            port,
-            quantize.as_deref(),
-            token.as_deref(),
-        ),
-        Command::Repl {
-            port,
-            quantize,
-            token,
-        } => run_repl(port, quantize, token.as_deref()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -379,22 +202,12 @@ fn run_render(args: RenderArgs) -> Result<(), String> {
         to.as_deref(),
     );
     let out = out.as_path();
-    let mut source = read(file)?;
-    let mut arrangement = arrangement;
+    let source = read(file)?;
     let mut score_events = Vec::new();
     if let Some(path) = score {
-        match ScoreFile::from_json(&read(path)?)
+        score_events = niminal_compose::Section::from_json(&read(path)?)
             .map_err(|e| format!("error: {}: {e}", path.display()))?
-        {
-            ScoreFile::Section(section) => score_events = section.events,
-            ScoreFile::Project(project) => {
-                if arrangement.is_none() {
-                    arrangement = project.arrangement.as_ref().map(|a| a.name.clone());
-                }
-                source.push('\n');
-                source.push_str(&project.to_source());
-            }
-        }
+            .events;
     }
     let name = file.display().to_string();
     let options = niminal_lang::CompileOptions {
@@ -535,291 +348,6 @@ fn run_render(args: RenderArgs) -> Result<(), String> {
     }
 
     write_output(&rendered, out, stems)
-}
-
-fn run_live(args: LiveArgs) -> Result<(), String> {
-    use niminal_server::EngineReply;
-    let LiveArgs {
-        file,
-        port,
-        engine_port,
-        token,
-        parent_stdio,
-        midi,
-        osc_port,
-        clock_out,
-        clock_in,
-    } = args;
-    let link = niminal_live::WsLink::connect(engine_port, token.as_deref(), "niminal-live")?
-        .exit_when_lost();
-    let EngineReply::Hello {
-        sample_rate,
-        channels,
-        ..
-    } = link.hello.clone()
-    else {
-        return Err("the server did not return its audio format".into());
-    };
-    let layout = niminal_lang::Layout::standard(channels as u16)?;
-    // Over a socket each look at the engine's clock is a round trip that locks the engine, so count
-    // between looks: the sequencer works 100ms ahead and the count is never ahead of the engine.
-    let new_live = move |link: Box<dyn niminal_live::EngineLink>| {
-        Live::new(link, sample_rate, layout).with_clock_sync(Duration::from_millis(250))
-    };
-    // A client that names a chair in its hello gets a performance of its own, over a connection of its own.
-    let chair_token = token.clone();
-    let live: LiveShared = Arc::new(Mutex::new(
-        LiveServer::new(new_live(Box::new(link))).with_chairs(move || {
-            let link =
-                niminal_live::WsLink::connect(engine_port, chair_token.as_deref(), "niminal-live")?
-                    .exit_when_lost();
-            Ok(new_live(Box::new(link)))
-        }),
-    ));
-    let server = Server::start(
-        live.clone(),
-        ServerConfig {
-            port,
-            token,
-            ..ServerConfig::default()
-        },
-    )?;
-    let _midi = midi
-        .as_deref()
-        .map(|filter| niminal_live_cli::input::start_midi(&live, filter))
-        .transpose()?;
-    let _osc = osc_port
-        .map(|port| niminal_live_cli::input::OscInput::start(live.clone(), port))
-        .transpose()?;
-    let clock_out = clock_out
-        .as_deref()
-        .map(niminal_live_cli::clock::ClockOutput::open)
-        .transpose()?;
-    if clock_out.is_some() {
-        lock(&live).live_mut().set_clock_out(true);
-    }
-    let _clock_in = clock_in
-        .as_deref()
-        .map(|filter| {
-            lock(&live).live_mut().set_clock_in(true);
-            let live = live.clone();
-            niminal_live_cli::input::open_clock_in(filter, move |message, arrived| {
-                lock(&live).live_mut().midi_clock(message, arrived);
-            })
-        })
-        .transpose()?;
-    let mut watched = file.as_deref().map(|path| load(&live, path, Some("now")));
-    if parent_stdio {
-        std::thread::spawn(|| {
-            let mut buffer = [0; 256];
-            while matches!(std::io::stdin().read(&mut buffer), Ok(n) if n > 0) {}
-            // The OS closes the engine connection, cancelling this client's pending events.
-            std::process::exit(0);
-        });
-    }
-    println!("niminal-live listening on ws://127.0.0.1:{}", server.port());
-    // Events go to the server every 25ms; the files are looked at a tenth as often.
-    let mut ticks = 0u32;
-    loop {
-        {
-            let mut server = lock(&live);
-            server.advance();
-            if let Some(out) = &clock_out {
-                niminal_live_cli::clock::pump_clock_out(server.live_mut(), out);
-            }
-        }
-        ticks = ticks.wrapping_add(1);
-        if ticks.is_multiple_of(10)
-            && let (Some(path), Some((files, last))) = (file.as_deref(), watched.as_mut())
-        {
-            let modified = newest(files);
-            if modified.is_some() && modified != *last {
-                (*files, *last) = load(&live, path, None);
-            }
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-}
-
-/// The latest modification time among `files`.
-fn newest(files: &[PathBuf]) -> Option<SystemTime> {
-    files
-        .iter()
-        .filter_map(|f| std::fs::metadata(f).and_then(|m| m.modified()).ok())
-        .max()
-}
-
-/// Evaluate a project file, reporting what happened. Returns the files it is
-/// made of and when they were last changed, to notice when any changes again.
-fn load(
-    server: &LiveShared,
-    path: &Path,
-    quantize: Option<&str>,
-) -> (Vec<PathBuf>, Option<SystemTime>) {
-    let mut files = vec![path.to_path_buf()];
-    let name = path.display().to_string();
-    let source = match read(path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("{e}");
-            return (files.clone(), newest(&files));
-        }
-    };
-    let dir = path.parent().unwrap_or(Path::new("."));
-    let parsed = niminal_live::ParsedEval::from_dir(&source, dir, quantize);
-    files.extend(parsed.module_files());
-    let modified = newest(&files);
-    let begun = {
-        let mut d = lock(server);
-        d.live_mut()
-            .set_sample_dir(path.parent().unwrap_or(Path::new(".")));
-        d.live_mut().begin_parsed(parsed)
-    };
-    let result = match begun {
-        niminal_live::Begin::Done(result) => result,
-        niminal_live::Begin::Job(job) => {
-            let mut done = job.compile();
-            loop {
-                let retry = {
-                    let mut d = lock(server);
-                    match d.live().retry_eval(&done) {
-                        Some(job) => job,
-                        None => break d.live_mut().finish_eval(done),
-                    }
-                };
-                done = retry.compile();
-            }
-        }
-    };
-    match result {
-        Ok(a) => match a.id {
-            Some(_) => println!(
-                "{name}: lands at bar {} beat {:.2}",
-                a.position.0, a.position.1
-            ),
-            None => println!("{name}: nothing to do"),
-        },
-        Err(problems) => eprint!("{}", render_problems(&problems, &source, &name)),
-    }
-    (files, modified)
-}
-
-fn run_send(
-    code: Option<String>,
-    file: Option<&Path>,
-    port: u16,
-    quantize: Option<&str>,
-    token: Option<&str>,
-) -> Result<(), String> {
-    let (source, name) = match (code, file) {
-        (Some(c), _) => (c, "<code>".to_string()),
-        (None, Some(path)) => (read(path)?, path.display().to_string()),
-        (None, None) => {
-            let mut text = String::new();
-            std::io::stdin()
-                .read_to_string(&mut text)
-                .map_err(|e| format!("error: can't read the standard input: {e}"))?;
-            (text, "<stdin>".to_string())
-        }
-    };
-    let mut client = Client::connect(port, token).map_err(|e| format!("error: {e}"))?;
-    println!("{}", eval(&mut client, &source, quantize, &name)?);
-    Ok(())
-}
-
-/// Evaluate code on the server, describing when it lands.
-fn eval(
-    client: &mut Client,
-    source: &str,
-    quantize: Option<&str>,
-    name: &str,
-) -> Result<String, String> {
-    let mut params = json!({ "source": source });
-    if let Ok(dir) = std::env::current_dir() {
-        params["dir"] = json!(dir);
-    }
-    if let Some(q) = quantize {
-        params["quantize"] = json!(q);
-    }
-    match client
-        .call_raw("eval", params)
-        .map_err(|e| format!("error: {e}"))?
-    {
-        Ok(result) => Ok(if result["id"].is_null() {
-            "nothing to do".to_string()
-        } else if result["in_seconds"].as_f64().unwrap_or(0.0) == 0.0 {
-            "applied".to_string()
-        } else {
-            format!(
-                "lands at bar {} beat {:.2} (in {:.1}s)",
-                result["position"]["bar"],
-                result["position"]["beat"].as_f64().unwrap_or(1.0),
-                result["in_seconds"].as_f64().unwrap_or(0.0)
-            )
-        }),
-        Err(error) => Err(render_error(&error, source, name)),
-    }
-}
-
-/// How many brackets a line leaves open.
-fn open_brackets(line: &str) -> i32 {
-    let code = line.split("//").next().unwrap_or("");
-    code.chars().fold(0, |depth, c| match c {
-        '{' | '[' | '(' => depth + 1,
-        '}' | ']' | ')' => depth - 1,
-        _ => depth,
-    })
-}
-
-/// A statement runs once its brackets are closed, so a block can be typed
-/// over several lines. `:quantize WHEN` (or `:quantize off`) sets when
-/// statements land, and `:quit` leaves.
-fn run_repl(port: u16, mut quantize: Option<String>, token: Option<&str>) -> Result<(), String> {
-    use std::io::{BufRead, IsTerminal, Write};
-
-    let mut client = Client::connect(port, token).map_err(|e| format!("error: {e}"))?;
-    let interactive = std::io::stdin().is_terminal();
-    let prompt = |depth: i32| {
-        if interactive {
-            print!("{}", if depth > 0 { "     ... " } else { "niminal> " });
-            let _ = std::io::stdout().flush();
-        }
-    };
-    if interactive {
-        println!(
-            "connected to the server on port {port}. :quantize WHEN sets when code lands, :quit leaves."
-        );
-    }
-
-    let mut pending = String::new();
-    let mut depth = 0;
-    prompt(depth);
-    for line in std::io::stdin().lock().lines() {
-        let line = line.map_err(|e| format!("error: can't read the standard input: {e}"))?;
-        let trimmed = line.trim();
-        if depth == 0 && trimmed.starts_with(':') {
-            match trimmed.split_once(' ').unwrap_or((trimmed, "")) {
-                (":quit" | ":q", _) => break,
-                (":quantize", "off" | "") => quantize = None,
-                (":quantize", when) => quantize = Some(when.trim().to_string()),
-                _ => eprintln!("error: unknown command `{trimmed}`"),
-            }
-        } else if !(depth == 0 && trimmed.is_empty()) {
-            pending.push_str(&line);
-            pending.push('\n');
-            depth += open_brackets(&line);
-            if depth <= 0 {
-                depth = 0;
-                match eval(&mut client, &pending, quantize.as_deref(), "<repl>") {
-                    Ok(message) => println!("{message}"),
-                    Err(message) => eprint!("{message}"),
-                }
-                pending.clear();
-            }
-        }
-        prompt(depth);
-    }
-    Ok(())
 }
 
 /// Write a finished render: one WAV, or with `stems` a folder of them.

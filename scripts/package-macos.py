@@ -51,14 +51,13 @@ def main():
     if archive.exists():
         parser.error(f"{archive.name} already exists; choose a new version or move the previous archive")
     env = os.environ.copy()
-    # Override the repo's target-cpu=native, and share dependencies across the four workspaces.
+    # Override the repo's target-cpu=native, and share dependencies across the workspaces.
     env.pop("CARGO_ENCODED_RUSTFLAGS", None)
     env.update(RUSTFLAGS="-C target-cpu=apple-m1", CARGO_TARGET_DIR=str(target),
                MACOSX_DEPLOYMENT_TARGET="13.0", NIMINAL_RELEASE_VERSION=args.version, APPLE_SIGNING_IDENTITY="-")
-    run("cargo", "build", "--locked", "--release", "-p", "niminal-cli", env=env)
     run("cargo", "build", "--locked", "--release", "-p", "niminal-live-cli", cwd=ROOT / "sequencer", env=env)
     apps = []
-    for folder, name in [("tracker", "Niminal Tracker"), ("stage", "Niminal Stage")]:
+    for folder, name in [("stage", "Niminal Stage")]:
         run("npm", "ci", cwd=ROOT / folder)
         config = {
             "version": args.version, "productName": name,
@@ -78,16 +77,15 @@ def main():
         bundle = temp / "Niminal"
         bundle.mkdir()
         (bundle / "bin").mkdir()
-        for name in ["niminal", "niminal-live"]:
-            shutil.copy2(target / "release" / name, bundle / "bin" / name)
-            run("codesign", "--force", "--sign", "-", "--timestamp=none", bundle / "bin" / name)
+        shutil.copy2(target / "release" / "niminal", bundle / "bin" / "niminal")
+        run("codesign", "--force", "--sign", "-", "--timestamp=none", bundle / "bin" / "niminal")
         for app in apps:
             run("ditto", app, bundle / app.name)
         # Materialize the local file: dependency; the VSIX must work without the checkout.
         staged_extension = temp / "extension"
         staged_extension.mkdir()
         for name in ["package.json", "package-lock.json", "README.md", "extension.js", "blocks.js", "project.js",
-                     "panel.js", "learn.js", "live.js", "live-client.js", "binaries.js", "language-configuration.json",
+                     "panel.js", "learn.js", "compat.js", "live-client.js", "binaries.js", "language-configuration.json",
                      "score-language-configuration.json", "syntaxes", "snippets", "media"]:
             source = extension / name
             if source.is_dir():
@@ -98,6 +96,8 @@ def main():
         # Install only runtime dependencies into a separate staging tree.
         package = json.loads((staged_extension / "package.json").read_text())
         package.pop("devDependencies", None)
+        # the extension and Stage of one download say they are the same release, so a mismatch is noticed
+        package["version"] = args.version
         package["dependencies"]["niminal-client"] = "file:" + str(ROOT / "clients" / "js")
         (staged_extension / "package.json").write_text(json.dumps(package, indent=2) + "\n")
         (staged_extension / "package-lock.json").unlink()

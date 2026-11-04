@@ -3,16 +3,11 @@ name = "niminal-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "The niminal command line: the audio server, the language server and offline tools"
-
-[[bin]]
-name = "niminal"
-path = "src/main.rs"
+description = "Hosting the niminal engine in a program: the sound card, the render threads, the session log and replay"
 
 [dependencies]
 niminal-engine = { path = "../niminal-engine" }
 niminal-lang = { path = "../niminal-lang" }
-clap = { version = "4", features = ["derive"] }
 hound = "3"
 niminal-server = { path = "../niminal-server" }
 niminal-ws = { path = "../niminal-ws" }

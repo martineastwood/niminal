@@ -1,29 +1,25 @@
 ---
 title: Live coding
-description: Change the music while it plays, from the editor or a terminal.
+description: Change the music while it plays, from Stage or your editor.
 ---
 
-A `niminal` server makes the sound. A **live sequencer** holds the clips, scenes, patterns and tempo, and drives that server. The [VS Code / Cursor extension](/reference/editor/) is a live sequencer with an editor attached, and is the usual way to live-code. `niminal-live live` is the same sequencer as a terminal client, for when you'd rather not use an editor.
-
-Either way, code compiles immediately and the sound changes on a musical boundary — see [When changes land](#when-changes-land).
+Niminal Stage makes the sound and holds the clips, scenes, patterns and tempo, and the [VS Code / Cursor extension](/reference/editor/) plays through it. Code compiles immediately and the sound changes on a musical boundary — see [When changes land](#when-changes-land).
 
 ## In the editor
 
 ### Install it once
 
-With the macOS download, choose **File > Install VS Code Extension…** in Tracker or Stage, and you can skip this section. Otherwise:
+With the macOS download, choose **File > Install VS Code Extension…** in Stage, and you can skip this section. Otherwise:
 
 ```sh
-cargo install --path crates/niminal-cli   # niminal: the audio server
-cargo install --path sequencer/live-cli    # niminal-live: live sequencer and language server
 cd editors/vscode && npm install && node install.js      # add --cursor for Cursor
 ```
 
-Reload the window. If the binaries aren't on your `PATH`, set `niminal.path` and `niminal.livePath` to them.
+Reload the window. The language server comes from the `niminal` command in the download's `bin` folder (set `niminal.path` if the editor can't find it), and the sound comes from Niminal Stage, so install that too. The code you evaluate plays through Stage.
 
 ### Start playing
 
-Open a `.nml` file such as `examples/groove.nml`, and press **Cmd+Enter** / **Ctrl+Enter**. The first evaluation starts the audio server if none is running; it stops when its last client closes. To watch its messages or choose an audio device, run `niminal server` in a terminal first (or use **niminal: Start Server in a Terminal**).
+Open a `.nml` file such as `examples/groove.nml`, and press **Cmd+Enter** / **Ctrl+Enter**. The code plays through Niminal Stage. If Stage is not running, the first evaluation offers to open it. What you evaluate shows in Stage as clips and scenes, on its transport and meters.
 
 | Key (mac / other) | Action |
 | --- | --- |
@@ -47,7 +43,7 @@ Every command, key and setting is in [Editor and LSP](/reference/editor/).
 
 ### MIDI and OSC in the editor
 
-Named controls (`ctl`) can follow a controller or OSC sender. Point the editor's sequencer at them with `niminal.midi` (empty string for every input, `null` to turn MIDI off) and `niminal.oscPort`, then reload the window:
+Named controls (`ctl`) can follow a controller or OSC sender. Choose the MIDI inputs in Stage (and its OSC port, in code with `osc_in`).
 
 ```nml
 ctl cutoff = midi.cc(21).range(200hz..4khz).smooth(10ms)
@@ -56,21 +52,9 @@ ctl pan    = osc_in("/fx/pan").range(-60deg..60deg)
 
 Write the control as `ctl cutoff = midi.learn...` and, once a control change arrives, the extension rewrites the line to the `midi.cc(n)` it heard.
 
-## From a terminal
+## Useful live commands
 
-The same sequencer, running as its own process, with a REPL and a one-shot `send`:
-
-```sh
-niminal server
-# another terminal:
-niminal-live live examples/groove.nml
-niminal-live repl
-niminal-live send 'chorus.start' --quantize "next 4bars"
-```
-
-With a file argument the live client watches that file and every module it `use`s, and evaluates the file again when you save. Its live-control API defaults to `ws://127.0.0.1:7400/` and it talks to the server on `--engine-port` (7401). Add `--midi` and `--osc-port` as described below. `:quit` leaves the REPL.
-
-Useful live commands once a scene is running (see [Performance](/reference/language/performance/)). Starting another scene stops the running clips of other scenes that it does not use. Shared clips keep playing, and clips that belong to no scene are left alone:
+Stage and the extension both evaluate what you send, and a file you open in Stage reloads when it changes on disk. Useful live commands once a scene is running (see [Performance](/reference/language/performance/)). Starting another scene stops the running clips of other scenes that it does not use. Shared clips keep playing, and clips that belong to no scene are left alone:
 
 ```nml
 verse.start
@@ -84,35 +68,19 @@ hush
 
 ## When changes land
 
-Pass `--quantize` to `send` / `repl`, set `:quantize next 4bars` in the REPL (`:quantize off` clears it), set `niminal.quantize` in the editor, or write `@ next 4bars` after a command in source.
+Set the **land** field in Stage's top bar (for example `next 4bars`), set `niminal.quantize` in the editor, or write `@ next 4bars` after a command in source.
 
 Defaults when you omit a quantum: plays on the next cycle, instrument redefinitions on the next beat, most other changes on the next bar. `now` lands as soon as possible.
 
 ## MIDI and OSC from a controller
 
-For a terminal session, start the live client with the inputs you want:
-
-```sh
-niminal-live live examples/midi_osc.nml --midi --osc-port 9000
-```
-
-- `--midi [NAME]` — every MIDI input whose name contains `NAME`, or all inputs if you omit the name.
-- `--osc-port PORT` — OSC over UDP on this machine only.
+Stage listens to your MIDI inputs, and shows the last message it heard in the top bar. For OSC, open **Audio** and give an **OSC in port** (UDP, on this machine only); controls bound with `osc_in` then hear it.
 
 `midi.learn` waits for the next control change and binds to it. A clip with `keys: midi.keys(...)` plays from a MIDI keyboard. Details: [Performance](/reference/language/performance/).
 
 ## Syncing to other gear with MIDI clock
 
-Niminal can follow the clock of another device or program, and send its own.
-
-```sh
-niminal-live live song.nml --clock-in "IAC Driver" --clock-out "IAC Driver"
-```
-
-- `--clock-in NAME` follows the clock of the MIDI input whose name contains `NAME`. The tempo is taken from the spacing of its ticks, and kept in step with them as they drift. When the other side presses start, bar 1 starts at its first tick (continue picks up the bar where it stopped). Stop leaves the clips playing and holds the tempo. Clips and changes already waiting for a bar line keep the sample they were queued for, so start the other side before you queue anything for the first bar.
-- `--clock-out NAME` sends 24 ticks to the beat to the output whose name contains `NAME` (or makes an output of that name, where the system allows). A start goes out on a bar line, ticks follow the tempo through every change, and a `reset` stops the clock and starts it again on the next bar line.
-
-The stage has the same two choices in its **sync** menus. Following a clock changes the tempo like a `tempo` command would, so it shows in the session log and a set replays.
+Niminal can follow the clock of another device or program, and send its own. Stage has both in its **sync** menus: **follow** takes the clock of a MIDI input, whose tempo is taken from the spacing of its ticks and kept in step as they drift (when the other side presses start, bar 1 starts there), and **send** sends 24 ticks to the beat to an output (or makes an output of that name, where the system allows), with a start on a bar line. Following a clock changes the tempo like a `tempo` command would, so it shows in the session log and a set replays.
 
 ## Sending MIDI and OSC out
 
@@ -158,7 +126,7 @@ An fx can read the sound card's input with `input(1)`, or `input(1..2)` for two 
 fx voice { out = input(1).lpf(cutoff: 3khz) }
 ```
 
-Start the server with `--audio-input` to listen to the default input device (at the output's sample rate). `niminal-live render file.nml --input take.wav` plays a WAV file into those fx declarations instead, for as long as the file lasts unless you say otherwise with `--bars` or `--seconds`.
+Start the server with `--audio-input` to listen to the default input device (at the output's sample rate). `niminal render file.nml --input take.wav` plays a WAV file into those fx declarations instead, for as long as the file lasts unless you say otherwise with `--bars` or `--seconds`.
 
 ## Session replay
 

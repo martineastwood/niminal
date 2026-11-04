@@ -5,7 +5,7 @@ description: "JSON-RPC 2.0 over WebSocket for the niminal server: timestamped no
 
 **Compiled by niminal.** This is the server's own API: the notes and definitions every client sends, whichever one you use.
 
-The **engine** is the audio server that `niminal server` runs. It holds the instruments, effects, nodes, buses and controls that niminal code defines, and plays timestamped events sent to it: notes, parameter changes, control changes, definitions. It knows nothing of clips, scenes, patterns or quantize, and keeps only a tempo and a meter for each connection (see [Tempo](#tempo)): the rest belongs to a client such as the [live sequencer](/reference/protocol/), which uses this very API. A tracker, a score editor or a bridge to another tool can be a client too.
+The **engine** is the audio engine that Stage has inside it, and that `niminal server` runs on its own. It holds the instruments, effects, nodes, buses and controls that niminal code defines, and plays timestamped events sent to it: notes, parameter changes, control changes, definitions. It knows nothing of clips, scenes, patterns or quantize, and keeps only a tempo and a meter for each connection (see [Tempo](#tempo)): the rest belongs to a client such as the [live sequencer](/reference/protocol/), which uses this very API. A score editor or a bridge to another tool can be a client too.
 
 `niminal server` runs only the generic engine on port **7401** (`--port`). Any client can connect with its own sequencing model. VS Code owns a separate live sequencer process; the server never starts one. Messages are **JSON-RPC 2.0** text frames over **WebSocket**, on loopback only.
 
@@ -13,7 +13,7 @@ The **engine** is the audio server that `niminal server` runs. It holds the inst
 
 1. Open a WebSocket to `ws://127.0.0.1:7401/`.
 2. Send **`hello`** first, with `{ "protocol": 5, "client": "my-app" }` (and `token` if the server needs one). The result has `sample_rate`, `channels` and the `topics`.
-3. Subscribe to topics for push updates: **`clock`** (the [clock](#clock) about ten times a second), **`meters`** (peak levels), **`notices`** (warnings) and **`transactions`** (graph change acknowledgements), **`voices`**, **`reports`**, **`scopes`** and **`jobs`**. The hello result also advertises capabilities and limits.
+3. Subscribe to topics for push updates: **`clock`** (the [clock](#clock) about ten times a second), **`meters`** (peak levels), **`notices`** (warnings) and **`transactions`** (graph change acknowledgements), **`voices`** and **`reports`**. The hello result also advertises capabilities and limits.
 
 ## Requests
 
@@ -70,7 +70,7 @@ Beats and bars written inside definitions are still resolved by the client into 
 
 **Events at the same sample.** Events with the same `at` take effect in this order: resets and panics, then definition swaps, `control` changes and buffer writes, then notes, then everything that changes a sounding note (`off`, `set` and parameter mappings). Within one step the order is the order the events were accepted: the order of a batch, and batches in the order they arrived. Two consequences clients can rely on, and that the replay test suite pins:
 
-- An `off` and a `note` that reuse the same `id` at one sample end the old note and start the new one, when the `off` comes first in the batch. A tracker row can release the previous note and play the next with one `id`.
+- An `off` and a `note` that reuse the same `id` at one sample end the old note and start the new one, when the `off` comes first in the batch.
 - `control` changes at one sample apply in the order they were sent, so the last one sent is the value that holds.
 
 Notes, controls and the rest in a batch are checked against the definitions in force at their own time, so a batch can `define` an instrument and play it. If anything in a batch is wrong, definitions queued earlier in the same batch are taken back.
@@ -166,13 +166,7 @@ Where the engine is in time, for a client that schedules against it.
 
 ### Buffers
 
-| Method | Parameters | Result |
-| --- | --- | --- |
-| `buffers.list` | none | `buffers`: each resource's `name`, `frames`, `channels`, `sample_rate` |
-| `buffers.alloc` | `name`, `frames`, optional `channels` (default 1) | Allocate a new named buffer within the client memory budget through a logged definition |
-| `buffers.read` | `name`, `offset` (default 0), `count` | `name`, `offset`, `values` (at most 65536 samples) |
-| `buffers.load` | `name`, `path`, `channel` (0 for all channels, otherwise 1-based; default 0) | Load WAV audio, resample to the engine rate, allocate if absent, and queue logged writes; an existing buffer must have the resulting frame and channel counts |
-| `buffers.save` | `name`, `path` | Save a multichannel 32-bit float WAV snapshot; returns `name`, `path`, `frames` |
+Buffers are declared in code (`buffer take = zeros(48000, channels: 2)`), and written to with `buffer_write` events.
 
 Sample updates go in `events.send`:
 
@@ -180,13 +174,13 @@ Sample updates go in `events.send`:
 { "op": "buffer_write", "name": "take", "at": "now", "offset": 0, "values": [0.25, -0.5], "tag": "edit" }
 ```
 
-A write contains at most 65536 finite samples within the declared length. It applies before notes at that sample, is validated with the rest of the batch, and supports cancellation and disconnect cleanup. Longer updates use several writes at the same time. `buffers.load` records the decoded values in the session log, so replay does not need the original WAV. Writes apply when rendering reaches their time; reading immediately after queuing a write may still return the previous contents. Snapshots do not stop concurrent recording.
+A write contains at most 65536 finite samples within the declared length. It applies before notes at that sample, is validated with the rest of the batch, and supports cancellation and disconnect cleanup. Longer updates use several writes at the same time.
 
-`offset` and `count` measure frames; values are interleaved by frame. Buffers support 1–16 channels. `buffers.read` and `buffer_write` accept at most 65536 samples, including all channels. `buffers.free {name}` removes the published name. Prepared voices keep their references; allocating the same name creates a new generation. `buffers.budget {bytes?}` reads or changes the connection’s memory budget (default 256 MiB), returning `bytes` and `retained_bytes`. Retained generations count until their final reference disappears.
+`offset` measures frames; values are interleaved by frame. Buffers support 1–16 channels, and `buffer_write` accepts at most 65536 samples, including all channels. Prepared voices keep their references; allocating the same name creates a new generation.
 
 In DSP, `buffer take = zeros(48000, channels: 2)` allocates stereo storage. Read a channel with `take.at(position, channel: 2)`. `take.record(signal, channel: 1, loop: true)` records consecutive samples; multichannel signals write consecutive channels starting at `channel`.
 
-### Reports, scopes and voice lifecycle
+### Reports and voice lifecycle
 
 Subscribe to `reports`, then use a signal tap in an instrument or fx:
 
@@ -198,7 +192,6 @@ instr tone(freq: hz) {
 
 `.report("name", rate: 30hz, on: trigger)` passes through its input and emits scalar or array values (up to 64 elements). With `on`, every positive edge is retained, including repeated values. Each tap has a 256-event ring; overflow is counted in `dropped`. `report` notifications carry `name`, `source`, `token` (for notes), absolute `sample`, `values` and cumulative `dropped`. Audio threads only publish to bounded storage. Existing `.osc_out` remains available for external OSC destinations.
 
-`scopes.create {id, endpoint, frames?, rate?}` watches master, a node or an accessible bus. Defaults are 1024 frames at 20 updates/second; limits are 4096 frames, 30 updates/second and 32 scopes per connection. Subscribe to `scopes` for `scope` notifications containing `id`, `sample`, `channels` and interleaved `values`. Remove with `scopes.remove {id}`. Windows are sampled from the current rendered audio and can overlap or skip; use capture for continuous audio.
 
 Every accepted note returns a server `token` in the `events.send` result’s `notes` list, paired with its input `event` index. Subscribe to `voices` for `voice` notifications: `state` (`started`, `released`, `ended`, `dropped`), actual renderer `sample`, `token`, optional client `id`, `target`, `reason` and connection-local `sequence`. Reasons distinguish normal completion, choke, panic, invalid DSP, graph removal and capacity drops. `status.active_voices` supplies the current snapshot and sequence for resynchronization. A notification describes actual playback rather than acceptance into the queue.
 
@@ -210,26 +203,12 @@ A routing `player` edit creates a disk-backed source node:
 
 ```json
 {"op":"routing","at":"now","edits":[
-  {"op":"player","id":"music","path":"file:1","looping":true},
+  {"op":"player","id":"music","path":"/Users/me/Music/loop.wav","looping":true},
   {"op":"connect","id":"music_out","from":{"kind":"node","id":"music"},"to":{"kind":"master"}}
 ]}
 ```
 
 Player fields: `path`, optional 1-based `channels` selection, `rate` (0.25–4, default 1), `position` in seconds, `playing` (default true), `looping`, `loop_start` and `loop_end` in seconds. `seek {id,seconds}` seeks at the enclosing event time. Node `set` edits control `rate`, `playing`, `loop`, `loop_start` and `loop_end`; modulation supports `rate`. Decoding and seeking run on a worker with a fixed page cache. A realtime cache miss produces silence and increments the player’s `underruns`; offline rendering waits for data. Status exposes player position and failure state. Files must remain unchanged during playback. Reverse and granular disk access are outside this transport player’s contract.
-
-### File transfer, export and live capture
-
-Browser clients upload WAV files with `files.upload {id?,offset?,data?,finish?}`. `data` is base64, at most 256 KiB decoded per chunk; start without `id`, then append using the returned handle and byte offset. Set `finish:true` on the final chunk. Ready handles can replace local paths in buffer loads and player edits. `files.read {id,offset?,count}` returns base64 bytes and `eof`, up to 256 KiB per read. `files.remove {id}` deletes the handle. Handles belong to the connection and temporary files are removed on disconnect.
-
-`render.start` runs an independent offline session with `{source,events,frames,sample_rate?,channels?,limiter?,tail?,resources?,outputs?}`. Defaults: 48000 Hz, stereo, limiter and tail enabled. `source` may be empty when the definitions arrive as events instead (a `transaction` at sample 0 can carry a `dir` for sample paths). Events contain explicit engine sample times and must fall before `frames`; the client supplies its project and schedule. This does not replay the live session’s history. Resources are `{name,path,channel?}` buffer imports. Outputs are `{id,endpoint,path?}`; default output is master. Selected stem endpoints must exist at render start. A missing path produces a downloadable file handle. WAV output is streamed with bounded memory and promotes to RF64 past 4 GiB. Tail rendering stops after one second below −90 dB, capped at 60 seconds.
-
-`capture.start {output,at?}` records an existing live endpoint from an absolute sample or `"now"`; `capture.stop {id,at?}` sets the exact exclusive end sample. Capture includes the actual live performance, with the master after its limiter. A worker drains bounded audio storage; overflow or removal of a source fails visibly instead of silently dropping audio.
-
-Both return a job `id`. Use `jobs.status {id}`, `jobs.cancel {id}` or subscribe to `jobs` for `job` notifications. States are `running`, `completed`, `failed` and `cancelled`; completed results include output file handles. At most two jobs run per connection, and at most four offline renders engine-wide. The most recent 64 terminal jobs per connection are retained. Disconnect cancels outstanding work. Local output paths refer to the server’s filesystem.
-
-### Audio devices
-
-`audio.devices` lists input/output devices and supported formats. `audio.status` reports host state and selected settings. `audio.configure {settings,restart:true}` queues an explicit engine restart; settings include `output`, `input`, `sample_rate`, `channels`, optional `buffer_size` (the device callback size in frames, not the DSP block; see `--block-size`) and `no_audio`. Use device IDs from enumeration or `"default"`. Restart resets the sample clock and disconnects all clients; reconnect and resubmit the project. Unsupported formats fail preflight, and device loss remains visible in host status. An embedded engine without an audio host rejects configuration.
 
 ### Per-connection limits
 
@@ -240,15 +219,11 @@ Both return a job `id`. Use `jobs.status {id}`, `jobs.cancel {id}` or subscribe 
 | Message size | 4 MiB |
 | Buffer write per request | 65,536 samples |
 | Buffer size | 256 MiB |
-| File transfer chunk | 256 KiB |
 | Values in one `report` | 64 |
-| Scopes | 8, each up to 4096 frames and 30 updates/second |
-
-The scopes are the biggest steady stream a client can ask for: 32 scopes at the limit are `32 × 4096 × 30` frames per second of every channel of the endpoint, far more than the notification queue below holds, so a client that asks for that gets coalesced updates (`transport_dropped` counts them). Ask for the window and rate you will draw.
 
 ### Transport limits
 
-Messages are limited to 4 MiB. Each connection has a bounded notification queue (256 messages / 4 MiB); clock, meter and scope updates coalesce. `transport_dropped` reports coalescing/drops. If reliable notifications cannot fit, the slow connection closes so its client can reconnect and rebuild state. There are no resumable server sessions.
+Messages are limited to 4 MiB. Each connection has a bounded notification queue (256 messages / 4 MiB); clock and meter updates coalesce. `transport_dropped` reports coalescing/drops. If reliable notifications cannot fit, the slow connection closes so its client can reconnect and rebuild state. There are no resumable server sessions.
 
 ### `events.cancel`
 
@@ -359,7 +334,7 @@ Use one `transaction` operation for coordinated definition and topology changes 
 
 `events.send` returns `transactions: [{ "id": 42, "at": 96000 }]` for accepted graph changes (`define`, structural `routing`, `transaction` and `forget`). Control-only operations return no graph receipts. Subscribe to **`transactions`** to receive **`transaction`** notifications for your connection. Each has `id`, scheduled `at`, `status` (`queued`, `applied`, `cancelled` or `dropped`), and `applied_at` (null until applied). Applied acknowledgements come from the DSP renderer, with the actual swap sample; acceptance and the metadata clock alone do not acknowledge application. Notifications are delivered when the server next polls. `status.transactions` contains pending transactions and a bounded recent history. Cancelling uses the existing tag/time API; a dropped transaction was invalidated by an earlier graph change.
 
-The JavaScript and Python clients expose `transaction(...)`. The live sequencer also uses transactions when submitting its definitions and routing.
+The JavaScript client sends them like any other event. The live sequencer also uses transactions when submitting its definitions and routing.
 
 ### Replacing an fx live
 

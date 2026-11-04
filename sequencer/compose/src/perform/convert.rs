@@ -370,27 +370,3 @@ pub(super) fn section_to_clip(section: crate::Section, tempo: Tempo) -> Res<Clip
         fx_params: Vec::new(),
     })
 }
-
-pub(super) fn clipdef_to_clip(def: &crate::ClipDef, cx: &Context) -> Res<Clip> {
-    // Re-parse the canonical source so lanes go through the same path as handwritten clips.
-    let src = def.to_source();
-    let items = niminal_lang::parse_composition(&src)?;
-    let Item::Clip(block) = items
-        .into_iter()
-        .find(|i| matches!(i, Item::Clip(_)))
-        .ok_or_else(|| {
-            Diagnostic::new(
-                format!("clip `{}` produced no clip source", def.name),
-                Span::new(0, 0),
-            )
-        })?
-    else {
-        unreachable!()
-    };
-    let p = Perform {
-        cx,
-        bindings: HashMap::new(),
-        arrangements: HashMap::new(),
-    };
-    p.clip(&block)
-}

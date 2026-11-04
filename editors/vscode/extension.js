@@ -6,15 +6,14 @@ const nodePath = require("node:path");
 const { spawn } = require("node:child_process");
 const { LanguageClient } = require("vscode-languageclient/node");
 const { LiveClient: Client } = require("./live-client");
-const { startLive } = require("./live");
-const { findBinary, serverCommand, backgroundServerArgs } = require("./binaries");
+const { findBinary, openStageCommand } = require("./binaries");
+const { releaseMismatch } = require("./compat");
 const { blockAround } = require("./blocks");
 const { clipDescription, sceneDescription, silencers } = require("./panel");
 const { rewriteLearned } = require("./learn");
 const { projectFiles } = require("./project");
 
 let client = null;
-let live = null;
 let connecting = null;
 let languageServer = null;
 let status;
@@ -39,7 +38,7 @@ const flash = vscode.window.createTextEditorDecorationType({
 
 function settings() {
   const c = vscode.workspace.getConfiguration("niminal");
-  return { port: c.get("port"), token: c.get("token"), quantize: c.get("quantize"), path: findBinary("niminal", c.get("path")), livePath: findBinary("niminal-live", c.get("livePath")), midi: c.get("midi"), oscPort: c.get("oscPort") };
+  return { port: c.get("port"), token: c.get("token"), quantize: c.get("quantize"), stageApp: c.get("stageApp"), path: findBinary("niminal", c.get("path")) };
 }
 
 const METER_BLOCKS = " ▁▂▃▄▅▆▇█";
@@ -53,7 +52,7 @@ function showStatus() {
   if (!client?.connected) {
     const reconnecting = reconnectTimer !== null;
     status.text = reconnecting ? "$(sync~spin) niminal" : "$(debug-disconnect) niminal";
-    status.tooltip = reconnecting ? "Reconnecting…" : "Not connected. Click to connect to the server.";
+    status.tooltip = reconnecting ? "Reconnecting…" : "Not connected. Click to connect to Niminal Stage.";
     status.command = reconnecting ? undefined : "niminal.connect";
     return;
   }
@@ -69,7 +68,7 @@ function showStatus() {
   status.text = `$(unmute) ${transport.bar}.${Math.floor(transport.beat)} · ${Math.round(transport.bpm)} bpm · ${transport.voices} voices${meter ? ` ${meter}` : ""}${pending}${silenced ? ` · ${silenced}` : ""}`;
 }
 
-/** The server heard a control change for `midi.learn`: write it into the code that asked. */
+/** Stage heard a control change for `midi.learn`: write it into the code that asked. */
 async function applyLearned(control, source) {
   channel.appendLine(`learned: ctl ${control} = ${source}`);
   for (const document of vscode.workspace.textDocuments) {
@@ -92,8 +91,6 @@ async function connect() {
   } catch (error) {
     intentionalClose = true;
     client?.close();
-    live?.dispose();
-    live = null;
     intentionalClose = false;
     throw error;
   } finally {
@@ -102,11 +99,7 @@ async function connect() {
 }
 
 async function connectLive() {
-  const config = settings();
-  const { token } = config;
-  live?.dispose();
-  live = startLive({ ...config, path: config.livePath }, (text) => channel.appendLine(`live: ${text}`));
-  const port = await live.ready;
+  const { port, token } = settings();
   intentionalClose = false;
   client = new Client({
     port,
@@ -142,7 +135,12 @@ async function connectLive() {
       if (!intentionalClose) scheduleReconnect();
     },
   });
-  await client.connect();
+  const hello = await client.connect();
+  const mismatch = releaseMismatch(hello.release, require("./package.json").version);
+  if (mismatch) {
+    channel.appendLine(mismatch);
+    vscode.window.showWarningMessage(`niminal: ${mismatch}`);
+  }
   await client.subscribe(["transport", "landed", "notices", "learned", "meters", "pending"]);
   reconnectAttempts = 0;
   clearReconnectTimer();
@@ -212,45 +210,43 @@ async function ensureConnected() {
   try {
     return await connect();
   } catch (e) {
-    // A server that is listening but won't talk is not helped by starting another one:
-    // say what it said instead of asking for a server that is already there.
+    // Something that is listening but won't talk is not helped by opening Stage again:
+    // say what it said instead.
     if (await listening(settings().port)) return reportConnectError(e);
-    // Nothing is listening: start a server in the background, as Tracker and Stage do.
-    try {
-      return await startBackgroundServer();
-    } catch (started) {
-      const choice = await vscode.window.showErrorMessage(`niminal: ${started.message}`, "Start Server in a Terminal");
-      if (choice === "Start Server in a Terminal") return startServer();
-      return null;
-    }
+    return openStage();
   }
 }
 
-/** Start `niminal server --exit-when-unused` on its own, so it goes when the last client closes, then connect.
- *  Its messages go to ~/.niminal/server.log. */
-async function startBackgroundServer() {
-  const { port, token, path } = settings();
-  const dir = nodePath.join(os.homedir(), ".niminal");
-  fs.mkdirSync(dir, { recursive: true });
-  const logPath = nodePath.join(dir, "server.log");
-  // the last run's log is kept as server.log.old, so what a crashed server said survives a restart
-  try { fs.renameSync(logPath, `${logPath}.old`); } catch {}
-  const log = fs.openSync(logPath, "w");
-  const child = spawn(path, backgroundServerArgs(port, token), { detached: true, stdio: ["ignore", log, log] });
-  fs.closeSync(log);
+/** Open Niminal Stage, which has the engine and the sequencer in it, and connect once it is listening. */
+async function openStage() {
+  const { port, stageApp } = settings();
+  const choice = await vscode.window.showInformationMessage(
+    `niminal: Niminal Stage is not running. The code you evaluate plays through it.`,
+    "Open Stage",
+  );
+  if (choice !== "Open Stage") return null;
+  const command = openStageCommand(stageApp);
+  if (!command) {
+    vscode.window.showWarningMessage("niminal: open Niminal Stage yourself, then evaluate again.");
+    return null;
+  }
+  channel.appendLine(`opening Niminal Stage: ${command.join(" ")}`);
+  const child = spawn(command[0], command.slice(1), { detached: true, stdio: "ignore" });
   const failed = new Promise((_, reject) => {
-    child.once("error", (e) => reject(new Error(`could not start ${path}: ${e.message}. Set niminal.path to the niminal program.`)));
-    child.once("exit", (code) => reject(new Error(`the server stopped as it started (exit ${code}); ${logPath} says why`)));
+    child.once("error", (e) => reject(new Error(`could not open ${stageApp}: ${e.message}. Set niminal.stageApp to its name.`)));
+    child.once("exit", (code) => code && reject(new Error(`could not open ${stageApp} (exit ${code}). Set niminal.stageApp to its name.`)));
   });
   failed.catch(() => {});
   child.unref();
-  channel.appendLine(`starting a server on port ${port} that stops when its last client does`);
-  await Promise.race([waitForServer(port, 15000, `nothing answered on port ${port}; ${logPath} may say why`), failed]);
-  child.removeAllListeners("exit");
-  return connect();
+  try {
+    await Promise.race([waitForStage(port), failed]);
+    return await connect();
+  } catch (e) {
+    return reportConnectError(e);
+  }
 }
 
-/** Show the server's complaints about code that began at `firstLine` of `document`. */
+/** Show Stage's complaints about code that began at `firstLine` of `document`. */
 function reportProblems(document, firstLine, problems, range) {
   const kept = (diagnostics.get(document.uri) ?? []).filter((d) => !range.intersection(d.range));
   const fresh = problems.map((p) => {
@@ -351,7 +347,7 @@ function listening(port, timeout = 500) {
 }
 
 /** Wait for a server to answer on `port`, turning a timeout into something readable. */
-async function waitForServer(port, timeout = 20000, failure = `nothing answered on port ${port}; the server terminal says why`) {
+async function waitForStage(port, timeout = 30000, failure = `nothing answered on port ${port}; is Niminal Stage open?`) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     if (await listening(port)) return;
@@ -365,42 +361,19 @@ function reportConnectError(e) {
   return null;
 }
 
-/** Start a server in a terminal, then connect to it, so the editor uses what it started. */
-async function startServer() {
-  const { port, token, path } = settings();
-  if (await listening(port)) {
-    vscode.window.showInformationMessage(`niminal: a server is already listening on port ${port}`);
-  } else {
-    const terminal = vscode.window.createTerminal("niminal server");
-    terminal.sendText(serverCommand(path, port, token));
-    terminal.show(true);
-    channel.appendLine(`starting the server on port ${port}`);
-    try {
-      await waitForServer(port);
-    } catch (e) {
-      return reportConnectError(e);
-    }
-  }
-  try {
-    return await connect();
-  } catch (e) {
-    return reportConnectError(e);
-  }
-}
-
-// Errors, completion, hover and go-to-definition come from `niminal-live lsp`, the same
-// binary as the live sequencer, so they always agree with it about the language.
+// Errors, completion, hover and go-to-definition come from `niminal lsp`, which comes in the same download as
+// Stage, so they agree about the language. Stage need not be running.
 function startLanguageServer() {
   const server = new LanguageClient(
     "niminal",
     "niminal language server",
-    { command: settings().livePath, args: ["lsp"] },
+    { command: settings().path, args: ["lsp"] },
     { documentSelector: [{ language: "niminal" }] },
   );
   languageServer = server;
   server.start().catch((e) => {
     channel.appendLine(`language server: ${e.message}`);
-    vscode.window.showWarningMessage(`niminal: can't start \`${settings().livePath} lsp\`. Set niminal.livePath to the niminal-live executable.`);
+    vscode.window.showWarningMessage(`niminal: can't start \`${settings().path} lsp\`. Install niminal from the Niminal download, or set niminal.path to the niminal program.`);
   });
 }
 
@@ -429,7 +402,6 @@ function activate(context) {
     command("niminal.hush", () => simple("hush")),
     command("niminal.panic", () => simple("panic")),
     command("niminal.connect", ensureConnected),
-    command("niminal.startServer", startServer),
     command("niminal.restartLanguageServer", restartLanguageServer),
     vscode.window.registerTreeDataProvider("niminal.scenes", {
       onDidChangeTreeData: scenesChanged.event,
@@ -515,7 +487,6 @@ function deactivate() {
   intentionalClose = true;
   clearReconnectTimer();
   client?.close();
-  live?.dispose();
   return languageServer?.stop();
 }
 

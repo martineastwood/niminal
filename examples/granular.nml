@@ -2,7 +2,7 @@
 // debris, masks and trainlets, then re-form into the original break for two final bars.
 // Evaluate the whole file; + times restart the sequence wherever the live clock has reached.
 // Render:
-// niminal-live render examples/granular.nml --out /tmp/granular.wav
+// niminal render examples/granular.nml --out /tmp/granular.wav
 config { channels: stereo }
 tempo 100bpm
 

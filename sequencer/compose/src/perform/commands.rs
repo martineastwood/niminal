@@ -59,7 +59,7 @@ impl Perform<'_> {
                         ),
                         name.span,
                     )
-                    .with_help(format!("render it with `niminal-live render file.nml {}`", name.name)));
+                    .with_help(format!("render it with `niminal render file.nml {}`", name.name)));
                 }
                 let tempo = self.cx.tempo;
                 let base = at.to_seconds(tempo);

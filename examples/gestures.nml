@@ -4,7 +4,7 @@
 // `quantize:` lands it on the next sixteenth, so a pad hit a little early is still in time. In a file, as below,
 // `at` starts them in turn so you can render it. Pad 39 is different: it holds the stutter for as long as the key
 // is down, because `ctl held = midi.note(39)` is open while the key is; `.quantize(1/8beat)` on it makes the hold start and end on the next eighth of a beat.
-// Render with:  niminal-live render examples/gestures.nml --out gestures.wav --bars 4
+// Render with:  niminal render examples/gestures.nml --out gestures.wav --bars 4
 config { channels: stereo }
 tempo 130bpm
 

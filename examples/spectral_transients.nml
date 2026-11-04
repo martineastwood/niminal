@@ -1,6 +1,6 @@
 // The same percussion-and-pluck groove: dry, shifted with resets off, shifted with resets on.
 // Evaluate the whole file. All three passes have identical timing, source levels and noise seeds.
-// niminal-live render examples/spectral_transients.nml --out /tmp/spectral_transients.wav
+// niminal render examples/spectral_transients.nml --out /tmp/spectral_transients.wav
 use std/spectral
 
 config { channels: stereo }

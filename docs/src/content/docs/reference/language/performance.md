@@ -3,7 +3,7 @@ title: Performance
 description: Clips, scenes, live commands, quantization, and control.
 ---
 
-**Read by niminal-live.** Clips, scenes and arrangements are the sequencer's; the server only receives the notes and changes they produce.
+**Read by the sequencer.** Clips, scenes and arrangements are the sequencer's; the server only receives the notes and changes they produce.
 
 The performance layer is built around **clips**. A clip is bound to an instrument and holds **lanes** on a timeline: notes that trigger it, and parameters it automates. You start, stop, mute, solo and transform clips, and a **scene** is a list of clips to do that to several at once. An **arrangement** is a timeline of those commands.
 
@@ -140,7 +140,7 @@ arrangement song {
 }
 ```
 
-A section's bars are its own: `over(8bars)` in `7/8` is eight bars of three and a half beats, at that section's tempo, and its clips cycle with that bar. The change is a step at the start of the section. For a tempo that moves gradually, write `tempo: env[84bpm 64bars 84bpm 8bars.log 96bpm]` instead of the list: an envelope over the whole piece, with levels in bpm and times in bars of music. It is played as steps of an eighth of a bar, and a clip playing through a change speeds up with it. Arrangements can also move an fx parameter over the whole piece (`bass_filter.tone: env[800hz 88bars 3khz]`). Per-section tempo and meter, and these envelopes, apply when an arrangement is rendered (`niminal-live render file.nml song`); a live session takes the tempo from `tempo` commands. Notes whose lengths are written in beats (a `dur` lane, an instrument time in beats) still count beats at the file's tempo. `--from` and `--to` positions also count bars at the file's tempo.
+A section's bars are its own: `over(8bars)` in `7/8` is eight bars of three and a half beats, at that section's tempo, and its clips cycle with that bar. The change is a step at the start of the section. For a tempo that moves gradually, write `tempo: env[84bpm 64bars 84bpm 8bars.log 96bpm]` instead of the list: an envelope over the whole piece, with levels in bpm and times in bars of music. It is played as steps of an eighth of a bar, and a clip playing through a change speeds up with it. Arrangements can also move an fx parameter over the whole piece (`bass_filter.tone: env[800hz 88bars 3khz]`). Per-section tempo and meter, and these envelopes, apply when an arrangement is rendered (`niminal render file.nml song`); a live session takes the tempo from `tempo` commands. Notes whose lengths are written in beats (a `dur` lane, an instrument time in beats) still count beats at the file's tempo. `--from` and `--to` positions also count bars at the file's tempo.
 
 See [Score model](/reference/score-model/) for arrangement-level lanes.
 
@@ -256,7 +256,7 @@ tempo 100bpm
 tempo 140bpm @ next 4bars over 8bars
 ```
 
-`niminal-live render` plays a file like that through a session, as the server would, so you say how long to render (`--bars 16` or `--seconds 30`). `--stems`, `--arrangement`, `--score`, `--from` and `--to` aren't available for it.
+`niminal render` plays a file like that through a session, as the server would, so you say how long to render (`--bars 16` or `--seconds 30`). `--stems`, `--arrangement`, `--score`, `--from` and `--to` aren't available for it.
 
 ## Score functions
 

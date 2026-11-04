@@ -47,14 +47,3 @@ jobs:
         working-directory: sequencer
       - run: cargo test
         working-directory: sequencer
-
-  # The engine has no OS-specific code, so it must always build for the browser.
-  wasm:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build -p niminal-engine --target wasm32-unknown-unknown

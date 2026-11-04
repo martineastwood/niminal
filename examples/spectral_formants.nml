@@ -1,6 +1,6 @@
 // A held vocal-like harmony changes colour; a rising phrase compares envelope preservation.
 // Evaluate the whole file; + times restart the piece wherever the live clock has reached.
-// niminal-live render examples/spectral_formants.nml --out /tmp/spectral_formants.wav
+// niminal render examples/spectral_formants.nml --out /tmp/spectral_formants.wav
 use std/spectral
 
 config { channels: stereo }

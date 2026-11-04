@@ -193,7 +193,6 @@ pub struct Server {
     port: u16,
     addr: std::net::SocketAddr,
     stop: Arc<AtomicBool>,
-    outboxes: Outboxes,
     threads: Vec<JoinHandle<()>>,
 }
 
@@ -280,16 +279,11 @@ impl Server {
             port,
             addr,
             stop,
-            outboxes,
             threads,
         })
     }
 
     /// How many clients are connected now.
-    pub fn client_count(&self) -> usize {
-        self.outboxes.lock().unwrap_or_else(|e| e.into_inner()).len()
-    }
-
     /// The port actually listening (useful when asked for port 0).
     pub fn port(&self) -> u16 {
         self.port
@@ -460,16 +454,6 @@ impl Client {
         name: &str,
     ) -> Result<(Client, Value), String> {
         Client::hello(port, token, json!({ "client": name }))
-    }
-
-    /// Connect to a sequencer and sit in the chair called `chair`.
-    pub fn connect_in_chair(port: u16, token: Option<&str>, chair: &str) -> Result<Client, String> {
-        Ok(Client::hello(
-            port,
-            token,
-            json!({ "client": "niminal-cli", "chair": chair }),
-        )?
-        .0)
     }
 
     fn hello(port: u16, token: Option<&str>, mut params: Value) -> Result<(Client, Value), String> {

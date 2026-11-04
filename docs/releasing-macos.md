@@ -1,10 +1,9 @@
 # Making the macOS alpha download
 
-The alpha is one ZIP containing a `Niminal` folder. Users copy that folder to
-`/Applications/Niminal`, add its `bin` directory to their shell PATH, and run
-`niminal server` before opening a client. Both desktop apps are optional, as is
-the VSIX. There is no installer, background service, automatic update or Apple
-Developer account dependency. The apps and CLI tools are ad-hoc signed and are
+The alpha is one disk image containing a `Niminal` folder. Users copy that folder to
+`/Applications/Niminal` and open Stage, which has the audio engine and the sequencer inside it.
+The `niminal` command (language server, offline render, `play`) and the VSIX are optional. There is no installer, background service,
+automatic update or Apple Developer account dependency. The app is ad-hoc signed and is
 not notarized.
 
 ## Build locally
@@ -57,10 +56,8 @@ checking MIDI timing locally:
 
 ```text
 Niminal/
-  Niminal Tracker.app
   Niminal Stage.app
   bin/niminal
-  bin/niminal-live
   niminal-vscode.vsix
   Examples/
   Getting Started.txt
@@ -81,16 +78,19 @@ Rust, Node.js, a checkout or older Niminal binaries. This is important: local
 builds do not reproduce downloaded-file quarantine or a fresh user's PATH.
 
 - Check the SHA-256, open the dmg, and follow `Getting Started.txt` exactly.
-- Exercise the normal Privacy & Security approval flow for both apps and CLI
-  tools. Keep quarantine intact; do not disable Gatekeeper to pass this check.
-- Verify CLI startup and offline rendering before starting the engine.
-- Open each client before the engine, check its helpful error, then start the
-  engine and connect. Confirm multiple clients can connect concurrently.
-- Install the VSIX in Finder-launched VS Code. Check diagnostics with no engine,
-  then live evaluation with the engine. Test a tool path containing spaces.
-- In Tracker and Stage, play, stop, save, reopen and export a small project.
-  Import a sample and reopen the project with the original sample moved away.
-- Test Stage's replay/gallery helpers with the packaged tools.
+- Exercise the normal Privacy & Security approval flow for the app. Keep
+  quarantine intact; do not disable Gatekeeper to pass this check.
+- Open Stage with nothing else running and check it plays through the default
+  sound card. Move the sound card's sample rate (44.1 and 48 kHz) and render a
+  take: the WAV must play at the right speed.
+- Install the VSIX in Finder-launched VS Code. Check diagnostics with Stage
+  closed (the language server is `bin/niminal lsp`), then evaluate with Stage
+  closed and accept the offer to open it, and check the clips appear in Stage.
+  Test an app path containing spaces.
+- Run `bin/niminal play Examples/groove.nml` and edit the file: it plays again.
+- Edit an open file from another editor: Stage reloads a tab with no edits and
+  asks before saving over one that has them.
+- In Stage, play, stop, save and reopen a small piece.
 - Replace the complete application folder with another build, reload the
   extension, and check that externally saved projects and samples remain intact.
 - Confirm the advertised macOS minimum on that OS, or narrow the support claim
@@ -110,8 +110,8 @@ physical audio/MIDI devices.
 ## Publish after review
 
 Pushing a `v*-alpha.N` tag runs the **macOS alpha package** workflow, which tests, builds the dmg and
-publishes the GitHub prerelease, then updates the Homebrew cask. Run the Tracker, Stage and VS Code
-suites locally first (`npm test` in each, and `cargo test` in `tracker/src-tauri` and `stage/src-tauri`):
+publishes the GitHub prerelease, then updates the Homebrew cask. Run the Stage and VS Code
+suites locally first (`npm test` in each, and `cargo test` in `stage/src-tauri`):
 `scripts/check.sh` does not cover them and the workflow does. A failed run leaves a dead tag, so use a
 new version for the retry.
 

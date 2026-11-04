@@ -1,7 +1,7 @@
 use std::process::Command;
 
 fn niminal() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_niminal-live"))
+    Command::new(env!("CARGO_BIN_EXE_niminal"))
 }
 
 fn scratch(name: &str) -> std::path::PathBuf {

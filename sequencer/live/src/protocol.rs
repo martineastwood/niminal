@@ -36,31 +36,14 @@ pub const TOPICS: [&str; 6] = [
     "learned",
 ];
 
-/// The chair a client sits in unless its `hello` names another.
-pub const MAIN_CHAIR: &str = "main";
-
-/// The most chairs one sequencer seats: each is a connection to the engine of its own.
-const MAX_CHAIRS: usize = 8;
-
+#[derive(Default)]
 struct Client {
     greeted: bool,
     topics: BTreeSet<String>,
-    chair: String,
 }
 
-impl Default for Client {
-    fn default() -> Self {
-        Client {
-            greeted: false,
-            topics: BTreeSet::new(),
-            chair: MAIN_CHAIR.into(),
-        }
-    }
-}
-
-/// One player's performance: its own clips, scenes, mute and solo, and what is playing, sent to the
-/// engine over a connection of its own. Clients that name the same chair share it.
-struct Chair {
+/// The performance: its clips, scenes, mute and solo, and what is playing. Every client shares it.
+struct Player {
     live: Live,
     metering: bool,
     /// The waiting changes last announced, to tell when they change.
@@ -68,9 +51,9 @@ struct Chair {
     last_transport: Option<u64>,
 }
 
-impl Chair {
-    fn new(live: Live) -> Chair {
-        Chair {
+impl Player {
+    fn new(live: Live) -> Player {
+        Player {
             live,
             metering: false,
             announced: Vec::new(),
@@ -79,12 +62,22 @@ impl Chair {
     }
 }
 
-/// Makes the sequencer for a new chair, connected to the engine.
-type SeatChair = Box<dyn FnMut() -> Result<Live, String> + Send>;
+/// What the app that owns the sequencer is told as well, so that it and the clients on the socket each see
+/// every event: the queues that announcing to clients empties are copied here first.
+#[derive(Debug, Default, Clone)]
+pub struct Tap {
+    pub landed: Vec<Landed>,
+    /// `(control, source)` of each control that learned a MIDI binding.
+    pub learned: Vec<(String, String)>,
+    pub notices: Vec<String>,
+    /// The loudest sample on each output channel since the tap was last taken; empty before any reading.
+    pub peaks: Vec<f32>,
+}
 
 pub struct LiveServer {
-    chairs: BTreeMap<String, Chair>,
-    seat: Option<SeatChair>,
+    player: Player,
+    /// Copies of what is announced to clients, for the app that owns the server, if it wants them.
+    tap: Option<Tap>,
     clients: BTreeMap<ClientId, Client>,
     next_client: ClientId,
     transport_every: u64,
@@ -92,12 +85,11 @@ pub struct LiveServer {
 }
 
 impl LiveServer {
-    /// A server with one chair, `main`.
     pub fn new(live: Live) -> LiveServer {
         let transport_every = (live.sample_rate() / 10.0) as u64;
         LiveServer {
-            chairs: BTreeMap::from([(MAIN_CHAIR.to_string(), Chair::new(live))]),
-            seat: None,
+            player: Player::new(live),
+            tap: None,
             clients: BTreeMap::new(),
             next_client: 1,
             transport_every,
@@ -105,50 +97,45 @@ impl LiveServer {
         }
     }
 
-    /// Let a client's `hello` ask for a chair of its own by name; `seat` makes the sequencer for it. A new
-    /// chair starts at the tempo and meter of `main` and plays on its own from there.
-    pub fn with_chairs(
-        mut self,
-        seat: impl FnMut() -> Result<Live, String> + Send + 'static,
-    ) -> Self {
-        self.seat = Some(Box::new(seat));
+    /// Keep a copy of what is announced to clients, for [`LiveServer::take_tap`], and keep its meters on
+    /// whether or not a client listens to them. The app reading the tap must also call
+    /// [`LiveServer::notifications`] if no socket server does.
+    pub fn with_tap(mut self) -> Self {
+        self.tap = Some(Tap::default());
         self
     }
 
-    /// The `main` chair, where the keyboard and MIDI and OSC controls play.
+    /// What was announced to clients since this was last called (nothing if there is no tap).
+    pub fn take_tap(&mut self) -> Tap {
+        self.tap.as_mut().map(std::mem::take).unwrap_or_default()
+    }
+
+    /// Put a new sequencer in place, for an engine that was started again (a new sound card, say).
+    /// Clients on the socket stay connected; what was playing, and the clips and scenes, are gone with the old
+    /// engine, so they evaluate their code again.
+    pub fn replace_live(&mut self, live: Live) {
+        self.transport_every = (live.sample_rate() / 10.0) as u64;
+        self.player = Player::new(live);
+    }
+
+    /// The sequencer, where the keyboard and MIDI and OSC controls play.
     pub fn live(&self) -> &Live {
-        &self.chairs[MAIN_CHAIR].live
+        &self.player.live
     }
 
     /// For the thread that keeps the sequencer working ahead of the engine's clock, and for the controls.
     pub fn live_mut(&mut self) -> &mut Live {
-        &mut self
-            .chairs
-            .get_mut(MAIN_CHAIR)
-            .expect("the main chair")
-            .live
+        &mut self.player.live
     }
 
-    /// Work every chair a little ahead of the engine's clock.
+    /// Work the sequencer a little ahead of the engine's clock.
     pub fn advance(&mut self) {
-        for chair in self.chairs.values_mut() {
-            chair.live.advance();
-        }
+        self.player.live.advance();
     }
 
-    /// Work every chair up to the engine's sample `end`, for an engine whose clock is moved by hand.
+    /// Work the sequencer up to the engine's sample `end`, for an engine whose clock is moved by hand.
     pub fn advance_to(&mut self, end: u64) {
-        for chair in self.chairs.values_mut() {
-            chair.live.advance_to(end);
-        }
-    }
-
-    fn live_of(&mut self, client: ClientId) -> &mut Live {
-        let name = self
-            .clients
-            .get(&client)
-            .map_or(MAIN_CHAIR, |c| c.chair.as_str());
-        &mut self.chairs.get_mut(name).expect("a client's chair").live
+        self.player.live.advance_to(end);
     }
 
     pub fn connect(&mut self) -> ClientId {
@@ -259,11 +246,9 @@ impl LiveServer {
                 }
                 Some("cancel") => {
                     if let Ok(id) = optional_u64(&request["params"], "id") {
-                        let chair = self.clients[&client].chair.clone();
                         return Request::Compile(Box::new(CompileTicket {
                             id: request.get("id").cloned(),
-                            chair,
-                            job: Job::Cancel(self.live_of(client).begin_cancel(id)),
+                            job: Job::Cancel(self.player.live.begin_cancel(id)),
                         }));
                     }
                 }
@@ -304,8 +289,7 @@ impl LiveServer {
         let params = &request["params"];
         let source = params["source"].as_str().unwrap_or_default();
         let quantize = params.get("quantize").and_then(Value::as_str);
-        let chair = self.clients[&client].chair.clone();
-        let live = self.live_of(client);
+        let live = &mut self.player.live;
         if let Some(dir) = params.get("dir").and_then(Value::as_str) {
             live.set_sample_dir(std::path::Path::new(dir));
         }
@@ -316,11 +300,10 @@ impl LiveServer {
         match begun {
             Ok(Begin::Job(job)) => Request::Compile(Box::new(CompileTicket {
                 id,
-                chair,
                 job: Job::Eval(job),
             })),
             Ok(Begin::Done(result)) => {
-                let outcome = self.eval_outcome(&chair, result);
+                let outcome = self.eval_outcome(result);
                 Request::Replies(self.respond(id, outcome))
             }
             Err(_) => Request::Replies(self.respond(id, Err(internal_error()))),
@@ -330,14 +313,13 @@ impl LiveServer {
     /// A compilation made stale by another client or a landed change must be
     /// retried without holding the render worker's control lock.
     pub fn retry(&mut self, ticket: &CompiledTicket) -> Option<CompileTicket> {
-        let live = &mut self.chairs.get_mut(&ticket.chair)?.live;
+        let live = &mut self.player.live;
         let job = match ticket.done.as_ref()? {
             Done::Eval(done) => Job::Eval(live.retry_eval(done)?),
             Done::Cancel(done) => Job::Cancel(live.retry_cancel(done)?),
         };
         Some(CompileTicket {
             id: ticket.id.clone(),
-            chair: ticket.chair.clone(),
             job,
         })
     }
@@ -345,23 +327,18 @@ impl LiveServer {
     /// Reply to work compiled away from the session. The server checks `retry`
     /// under the same lock before calling this, so no compilation is needed here.
     pub fn finish(&mut self, ticket: CompiledTicket) -> Vec<String> {
-        let CompiledTicket { id, chair, done } = ticket;
+        let CompiledTicket { id, done } = ticket;
         let outcome = match done {
             None => Err(internal_error()),
             Some(done) => {
                 match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match done {
                     Done::Eval(done) => {
-                        let result = self
-                            .chairs
-                            .get_mut(&chair)
-                            .expect("a ticket's chair")
-                            .live
-                            .finish_eval(done);
-                        self.eval_outcome(&chair, result)
+                        let result = self.player.live.finish_eval(done);
+                        self.eval_outcome(result)
                     }
-                    Done::Cancel(done) => Ok(
-                        json!({ "cancelled": self.chairs.get_mut(&chair).expect("a ticket's chair").live.finish_cancel(done) }),
-                    ),
+                    Done::Cancel(done) => {
+                        Ok(json!({ "cancelled": self.player.live.finish_cancel(done) }))
+                    }
                 })) {
                     Ok(result) => result,
                     Err(_) => Err(internal_error()),
@@ -371,13 +348,9 @@ impl LiveServer {
         self.respond(id, outcome)
     }
 
-    fn eval_outcome(
-        &self,
-        chair: &str,
-        result: Result<Accepted, Vec<Problem>>,
-    ) -> Result<Value, RpcError> {
+    fn eval_outcome(&self, result: Result<Accepted, Vec<Problem>>) -> Result<Value, RpcError> {
         match result {
-            Ok(a) => Ok(accepted_json(&self.chairs[chair].live, &a)),
+            Ok(a) => Ok(accepted_json(&self.player.live, &a)),
             Err(problems) => Err(rejected(&problems)),
         }
     }
@@ -398,22 +371,22 @@ impl LiveServer {
             ));
         }
         match method {
-            "eval" => self.eval(client, params),
+            "eval" => self.eval(params),
             "clip.define" | "scene.define" | "launch" | "stop" | "mute" | "unmute" | "solo"
-            | "unsolo" | "edit" => self.api_eval(client, method, params),
+            | "unsolo" | "edit" => self.api_eval(method, params),
             "cancel" => {
                 let id = optional_u64(params, "id")?;
-                Ok(json!({ "cancelled": self.live_of(client).cancel(id) }))
+                Ok(json!({ "cancelled": self.player.live.cancel(id) }))
             }
             "hush" => {
-                let live = self.live_of(client);
+                let live = &mut self.player.live;
                 match live.hush() {
                     Ok(a) => Ok(accepted_json(live, &a)),
                     Err(problems) => Err(rejected(&problems)),
                 }
             }
             "panic" => {
-                self.live_of(client).panic();
+                self.player.live.panic();
                 Ok(json!({}))
             }
             "control.set" => {
@@ -427,7 +400,7 @@ impl LiveServer {
                 let unit = params.get("unit").and_then(Value::as_str);
                 let smooth_ms = params.get("smooth_ms").and_then(Value::as_f64);
                 match self
-                    .live_of(client)
+                    .player.live
                     .set_control(name, value, unit, smooth_ms)
                 {
                     Ok(()) => Ok(json!({})),
@@ -450,7 +423,7 @@ impl LiveServer {
                     int("velocity", 127)?,
                 );
                 let taken =
-                    self.live_of(client)
+                    self.player.live
                         .key_input(channel as u8, note as u8, velocity as u8);
                 Ok(json!({ "taken": taken }))
             }
@@ -462,11 +435,11 @@ impl LiveServer {
                     .get("value")
                     .and_then(Value::as_f64)
                     .ok_or_else(|| RpcError::new(INVALID_PARAMS, "`value` should be a number"))?;
-                let moved = self.live_of(client).param_input(name, value);
+                let moved = self.player.live.param_input(name, value);
                 Ok(json!({ "moved": moved }))
             }
             "subscribe" | "unsubscribe" => self.subscribe(client, params, method == "subscribe"),
-            "status" => Ok(status_json(self.live_of(client))),
+            "status" => Ok(status_json(&mut self.player.live)),
             other => Err(RpcError::new(
                 METHOD_NOT_FOUND,
                 &format!("no method `{other}`"),
@@ -477,7 +450,6 @@ impl LiveServer {
     /// Typed performance calls: build canonical source and evaluate it.
     fn api_eval(
         &mut self,
-        client: ClientId,
         method: &str,
         params: &Value,
     ) -> Result<Value, RpcError> {
@@ -486,9 +458,8 @@ impl LiveServer {
             .get("quantize")
             .and_then(Value::as_str)
             .or(Some("now"));
-        let result = self.live_of(client).eval(&source, quantize);
-        let chair = self.clients[&client].chair.clone();
-        self.eval_outcome(&chair, result)
+        let result = self.player.live.eval(&source, quantize);
+        self.eval_outcome(result)
     }
 
     fn hello(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
@@ -497,60 +468,24 @@ impl LiveServer {
             return Err(RpcError::new(
                 PROTOCOL_ERROR,
                 &format!(
-                    "this server speaks protocol {PROTOCOL_VERSION}, the client said {version:?}"
+                    "this server speaks protocol {PROTOCOL_VERSION}, the client said {version:?}; update whichever is older, so that they come from the same release"
                 ),
             ));
         }
-        let chair = match params.get("chair") {
-            None | Some(Value::Null) => MAIN_CHAIR.to_string(),
-            Some(Value::String(name)) if !name.is_empty() => name.clone(),
-            Some(_) => {
-                return Err(RpcError::new(INVALID_PARAMS, "`chair` should be a name"));
-            }
-        };
-        self.seat_chair(&chair)?;
         if let Some(c) = self.clients.get_mut(&client) {
             c.greeted = true;
-            c.chair = chair.clone();
         }
-        let live = &self.chairs[&chair].live;
+        let live = &self.player.live;
         Ok(json!({
             "protocol": PROTOCOL_VERSION,
             "sample_rate": live.sample_rate(),
             "channels": live.channels(),
             "topics": TOPICS,
-            "chair": chair,
+            "release": niminal_server::release(),
         }))
     }
 
-    /// Make sure the chair `name` exists: a new one starts at the tempo and meter `main` has now.
-    fn seat_chair(&mut self, name: &str) -> Result<(), RpcError> {
-        if self.chairs.contains_key(name) {
-            return Ok(());
-        }
-        let Some(seat) = self.seat.as_mut() else {
-            return Err(RpcError::new(
-                INVALID_PARAMS,
-                &format!("this sequencer has one chair, `{MAIN_CHAIR}`; there is no `{name}`"),
-            ));
-        };
-        if self.chairs.len() >= MAX_CHAIRS {
-            return Err(RpcError::new(
-                INVALID_PARAMS,
-                &format!("this sequencer seats at most {MAX_CHAIRS} chairs"),
-            ));
-        }
-        let mut live = seat().map_err(|e| RpcError::new(INTERNAL_ERROR, &e))?;
-        let tempo = self.chairs[MAIN_CHAIR].live.tempo();
-        let (top, bottom) = tempo.meter();
-        let start = format!("tempo {}bpm\nmeter {top}/{bottom}", tempo.bpm);
-        live.eval(&start, Some("now"))
-            .map_err(|problems| rejected(&problems))?;
-        self.chairs.insert(name.to_string(), Chair::new(live));
-        Ok(())
-    }
-
-    fn eval(&mut self, client: ClientId, params: &Value) -> Result<Value, RpcError> {
+    fn eval(&mut self, params: &Value) -> Result<Value, RpcError> {
         let source = params
             .get("source")
             .and_then(Value::as_str)
@@ -560,7 +495,7 @@ impl LiveServer {
             .get("dir")
             .and_then(Value::as_str)
             .map(std::path::Path::new);
-        let live = self.live_of(client);
+        let live = &mut self.player.live;
         if let Some(dir) = dir {
             live.set_sample_dir(dir);
         }
@@ -569,8 +504,7 @@ impl LiveServer {
             ParsedEval::from_dir(source, dir.unwrap_or(std::path::Path::new(".")), quantize)
                 .with_origin(origin),
         );
-        let chair = self.clients[&client].chair.clone();
-        self.eval_outcome(&chair, result)
+        self.eval_outcome(result)
     }
 
     fn subscribe(&mut self, client: ClientId, params: &Value, on: bool) -> Result<Value, RpcError> {
@@ -604,17 +538,17 @@ impl LiveServer {
 
     // ---- notifications -------------------------------------------------------------
 
-    fn has_subscribers(&self, chair: &str, topic: &str) -> bool {
+    fn has_subscribers(&self, topic: &str) -> bool {
         self.clients
             .values()
-            .any(|c| c.greeted && c.chair == chair && c.topics.contains(topic))
+            .any(|c| c.greeted && c.topics.contains(topic))
     }
 
-    /// Tell the clients in `chair` that subscribed to `topic`.
-    fn send_to_subscribers(&mut self, chair: &str, topic: &str, method: &str, params: Value) {
+    /// Tell the clients that subscribed to `topic`.
+    fn send_to_subscribers(&mut self, topic: &str, method: &str, params: Value) {
         let text = json!({"jsonrpc": "2.0", "method": method, "params": params}).to_string();
         for (id, client) in &self.clients {
-            if client.greeted && client.chair == chair && client.topics.contains(topic) {
+            if client.greeted && client.topics.contains(topic) {
                 self.outbox.push((*id, text.clone()));
             }
         }
@@ -622,68 +556,74 @@ impl LiveServer {
 
     /// Tell subscribers when the set of waiting changes differs from last time.
     fn queue_changes(&mut self) {
-        let names: Vec<String> = self.chairs.keys().cloned().collect();
-        for name in names {
-            let chair = self.chairs.get_mut(&name).expect("a chair");
-            let pending = chair.live.pending();
-            let now: Vec<(u64, u64)> = pending.iter().map(|p| (p.id, p.lands_at)).collect();
-            if now != chair.announced {
-                chair.announced = now;
-                let changes =
-                    json!({ "changes": pending.iter().map(pending_json).collect::<Vec<_>>() });
-                self.send_to_subscribers(&name, "pending", "pending", changes);
-            }
+        let pending = self.player.live.pending();
+        let now: Vec<(u64, u64)> = pending.iter().map(|p| (p.id, p.lands_at)).collect();
+        if now != self.player.announced {
+            self.player.announced = now;
+            let changes = json!({ "changes": pending.iter().map(pending_json).collect::<Vec<_>>() });
+            self.send_to_subscribers("pending", "pending", changes);
         }
     }
 
     /// Everything the server has to say that nobody asked for, since this was
     /// last called, as `(client, message)`. Call it regularly while the clock
     /// advances: it reports changes that landed and, about ten times a second,
-    /// the transport and meters. Each client hears about its own chair.
+    /// the transport and meters.
     pub fn notifications(&mut self) -> Vec<(ClientId, String)> {
-        let names: Vec<String> = self.chairs.keys().cloned().collect();
-        for name in &names {
-            let live = &mut self.chairs.get_mut(name).expect("a chair").live;
-            let landed = live.take_landed();
-            let learned = live.take_learned();
-            let notices = live.take_notices();
-            for landed in landed {
-                self.send_to_subscribers(name, "landed", "landed", landed_json(&landed));
-            }
-            for (control, source) in learned {
-                self.send_to_subscribers(
-                    name,
-                    "learned",
-                    "learned",
-                    json!({ "control": control, "source": source }),
-                );
-            }
-            for notice in notices {
-                self.send_to_subscribers(name, "notices", "notice", json!({ "message": notice }));
-            }
+        let live = &mut self.player.live;
+        let landed = live.take_landed();
+        let learned = live.take_learned();
+        let notices = live.take_notices();
+        if let Some(tap) = &mut self.tap {
+            tap.landed.extend(landed.iter().cloned());
+            tap.learned.extend(learned.iter().cloned());
+            tap.notices.extend(notices.iter().cloned());
+        }
+        for landed in landed {
+            self.send_to_subscribers("landed", "landed", landed_json(&landed));
+        }
+        for (control, source) in learned {
+            self.send_to_subscribers(
+                "learned",
+                "learned",
+                json!({ "control": control, "source": source }),
+            );
+        }
+        for notice in notices {
+            self.send_to_subscribers("notices", "notice", json!({ "message": notice }));
         }
         self.queue_changes();
 
-        for name in &names {
-            // the meters are only read from the engine for someone listening
-            let listening = self.has_subscribers(name, "meters");
-            let chair = self.chairs.get_mut(name).expect("a chair");
-            if listening != chair.metering {
-                chair.metering = listening;
-                chair.live.set_metering(listening);
-            }
-            let now = chair.live.clock();
-            if chair
-                .last_transport
-                .is_none_or(|t| now >= t + self.transport_every)
-            {
-                chair.last_transport = Some(now);
-                let transport = transport_json(&chair.live.transport());
-                // reading the meters resets them, so only do it for someone listening
-                let peaks = listening.then(|| chair.live.take_peaks());
-                self.send_to_subscribers(name, "transport", "transport", transport);
-                if let Some(peaks) = peaks {
-                    self.send_to_subscribers(name, "meters", "meters", json!({ "peaks": peaks }));
+        // the meters are only read from the engine for someone listening
+        let heard_by_clients = self.has_subscribers("meters");
+        let tapped = self.tap.is_some();
+        let listening = heard_by_clients || tapped;
+        let player = &mut self.player;
+        if listening != player.metering {
+            player.metering = listening;
+            player.live.set_metering(listening);
+        }
+        let now = player.live.clock();
+        if player
+            .last_transport
+            .is_none_or(|t| now >= t + self.transport_every)
+        {
+            player.last_transport = Some(now);
+            let transport = transport_json(&player.live.transport());
+            // reading the meters resets them, so only do it for someone listening
+            let peaks = listening.then(|| player.live.take_peaks());
+            self.send_to_subscribers("transport", "transport", transport);
+            if let Some(peaks) = peaks {
+                if let Some(tap) = &mut self.tap {
+                    if tap.peaks.len() != peaks.len() {
+                        tap.peaks = vec![0.0; peaks.len()];
+                    }
+                    for (kept, now) in tap.peaks.iter_mut().zip(&peaks) {
+                        *kept = kept.max(*now);
+                    }
+                }
+                if heard_by_clients {
+                    self.send_to_subscribers("meters", "meters", json!({ "peaks": peaks }));
                 }
             }
         }
@@ -709,7 +649,6 @@ pub enum Request {
 /// A request waiting for background compilation.
 pub struct CompileTicket {
     id: Option<Value>,
-    chair: String,
     job: Job,
 }
 
@@ -727,19 +666,18 @@ impl CompileTicket {
     /// Compile the code. This needs nothing from the server, so it can run
     /// while the render worker continues playing.
     pub fn compile(self) -> CompiledTicket {
-        let CompileTicket { id, chair, job } = self;
+        let CompileTicket { id, job } = self;
         let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match job {
             Job::Eval(job) => Done::Eval(job.compile()),
             Job::Cancel(job) => Done::Cancel(job.compile()),
         }))
         .ok();
-        CompiledTicket { id, chair, done }
+        CompiledTicket { id, done }
     }
 }
 
 pub struct CompiledTicket {
     id: Option<Value>,
-    chair: String,
     done: Option<Done>,
 }
 

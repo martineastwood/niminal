@@ -1,9 +1,9 @@
 //! The ready-made instruments and effects that come with niminal, as one catalog for every program that
-//! offers them: `niminal presets`, the tracker's browser, the editor's completions. They are written in the
+//! offers them: the editor's completions and the tests. They are written in the
 //! shelf files under `std/` (`std/drums`, `std/fx`, ...), each preset standing alone with a blank line
 //! between it and the next, the `///` comment above it as its description, and a `// folder: drums/kicks`
 //! comment putting the presets after it in that folder. In code a preset is taken by name,
-//! `use std/drums.{kick_808}`; the tracker and editor copy its `source` into a project instead.
+//! `use std/drums.{kick_808}`.
 
 use std::sync::OnceLock;
 
@@ -151,38 +151,3 @@ fn parse_shelf(shelf: &'static str) -> Vec<Preset> {
     out
 }
 
-/// The catalog as JSON, for programs that read it from a file: `std/presets.json`.
-pub fn json() -> String {
-    fn string(s: &str) -> String {
-        let mut out = String::from("\"");
-        for c in s.chars() {
-            match c {
-                '"' => out.push_str("\\\""),
-                '\\' => out.push_str("\\\\"),
-                '\n' => out.push_str("\\n"),
-                c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-                c => out.push(c),
-            }
-        }
-        out.push('"');
-        out
-    }
-    let items: Vec<String> = all()
-        .iter()
-        .map(|p| {
-            format!(
-                "  {{\"id\":{},\"name\":{},\"kind\":{},\"folder\":{},\"description\":{},\"shelf\":{},\"source\":{},\"helpers\":{},\"params\":[{}]}}",
-                string(&p.id),
-                string(&p.name),
-                string(p.kind.keyword()),
-                string(&p.folder),
-                string(&p.description),
-                string(p.shelf),
-                string(&p.source),
-                string(&p.helpers),
-                p.params.iter().map(|l| string(l)).collect::<Vec<_>>().join(",")
-            )
-        })
-        .collect();
-    format!("[\n{}\n]\n", items.join(",\n"))
-}

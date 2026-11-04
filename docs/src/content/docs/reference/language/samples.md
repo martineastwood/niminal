@@ -89,7 +89,7 @@ instr held(freq: hz) {
 }
 ```
 
-The intro plays once, then frames from Start (inclusive) to End (exclusive) repeat. Reverse playback plays the outro first, then repeats the same region backwards. Points are rounded to source frames. Changes on a held note take effect at the next wrap or ping-pong turn; invalid or empty regions use the whole sample. Bounds default to 0 and 1. On slices, the bounds are relative to the piece; the tracker's loop editor is for whole samples.
+The intro plays once, then frames from Start (inclusive) to End (exclusive) repeat. Reverse playback plays the outro first, then repeats the same region backwards. Points are rounded to source frames. Changes on a held note take effect at the next wrap or ping-pong turn; invalid or empty regions use the whole sample. Bounds default to 0 and 1. On slices, the bounds are relative to the piece.
 
 Pass `loop_crossfade: 10ms` to overlap the outgoing and incoming audio at each wrap or ping-pong turn. The default is `0ms` (no crossfade). The duration is measured in source audio, so playback pitch and stretch affect the time heard; it is capped at half the usable loop span. Overlapping consumes the incoming part of the loop, shortening each repeat by the overlap. Crossfades work with reverse playback, cubic/sinc interpolation and stretching. Longer fades suit pads but can soften attacks.
 
@@ -103,7 +103,7 @@ Automate the forwarded loop parameters to reshape a held note without restarting
 
 Fitting preserves pitch by default: `amen = sample("amen.wav").beats(4)` lasts four beats even when played with `pitch: +3st`. Live tempo changes move the sample through its remaining audio at the new tempo without restarting it. For tape-style playback, use `.beats(4).mode(repitch)`: tempo changes also change pitch, and transposing the sample changes its duration. Unfitted samples still change speed and duration when transposed.
 
-Use `amen(stretch: 2)` to double the playback duration without changing the selected pitch, or `stretch: 0.5` to halve it. This multiplier also applies on top of a fitted duration, so `stretch: 2` makes a four-beat sample last eight beats. The manual duration multiplier ranges from 0.25 to 4 and works with samples, kits, slices, reverse playback and loops. Automatic fitting is not clamped to that range; extreme fits can sound unnatural. The tracker exposes the manual duration as **Stretch ×** and the algorithm as **Granular / WSOLA** in the Sample panel. The stretching algorithms use overlapping 50 ms grains:
+Use `amen(stretch: 2)` to double the playback duration without changing the selected pitch, or `stretch: 0.5` to halve it. This multiplier also applies on top of a fitted duration, so `stretch: 2` makes a four-beat sample last eight beats. The manual duration multiplier ranges from 0.25 to 4 and works with samples, kits, slices, reverse playback and loops. Automatic fitting is not clamped to that range; extreme fits can sound unnatural. The stretching algorithms use overlapping 50 ms grains:
 
 | `stretch_mode` | Algorithm | Tradeoff |
 | --- | --- | --- |

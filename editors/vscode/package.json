@@ -89,11 +89,6 @@
         "category": "niminal"
       },
       {
-        "command": "niminal.startServer",
-        "title": "Start Server in a Terminal",
-        "category": "niminal"
-      },
-      {
         "command": "niminal.launchScene",
         "title": "Launch Scene",
         "category": "niminal",
@@ -240,46 +235,28 @@
       "properties": {
         "niminal.port": {
           "type": "number",
-          "default": 7401,
-          "description": "The generic server events API port. The extension runs its own live sequencer."
-        },
-        "niminal.midi": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null,
-          "description": "MIDI input name filter for the editor's live sequencer. Empty listens to all inputs; null disables MIDI. Reload the editor after changing."
-        },
-        "niminal.oscPort": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "default": null,
-          "minimum": 1,
-          "maximum": 65535,
-          "description": "OSC input UDP port for the editor's live sequencer. Null disables OSC. Reload the editor after changing."
+          "default": 7400,
+          "description": "The port Niminal Stage serves the live sequencer on (the \"tools port\" in Stage). Code you evaluate plays through Stage."
         },
         "niminal.token": {
           "type": "string",
           "default": "",
-          "description": "The server's token, if it was started with --token."
+          "description": "The token Stage asks for, if one is set in its tools port settings."
         },
         "niminal.quantize": {
           "type": "string",
           "default": "",
           "description": "When evaluated code lands, as in `now` or `next 4 bars`. Empty uses the live sequencer's default."
         },
+        "niminal.stageApp": {
+          "type": "string",
+          "default": "Niminal Stage",
+          "description": "The name of the Stage app, which \"niminal: Connect\" opens when it is not running (macOS)."
+        },
         "niminal.path": {
           "type": "string",
           "default": "niminal",
-          "description": "The niminal executable, the audio server that \"niminal: Start Server in a Terminal\" runs."
-        },
-        "niminal.livePath": {
-          "type": "string",
-          "default": "niminal-live",
-          "description": "The niminal-live executable: the live sequencer the editor starts, and the language server."
+          "description": "The niminal command, which runs the language server (`niminal lsp`). The macOS download puts it in /Applications/Niminal/bin, which is found without setting this."
         }
       }
     },

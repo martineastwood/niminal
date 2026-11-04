@@ -65,7 +65,7 @@ pub fn render_command(args: &[&str]) -> (std::process::Output, std::path::PathBu
     let src = dir.join("song.nml");
     std::fs::write(&src, SONG).unwrap();
     let out = dir.join("out.wav");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_niminal-live"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_niminal"))
         .arg("render")
         .arg(&src)
         .args(args)

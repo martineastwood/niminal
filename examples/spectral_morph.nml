@@ -1,6 +1,6 @@
 // A rounded bowed note becomes a bright, breathing reed; then their properties move independently.
 // Evaluate the whole file in VS Code. Each + time is relative to this submission.
-// niminal-live render examples/spectral_morph.nml --out /tmp/spectral_morph.wav
+// niminal render examples/spectral_morph.nml --out /tmp/spectral_morph.wav
 config { channels: stereo }
 tempo 100bpm
 

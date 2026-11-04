@@ -9,8 +9,6 @@ trap 'rm -rf "$log"' EXIT
 
 engine() {
   cargo clippy --workspace --all-targets -- -D warnings
-  # needs: rustup target add wasm32-unknown-unknown
-  cargo build -p niminal-engine --target wasm32-unknown-unknown
   if [ "$1" = "--test" ]; then cargo test --workspace; fi
 }
 sequencer() {

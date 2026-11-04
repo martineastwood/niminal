@@ -1,7 +1,7 @@
-// A drum grid made by `niminal-live drums`, then left as ordinary code to edit.
-//   niminal-live drums --theme house --density 0.8 --chaos 0.3 --seed 4 --drum hat=0.6 --name beat
+// A drum grid like the one `drum_grid(theme: house, density: 0.8, chaos: 0.3, seed: 4, hat: 0.6)` makes,
+// written out as ordinary code to edit.
 // Change a step by hand, or make another with a new seed. Render with:
-//   niminal-live render examples/generated_drums.nml --out generated_drums.wav --bars 4
+//   niminal render examples/generated_drums.nml --out generated_drums.wav --bars 4
 use std/drums.{kick_deep, clap, hat_closed, hat_open, rim}
 config { channels: stereo }
 tempo 124bpm

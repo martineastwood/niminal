@@ -11,9 +11,9 @@ niminal is in **alpha**. Syntax and behaviour can change; expect rough edges.
 
 ### On a Mac (Apple Silicon, macOS 13+)
 
-Download the dmg from [GitHub Releases](https://github.com/martineastwood/niminal/releases) and drag the **Niminal** folder onto Applications. It holds Tracker, Stage, the `niminal` and `niminal-live` commands, the VS Code extension and the examples. Tracker and Stage start the audio server for you, and offer to put the commands on your PATH the first time they open (or later, with **File > Install Command Line Tools…**).
+Download the dmg from [GitHub Releases](https://github.com/martineastwood/niminal/releases) and drag the **Niminal** folder onto Applications. It holds Stage, the VS Code extension and the examples. Stage has the audio engine inside it, so there is nothing else to start.
 
-Or with Homebrew, which also links the commands:
+Or with Homebrew:
 
 ```sh
 brew tap martineastwood/niminal
@@ -21,30 +21,20 @@ brew trust --cask martineastwood/niminal/niminal   # recent Homebrew only
 brew install --cask martineastwood/niminal/niminal
 ```
 
-The apps are not notarized by Apple. If you used the dmg and macOS blocks one, approve it under **System Settings > Privacy & Security > Open Anyway**. Homebrew clears that warning for you.
+The app is not notarized by Apple. If you used the dmg and macOS blocks it, approve it under **System Settings > Privacy & Security > Open Anyway**. Homebrew clears that warning for you.
 
 ### From source
 
-You need a recent [Rust toolchain](https://rustup.rs/).
-
-From a clone of the [repo](https://github.com/martineastwood/niminal):
+You need a recent [Rust toolchain](https://rustup.rs/), and Node.js and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) to build Stage (see [stage/](https://github.com/martineastwood/niminal/tree/main/stage)). For the command-line tools, from a clone of the [repo](https://github.com/martineastwood/niminal):
 
 ```sh
-cargo install --path crates/niminal-cli   # niminal
-cargo install --path sequencer/live-cli    # niminal-live
-```
-
-Or install from GitHub without cloning:
-
-```sh
-cargo install --git https://github.com/martineastwood/niminal niminal-cli niminal-live-cli
+cargo install --path sequencer/live-cli    # niminal: play, render, server, replay and the language server
 ```
 
 Check them:
 
 ```sh
 niminal --version
-niminal-live --version
 ```
 
 ## Hear something
@@ -53,10 +43,10 @@ Save this as `saw_lead.nml` (or use `examples/saw_lead.nml` in the repo):
 
 <Example file="saw_lead.nml" />
 
-Render it to a WAV file:
+Render it to a WAV file with `niminal`, or open it in Stage and evaluate it:
 
 ```sh
-niminal-live render saw_lead.nml --out saw_lead.wav
+niminal render saw_lead.nml --out saw_lead.wav
 ```
 
 Open the `.nml` file: tempo, an instrument with units (`hz`, `db`, `ms`), an envelope, and notes timed with `at`.
@@ -67,28 +57,17 @@ More examples live under `examples/` — kits and grids (`drums.nml`, `breakbeat
 
 The [VS Code / Cursor extension](/reference/editor/) brings live coding to your own editor: highlighting, diagnostics while you type, and evaluate-while-playing. [Stage](/reference/stage/) does the same in a window of its own, with scenes, lanes and meters beside the code.
 
-With the macOS download, choose **File > Install VS Code Extension…** in Tracker or Stage (they also offer it the first time they open). Otherwise, from a clone of the repo:
+With the macOS download, choose **File > Install VS Code Extension…** in Stage (it also offers it the first time it opens). Otherwise, from a clone of the repo:
 
 ```sh
 cd editors/vscode && npm install && node install.js   # --cursor for Cursor
 ```
 
-Reload the window and open a `.nml` file and press **Cmd+Enter** (macOS) or **Ctrl+Enter** to evaluate the block around the cursor. The status bar shows the bar and tempo, and the sidebar lists scenes and clips. The extension starts the audio server if none is running, and it stops when the last client closes. The language server (`niminal-live lsp`) works without a server for hover, completion, and errors.
+Reload the window and open a `.nml` file and press **Cmd+Enter** (macOS) or **Ctrl+Enter** to evaluate the block around the cursor. The status bar shows the bar and tempo, and the sidebar lists scenes and clips. The extension starts the audio server if none is running, and it stops when the last client closes. The language server (`niminal lsp`) works without a server for hover, completion, and errors.
 
-## Live coding from a terminal
+## Live coding in Stage
 
-The same live sequencer, as its own process, with a REPL and one-shot sends:
-
-```sh
-niminal server
-# in another terminal:
-niminal-live live examples/groove.nml
-niminal-live repl
-# in another terminal:
-niminal-live send 'chorus.start' --quantize "next 4bars"
-```
-
-See [Live coding](/guide/live-coding/) for quantization, MIDI, and session replay.
+Open Niminal Stage, open a `.nml` file (try `examples/groove.nml`) and press **Cmd+Enter** to evaluate a block. The engine is inside Stage and plays through your default sound card (choose another under **Audio**), so there is nothing to start first. See [Live coding](/guide/live-coding/) for quantization, MIDI, and session replay.
 
 ## If something goes wrong
 
@@ -96,11 +75,8 @@ niminal keeps its logs in `~/.niminal/`:
 
 | File | What it holds |
 | --- | --- |
-| `crash.log` | A panic in `niminal`, Tracker or Stage, with the version and a backtrace |
-| `server.log` | What the server printed when an app or the editor started it; `server.log.old` is the run before |
+| `crash.log` | A panic in `niminal` or Stage, with the version and a backtrace |
 | `sessions/` | A log of each session, newest kept |
-
-If an app says that a niminal server from another release is already running, an older install left its server running. Quit it with `pkill -f "niminal server"` in a terminal and open the app again; the app starts a new one.
 
 If you report a problem, [open an issue](https://github.com/martineastwood/niminal/issues/new?template=bug_report.md) with the version from `niminal --version`, a minimal `.nml` file that shows it, and any of these files.
 
@@ -109,11 +85,9 @@ If you report a problem, [open an issue](https://github.com/martineastwood/nimin
 | Guide | When |
 | --- | --- |
 | [The pieces](/guide/the-pieces/) | Which program does what |
-| [Live coding](/guide/live-coding/) | Editor, REPL, quantization, MIDI |
+| [Live coding](/guide/live-coding/) | Stage, the editor, quantization, MIDI |
 | [Offline rendering](/guide/offline-rendering/) | Arrangements, stems, scores |
 | [Stage](/reference/stage/) | Live coding with scenes and lanes in a desktop app |
-| [Tracker](/reference/tracker/) | Grid, mixer and code in a desktop app |
 | [Language overview](/reference/language/) | Instruments, patterns, performance |
-| [Command line](/reference/server/cli/) | The server's subcommands and flags |
-| [niminal-live](/reference/niminal-live/cli/) | render, live, repl, send, lsp |
+| [Command line](/reference/server/cli/) | `niminal`: play, render, server, replay, lsp |
 | [Editor and LSP](/reference/editor/) | Extension settings and language server |

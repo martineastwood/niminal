@@ -1,6 +1,6 @@
 // A warm chord learns to breathe: carrier, rhythmic donor, then the playable hybrid.
 // Evaluate the whole file in VS Code; all + times count from when it lands.
-// niminal-live render examples/envelope_transfer.nml --out /tmp/envelope_transfer.wav
+// niminal render examples/envelope_transfer.nml --out /tmp/envelope_transfer.wav
 use std/spectral
 
 config { channels: stereo }

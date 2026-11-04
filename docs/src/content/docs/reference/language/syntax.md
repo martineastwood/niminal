@@ -3,7 +3,7 @@ title: Syntax
 description: Comments, blocks, bindings, calls and control flow in the orchestra language.
 ---
 
-**Read by both programs.** The syntax is the same in the server's half and in niminal-live's.
+**Read by both programs.** The syntax is the same in the engine's half and in the sequencer's.
 
 ## Comments and blocks
 

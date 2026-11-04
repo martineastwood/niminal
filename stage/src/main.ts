@@ -14,10 +14,9 @@ import { sceneCommand, sceneStates } from './scenes';
 import { HealthWatch } from './health';
 import { learnedRange } from './learn';
 import { FileBrowse } from './browse';
-import { Lab } from './lab';
 import { divider } from './divider';
 import { Bar, loudest } from './meters';
-import { Action, EvalOutcome, OpenedFile, Problem, Queued, Scene, Snapshot, beatsUntil, queuedStates, stage } from './live';
+import { Action, AudioState, EvalOutcome, OpenedFile, Problem, Queued, Scene, Snapshot, beatsUntil, queuedStates, stage } from './live';
 import { StoredTabs, loadTabs, moveItem, tabTitle, tabsKey } from './tabs';
 import './style.css';
 
@@ -48,11 +47,12 @@ app.innerHTML = `
     </div>
     <div class="top-actions">
       <span class="setup" id="setup">
-        <label class="port">port <input id="port" inputmode="numeric" value="7401" /></label>
-        <input id="token" type="password" placeholder="token" aria-label="engine token" />
-        <button id="reconnect" title="Connect to the engine">Connect</button>
+        <label class="port" title="The engine runs inside the stage. The VS Code extension plays through the stage on this port; other sequencers reach the engine on the next one up.">tools port <input id="port" inputmode="numeric" value="7400" /></label>
+        <input id="token" type="password" placeholder="token" aria-label="token other tools must give" />
+        <button id="reconnect" title="Use this port and token, and start the engine again if it stopped">Apply</button>
+        <span id="tools-problem" class="tools-problem"></span>
       </span>
-      <button id="lab-toggle" title="Lab: play an instrument and move its parameters while it sounds (Cmd/Ctrl+Shift+B)">Lab</button>
+      <button id="audio-toggle" title="Choose the sound card, sample rate and buffer size">Audio</button>
       <button id="perform" title="Performance mode: just the code and what is playing (Cmd/Ctrl+Shift+P)">Perform</button>
       <button id="hush" title="Stop every clip, letting what sounds ring out">Hush</button>
       <button id="panic" class="danger" title="Stop everything now">Panic</button>
@@ -123,7 +123,6 @@ const editorStatus = $('editor-status');
 const footerStatus = $('footer-status');
 const stageHint = $('stage-hint');
 
-const portKey = 'niminal-stage:port';
 
 let view: EditorView | null = null;
 // numbered by the clock, so what the engine remembers from an earlier run never matches a new one
@@ -315,19 +314,15 @@ function persist() {
 
 async function ensureConnected() {
   if (connected) return true;
-  const port = Number(input('port').value) || 7401;
-  localStorage.setItem(portKey, String(port));
-  status('looking for the engine…');
+  status('starting the engine…');
   try {
-    await stage.connect(port, input('token').value.trim());
+    await stage.startEngine();
     setConnection(true);
-    status('connected');
+    status('engine running');
     return true;
   } catch (error) {
     setConnection(false);
-    const message = String(error).includes("can't reach the server")
-      ? `No engine on port ${port}: run niminal server, then click Connect`
-      : String(error);
+    const message = String(error);
     status(message);
     editorStatus.textContent = message;
     return false;
@@ -833,10 +828,69 @@ async function openProject() {
   }
 }
 
+/** What the file holds now, or null if it can't be read (it may have been moved or deleted). */
+async function diskText(path: string): Promise<string | null> {
+  try {
+    return (await stage.openPath(path)).source;
+  } catch {
+    return null;
+  }
+}
+
+/** Put `text` in a tab in place of what it holds, keeping the cursor near where it was. */
+function replaceText(tab: Tab, text: string) {
+  const changes = { from: 0, to: tab.state.doc.length, insert: text };
+  if (tab === current && view) {
+    view.dispatch({ changes, selection: { anchor: Math.min(view.state.selection.main.head, text.length) } });
+  } else {
+    tab.state = tab.state.update({ changes }).state;
+  }
+}
+
+/** The text of each file that changed on disk and that its tab has already been told about. */
+const toldAbout = new Map<Tab, string>();
+let checkingDisk = false;
+
+/** Another program (an editor, a sync tool) may have changed the files in the tabs. A tab with no edits of its
+ *  own follows the file; one with edits is told, and asks before it replaces the file. */
+async function checkDisk() {
+  if (checkingDisk) return;
+  checkingDisk = true;
+  try {
+    for (const tab of [...tabs]) {
+      if (!tab.path) continue;
+      const disk = await diskText(tab.path);
+      if (disk === null || disk === tab.saved) {
+        toldAbout.delete(tab);
+      } else if (!isDirty(tab)) {
+        replaceText(tab, disk);
+        tab.saved = disk;
+        toldAbout.delete(tab);
+        renderTabs();
+        persist();
+        status(`${tab.title} changed on disk, so it was reloaded`);
+      } else if (toldAbout.get(tab) !== disk) {
+        toldAbout.set(tab, disk);
+        status(`${tab.title} changed on disk and here. Saving will ask before it replaces the file.`);
+      }
+    }
+  } finally {
+    checkingDisk = false;
+  }
+}
+setInterval(() => void checkDisk(), 1500);
+window.addEventListener('focus', () => void checkDisk());
+
 async function saveFile(tab = current) {
   if (!view) return;
   const text = tab.state.doc.toString();
   try {
+    if (tab.path) {
+      const disk = await diskText(tab.path);
+      if (disk !== null && disk !== tab.saved && !(await ask(`${tab.title} changed on disk since it was opened here. Replace what is there with this version?`))) {
+        return;
+      }
+    }
     if (!tab.path) {
       const path = await stage.saveFileAs(text);
       if (!path) return;
@@ -888,6 +942,10 @@ function offline(): Snapshot {
     health: null,
     learned: [],
     midi: { inputs: [], last: null },
+    tools_problem: null,
+    tools_port: 7400,
+    osc_port: null,
+    engine_error: null,
   };
 }
 
@@ -940,6 +998,7 @@ function draw(snapshot: Snapshot) {
     ['scenes', () => updateScenes(snapshot)],
     ['pending', () => updatePending(snapshot)],
     ['notices', () => updateNotices(snapshot)],
+    ['tools', () => updateToolsProblem(snapshot)],
     ['lanes', () => laneView.update(snapshot)],
     ['highlights', () => highlighter.update(snapshot)],
     ['status', () => updateClipCount(snapshot)],
@@ -981,7 +1040,7 @@ async function poll() {
   // an engine that has gone is looked for every couple of seconds
   if (linkLost && ++polls % 25 === 0) {
     try {
-      await stage.connect(Number(input('port').value) || 7401, input('token').value.trim());
+      await stage.startEngine();
     } catch {
       // still not there
     }
@@ -1079,27 +1138,111 @@ const files = new FileBrowse({
 });
 $('workbench').prepend(files.element);
 
-/** The Lab: holds notes on one instrument and moves its parameters while they sound. */
-const lab = new Lab({
-  status,
-  openPiece: path => void openPath(path),
-  insert: text => {
-    if (!view) return status('Open a file to put the code in');
-    view.dispatch(view.state.replaceSelection(text));
-    view.focus();
-  },
-  evaluate: async source => {
-    if (!(await ensureConnected())) return;
-    showOutcome(await stage.evaluate(source, 'now', null, ++evaluations));
-  },
-});
-$('stage').prepend(lab.element);
-/** The Lab lives in the sidebar, so opening it brings the sidebar back. */
-function toggleLab() {
-  if (!lab.open) setMode('no-rail', false);
-  void lab.toggle();
+/** The sound card, sample rate and buffer size. Changing them starts the engine again. */
+const BUFFERS = [64, 128, 256, 512, 1024];
+const audioPanel = document.createElement('div');
+audioPanel.id = 'audio-panel';
+audioPanel.className = 'audio-panel';
+audioPanel.hidden = true;
+audioPanel.innerHTML = `
+  <label>output <select id="audio-output"></select></label>
+  <label>sample rate <select id="audio-rate"></select></label>
+  <label>buffer <select id="audio-buffer"></select></label>
+  <button id="audio-apply" title="Start the engine on these settings">Apply</button>
+  <div id="audio-note" class="audio-note"></div>
+  <label title="Controls bound with osc_in hear OSC sent to this UDP port on this machine">OSC in port <input id="audio-osc" inputmode="numeric" placeholder="off" /></label>
+  <button id="osc-apply" title="Listen for OSC on this port, or stop if it is empty">Listen</button>`;
+document.body.append(audioPanel);
+
+function fillSelect(select: HTMLSelectElement, options: { value: string; label: string }[], chosen: string) {
+  select.replaceChildren(
+    ...options.map(({ value, label }) => {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = label;
+      return option;
+    }),
+  );
+  if (!options.some(o => o.value === chosen)) {
+    const option = document.createElement('option');
+    option.value = chosen;
+    option.textContent = chosen;
+    select.append(option);
+  }
+  select.value = chosen;
 }
-$('lab-toggle').addEventListener('click', toggleLab);
+
+function showAudio(state: AudioState) {
+  const output = (audioPanel.querySelector('#audio-output') as HTMLSelectElement);
+  const rate = (audioPanel.querySelector('#audio-rate') as HTMLSelectElement);
+  const buffer = (audioPanel.querySelector('#audio-buffer') as HTMLSelectElement);
+  fillSelect(output, [{ value: '', label: 'system default' }, ...state.devices.map(d => ({ value: d.name, label: d.name }))], state.choice.output ?? '');
+  const chosen = state.devices.find(d => d.name === (state.choice.output ?? ''));
+  const rates = chosen ? chosen.rates : [...new Set(state.devices.flatMap(d => d.rates))].sort((a, b) => a - b);
+  fillSelect(rate, [{ value: '', label: "the card's own" }, ...rates.map(r => ({ value: String(r), label: `${r} Hz` }))], state.choice.sample_rate ? String(state.choice.sample_rate) : '');
+  fillSelect(buffer, [{ value: '', label: 'default' }, ...BUFFERS.map(b => ({ value: String(b), label: `${b} frames` }))], state.choice.buffer_size ? String(state.choice.buffer_size) : '');
+  $('audio-note').textContent = `playing at ${state.sample_rate} Hz through ${state.output}`;
+  input('audio-osc').value = state.osc_port ? String(state.osc_port) : '';
+}
+
+async function openAudio() {
+  if (!(await ensureConnected())) return;
+  try {
+    showAudio(await stage.audioState());
+    audioPanel.hidden = false;
+  } catch (error) {
+    status(String(error));
+  }
+}
+
+$('audio-toggle').addEventListener('click', () => {
+  if (audioPanel.hidden) void openAudio();
+  else audioPanel.hidden = true;
+});
+// choosing another card offers its own sample rates
+audioPanel.querySelector('#audio-output')!.addEventListener('change', async () => {
+  try {
+    const state = await stage.audioState();
+    state.choice.output = (audioPanel.querySelector('#audio-output') as HTMLSelectElement).value || null;
+    state.choice.sample_rate = null;
+    showAudio(state);
+  } catch (error) {
+    status(String(error));
+  }
+});
+$('osc-apply').addEventListener('click', async () => {
+  const port = Number(input('audio-osc').value) || null;
+  try {
+    await stage.oscListen(port);
+    status(port ? `listening for OSC on port ${port}` : 'not listening for OSC');
+  } catch (error) {
+    status(String(error));
+  }
+});
+$('audio-apply').addEventListener('click', async () => {
+  const value = (id: string) => (audioPanel.querySelector(id) as HTMLSelectElement).value;
+  const choice = {
+    output: value('#audio-output') || null,
+    sample_rate: Number(value('#audio-rate')) || null,
+    buffer_size: Number(value('#audio-buffer')) || null,
+  };
+  const sure = await ask('Changing the audio settings starts the engine again. What is playing stops and your clips and scenes are cleared, so evaluate your code again afterwards. Continue?');
+  if (!sure) return;
+  $('audio-note').textContent = 'starting the engine…';
+  try {
+    const state = await stage.audioApply(choice);
+    showAudio(state);
+    lastSceneSignature = '';
+    lastClipCount = -1;
+    status(`playing at ${state.sample_rate} Hz through ${state.output}; evaluate your code to play it again`);
+  } catch (error) {
+    // the previous settings were put back: show them, with why the new ones did not work
+    status(String(error));
+    void stage.audioState().then(showAudio).catch(() => {}).finally(() => {
+      $('audio-note').textContent = String(error);
+    });
+  }
+});
 $('browse-toggle').addEventListener('click', () => files.toggle());
 
 $('evaluate').addEventListener('click', () => void evaluate());
@@ -1159,13 +1302,25 @@ clockMenu('clock-in', name => stage.clockIn(name));
 clockMenu('clock-out', name => stage.clockOut(name));
 $('hush').addEventListener('click', () => void act({ action: 'hush' }));
 $('panic').addEventListener('click', () => void act({ action: 'panic' }));
+/** The port other tools reach the stage on can't be opened: say why, and keep the port and token fields in reach. */
+let portShown = false;
+function updateToolsProblem(snapshot: Snapshot) {
+  if (!portShown && snapshot.tools_port) {
+    input('port').value = String(snapshot.tools_port);
+    portShown = true;
+  }
+  const problem = snapshot.tools_problem ?? '';
+  $('tools-problem').textContent = problem;
+  $('tools-problem').title = problem;
+  $('setup').hidden = connected && !problem;
+}
+
 async function reconnect() {
   try {
-    await stage.disconnect();
-    setConnection(false);
-    lastSceneSignature = '';
-    lastClipCount = -1;
+    // other tools use the port and token as they are now, and any socket that was not open is opened
     await ensureConnected();
+    await stage.toolsApply(Number(input('port').value) || 7400, input('token').value.trim());
+    status('other tools reach the stage on the port above');
   } catch (error) {
     status(String(error));
   }
@@ -1190,9 +1345,6 @@ window.addEventListener('keydown', event => {
   } else if (event.key.toLowerCase() === 'p' && event.shiftKey) {
     event.preventDefault();
     togglePerform();
-  } else if (event.key.toLowerCase() === 'b' && event.shiftKey) {
-    event.preventDefault();
-    toggleLab();
   } else if (event.key.toLowerCase() === 'l' && event.shiftKey) {
     event.preventDefault();
     files.toggle();
@@ -1242,7 +1394,6 @@ const menuActions: Record<string, () => void> = {
   redo: () => view && redo(view),
   browse: () => files.toggle(),
   sidebar: toggleRail,
-  lab: toggleLab,
   perform: togglePerform,
   'zoom-in': () => stepZoom(1),
   'zoom-out': () => stepZoom(-1),
@@ -1261,7 +1412,6 @@ if (stored) {
 } else {
   addTab(demoSource, null, 'demo');
 }
-input('port').value = localStorage.getItem(portKey) ?? '7401';
 setConnection(false);
 void connectLanguageServer(message => status(message));
 void ensureConnected();

@@ -1139,12 +1139,11 @@ fn take_all(shelf: &str) -> String {
     format!("use {shelf}.{{{}}}\n", names.join(", "))
 }
 
-/// The catalog the tracker, the editor and the command line read: every preset has a folder, a description, its
-/// parameters and a source that compiles on its own with the helpers it names; and the JSON file the tracker
-/// imports is this catalog as it stands (`BLESS=1` rewrites it).
+/// The catalog the editor reads: every preset has a folder, a description, its parameters and a source that
+/// compiles on its own with the helpers it names.
 #[test]
-fn the_preset_catalog_is_complete_and_its_json_is_current() {
-    use niminal_lang::presets::{PresetKind, all, find, json};
+fn the_preset_catalog_is_complete() {
+    use niminal_lang::presets::{PresetKind, all, find};
     let presets = all();
     assert_eq!(
         presets
@@ -1182,13 +1181,4 @@ fn the_preset_catalog_is_complete_and_its_json_is_current() {
     assert!(find("echo").unwrap().helpers.is_empty());
     assert_eq!(find("echo").unwrap().name, "Echo");
     assert_eq!(find("band_cut").unwrap().name, "Band cut");
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("std/presets.json");
-    if std::env::var_os("BLESS").is_some() {
-        std::fs::write(&path, json()).unwrap();
-    }
-    assert_eq!(
-        std::fs::read_to_string(&path).unwrap_or_default(),
-        json(),
-        "std/presets.json is out of date; run with BLESS=1"
-    );
 }

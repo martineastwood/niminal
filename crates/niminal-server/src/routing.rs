@@ -421,30 +421,6 @@ impl Routing {
             }
         }
     }
-    pub fn meter(
-        &self,
-        client: u64,
-        endpoint: &Endpoint,
-    ) -> Result<Arc<niminal_engine::Meter>, String> {
-        match endpoint {
-            Endpoint::Node { id } => self
-                .clients
-                .get(&client)
-                .and_then(|p| p.nodes.get(id))
-                .map(|n| n.meter.clone())
-                .ok_or_else(|| format!("no node `{id}`")),
-            Endpoint::Bus { id, owner } => {
-                let owner = owner.unwrap_or(client);
-                self.clients
-                    .get(&owner)
-                    .and_then(|p| p.buses.get(id))
-                    .filter(|b| owner == client || b.shared)
-                    .map(|b| b.meter.clone())
-                    .ok_or_else(|| format!("no accessible bus `{id}`"))
-            }
-            Endpoint::Master => Err("master meter belongs to the session".into()),
-        }
-    }
 
     pub fn has_node(&self, client: u64, id: &str) -> bool {
         self.clients

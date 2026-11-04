@@ -1,6 +1,6 @@
 // A bowed, slightly breathy tone becomes a sine-bank instrument, then freezes into a harmony.
 // Tracks follow measured peaks across frames. Their slots stay stable as loudness order changes.
-// niminal-live render examples/spectral_partials.nml --out /tmp/spectral_partials.wav
+// niminal render examples/spectral_partials.nml --out /tmp/spectral_partials.wav
 config { channels: stereo }
 tempo 100bpm
 

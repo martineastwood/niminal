@@ -55,12 +55,12 @@ fn the_library_that_comes_with_niminal_plays() {
     assert!(peak(source, Path::new(".")) > 0.1);
 }
 
-/// What `niminal-live render` says about `main`, a file that uses the modules given.
+/// What `niminal render` says about `main`, a file that uses the modules given.
 fn render_error(main: &str, modules: &[(&str, &str)]) -> String {
     let mut files = vec![("main.nml", main)];
     files.extend_from_slice(modules);
     let dir = project(&files.iter().map(|(n, t)| (*n, *t)).collect::<Vec<_>>());
-    let run = std::process::Command::new(env!("CARGO_BIN_EXE_niminal-live"))
+    let run = std::process::Command::new(env!("CARGO_BIN_EXE_niminal"))
         .arg("render")
         .arg(dir.join("main.nml"))
         .args(["--bars", "1", "--out"])

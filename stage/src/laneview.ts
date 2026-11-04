@@ -125,9 +125,13 @@ export class LaneView {
     this.root.replaceChildren();
     if (!snapshot.connected) {
       const empty = element('div', 'stage-empty');
-      empty.innerHTML =
-        '<strong>No engine yet</strong><span>The stage looks for one on the port above. Start one with <code>niminal server</code>, then connect.</span>';
-      const connect = button('Connect', 'Look for the engine again', 'connect');
+      // the reason comes from the sound card and the engine, so it goes in as text
+      const heading = element('strong');
+      heading.textContent = 'The engine is not running';
+      const why = element('span');
+      why.textContent = `${snapshot.engine_error ?? 'It starts with the stage, and is starting now.'} The stage tries again every few seconds; Restart tries now.`;
+      empty.append(heading, why);
+      const connect = button('Restart', 'Start the engine again', 'connect');
       connect.classList.add('ready-connect');
       connect.addEventListener('click', () => this.onAction('connect'));
       empty.append(connect);

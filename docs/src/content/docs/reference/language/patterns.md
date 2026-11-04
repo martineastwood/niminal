@@ -3,7 +3,7 @@ title: Patterns
 description: Mini-notation, grids, and pattern transforms.
 ---
 
-**Read by niminal-live.** Patterns are evaluated by the sequencer while a piece plays; the server only sees the notes that come out of them. Finite event lists from outside niminal use [`.nms` scores](/reference/score-model/).
+**Read by the sequencer.** Patterns are evaluated by the sequencer while a piece plays; the server only sees the notes that come out of them. Finite event lists from outside niminal use [`.nms` scores](/reference/score-model/).
 
 ## Shared symbols
 
@@ -108,7 +108,7 @@ clip beat {
 | `seed` | Another number wanders somewhere else. The same choices always make the same grid |
 | `hat: 0.6` | A drum's name sets how busy that drum is compared with the rest: below 1 sparser, above 1 busier |
 
-The rows are named `kick`, `snare` or `clap`, `hat`, `open` and `perc`, depending on the theme, so the kit needs members of those names. `niminal-live drums` prints the same choices as a written `grid { ... }` to paste and edit by hand.
+The rows are named `kick`, `snare` or `clap`, `hat`, `open` and `perc`, depending on the theme, so the kit needs members of those names.
 
 ## Lanes for an effect
 

@@ -8,7 +8,7 @@
 // language. `scatter` shuffles slices of the last bar (the same seed shuffles the same way) and `freeze`
 // holds the last moment as a cloud of grains. The `glitch` effect in `std/fx` is the same chain, ready to
 // put on a tracker track. The `gate` row is a trance gate and the one control that starts open.
-// Render with:  niminal-live render examples/glitch.nml --out glitch.wav --bars 7
+// Render with:  niminal render examples/glitch.nml --out glitch.wav --bars 7
 config { channels: stereo }
 tempo 130bpm
 

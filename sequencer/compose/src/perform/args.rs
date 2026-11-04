@@ -277,25 +277,9 @@ impl Perform<'_> {
         let resolved = self.cx.samples.resolve_path(path);
         let text = std::fs::read_to_string(&resolved)
             .map_err(|e| Diagnostic::new(format!("couldn't read `{path}`: {e}"), span))?;
-        let file = crate::ScoreFile::from_json(&text)
+        let section = crate::Section::from_json(&text)
             .map_err(|e| Diagnostic::new(format!("couldn't load `{path}`: {e}"), span))?;
-        let clip = match file {
-            crate::ScoreFile::Section(section) => section_to_clip(section, self.cx.tempo)?,
-            crate::ScoreFile::Project(project) => {
-                if project.clips.len() == 1 && project.scenes.is_empty() {
-                    clipdef_to_clip(&project.clips[0], self.cx)?
-                } else {
-                    return Err(Diagnostic::new(
-                        format!(
-                            "`{path}` is a project with {} clips and {} scenes; `load` takes a version-1 section or a project with one clip",
-                            project.clips.len(),
-                            project.scenes.len()
-                        ),
-                        span,
-                    ));
-                }
-            }
-        };
+        let clip = section_to_clip(section, self.cx.tempo)?;
         Ok(PerfValue::Clip(clip))
     }
 }

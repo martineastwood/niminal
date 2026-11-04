@@ -1,7 +1,7 @@
 // Remixing a break with pattern operations. The one-bar loop in break.wav is cut into 16 slices (s0..s15),
 // and each clip below is the same straight break with a different operation on it. Each plays
 // twice, one after the other, from the `at` lines at the end.
-// Render with:  niminal-live render examples/break_variations.nml --out break_variations.wav --bars 16
+// Render with:  niminal render examples/break_variations.nml --out break_variations.wav --bars 16
 config { channels: stereo }
 tempo 130bpm
 

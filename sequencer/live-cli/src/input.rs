@@ -148,20 +148,8 @@ impl OscInput {
     }
 }
 
-/// Open every MIDI input whose name contains `filter` (all of them if it is empty).
-/// Returns the connections, which stay open until dropped, and their names.
-pub fn start_midi(
-    server: &LiveShared,
-    filter: &str,
-) -> Result<(Vec<MidiInputConnection<()>>, Vec<String>), String> {
-    let server = server.clone();
-    open_midi(filter, move |signal| {
-        lock(&server).live_mut().control_input(signal);
-    })
-}
-
-/// Like [`start_midi`], handing each message that parses to `deliver`, for a client that holds its
-/// sequencer another way.
+/// Open every MIDI input whose name contains `filter` (all of them if it is empty), handing each message that
+/// parses to `deliver`. Returns the connections, which stay open until dropped, and their names.
 pub fn open_midi(
     filter: &str,
     deliver: impl Fn(&ControlSignal) + Clone + Send + 'static,

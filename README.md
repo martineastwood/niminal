@@ -27,39 +27,36 @@ clip bass {
 - **Your own DSP, down to the sample.** Write functions with state that run at audio rate, and use them exactly like the built-ins.
 - **Expressive patterns.** Mini-notation, per-note controls, rational time and clips that you can transpose, reverse, mute and re-pattern on the fly.
 - **Exactly repeatable.** Render a piece to a WAV file offline, or replay a recorded live session sample for sample and get identical audio every time.
-- **Pick the way you like to work.** Code in Stage or VS Code, or compose in a keyboard-driven tracker grid. They all play through the same audio engine.
-- **Open to your own tools.** The audio engine is a WebSocket server with JavaScript and Python clients, so your own programs can play through it too.
+- **Pick the way you like to work.** Code in Stage, or in VS Code playing through Stage. One app, with the audio engine inside it.
+- **Open to your own tools.** The audio engine speaks a WebSocket API with a JavaScript client, so your own programs can play through it too (Stage serves it, or run `niminal server`).
 - **Fast and parallel.** A Rust engine with voice-parallel DSP, MIDI and OSC control, and MIDI clock in and out.
 
 ## How it fits together
 
-niminal has an **audio server** and **clients** that talk to it.
+**Stage** is the app. It has the audio engine and the live sequencer inside it, so you open it and play. The **VS Code extension** sends the code you evaluate to Stage, and Stage's lanes and scenes show it.
 
 ```
-  Stage / Tracker / VS Code / your code
-                 │   WebSocket (port 7401)
-                 ▼
-          niminal server      ← compiles instruments, plays the audio
+  VS Code extension ──▶ Stage ◀── your code (JS, ...)
+                        ├ live sequencer: tempo, clips, scenes, patterns
+                        └ audio engine: compiles instruments and plays them
 ```
 
-The server (`niminal server`) does the sound: it compiles instruments, effects and routing, and plays timestamped events. Clients decide what to play and when: tempo, clips, scenes and patterns live in the client. This is why every client connects to it (Tracker and Stage start it for you if it is not running; the VS Code extension needs it started first), and they reconnect automatically if you restart it.
+The engine compiles instruments, effects and routing, and plays timestamped events. Clients decide what to play and when: tempo, clips, scenes and patterns live in the sequencer. For testing and for building your own clients, `niminal server` runs the same engine as a command.
 
 | Piece | What it is | Needs |
 | --- | --- | --- |
-| [`niminal`](https://niminal.dev/reference/server/cli/) | The audio server and command-line tool | nothing |
-| [Stage](https://niminal.dev/reference/stage/) | Desktop app for live coding: editor, scenes, lanes that light up as clips play, meters, controls | the server |
-| [Tracker](https://niminal.dev/reference/tracker/) | Desktop app with a keyboard-driven pattern grid, instrument/effect editor, mixer and project files | the server |
-| [VS Code / Cursor extension](https://niminal.dev/reference/editor/) | Highlighting, diagnostics, hover, completion, evaluate-while-playing | the server for playback only |
-| [`niminal-live`](https://niminal.dev/reference/niminal-live/cli/) | The live sequencer and offline renderer | the server for live use only |
+| [Stage](https://niminal.dev/reference/stage/) | Desktop app for live coding: editor, scenes, lanes that light up as clips play, meters, controls | nothing: the engine is built in |
+| [VS Code / Cursor extension](https://niminal.dev/reference/editor/) | Highlighting, diagnostics, hover, completion, evaluate-while-playing | Stage installed (and open, for playback) |
+| [`niminal`](https://niminal.dev/reference/server/cli/) | The command line: `play` a file and hear it change as you edit, `render` to WAV, `server` for your own clients, `replay`, and the language server | nothing |
 
 ## Install
 
 ### macOS download (recommended)
 
-The alpha is a single `Niminal` folder (Apple Silicon, macOS 13+) with Tracker, Stage, both command-line tools, the VS Code extension and examples. No Rust, Node or installer needed.
+The alpha is a single `Niminal` folder (Apple Silicon, macOS 13+) with Stage, the `niminal` command, the VS Code extension and examples. No Rust, Node or installer needed.
 
 1. Download the latest dmg from [GitHub Releases](https://github.com/martineastwood/niminal/releases) and drag the `Niminal` folder onto Applications, so it ends up at `/Applications/Niminal`.
-   Or with Homebrew, which also puts `niminal` and `niminal-live` on your PATH and skips the macOS warning below:
+   Or with Homebrew, which also puts `niminal` on your PATH and skips the macOS warning below:
 
    ```sh
    brew tap martineastwood/niminal
@@ -67,8 +64,8 @@ The alpha is a single `Niminal` folder (Apple Silicon, macOS 13+) with Tracker, 
    brew install --cask martineastwood/niminal/niminal
    ```
 
-2. The apps are ad-hoc signed and not notarized. If macOS blocks one on first use, approve it under **System Settings > Privacy & Security > Open Anyway**.
-3. Put the tools on your PATH (add the line to `~/.zprofile` to keep it):
+2. The apps are ad-hoc signed and not notarized. If macOS blocks Stage or `niminal` on first use, approve it under **System Settings > Privacy & Security > Open Anyway**.
+3. To use `niminal` from Terminal, put it on your PATH (add the line to `~/.zprofile` to keep it):
 
    ```sh
    export PATH="/Applications/Niminal/bin:$PATH"
@@ -81,11 +78,10 @@ The bundled `Getting Started.txt` covers the same steps, plus upgrading and unin
 You need a recent [Rust toolchain](https://rustup.rs/). From a clone of this repo:
 
 ```sh
-cargo install --path crates/niminal-cli      # niminal (the audio server)
-cargo install --path sequencer/live-cli      # niminal-live (sequencer and renderer)
+cargo install --path sequencer/live-cli      # niminal: play, render, server, replay and the language server
 ```
 
-To run Stage or the Tracker from source you also need Node.js and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). See [stage/](stage/) and [tracker/README.md](tracker/README.md).
+To build Stage from source you also need Node.js and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). See [stage/](stage/).
 
 ## Run it
 
@@ -94,37 +90,26 @@ To run Stage or the Tracker from source you also need Node.js and the [Tauri pre
 Offline rendering works on its own. Write a piece to a WAV file:
 
 ```sh
-niminal-live render examples/saw_lead.nml --out saw_lead.wav
+niminal render examples/saw_lead.nml --out saw_lead.wav
 ```
 
-### 2. Start the audio server
+### 2. Play live
 
-For anything live, start the server first, in its own terminal, and leave it running:
+Open **Niminal Stage**, open a `.nml` file (try `examples/groove.nml`) and press **Cmd+Enter** to evaluate a block. The engine runs inside Stage and plays through your default sound card, so there is nothing to start first.
+
+**VS Code / Cursor**: choose **File > Install VS Code Extension…** in Stage (or accept the offer the first time it opens), or install `niminal-vscode.vsix` yourself (or `editors/vscode`). Then open a `.nml` file and press **Cmd+Enter** (**Ctrl+Enter**) to evaluate a block, **Cmd+.** to hush. The code plays through Stage, which opens if it isn't running, and its clips and scenes appear in Stage's lanes. Diagnostics, hover and completion come from the Stage app and work even when Stage is not open.
+
+### 3. Build on the engine
+
+To drive the engine from your own program, run it on its own:
 
 ```sh
 niminal server
 ```
 
-It listens on port 7401. Ctrl+C stops it. See `niminal server --help` for audio and MIDI device options.
+It listens on port 7401 (Stage serves the engine on 7401 too when it is open, with the sequencer on 7400). Ctrl+C stops it. See `niminal server --help` for audio and MIDI device options.
 
-### 3. Connect a client
-
-With the server running, pick one:
-
-- **Stage**: open Niminal Stage, open a `.nml` file (try `examples/groove.nml`) and it connects. Stage has the sequencer built in, so it needs only the server.
-- **Tracker**: open Niminal Tracker, create a project, choose an instrument and enter notes in the grid. It connects on startup, starting the server if none is running.
-- **VS Code / Cursor**: choose **File > Install VS Code Extension…** in Tracker or Stage (or accept the offer the first time they open), or install `niminal-vscode.vsix` yourself (or `editors/vscode`). Then open a `.nml` file and press **Cmd+Enter** (**Ctrl+Enter**) to evaluate a block, **Cmd+.** to hush. The extension starts the server if none is running. Diagnostics, hover and completion work even without it.
-- **Terminal**:
-
-  ```sh
-  niminal-live live examples/groove.nml
-  # in another terminal:
-  niminal-live send 'chorus.start' --quantize "next 4bars"
-  ```
-
-  `niminal-live repl` gives an interactive prompt.
-
-If a client says it cannot connect, check that `niminal server` is running and that you restarted it after upgrading, since it keeps the old build until restarted.
+If a client says it cannot connect, check that the server is running and that you restarted it after upgrading, since it keeps the old build until restarted.
 
 ### Record and replay
 
@@ -138,12 +123,12 @@ For MIDI / OSC control, start the live client with `--midi` and/or `--osc-port` 
 
 ## What you get
 
-- **Live** — Evaluate while playing, quantized to musical time, from Stage, VS Code, the REPL or `send`.
-- **Offline** — `niminal-live render` renders a piece to audio; `niminal replay` reproduces a session to identical samples.
+- **Live** — Evaluate while playing, quantized to musical time, from Stage or VS Code.
+- **Offline** — `niminal render` renders a piece to audio; `niminal replay` reproduces a session to identical samples.
 - **Musical** — Rational time, mini-notation, clips, scenes, and arrangements; one pattern cycle is one bar.
 - **Routing** — Independent fx instances, private buses and sample-timed connection edits.
 - **Extensible** — Write functions and instruments in the language, with the same tooling as built-ins.
-- **Open API** — Browser, Node and Python clients can define effects, route and modulate them, stream WAV files, capture output and run offline exports. See the [engine API](https://niminal.dev/reference/engine-api/) and [client examples](clients/examples/).
+- **Open API** — Browser and Node clients can send events, define instruments, effects and routing, and subscribe to the clock, meters and voices. See the [engine API](https://niminal.dev/reference/engine-api/).
 
 ## Repository layout
 
@@ -151,7 +136,8 @@ For MIDI / OSC control, start the live client with `--midi` and/or `--osc-port` 
 | --- | --- |
 | `crates/niminal-cli` | `niminal` command-line tool |
 | `crates/niminal-server` | The engine: an audio server that plays events stamped in absolute samples |
-| `crates/niminal-live` | The live sequencer: clips, scenes, quantize, keyboards; a client of the engine's API |
+| `sequencer/live` | The live sequencer: clips, scenes, quantize, keyboards; plays through the engine in-process |
+| `stage/` | Niminal Stage, the desktop app: the engine and the sequencer, with an editor and lanes |
 | `crates/niminal-*` | Language, DSP, LSP, and related libraries |
 | `examples/` | Example `.nml` pieces |
 | `editors/vscode/` | Editor extension |

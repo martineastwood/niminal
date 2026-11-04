@@ -3,17 +3,19 @@ title: Editor and LSP
 description: VS Code extension, language server, and editing without a server.
 ---
 
-**Read by niminal-live.** The extension is an editor around niminal-live: it runs the language server, and a private live sequencer, for you.
+**Read by Niminal Stage.** The extension is an editor for Niminal Stage: it runs the `niminal` language server, and the code you evaluate plays through Stage.
 
-## Language server (`niminal-live lsp`)
+## Language server (`niminal lsp`)
 
-The CLI runs an **LSP server on stdio**. Any editor that can spawn a language server can use it for `.nml` files:
+`niminal lsp` runs an **LSP server on stdio**. Any editor that can spawn a language server can use it for `.nml` files:
 
 ```sh
-niminal-live lsp
+niminal lsp
 ```
 
-The VS Code extension starts the same binary automatically (see settings below).
+The macOS download puts `niminal` in `/Applications/Niminal/bin`. Stage need not be running.
+
+The VS Code extension starts it automatically, finding `niminal` in the download's `bin` folder, on your PATH or in `~/.cargo/bin` (see settings below).
 
 **Works without a running server** — editing support comes from the compiler in-process:
 
@@ -26,39 +28,19 @@ The VS Code extension starts the same binary automatically (see settings below).
 
 Trigger character for completion: `.`
 
-After installing a new `niminal-live` binary, run **Restart Language Server** in the command palette (VS Code) or restart your editor’s LSP client.
+After installing a new `niminal` binary, run **Restart Language Server** in the command palette (VS Code) or restart your editor’s LSP client.
 
 ## VS Code / Cursor extension
 
-With the macOS download, choose **File > Install VS Code Extension…** in Tracker or Stage (they also offer it the first time they open). From the repo root:
+With the macOS download, choose **File > Install VS Code Extension…** in Stage (it also offers it the first time it opens). From the repo root:
 
 ```sh
 cd editors/vscode && npm install && node install.js
 ```
 
-Reload the window (`--cursor` for Cursor). Build or install both binaries first:
+Reload the window (`--cursor` for Cursor). The language server comes from the Niminal Stage app, so install that first.
 
-```sh
-cargo install --path crates/niminal-cli   # niminal, the server
-cargo install --path sequencer/live-cli    # niminal-live, the live sequencer and language server
-```
-
-The extension starts `niminal server --exit-when-unused` in the background if none is listening on the port (its messages go to `~/.niminal/server.log`), and it stops when its last client closes. To watch the server or choose an audio device, start one yourself in a terminal, or use **niminal: Start Server in a Terminal** from the command palette:
-
-```sh
-niminal server
-```
-
-Open a `.nml` file. The first evaluation starts a private `niminal-live live --port 0 --parent-stdio` process owned by that window: clips, scenes, lanes and quantized edits live there, and only generic events reach the server. Each window has its own performance state, and closing it stops the sequencer. The language server is separate (stdio).
-
-### Shortcuts
-
-| Key (mac / other) | Action |
-| --- | --- |
-| Cmd+Enter / Ctrl+Enter | Evaluate selection, or the block around the cursor (blank-line blocks, bracket-balanced) |
-| Cmd+Shift+Enter / Ctrl+Shift+Enter | Evaluate whole file |
-| Cmd+. / Ctrl+. | Hush: stop every clip, letting what's sounding ring out |
-| Cmd+1..9 | Launch the Nth scene from the sidebar (while a `.nml` file has focus) |
+The code you evaluate plays through Niminal Stage, which has the engine and the sequencer in it. If Stage is not running, the first evaluation offers to open it (`niminal.stageApp` names the app). Stage serves the sequencer on its tools port (7400 by default), and the extension joins its `main` chair: what you evaluate in the editor shows in Stage's lanes and scene buttons and plays on its transport. If both define the same name, the last one evaluated wins.
 
 The **niminal** sidebar lists scenes and clips. A scene shows how many of its clips are playing, and starts, mutes, solos and stops them as a group; a clip shows what has been done to it and can be muted, soloed and stopped. The file's scenes launch with Cmd/Ctrl+1..9. The status bar flags a soloed or muted clip (`SOLO bass · 2 muted`), since either silences something that is playing. Compile errors show as squiggles at the right place and in the **niminal** output channel; the status bar shows bar, beat, tempo, voices and pending changes, and clicking it hushes. **niminal: Connect to Server** and **niminal: Panic** are in the command palette. Evaluating starts the window's live sequencer; if the server isn't answering, the extension offers to start it in a terminal.
 
@@ -66,17 +48,15 @@ The **niminal** sidebar lists scenes and clips. A scene shows how many of its cl
 
 | Setting | Purpose |
 | --- | --- |
-| `niminal.path` | Path to the `niminal` binary (the audio server) |
-| `niminal.livePath` | Path to the `niminal-live` binary (live sequencer + LSP) |
-| `niminal.port` | Server WebSocket port (default `7401`) |
-| `niminal.token` | Token if the server was started with `--token` |
+| `niminal.path` | The `niminal` command, which runs the language server (`niminal lsp`). Found in the download's `bin` folder or on your PATH if you leave it |
+| `niminal.stageApp` | The Stage app to open when it is not running (macOS; default `Niminal Stage`) |
+| `niminal.port` | The tools port Stage serves the sequencer on (default `7400`) |
+| `niminal.token` | The token Stage asks for, if one is set |
 | `niminal.quantize` | Default land time for evaluation (e.g. `next 4bars`); empty uses the sequencer's default |
-| `niminal.midi` | MIDI input name filter for the window's sequencer: empty string listens to all inputs, `null` disables MIDI. Reload the editor after changing |
-| `niminal.oscPort` | OSC input UDP port for the window's sequencer (`null` disables OSC). Reload the editor after changing |
 
 ### MIDI learn
 
-With MIDI enabled (`niminal.midi`), a control written as `midi.learn` waits for the next CC. When one arrives, the extension rewrites the line to the bound `midi.cc(...)`. See [Performance](/reference/language/performance/) and [Live coding](/guide/live-coding/).
+With a MIDI input chosen in Stage, a control written as `midi.learn` waits for the next CC. When one arrives, the extension rewrites the line to the bound `midi.cc(...)`. See [Performance](/reference/language/performance/) and [Live coding](/guide/live-coding/).
 
 ## Live session vs LSP
 
@@ -87,4 +67,4 @@ With MIDI enabled (`niminal.midi`), a control written as `midi.learn` waits for 
 | Live `start` / `stop` / changes | No | Yes |
 | Diagnostics / completion | Yes | Eval diagnostics via extension/REPL |
 
-For command-line workflow (REPL, `send`, render, replay), see [Command line](/reference/niminal-live/cli/) and [Live coding](/guide/live-coding/). For WebSocket messages, subscriptions, and `eval` / `events.send`, see [Sequencer protocol](/reference/protocol/).
+For the command line (`niminal play`, render, replay), see [Command line](/reference/server/cli/) and [Live coding](/guide/live-coding/). For WebSocket messages, subscriptions, and `eval` / `events.send`, see [Sequencer protocol](/reference/protocol/).

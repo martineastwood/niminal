@@ -450,7 +450,7 @@ impl Perform<'_> {
 
     /// `drum_grid(theme: house, density: 0.8, chaos: 0.3, seed: 4, hat: 0.6)`: a grid made to order, the
     /// same each time for the same choices. A drum named as an argument is made busier or sparser than the
-    /// rest. It plays exactly as the `grid { ... }` that `niminal-live drums` prints.
+    /// rest. Written out by hand, the same choices are a `grid { ... }` to edit.
     pub(super) fn drum_grid(&self, args: &[Arg], span: Span) -> Res<Pattern<Step>> {
         let number = |e: &Expr| self.plain(e).map(|r| r.to_f64());
         let mut request = crate::drums::Request::default();

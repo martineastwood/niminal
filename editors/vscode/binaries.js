@@ -19,17 +19,10 @@ function executable(file) {
   catch { return false; }
 }
 
-/** VS Code uses the default shell; macOS/Linux use POSIX quoting, Windows uses PowerShell. */
-function serverCommand(binary, port, token, platform = process.platform) {
-  const quote = value => platform === "win32"
-    ? "'" + String(value).replaceAll("'", "''") + "'"
-    : "'" + String(value).replaceAll("'", "'\\''") + "'";
-  return `${platform === "win32" ? "& " : ""}${quote(binary)} server --port ${Number(port)}${token ? ` --token ${quote(token)}` : ""}`;
+/** The command that opens the Stage app by name: `open -a` on macOS, nothing known elsewhere yet. */
+function openStageCommand(app, platform = process.platform) {
+  if (!app) return null;
+  return platform === "darwin" ? ["open", "-a", app] : null;
 }
 
-/** The arguments for a server started in the background: it stops itself when the last client has gone. */
-function backgroundServerArgs(port, token) {
-  return ["server", "--port", String(Number(port)), "--exit-when-unused", ...(token ? ["--token", token] : [])];
-}
-
-module.exports = { findBinary, serverCommand, backgroundServerArgs };
+module.exports = { findBinary, openStageCommand };

@@ -15,7 +15,7 @@ fn render(args: &[&str]) -> (bool, String, Vec<f32>) {
     std::fs::create_dir_all(&dir).unwrap();
     let (file, out) = (dir.join("then.nml"), dir.join("then.wav"));
     std::fs::write(&file, SOURCE).unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_niminal-live"))
+    let run = Command::new(env!("CARGO_BIN_EXE_niminal"))
         .arg("render")
         .arg(&file)
         .args(args)

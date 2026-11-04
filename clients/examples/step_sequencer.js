@@ -1,5 +1,5 @@
-// A finite tracker phrase. Rows, tempo and note lengths belong entirely to this client.
-// Run with a server listening on port 7401: node clients/examples/tracker.js [BPM]
+// A finite step-sequenced phrase. Rows, tempo and note lengths belong entirely to this client.
+// Run with a server listening on port 7401: node clients/examples/step_sequencer.js [BPM]
 const { Client } = require("../js");
 
 async function main() {
@@ -14,12 +14,12 @@ async function main() {
   try {
     await engine.sendEvents([{
       op: "define", at: "now",
-      source: "instr tracker_tone(freq: hz) { osc(saw, freq) * env[0.15 | 80ms 0] }",
+      source: "instr step_tone(freq: hz) { osc(saw, freq) * env[0.15 | 80ms 0] }",
     }]);
     const { sample, sample_rate } = await engine.clock();
     const start = sample + Math.round(sample_rate * 0.2);
     await engine.sendEvents(rows.flatMap((pitch, row) => pitch === null ? [] : [{
-      op: "note", target: "tracker_tone",
+      op: "note", target: "step_tone",
       at: start + Math.round(row * rowSeconds * sample_rate),
       dur: `${rowSeconds * 0.8}sec`, args: { freq: pitch }, tag: "phrase",
     }]));

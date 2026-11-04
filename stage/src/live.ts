@@ -84,6 +84,24 @@ export type Snapshot = {
   /** Controls that took a MIDI control change since the last snapshot. */
   learned: { control: string; source: string }[];
   midi: { inputs: string[]; last: string | null };
+  /** Why the sockets other tools use are not open, if they are not. */
+  tools_problem: string | null;
+  /** The port other tools reach the stage on. */
+  tools_port: number;
+  osc_port: number | null;
+  /** Why the engine is not running, when it is not. */
+  engine_error: string | null;
+};
+
+export type AudioChoice = { output: string | null; buffer_size: number | null; sample_rate: number | null };
+export type AudioState = {
+  devices: { name: string; rates: number[] }[];
+  choice: AudioChoice;
+  /** What the engine is running with now. */
+  sample_rate: number;
+  output: string;
+  /** The UDP port OSC is listened for on, if it is. */
+  osc_port: number | null;
 };
 
 export type Accepted = {
@@ -125,10 +143,13 @@ export type Action = {
 };
 
 export const stage = {
-  async connect(port: number, token: string) {
-    await invoke<void>('connect', { port, token: token || null });
-    // a missing MIDI device must not stop the stage
-    await this.openMidi('').catch(() => []);
+  /** Start the engine again, if it could not start when the program opened. */
+  async startEngine() {
+    await invoke<void>('engine_start');
+  },
+  /** Reach other tools on this port (and the engine's own socket one above it), asking for this token. */
+  async toolsApply(port: number, token: string) {
+    await invoke<void>('tools_apply', { port, token: token || null });
   },
   /** Listen to the MIDI inputs whose names contain `filter` (all of them when empty); returns their names. */
   openMidi(filter: string) {
@@ -146,8 +167,14 @@ export const stage = {
   clockIn(name: string | null) {
     return invoke<void>('clock_in', { name });
   },
-  disconnect() {
-    return invoke<void>('disconnect');
+  audioState() {
+    return invoke<AudioState>('audio_state');
+  },
+  oscListen(port: number | null) {
+    return invoke<void>('osc_listen', { port });
+  },
+  audioApply(choice: AudioChoice) {
+    return invoke<AudioState>('audio_apply', { output: choice.output, bufferSize: choice.buffer_size, sampleRate: choice.sample_rate });
   },
   snapshot() {
     return invoke<Snapshot>('snapshot');

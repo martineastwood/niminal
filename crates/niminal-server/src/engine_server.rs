@@ -29,6 +29,11 @@ pub fn set_release(release: &str) {
     let _ = RELEASE.set(release.to_string());
 }
 
+/// The release this program is part of, if it was built as one.
+pub fn release() -> Option<&'static str> {
+    RELEASE.get().map(String::as_str)
+}
+
 pub(crate) const PARSE_ERROR: i64 = -32700;
 pub(crate) const INVALID_REQUEST: i64 = -32600;
 pub(crate) const METHOD_NOT_FOUND: i64 = -32601;
@@ -40,115 +45,19 @@ pub(crate) const PROTOCOL_ERROR: i64 = -32000;
 pub(crate) const REJECTED: i64 = -32001;
 
 /// What a client of the engine can subscribe to.
-pub const ENGINE_TOPICS: [&str; 8] = [
+pub const ENGINE_TOPICS: [&str; 6] = [
     "clock",
     "meters",
     "notices",
     "transactions",
-    "scopes",
     "voices",
     "reports",
-    "jobs",
 ];
 
 /// A request to the engine, as it is named on the wire.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "method", content = "params")]
 pub enum EngineRequest {
-    #[serde(rename = "audio.devices")]
-    AudioDevices {},
-    #[serde(rename = "audio.status")]
-    AudioStatus {},
-    #[serde(rename = "audio.configure")]
-    AudioConfigure {
-        settings: crate::AudioSettings,
-        #[serde(default)]
-        restart: bool,
-    },
-    #[serde(rename = "capture.start")]
-    CaptureStart {
-        output: crate::RenderOutput,
-        #[serde(default = "now")]
-        at: At,
-    },
-    #[serde(rename = "capture.stop")]
-    CaptureStop {
-        id: u64,
-        #[serde(default = "now")]
-        at: At,
-    },
-    #[serde(rename = "render.start")]
-    RenderStart {
-        #[serde(flatten)]
-        spec: crate::RenderSpec,
-    },
-    #[serde(rename = "jobs.status")]
-    JobsStatus { id: u64 },
-    #[serde(rename = "jobs.cancel")]
-    JobsCancel { id: u64 },
-    #[serde(rename = "files.upload")]
-    FilesUpload {
-        #[serde(default)]
-        id: Option<String>,
-        #[serde(default)]
-        offset: u64,
-        #[serde(default)]
-        data: String,
-        #[serde(default)]
-        finish: bool,
-    },
-    #[serde(rename = "files.read")]
-    FilesRead {
-        id: String,
-        #[serde(default)]
-        offset: u64,
-        count: usize,
-    },
-    #[serde(rename = "files.remove")]
-    FilesRemove { id: String },
-    #[serde(rename = "scopes.create")]
-    ScopesCreate {
-        id: String,
-        endpoint: crate::Endpoint,
-        #[serde(default = "scope_frames")]
-        frames: usize,
-        #[serde(default = "scope_rate")]
-        rate: f64,
-    },
-    #[serde(rename = "scopes.remove")]
-    ScopesRemove { id: String },
-    #[serde(rename = "buffers.budget")]
-    BuffersBudget {
-        #[serde(default)]
-        bytes: Option<usize>,
-    },
-    #[serde(rename = "buffers.list")]
-    BuffersList {},
-    #[serde(rename = "buffers.read")]
-    BuffersRead {
-        name: String,
-        #[serde(default)]
-        offset: usize,
-        count: usize,
-    },
-    #[serde(rename = "buffers.alloc")]
-    BuffersAlloc {
-        name: String,
-        frames: usize,
-        #[serde(default = "first_channel")]
-        channels: usize,
-    },
-    #[serde(rename = "buffers.free")]
-    BuffersFree { name: String },
-    #[serde(rename = "buffers.load")]
-    BuffersLoad {
-        name: String,
-        path: String,
-        #[serde(default)]
-        channel: usize,
-    },
-    #[serde(rename = "buffers.save")]
-    BuffersSave { name: String, path: String },
     #[serde(rename = "hello")]
     Hello {
         protocol: u64,
@@ -182,19 +91,7 @@ pub enum EngineRequest {
     Clock {},
 }
 
-fn now() -> At {
-    At::Now
-}
-fn scope_frames() -> usize {
-    1024
-}
-fn scope_rate() -> f64 {
-    20.0
-}
 
-fn first_channel() -> usize {
-    1
-}
 
 /// What the engine answers.
 #[derive(Debug, Clone, PartialEq)]
@@ -335,27 +232,7 @@ impl EngineReply {
             }
             EngineRequest::EventsCancel { .. } => EngineReply::Cancelled(decode(result)?),
             EngineRequest::Panic {} | EngineRequest::EnginePanic {} => EngineReply::Panicked,
-            EngineRequest::BuffersList {}
-            | EngineRequest::BuffersRead { .. }
-            | EngineRequest::BuffersAlloc { .. }
-            | EngineRequest::BuffersLoad { .. }
-            | EngineRequest::BuffersSave { .. }
-            | EngineRequest::BuffersFree { .. }
-            | EngineRequest::BuffersBudget { .. }
-            | EngineRequest::Status {}
-            | EngineRequest::AudioDevices {}
-            | EngineRequest::AudioStatus {}
-            | EngineRequest::AudioConfigure { .. }
-            | EngineRequest::CaptureStart { .. }
-            | EngineRequest::CaptureStop { .. }
-            | EngineRequest::RenderStart { .. }
-            | EngineRequest::JobsStatus { .. }
-            | EngineRequest::JobsCancel { .. }
-            | EngineRequest::FilesUpload { .. }
-            | EngineRequest::FilesRead { .. }
-            | EngineRequest::FilesRemove { .. }
-            | EngineRequest::ScopesCreate { .. }
-            | EngineRequest::ScopesRemove { .. } => EngineReply::Json(result.clone()),
+            EngineRequest::Status {} => EngineReply::Json(result.clone()),
             EngineRequest::Clock {} => EngineReply::Clock(decode(result)?),
         })
     }
@@ -373,8 +250,8 @@ impl EngineReply {
                 "sample_rate": sample_rate,
                 "channels": channels,
                 "topics": ENGINE_TOPICS,
-                "capabilities": ["private_definitions", "routing", "transactions", "voices", "reports", "scopes", "multichannel_buffers", "late_buffer_binding", "fx_modulation", "file_transfer", "offline_render", "capture", "file_players", "audio_management"],
-                "limits": { "buffer_write_samples": 65536, "message_bytes": 4194304, "buffer_bytes":268435456,"file_chunk_bytes":262144,"report_values":64,"scope_frames":4096,"scopes_per_client":crate::scopes::MAX_SCOPES },
+                "capabilities": ["private_definitions", "routing", "transactions", "voices", "reports", "multichannel_buffers", "late_buffer_binding", "fx_modulation"],
+                "limits": { "buffer_write_samples": 65536, "message_bytes": 4194304, "buffer_bytes": 268435456, "report_values": 64 },
             }),
             EngineReply::Subscribed(topics) => json!({ "topics": topics }),
             EngineReply::Sent { sent, horizon } => {
@@ -404,17 +281,13 @@ struct Client {
 }
 
 pub struct EngineServer {
-    audio: crate::AudioControl,
     session: Session,
     clients: BTreeMap<ClientId, Client>,
     next_client: ClientId,
     last_clock: Option<u64>,
     clock_every: u64,
     outbox: Vec<(ClientId, String)>,
-    scopes: crate::scopes::Scopes,
     reports: crate::reports::Reports,
-    files: crate::files::Files,
-    jobs: crate::jobs::Jobs,
     /// Verbosity and where log lines go. A separate thread prints them, so a slow terminal never holds up the engine.
     trace: Option<(u8, std::sync::mpsc::Sender<String>)>,
 }
@@ -423,17 +296,13 @@ impl EngineServer {
     pub fn new(session: Session) -> EngineServer {
         let clock_every = (session.sample_rate() / 10.0) as u64;
         EngineServer {
-            audio: Default::default(),
             session,
             clients: BTreeMap::new(),
             next_client: 1,
             last_clock: None,
             clock_every,
             outbox: Vec::new(),
-            scopes: Default::default(),
             reports: Default::default(),
-            files: Default::default(),
-            jobs: Default::default(),
             trace: None,
         }
     }
@@ -452,19 +321,10 @@ impl EngineServer {
         }
     }
 
-    pub fn set_audio_control(&mut self, audio: crate::AudioControl) {
-        self.audio = audio;
-    }
     pub fn is_connected(&self, client: u64) -> bool {
         self.clients.contains_key(&client)
     }
     pub fn reset_session(&mut self, session: Session) {
-        let clients: Vec<_> = self.clients.keys().copied().collect();
-        for client in clients {
-            self.jobs.disconnect(client);
-            self.files.disconnect(client);
-            self.scopes.disconnect(client);
-        }
         self.clients.clear();
         self.outbox.clear();
         self.reports = Default::default();
@@ -500,9 +360,6 @@ impl EngineServer {
         self.trace(1, || format!("client {client} disconnected"));
         self.clients.remove(&client);
         self.outbox.retain(|(id, _)| *id != client);
-        self.jobs.disconnect(client);
-        self.files.disconnect(client);
-        self.scopes.disconnect(client);
         self.session.drop_client(client);
     }
 
@@ -584,7 +441,7 @@ impl EngineServer {
                 return Err(EngineError::new(
                     PROTOCOL_ERROR,
                     &format!(
-                        "this engine speaks protocol {PROTOCOL_VERSION}, the client said {protocol}"
+                        "this engine speaks protocol {PROTOCOL_VERSION}, the client said {protocol}; update whichever is older, so that they come from the same release"
                     ),
                 ));
             }
@@ -617,7 +474,7 @@ impl EngineServer {
             EngineRequest::Hello { .. } => unreachable!("handled above"),
             EngineRequest::Subscribe { topics } => self.subscribe(client, &topics, true),
             EngineRequest::Unsubscribe { topics } => self.subscribe(client, &topics, false),
-            EngineRequest::EventsSend { mut events } => {
+            EngineRequest::EventsSend { events } => {
                 for event in &events {
                     let is_sample =
                         |v: &niminal_score::Value| matches!(v, niminal_score::Value::Sample(_));
@@ -640,22 +497,6 @@ impl EngineServer {
                             INVALID_PARAMS,
                             "internal namespace names are reserved",
                         ));
-                    }
-                }
-                for event in &mut events {
-                    if let Op::Routing { edits, .. } | Op::Transaction { edits, .. } = event {
-                        for edit in edits {
-                            if let crate::RoutingEdit::Player { player, .. } = edit
-                                && player.path.starts_with("file:")
-                            {
-                                player.path = self
-                                    .files
-                                    .path(client, &player.path)
-                                    .map_err(|e| EngineError::new(INVALID_PARAMS, &e))?
-                                    .to_string_lossy()
-                                    .into_owned();
-                            }
-                        }
                     }
                 }
                 let sent = self.session.send_events(client, events).map_err(|mut p| {
@@ -691,126 +532,12 @@ impl EngineServer {
                 self.session.panic_client(client);
                 Ok(EngineReply::Panicked)
             }
-            EngineRequest::BuffersBudget { bytes } => {
-                crate::resources::budget(&mut self.session, client, bytes).map(EngineReply::Json)
-            }
-            EngineRequest::BuffersList {} => {
-                crate::resources::list(&mut self.session, client).map(EngineReply::Json)
-            }
-            EngineRequest::BuffersRead {
-                name,
-                offset,
-                count,
-            } => crate::resources::read(&mut self.session, client, name, offset, count)
-                .map(EngineReply::Json),
-            EngineRequest::BuffersAlloc {
-                name,
-                frames,
-                channels,
-            } => crate::resources::alloc(&mut self.session, client, name, frames, channels)
-                .map(EngineReply::Json),
-            EngineRequest::BuffersFree { name } => {
-                crate::resources::free(&mut self.session, client, name).map(EngineReply::Json)
-            }
-            EngineRequest::BuffersSave { name, path } => {
-                crate::resources::save(&mut self.session, client, name, path).map(EngineReply::Json)
-            }
-            EngineRequest::BuffersLoad {
-                name,
-                path,
-                channel,
-            } => {
-                let path = if path.starts_with("file:") {
-                    self.files
-                        .path(client, &path)
-                        .map_err(|e| EngineError::new(INVALID_PARAMS, &e))?
-                        .to_string_lossy()
-                        .into_owned()
-                } else {
-                    path
-                };
-                crate::resources::load_buffer(&mut self.session, client, &name, &path, channel)
-                    .map(EngineReply::Json)
-            }
             EngineRequest::Status {} => {
                 let mut status = crate::status::client_status_json(&self.session, client);
                 status["active_voices"] = self.session.active_voice_status(client);
                 status["client_id"] = json!(client);
                 status["transactions"] = self.session.transaction_status(client);
                 Ok(EngineReply::Json(status))
-            }
-            EngineRequest::AudioDevices {} => Ok(EngineReply::Json(self.audio.devices())),
-            EngineRequest::AudioStatus {} => Ok(EngineReply::Json(self.audio.status())),
-            EngineRequest::AudioConfigure { settings, restart } => self
-                .audio
-                .configure(settings, restart)
-                .map(EngineReply::Json)
-                .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
-            EngineRequest::CaptureStart { output, at } => self
-                .jobs
-                .capture(&self.session, client, output, at)
-                .map(EngineReply::Json)
-                .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
-            EngineRequest::CaptureStop { id, at } => self
-                .jobs
-                .stop_capture(
-                    client,
-                    id,
-                    match at {
-                        At::Now => self.session.clock(),
-                        At::Sample(n) => n,
-                    },
-                )
-                .map(EngineReply::Json)
-                .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
-            EngineRequest::RenderStart { spec } => self
-                .jobs
-                .render(client, spec, &self.files)
-                .map(EngineReply::Json)
-                .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
-            EngineRequest::JobsStatus { id } => self
-                .jobs
-                .status(client, id, &mut self.files)
-                .map(EngineReply::Json)
-                .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
-            EngineRequest::JobsCancel { id } => self
-                .jobs
-                .cancel(client, id)
-                .map(EngineReply::Json)
-                .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
-            EngineRequest::FilesUpload {
-                id,
-                offset,
-                data,
-                finish,
-            } => self
-                .files
-                .upload(client, id, offset, &data, finish)
-                .map(EngineReply::Json)
-                .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
-            EngineRequest::FilesRead { id, offset, count } => self
-                .files
-                .read(client, &id, offset, count)
-                .map(EngineReply::Json)
-                .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
-            EngineRequest::FilesRemove { id } => self
-                .files
-                .remove(client, &id)
-                .map(|_| EngineReply::Json(json!({})))
-                .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
-            EngineRequest::ScopesCreate {
-                id,
-                endpoint,
-                frames,
-                rate,
-            } => self
-                .scopes
-                .create(&self.session, client, id, endpoint, frames, rate)
-                .map(EngineReply::Json)
-                .map_err(|e| EngineError::new(INVALID_PARAMS, &e)),
-            EngineRequest::ScopesRemove { id } => {
-                self.scopes.remove(client, &id);
-                Ok(EngineReply::Json(json!({})))
             }
             EngineRequest::Clock {} => Ok(EngineReply::Clock(self.session.clock_info())),
         }
@@ -900,9 +627,6 @@ impl EngineServer {
 
     fn collect_notifications(&mut self) {
         self.session.sync_realtime();
-        for (client, params) in self.jobs.poll(&mut self.files) {
-            self.send_to_client_subscriber(client, "jobs", "job", params);
-        }
         for (client, params) in self.reports.poll(&self.session) {
             self.send_to_client_subscriber(client, "reports", "report", params);
         }
@@ -918,9 +642,6 @@ impl EngineServer {
         self.session
             .voice_sequence
             .retain(|client, _| self.clients.contains_key(client));
-        for (client, params) in self.scopes.poll(&self.session) {
-            self.send_to_client_subscriber(client, "scopes", "scope", params);
-        }
         for (client, params) in self.session.take_transaction_updates() {
             self.send_to_client_subscriber(client, "transactions", "transaction", params);
         }

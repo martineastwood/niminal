@@ -526,73 +526,12 @@ body.perform .cm-content { line-height: 1.55; }
 .files-divider:hover, .files-divider.dragging, .files-divider:focus-visible { background: var(--accent); outline: none; }
 
 
-/* the Lab replaces what is playing in the right strip while it is open */
-#lab { display: none; flex-direction: column; gap: calc(12px * var(--z)); padding: calc(10px * var(--z)); min-height: 0; overflow: auto; background: var(--bg-grid); }
-body.lab #lab { display: flex; }
-body.lab #stage > :not(#lab) { display: none; }
-body.lab #lab-toggle { background: var(--accent-bg); color: var(--accent-text); }
-.lab-head { display: flex; align-items: center; gap: calc(6px * var(--z)); padding: calc(8px * var(--z)); background: var(--bg-panel); border: 1px solid var(--line); }
-.lab-head strong { color: var(--dim); font-size: calc(10px * var(--z)); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
-.lab-head .lab-instrument { flex: 1; min-width: 0; height: calc(22px * var(--z)); color: var(--hi); background: var(--bg-input); border: 1px solid var(--edge); border-radius: 0; font: inherit; }
-.lab-keys { position: relative; display: flex; height: calc(84px * var(--z)); gap: 1px; padding: calc(6px * var(--z)) calc(6px * var(--z)) 0; background: var(--bg-bar); border: 1px solid var(--line); border-bottom: calc(4px * var(--z)) solid var(--line); }
-.lab-keys button { padding: 0; border: 0; border-radius: 0 0 calc(2px * var(--z)) calc(2px * var(--z)); transition: background 60ms; }
-.lab-keys button.white { flex: 1; height: 100%; background: linear-gradient(#e4e6ea, #c6cad1); }
-.lab-keys button.white:hover { background: linear-gradient(#f0f1f4, #d6d9de); }
-.lab-keys button.black { position: absolute; z-index: 1; top: calc(6px * var(--z)); width: 6%; height: 58%; margin-left: -3%; background: linear-gradient(#34373d, #131518); border: 1px solid var(--line); }
-.lab-keys button.black:hover { background: linear-gradient(#4a4e56, #1f2227); }
-.lab-keys button:active, .lab-keys button.white:active, .lab-keys button.black:active { background: var(--accent); }
-.lab-octave { display: flex; align-items: center; gap: calc(4px * var(--z)); color: var(--dim); }
-.lab-octave span { min-width: calc(28px * var(--z)); text-align: center; color: var(--hi); font-family: var(--mono); }
-.lab-octave button { width: calc(22px * var(--z)); padding: 0; }
-.lab-octave .lab-hold { width: auto; margin-left: auto; padding: 0 calc(10px * var(--z)); }
-.lab-octave .lab-hold.on { background: var(--accent-bg); color: var(--accent-text); border-color: var(--accent); }
-.lab-faders { display: flex; flex-direction: column; gap: calc(2px * var(--z)); color: var(--dim); padding: calc(6px * var(--z)) calc(8px * var(--z)); background: var(--bg-panel); border: 1px solid var(--line); }
-.lab-faders:empty { display: none; }
-.lab-fader { display: grid; grid-template-columns: calc(78px * var(--z)) 1fr calc(64px * var(--z)); align-items: center; gap: calc(8px * var(--z)); height: calc(24px * var(--z)); }
-.lab-fader span { overflow: hidden; text-overflow: ellipsis; color: var(--text); }
-.lab-fader output { text-align: right; font-family: var(--mono); color: var(--accent-text); }
-#lab input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: calc(18px * var(--z)); padding: 0; background: transparent; border: 0; cursor: ew-resize; }
-#lab input[type=range]::-webkit-slider-runnable-track { height: calc(4px * var(--z)); background: var(--bg-input); border: 1px solid var(--edge); }
-#lab input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: calc(8px * var(--z)); height: calc(16px * var(--z)); margin-top: calc(-7px * var(--z)); background: var(--accent); border: 1px solid #7a4a1a; border-radius: 0; }
-#lab input[type=range]:hover::-webkit-slider-thumb { background: #e6a255; }
 
-.lab-tabs { display: flex; border-bottom: 1px solid var(--edge); }
-.lab-tabs .lab-tab { flex: 1; height: calc(26px * var(--z)); color: var(--dim); background: none; border: 0; border-bottom: calc(2px * var(--z)) solid transparent; margin-bottom: -1px; }
-.lab-tabs .lab-tab:hover { color: var(--text); background: var(--bg-panel); }
-.lab-tabs .lab-tab.on { color: var(--accent-text); border-bottom-color: var(--accent); }
-.lab-play, .gallery, .drums { display: flex; flex-direction: column; gap: calc(8px * var(--z)); }
-.lab-play[hidden], .gallery[hidden], .drums[hidden] { display: none; }
-.drums-head { display: flex; align-items: center; gap: calc(6px * var(--z)); }
-.drums-theme { flex: 1; }
-.drums-seed { flex: 1; color: var(--dim); font-family: var(--mono); }
-.drums-hear.on { background: var(--accent-bg); color: var(--accent-text); }
-.drums-sliders { display: flex; flex-direction: column; gap: calc(4px * var(--z)); }
-.drums-slider { display: grid; grid-template-columns: calc(56px * var(--z)) 1fr calc(34px * var(--z)); align-items: center; gap: calc(6px * var(--z)); color: var(--dim); }
-.drums-grid { padding: calc(8px * var(--z)); background: var(--bg-panel); border: 1px solid var(--line); display: flex; flex-direction: column; gap: calc(3px * var(--z)); }
-.drums-row { display: grid; grid-template-columns: calc(40px * var(--z)) 1fr calc(48px * var(--z)); align-items: center; gap: calc(6px * var(--z)); }
-.drums-name { color: var(--dim); font-family: var(--mono); font-size: calc(10px * var(--z)); }
-.drums-steps { display: grid; grid-template-columns: repeat(16, 1fr); gap: 1px; }
-.drums-steps i { height: calc(14px * var(--z)); background: var(--bg-input); border: 1px solid var(--line); }
-.drums-steps i.beat { border-left-color: var(--dim); }
-.drums-steps i.hit { background: var(--accent); border-color: var(--accent); }
-.drums-steps i.ghost { background: var(--accent-bg); border-color: var(--accent); }
-.drums-scale { width: 100%; }
-.gallery-head, .drums-head { padding: calc(8px * var(--z)); background: var(--bg-panel); border: 1px solid var(--line); }
-.gallery-head { display: flex; align-items: center; gap: calc(6px * var(--z)); }
-.gallery-where { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
-.gallery-amount { flex: 1; }
-.gallery-families { display: flex; flex-wrap: wrap; gap: calc(2px * var(--z)) calc(10px * var(--z)); color: var(--dim); }
-.gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(128px * var(--z)), 1fr)); gap: calc(4px * var(--z)); }
-.gallery-tile { display: flex; flex-direction: column; border: 1px solid var(--line); border-left-width: calc(3px * var(--z)); background: var(--bg-ctl); }
-.gallery-tile:hover { background: var(--bg-ctl-hover); }
-.gallery-tile.playing { background: var(--accent-bg); border-color: var(--accent); }
-.gallery-tile .gallery-play { display: flex; flex-direction: column; align-items: flex-start; gap: calc(2px * var(--z)); padding: calc(5px * var(--z)); background: none; border: 0; text-align: left; }
-.gallery-tile .gallery-play strong { color: var(--hi); font-weight: 600; }
-.gallery-tile .gallery-play small { color: var(--dim); font-family: var(--mono); font-size: calc(9px * var(--z)); }
-.gallery-tile .gallery-open { align-self: flex-end; margin: 0 calc(4px * var(--z)) calc(4px * var(--z)); padding: calc(1px * var(--z)) calc(6px * var(--z)); }
-.family-players { border-left-color: var(--green); }
-.family-manglers { border-left-color: var(--red); }
-.family-synthesis { border-left-color: var(--blue); }
-.family-modifiers { border-left-color: var(--violet); }
-.family-replicators { border-left-color: var(--accent); }
-.family-glitch { border-left-color: #e0c24a; }
+/* the sound card, sample rate and buffer size */
+.audio-panel { position: fixed; top: calc(44px * var(--z)); right: calc(10px * var(--z)); z-index: 20; display: flex; flex-direction: column; gap: calc(6px * var(--z)); padding: calc(10px * var(--z)); min-width: calc(260px * var(--z)); background: var(--bg-panel); border: 1px solid var(--edge); border-radius: calc(4px * var(--z)); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); color: var(--dim); }
+.audio-panel[hidden] { display: none; }
+.audio-panel label { display: flex; align-items: center; justify-content: space-between; gap: calc(8px * var(--z)); }
+.audio-panel select { max-width: calc(180px * var(--z)); }
+.audio-note { color: var(--dim); font-size: calc(10px * var(--z)); }
+body.perform .audio-panel, body.perform #audio-toggle { display: none; }
+.tools-problem { color: var(--accent-text); max-width: calc(420px * var(--z)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -2,7 +2,7 @@
 // taps added by hand sit wherever you put them and can each move or be filtered, and `comb_cloud` below is
 // a delay line written from scratch with `taps` and `fir`. Start with the first two; the last is for when
 // you want control of every sample.
-// Render with:  niminal-live render examples/multitap.nml --out multitap.wav
+// Render with:  niminal render examples/multitap.nml --out multitap.wav
 use std/physical
 use std/delays
 

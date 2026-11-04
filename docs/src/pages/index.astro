@@ -58,7 +58,6 @@ const features = [
         <a href="/guide/getting-started/">Docs</a>
         <a href="/reference/opcodes/">Opcodes</a>
         <a href="/guide/live-coding/">Live coding</a>
-        <a href="/reference/tracker/">Tracker</a>
         <a href={REPO}>GitHub</a>
       </nav>
       <div class="nav-end">
@@ -79,8 +78,8 @@ const features = [
             <a class="btn btn-solid" href="/guide/getting-started/">Get started</a>
             <a class="btn" href={REPO}>View on GitHub ↗</a>
           </div>
-          <button class="install" data-copy="cargo install --git https://github.com/martineastwood/niminal niminal-cli niminal-live-cli" title="Copy">
-            <span class="prompt">$</span> cargo install --git github.com/martineastwood/niminal niminal-cli niminal-live-cli <span class="copy-hint">copy</span>
+          <button class="install" data-copy="cargo install --git https://github.com/martineastwood/niminal niminal-live-cli" title="Copy">
+            <span class="prompt">$</span> cargo install --git github.com/martineastwood/niminal niminal-live-cli <span class="copy-hint">copy</span>
           </button>
         </div>
         <div class="hero-right">
@@ -90,7 +89,7 @@ const features = [
             <div class="player" data-src={audio('saw_lead')}>
               <button class="play" aria-label="Play"><svg viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5z"/></svg></button>
               <canvas class="scope" width="900" height="120"></canvas>
-              <span class="player-label">rendered by <b>niminal-live render</b></span>
+              <span class="player-label">rendered by <b>niminal render</b></span>
             </div>
           </div>
         </div>
@@ -148,7 +147,7 @@ const features = [
           <div class="copy">
             <p class="eyebrow">arrangements and samples</p>
             <h3>From sketch to finished piece.</h3>
-            <p>Drum kits load from a folder, sections play in order, and <code>niminal-live render</code> can bounce the whole song or just bars 5 to 9.</p>
+            <p>Drum kits load from a folder, sections play in order, and <code>niminal render</code> can bounce the whole song or just bars 5 to 9.</p>
           </div>
           <div class="panel">
             <div class="panel-bar"><i></i><i></i><i></i><span>song.nml</span></div>
@@ -164,16 +163,14 @@ const features = [
       <section class="session">
         <div class="section-head">
           <p class="eyebrow">the loop</p>
-          <h2>Start a server. Send it code. Hear it change.</h2>
+          <h2>Open Stage. Evaluate code. Hear it change.</h2>
         </div>
-        <pre class="term"><code><span class="c"># start the audio server</span>
-<span class="p">$</span> niminal server
+        <pre class="term"><code><span class="c"># open a file in Niminal Stage and press Cmd+Enter: the engine is inside it</span>
+verse.start
 
-<span class="c"># in another terminal: play a piece, and listen for changes</span>
-<span class="p">$</span> niminal-live live examples/groove.nml --midi
-
-<span class="c"># change the music, landing four bars from now</span>
-<span class="p">$</span> niminal-live send 'chorus.start' --quantize "next 4bars"
+<span class="c"># change the music while it plays, landing four bars from now</span>
+chorus.start @ next 4bars
+lead.transpose(+5st)
 
 <span class="c"># later: replay the whole session, sample for sample</span>
 <span class="p">$</span> niminal replay ~/.niminal/sessions/1760112000.log --out set.wav</code></pre>
@@ -181,7 +178,7 @@ const features = [
 
       <section class="tools">
         <article><span class="num">editor</span><h3>VS Code</h3><p>Highlighting, evaluate block or file, diagnostics, and a scenes panel you can launch with Cmd+1..9.</p></article>
-        <article><span class="num">lsp</span><h3>Language server</h3><p>Completion, hover, go to definition and an outline from <code>niminal-live lsp</code>, for any editor.</p></article>
+        <article><span class="num">lsp</span><h3>Language server</h3><p>Completion, hover, go to definition and an outline from <code>niminal lsp</code>, for any editor.</p></article>
         <article><span class="num">control</span><h3>MIDI and OSC</h3><p>Bind a control to a knob with <code>ctl x = midi.cc(21)</code> or an OSC address. Inputs are logged and replay too.</p></article>
         <article><span class="num">engine</span><h3>Rust, no allocations on the audio thread</h3><p>Compilation happens at eval time; landing a change only moves things. The engine builds for WebAssembly.</p></article>
       </section>

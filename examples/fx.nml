@@ -1,5 +1,5 @@
 // Clips select instruments. Fx declarations own persistent effects. Buses collect shared sends.
-// Render with:  niminal-live render examples/fx.nml --out fx.wav
+// Render with:  niminal render examples/fx.nml --out fx.wav
 config { channels: stereo }
 tempo 110bpm
 

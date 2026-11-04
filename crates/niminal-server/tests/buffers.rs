@@ -1,6 +1,6 @@
 use niminal_lang::Layout;
 use niminal_score::Time;
-use niminal_server::{At, EngineRequest, EngineServer, Op, RealtimeConfig, Session};
+use niminal_server::{At, Op, RealtimeConfig, Session};
 
 fn session() -> Session {
     let mut s = Session::new(48000.0, Layout::Mono).without_limiter();
@@ -84,104 +84,6 @@ fn realtime_buffer_writes_match_offline_including_injection() {
         .send_events(1, vec![write(17, 0.25), write(49, -0.25)])
         .unwrap();
     assert_eq!(out, reference.process(96)[0]);
-}
-
-#[test]
-fn buffer_protocol_allocates_reads_and_saves_loads() {
-    let mut server = EngineServer::new(session());
-    let client = server.connect_local();
-    server
-        .request(
-            client,
-            EngineRequest::Hello {
-                protocol: niminal_server::PROTOCOL_VERSION,
-                client: None,
-                token: None,
-            },
-        )
-        .unwrap();
-    server
-        .request(
-            client,
-            EngineRequest::BuffersAlloc {
-                name: "take".into(),
-                frames: 8,
-                channels: 1,
-            },
-        )
-        .unwrap();
-    assert_eq!(
-        server
-            .request(client, EngineRequest::BuffersList {})
-            .unwrap()
-            .to_json()["buffers"]
-            .as_array()
-            .unwrap()
-            .len(),
-        2
-    );
-    server
-        .request(
-            client,
-            EngineRequest::EventsSend {
-                events: vec![Op::BufferWrite {
-                    name: "take".into(),
-                    at: At::Now,
-                    offset: 0,
-                    values: vec![0.25, -0.5],
-                    tag: None,
-                }],
-            },
-        )
-        .unwrap();
-    server.session_mut().process(1);
-    let read = server
-        .request(
-            client,
-            EngineRequest::BuffersRead {
-                name: "take".into(),
-                offset: 0,
-                count: 2,
-            },
-        )
-        .unwrap()
-        .to_json();
-    assert_eq!(read["values"], serde_json::json!([0.25, -0.5]));
-    let path = std::env::temp_dir().join(format!("niminal-buffer-{}.wav", std::process::id()));
-    let path_text = path.to_string_lossy().to_string();
-    server
-        .request(
-            client,
-            EngineRequest::BuffersSave {
-                name: "take".into(),
-                path: path_text.clone(),
-            },
-        )
-        .unwrap();
-    server
-        .request(
-            client,
-            EngineRequest::BuffersLoad {
-                name: "loaded".into(),
-                path: path_text,
-                channel: 1,
-            },
-        )
-        .unwrap();
-    server.session_mut().process(1);
-    let read = server
-        .request(
-            client,
-            EngineRequest::BuffersRead {
-                name: "loaded".into(),
-                offset: 0,
-                count: 2,
-            },
-        )
-        .unwrap()
-        .to_json();
-    assert_eq!(read["values"], serde_json::json!([0.25, -0.5]));
-    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
