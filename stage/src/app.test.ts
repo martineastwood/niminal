@@ -79,7 +79,8 @@ describe('the stage app', () => {
     document.body.innerHTML = '<div id="app"></div>';
     await import('./main');
     await new Promise(resolve => setTimeout(resolve, 600));
-    expect(document.getElementById('connection')!.textContent).toContain('engine');
+    // an engine that answers needs no indicator; one that does not is called out
+    expect(document.getElementById('connection')!.hidden).toBe(true);
     expect(document.getElementById('bar')!.textContent).toBe('2');
     expect(calls.filter(c => c === 'snapshot').length).toBeGreaterThan(3);
     // it connects, but sends nothing until the player asks
@@ -97,10 +98,6 @@ describe('the stage app', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: '0', metaKey: true }));
     expect(document.documentElement.style.getPropertyValue('--z')).toBe('1');
 
-    document.getElementById('perform')!.click();
-    expect(document.body.classList.contains('perform')).toBe(true);
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'P', metaKey: true, shiftKey: true }));
-    expect(document.body.classList.contains('perform')).toBe(false);
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', metaKey: true }));
     expect(document.body.classList.contains('no-rail')).toBe(true);
   });
@@ -120,7 +117,7 @@ describe('the stage app', () => {
   it('keeps each tab\'s text apart and evaluates them left to right', async () => {
     const tabs = () => [...document.querySelectorAll('.tab')].map(t => t.querySelector('.tab-name')!.textContent);
     const first = tabs().length;
-    document.getElementById('new')!.click();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 't', metaKey: true }));
     expect(tabs().length).toBe(first + 1);
     expect(document.getElementById('evaluate-all')!.hidden).toBe(false);
     const editor = EditorView.findFromDOM(document.querySelector<HTMLElement>('.cm-editor')!)!;

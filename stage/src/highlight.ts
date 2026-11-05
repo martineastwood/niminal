@@ -4,9 +4,8 @@ import { ChangeSet, StateEffect, StateEffectType, StateField, Text } from '@code
 import { Decoration, DecorationSet, EditorView } from '@codemirror/view';
 import { Problem, Snapshot, sinceOnset } from './live';
 import { sceneStates } from './scenes';
+import { look } from './look';
 
-/** How long a note stays lit after it starts, in seconds. */
-const DECAY = 0.45;
 /** Brightness steps; each is a CSS class, so a frame only rebuilds when a step changes. */
 const STEPS = 6;
 /** One colour per clip, so the code, the lane and the meter read as the same thing. */
@@ -214,6 +213,8 @@ export class Highlighter {
   private snapshot: Snapshot | null = null;
   private updatedAt = 0;
   private shown = '';
+  private definedIn: unknown = null;
+  private defined = new Map<string, { from: number; to: number }>();
   private headed = '';
   private headedDoc: unknown = null;
   private markedSnapshot: Snapshot | null = null;
@@ -307,6 +308,19 @@ export class Highlighter {
     view.dispatch({ effects: marked.of(Decoration.set(marks)) });
   }
 
+  /** Where each instrument's name is in the text: `instr name`, or `name = kit`. Looked up again only when the text changes. */
+  private definitions(view: EditorView) {
+    if (this.definedIn === view.state.doc) return this.defined;
+    this.definedIn = view.state.doc;
+    this.defined = new Map();
+    for (let n = 1; n <= view.state.doc.lines; n++) {
+      const line = view.state.doc.line(n);
+      const found = /^(\s*instr\s+)([A-Za-z_]\w*)/.exec(line.text) ?? /^(\s*(?:const\s+)?)([A-Za-z_]\w*)(?=\s*=\s*kit\b)/.exec(line.text);
+      if (found) this.defined.set(found[2], { from: line.from + found[1].length, to: line.from + found[1].length + found[2].length });
+    }
+    return this.defined;
+  }
+
   private light() {
     const view = this.view();
     const snapshot = this.snapshot;
@@ -323,28 +337,42 @@ export class Highlighter {
     const elapsed = elapsedSince(this.updatedAt);
     const evals = view.state.field(drift);
     const ranges: { from: number; to: number; step: number; colour: string }[] = [];
+    // the freshest note each instrument sounded, so its name can light where it is defined
+    const sounding = new Map<string, { step: number; colour: string }>();
+    const decay = look.trail;
 
     snapshot.clips.forEach((clip, index) => {
       if (!clip.running || clip.cycles == null) return;
       const now = clip.cycles + elapsed / secondsPerCycle;
       for (const lane of clip.lanes) {
         for (const event of lane.events) {
+          const age = sinceOnset(clip, event, now);
+          if (age === null) continue;
+          const seconds = age * secondsPerCycle;
+          if (seconds >= decay) continue;
+          const step = Math.max(1, Math.ceil((1 - seconds / decay) * STEPS));
+          const colour = CLIP_COLOURS[index % CLIP_COLOURS.length];
+          if (look.instruments && clip.instrument && step > (sounding.get(clip.instrument)?.step ?? 0)) {
+            sounding.set(clip.instrument, { step, colour });
+          }
           const text = event.eval == null ? undefined : evals.get(event.eval);
           if (!event.src || !text) continue;
           const { base, unit, changes, length } = text;
           if (event.src[1] > length) continue;
-          const age = sinceOnset(clip, event, now);
-          if (age === null) continue;
-          const seconds = age * secondsPerCycle;
-          if (seconds >= DECAY) continue;
           const from = changes.mapPos(base + unit(event.src[0]), 1);
           const to = changes.mapPos(base + unit(event.src[1]), -1);
           if (to <= from || to > view.state.doc.length) continue;
-          const step = Math.max(1, Math.ceil((1 - seconds / DECAY) * STEPS));
-          ranges.push({ from, to, step, colour: CLIP_COLOURS[index % CLIP_COLOURS.length] });
+          ranges.push({ from, to, step, colour });
         }
       }
     });
+    if (sounding.size) {
+      const definitions = this.definitions(view);
+      for (const [name, { step, colour }] of sounding) {
+        const at = definitions.get(name);
+        if (at) ranges.push({ from: at.from, to: at.to, step, colour });
+      }
+    }
 
     ranges.sort((a, b) => a.from - b.from || a.to - b.to);
     const signature = ranges.map(r => `${r.from}:${r.to}:${r.step}:${r.colour}`).join(',');

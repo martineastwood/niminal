@@ -73,16 +73,22 @@ kbd { font: inherit; color: inherit; opacity: 0.6; margin-left: calc(3px * var(-
   padding: 0 calc(8px * var(--z));
   background: var(--bg-bar);
   border-bottom: 1px solid var(--line);
+  /* dragging across the bar should not select its labels; the fields in it stay editable */
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
 }
+#topbar input, #topbar select { -webkit-user-select: text; user-select: text; }
 
 .brand { display: flex; align-items: center; gap: calc(8px * var(--z)); }
 .mark { color: var(--accent); font-size: calc(14px * var(--z)); }
+.name { color: var(--text); font-size: calc(13px * var(--z)); font-weight: 600; letter-spacing: 0.04em; }
 .brand-text { display: flex; align-items: baseline; gap: calc(10px * var(--z)); }
 
 .connection { display: flex; align-items: center; gap: calc(5px * var(--z)); color: var(--dim); font-size: calc(9px * var(--z)); letter-spacing: 1px; text-transform: uppercase; }
 .connection i { width: calc(6px * var(--z)); height: calc(6px * var(--z)); border-radius: 50%; background: var(--faint); }
-.connection.online i { background: var(--green); }
-.connection.online { color: var(--text); }
+.connection[hidden] { display: none; }
+.connection.offline { color: var(--accent-text); }
 
 .transport { display: flex; align-items: center; gap: calc(14px * var(--z)); padding: 0 calc(10px * var(--z)); border-left: 1px solid var(--edge); }
 .position { display: flex; align-items: baseline; gap: calc(6px * var(--z)); min-width: calc(80px * var(--z)); }
@@ -263,14 +269,18 @@ footer .hint { color: var(--faint); }
 
 /* Notes lit in the source as they play: the colour is the clip's, the step is how recently it started. */
 .cm-hit {
+  /* padded and pulled back with a negative margin, so the rounded lozenge breathes around the text without moving it */
+  padding: 0.1em 0.25em;
+  margin: 0 -0.25em;
+  border-radius: 0.5em;
   color: #fff;
   background-color: color-mix(in srgb, var(--hit) 18%, transparent);
 }
 .cm-hit-2 { background-color: color-mix(in srgb, var(--hit) 32%, transparent); }
 .cm-hit-3 { background-color: color-mix(in srgb, var(--hit) 48%, transparent); }
-.cm-hit-4 { background-color: color-mix(in srgb, var(--hit) 64%, transparent); box-shadow: 0 0 4px color-mix(in srgb, var(--hit) 60%, transparent); }
-.cm-hit-5 { background-color: color-mix(in srgb, var(--hit) 80%, transparent); box-shadow: 0 0 6px var(--hit); }
-.cm-hit-6 { background-color: var(--hit); color: #14161a; box-shadow: 0 0 8px var(--hit); }
+.cm-hit-4 { background-color: color-mix(in srgb, var(--hit) 64%, transparent); }
+.cm-hit-5 { background-color: color-mix(in srgb, var(--hit) 80%, transparent); box-shadow: 0 0 calc(8px * var(--z)) var(--hit); }
+.cm-hit-6 { background-color: var(--hit); color: #14161a; box-shadow: 0 0 calc(10px * var(--z)) var(--hit); }
 
 /* What an evaluation did: queued (amber), landed on the beat (green), or refused (red). */
 .landing {
@@ -316,24 +326,31 @@ footer .hint { color: var(--faint); }
 @keyframes clip-pulse { from { background: color-mix(in srgb, var(--clip, var(--accent)) 38%, transparent); } to { background: transparent; } }
 .clip.running .clip-name { color: color-mix(in srgb, var(--clip, var(--accent)) 55%, #fff); }
 
+/* notes in the code glow and fade, which reads on a compressed video where subtle greys do not. The glow is
+   shadows stacked from tight and strong to wide and faint, so it falls off smoothly instead of ending at an edge. */
+.cm-hit-2 { box-shadow: 0 0 calc(12px * var(--glow, 1)) calc(1px * var(--glow, 1)) color-mix(in srgb, var(--hit) 18%, transparent); }
+.cm-hit-3 { box-shadow: 0 0 calc(14px * var(--glow, 1)) calc(2px * var(--glow, 1)) color-mix(in srgb, var(--hit) 32%, transparent), 0 0 calc(30px * var(--glow, 1)) calc(4px * var(--glow, 1)) color-mix(in srgb, var(--hit) 12%, transparent); }
+.cm-hit-4 { box-shadow: 0 0 calc(16px * var(--glow, 1)) calc(3px * var(--glow, 1)) color-mix(in srgb, var(--hit) 46%, transparent), 0 0 calc(36px * var(--glow, 1)) calc(7px * var(--glow, 1)) color-mix(in srgb, var(--hit) 20%, transparent); }
+.cm-hit-5 { box-shadow: 0 0 calc(18px * var(--glow, 1)) calc(4px * var(--glow, 1)) color-mix(in srgb, var(--hit) 62%, transparent), 0 0 calc(40px * var(--glow, 1)) calc(10px * var(--glow, 1)) color-mix(in srgb, var(--hit) 32%, transparent), 0 0 calc(70px * var(--glow, 1)) calc(16px * var(--glow, 1)) color-mix(in srgb, var(--hit) 12%, transparent); }
+.cm-hit-6 {
+  box-shadow:
+    0 0 calc(18px * var(--glow, 1)) calc(6px * var(--glow, 1)) color-mix(in srgb, var(--hit) 82%, transparent),
+    0 0 calc(40px * var(--glow, 1)) calc(14px * var(--glow, 1)) color-mix(in srgb, var(--hit) 50%, transparent),
+    0 0 calc(80px * var(--glow, 1)) calc(26px * var(--glow, 1)) color-mix(in srgb, var(--hit) 22%, transparent);
+}
+
 /* ---- sidebar hidden -------------------------------------------------------------------------- */
 
 body.no-rail main { grid-template-columns: minmax(0, 1fr) 0 0; }
 body.no-rail #divider, body.no-rail #stage { display: none; }
 
-/* ---- performance mode: the code, the transport, and the way to stop ---------------------------- */
+/* ---- large transport: the bar, beat and tempo big enough to read on a recording (Settings > Look) ------ */
 
-body.perform #app { grid-template-rows: calc(46px * var(--z)) minmax(0, 1fr) 0; }
-body.perform footer, body.perform .setup, body.perform .file-actions, body.perform .pane-title,
-body.perform #editor-status { display: none; }
-body.perform .position strong { font-size: calc(26px * var(--z)); }
-body.perform .position .beat { font-size: calc(15px * var(--z)); }
-body.perform .readout { font-size: calc(14px * var(--z)); }
-body.perform .landing { font-size: calc(15px * var(--z)); padding: calc(2px * var(--z)) calc(10px * var(--z)); }
-body.perform .landing.on { box-shadow: 0 0 12px rgba(217, 144, 63, 0.4); }
-body.perform .pane-head { min-height: calc(30px * var(--z)); }
-body.perform #hush, body.perform #panic { height: calc(26px * var(--z)); padding: 0 calc(12px * var(--z)); }
-body.perform .cm-content { line-height: 1.55; }
+body.large-transport #app { grid-template-rows: calc(46px * var(--z)) minmax(0, 1fr) calc(22px * var(--z)); }
+body.large-transport .position strong { font-size: calc(26px * var(--z)); }
+body.large-transport .position .beat { font-size: calc(15px * var(--z)); }
+body.large-transport .readout { font-size: calc(14px * var(--z)); }
+body.large-transport .landing { font-size: calc(15px * var(--z)); padding: calc(2px * var(--z)) calc(10px * var(--z)); }
 
 .setup[hidden], .readout[hidden] { display: none; }
 .setup { display: flex; align-items: center; gap: calc(4px * var(--z)); }
@@ -500,35 +517,31 @@ body.perform .cm-content { line-height: 1.55; }
 .midi.blink { animation: midi-blink 0.35s ease-out; }
 @keyframes midi-blink { from { background: var(--accent); color: #1a1006; } to { background: transparent; } }
 
-/* ---- the file browse panel: a column beside the code, so the cursor can still be placed in it --------- */
 #workbench { display: flex; flex: 1; min-height: 0; }
 #workbench #editor { flex: 1; min-width: 0; }
-#files { position: relative; display: flex; flex-direction: column; gap: calc(6px * var(--z)); flex: none; width: var(--browser-width, calc(260px * var(--z))); max-width: max(220px, calc(100% - 240px)); padding: calc(8px * var(--z)); background: var(--bg-panel); border-right: 1px solid var(--edge); }
-#files[hidden] { display: none; }
-.files-head { display: flex; align-items: center; gap: calc(8px * var(--z)); }
-.files-where { flex: 1; min-width: 0; overflow: hidden; color: var(--dim); font-family: var(--mono); font-size: calc(10px * var(--z)); text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
-.files-filter { width: 100%; }
-.files-list { flex: 1; overflow-y: auto; min-height: calc(80px * var(--z)); border: 1px solid var(--line); background: #0d0f12; }
-.entry { padding: calc(2px * var(--z)) calc(6px * var(--z)); color: var(--text); font-family: var(--mono); font-size: calc(11px * var(--z)); cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.entry.dir { color: var(--dim); }
-.entry.piece { color: var(--accent); }
-.entry:hover { background: rgba(255, 255, 255, 0.05); }
-.entry.on { color: #1a1006; background: var(--accent); }
-.files-wave { width: 100%; height: calc(56px * var(--z)); background: #0d0f12; border: 1px solid var(--line); }
-.files-detail { color: var(--dim); font-family: var(--mono); font-size: calc(10px * var(--z)); }
-.files-actions { display: flex; gap: calc(4px * var(--z)); }
-.files-actions button { flex: 1; }
-
-.files-divider { position: absolute; top: 0; right: 0; bottom: 0; width: 5px; cursor: col-resize; touch-action: none; }
-.files-divider:hover, .files-divider.dragging, .files-divider:focus-visible { background: var(--accent); outline: none; }
-
-
+/* an audio file is being dragged over the code: it lands where it is let go */
+.cm-editor.dropping { outline: 2px dashed var(--accent); outline-offset: -2px; }
 
 /* the sound card, sample rate and buffer size */
-.audio-panel { position: fixed; top: calc(44px * var(--z)); right: calc(10px * var(--z)); z-index: 20; display: flex; flex-direction: column; gap: calc(6px * var(--z)); padding: calc(10px * var(--z)); min-width: calc(260px * var(--z)); background: var(--bg-panel); border: 1px solid var(--edge); border-radius: calc(4px * var(--z)); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); color: var(--dim); }
-.audio-panel[hidden] { display: none; }
-.audio-panel label { display: flex; align-items: center; justify-content: space-between; gap: calc(8px * var(--z)); }
-.audio-panel select { max-width: calc(180px * var(--z)); }
 .audio-note { color: var(--dim); font-size: calc(10px * var(--z)); }
-body.perform .audio-panel, body.perform #audio-toggle { display: none; }
 .tools-problem { color: var(--accent-text); max-width: calc(420px * var(--z)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+
+/* ---- the settings page ----------------------------------------------------------------------- */
+.settings { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(0, 0, 0, 0.5); }
+.settings[hidden] { display: none; }
+.settings-card { display: flex; flex-direction: column; width: min(calc(560px * var(--z)), 92vw); max-height: 84vh; background: var(--bg-panel); border: 1px solid var(--edge); border-radius: calc(6px * var(--z)); box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5); color: var(--dim); }
+.settings-card header { display: flex; align-items: center; justify-content: space-between; padding: calc(12px * var(--z)) calc(16px * var(--z)); border-bottom: 1px solid var(--edge); }
+.settings-card h2 { margin: 0; font-size: calc(15px * var(--z)); font-weight: 600; color: var(--text, #e1e7ed); }
+#settings-close { font-size: calc(18px * var(--z)); line-height: 1; padding: 0 calc(8px * var(--z)); }
+.settings-body { overflow-y: auto; padding: calc(4px * var(--z)) calc(16px * var(--z)) calc(16px * var(--z)); }
+.settings-section h3 { margin: calc(14px * var(--z)) 0 calc(2px * var(--z)); font-size: calc(12px * var(--z)); text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent-text); }
+.settings-note { margin: 0 0 calc(8px * var(--z)); font-size: calc(12px * var(--z)); }
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: calc(16px * var(--z)); padding: calc(9px * var(--z)) 0; border-top: 1px solid var(--line, rgba(110, 117, 127, 0.18)); }
+.settings-row label { display: flex; flex-direction: column; gap: calc(2px * var(--z)); color: var(--text, #e1e7ed); }
+.settings-row small { color: var(--dim); font-size: calc(11px * var(--z)); }
+.settings-row input[type=range] { width: calc(150px * var(--z)); flex: none; }
+.settings-row select { flex: none; }
+.settings-inline { display: flex; align-items: center; gap: calc(6px * var(--z)); }
+.settings-inline input { width: calc(80px * var(--z)); }
+.settings-row select { max-width: calc(240px * var(--z)); }

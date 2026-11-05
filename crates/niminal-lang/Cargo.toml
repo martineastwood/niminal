@@ -8,4 +8,6 @@ description = "The niminal DSP language: parser, unit checker, and compiler to e
 [dependencies]
 niminal-engine = { path = "../niminal-engine" }
 niminal-score = { path = "../niminal-score" }
+
+[dev-dependencies]
 hound = "3"

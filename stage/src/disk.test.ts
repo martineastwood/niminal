@@ -18,6 +18,15 @@ vi.mock('@tauri-apps/api/core', () => ({
   },
 }));
 
+// the menu bar is native: its items reach the page as events, so the test sends them the way the menu does
+const menu: { send: (id: string) => void } = { send: () => {} };
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: async (_name: string, handler: (event: { payload: string }) => void) => {
+    menu.send = id => handler({ payload: id });
+    return () => {};
+  },
+}));
+
 const path = '/songs/a.nml';
 const editorText = () => document.querySelector('.cm-content')?.textContent ?? '';
 const status = () => document.getElementById('footer-status')?.textContent ?? '';
@@ -62,7 +71,7 @@ describe('a file that changes on disk', () => {
     disk = 'one';
     await openWith('my edit', 'one');
     disk = 'two';
-    document.getElementById('save')!.click();
+    menu.send('save');
     await vi.advanceTimersByTimeAsync(10);
     expect(calls).toContain('confirm');
     expect(calls).not.toContain('save_file');

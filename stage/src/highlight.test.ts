@@ -4,6 +4,7 @@ import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { Highlighter, evaluated, highlightExtensions, litRanges, markProblems, markSent } from './highlight';
 import { Clip, Snapshot } from './live';
+import { PRESETS, setLook } from './look';
 
 const source = 'clip a { notes: [c4 e4] }';
 
@@ -95,6 +96,37 @@ describe('lighting notes in the source', () => {
     highlighter.update(snapshot([clip([{ start: 0, value: 'c4', src: [5000, 5002], eval: 1 }])]));
     expect(() => highlighter.paint()).not.toThrow();
     expect(litRanges(view)).toEqual([]);
+  });
+});
+
+describe('lighting the instrument a clip plays', () => {
+  const doc = 'instr pluck() {\n}\ndrums = kit {\n}\nclip a { notes: [c4] }';
+  const playing = (instrument: string) => ({ ...clip([{ start: 0, value: 'c4', src: [0, 0], eval: 0 }]), instrument });
+
+  it('lights the name where the instrument is defined when the clip sounds a note', () => {
+    const { view, highlighter } = setup(doc);
+    highlighter.update(snapshot([playing('pluck')]));
+    highlighter.paint();
+    expect(litRanges(view).map(r => r.text)).toEqual(['pluck']);
+  });
+
+  it('finds a kit by its name too', () => {
+    const { view, highlighter } = setup(doc);
+    highlighter.update(snapshot([playing('drums')]));
+    highlighter.paint();
+    expect(litRanges(view).map(r => r.text)).toEqual(['drums']);
+  });
+
+  it('lights nothing when the look turns it off, or the instrument is not defined in the text', () => {
+    const { view, highlighter } = setup(doc);
+    highlighter.update(snapshot([playing('unknown')]));
+    highlighter.paint();
+    expect(litRanges(view)).toEqual([]);
+    setLook({ instruments: false });
+    highlighter.update(snapshot([playing('pluck')]));
+    highlighter.paint();
+    expect(litRanges(view)).toEqual([]);
+    setLook(PRESETS.standard);
   });
 });
 

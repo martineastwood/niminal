@@ -27,7 +27,9 @@ impl Sounding {
             .held
             .iter()
             .map(|h| h.0)
-            .chain(self.midi.iter().map(|h| h.0));
+            // An overdue MIDI off may be waiting for queue space; retry once per block,
+            // rather than forcing DSP to render one sample at a time until it can be sent.
+            .chain(self.midi.iter().map(|h| h.0).filter(|&off| off > clock));
         for off in ends {
             n = n.min(off.saturating_sub(clock).max(1));
         }

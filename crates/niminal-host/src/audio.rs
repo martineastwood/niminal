@@ -386,16 +386,18 @@ impl Playback {
         let frames = data.len() / channels;
         let renderer = &mut self.renderer;
         let mut written = 0;
-        let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            renderer.render(frames, &mut |block, n| {
-                for (c, plane) in block.iter().take(channels).enumerate() {
-                    for (i, sample) in plane[..n].iter().enumerate() {
-                        data[(written + i) * channels + c] = *sample;
+        let rendered = niminal_ws::launch::defer_panic_reports(|| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                renderer.render(frames, &mut |block, n| {
+                    for (c, plane) in block.iter().take(channels).enumerate() {
+                        for (i, sample) in plane[..n].iter().enumerate() {
+                            data[(written + i) * channels + c] = *sample;
+                        }
                     }
-                }
-                written += n;
-            });
-        }));
+                    written += n;
+                });
+            }))
+        });
         if rendered.is_err() {
             data.fill(0.0);
             self.renderer.request_panic();

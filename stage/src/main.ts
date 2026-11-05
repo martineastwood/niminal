@@ -1,5 +1,7 @@
 import { elapsedSince, positionAt } from './animation';
 import { onFrame, wake } from './frames';
+import { loadLook } from './look';
+import { settingsPage } from './settings';
 import { EditorState } from '@codemirror/state';
 import { redo, undo } from '@codemirror/commands';
 import { EditorView } from '@codemirror/view';
@@ -14,7 +16,8 @@ import { mod } from './shortcuts';
 import { sceneCommand, sceneStates } from './scenes';
 import { HealthWatch } from './health';
 import { learnedRange } from './learn';
-import { FileBrowse } from './browse';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { dropInto } from './samples';
 import { divider } from './divider';
 import { Bar, loudest } from './meters';
 import { Action, AudioState, EvalOutcome, OpenedFile, Problem, Queued, Scene, Snapshot, beatsUntil, queuedStates, stage } from './live';
@@ -29,8 +32,9 @@ app.innerHTML = `
   <header id="topbar">
     <div class="brand">
       <span class="mark">◈</span>
+      <span class="name">niminal</span>
       <div class="brand-text">
-        <span id="connection" class="connection offline"><i></i><span>offline</span></span>
+        <span id="connection" class="connection offline"><i></i><span>engine offline</span></span>
       </div>
     </div>
     <div class="transport" id="transport">
@@ -53,11 +57,9 @@ app.innerHTML = `
         <button id="reconnect" title="Use this port and token, and start the engine again if it stopped">Apply</button>
         <span id="tools-problem" class="tools-problem"></span>
       </span>
-      <button id="audio-toggle" title="Choose the sound card, sample rate and buffer size">Audio</button>
-      <button id="perform" title="Performance mode: just the code and what is playing (Cmd/Ctrl+Shift+P)">Perform</button>
       <button id="hush" title="Stop every clip, letting what sounds ring out">Hush</button>
       <button id="panic" class="danger" title="Stop everything now">Panic</button>
-      <button id="rec" title="Mark the start of a take; press again to end it, then render it or save what you evaluated">Rec</button>
+      <button id="rec" title="Mark the start of a replay; press again to end it. Nothing is captured as it happens: the session is logged, and the log is played back to audio afterwards">Replay</button>
     </div>
   </header>
 
@@ -69,7 +71,6 @@ app.innerHTML = `
         <span id="landing" class="landing" aria-live="polite"></span>
         <div class="editor-actions">
           <span class="file-actions">
-            <button id="browse-toggle" title="Browse the folder: open pieces, hear samples and write them into the code (Cmd/Ctrl+Shift+L)">Browse</button>
           </span>
           <label class="quantize" title="When an evaluation lands">land <input id="quantize" placeholder="next 4bars" /></label>
           <button id="evaluate-all" title="Evaluate every tab, left to right" hidden>All</button>
@@ -170,7 +171,9 @@ function setConnection(ok: boolean) {
   connected = ok;
   connection.classList.toggle('offline', !ok);
   connection.classList.toggle('online', ok);
-  connection.querySelector('span')!.textContent = ok ? 'engine' : 'offline';
+  // the engine runs inside the stage, so it is nearly always there: say so only when it is not
+  connection.hidden = ok;
+  connection.querySelector('span')!.textContent = 'engine offline';
   $('setup').hidden = ok;
 }
 
@@ -571,7 +574,7 @@ function updateMaster(snapshot: Snapshot) {
   );
 }
 
-/** A take is a stretch of the engine's clock: the engine's session log and the evaluations are cut to it. */
+/** A replay (called a take inside the code) is a stretch of the engine's clock: the engine's session log and the evaluations are cut to it. */
 let take: { from: number; to: number | null } | null = null;
 let clock = { sample: 0, rate: 48000 };
 
@@ -591,12 +594,12 @@ function drawTake() {
   box.hidden = false;
   const { from, to } = take;
   if (to === null) {
-    box.textContent = `● recording ${minutes(clock.sample - from)}`;
+    box.textContent = `● replay ${minutes(clock.sample - from)}`;
     return;
   }
   box.replaceChildren();
   const label = document.createElement('span');
-  label.textContent = `take · ${minutes(to - from)}`;
+  label.textContent = `replay · ${minutes(to - from)}`;
   const button = (name: string, title: string, run: () => Promise<string | null>) => {
     const node = document.createElement('button');
     node.textContent = name;
@@ -607,20 +610,20 @@ function drawTake() {
         if (done) status(done);
       } catch (error) {
         status(String(error));
-        showBanner([problem(String(error))], 'take');
+        showBanner([problem(String(error))], 'replay');
       }
     });
     return node;
   };
-  const close = button('×', 'Forget this take', async () => {
+  const close = button('×', 'Forget this replay', async () => {
     take = null;
     drawTake();
     return null;
   });
   box.append(
     label,
-    button('Render WAV', "Play the engine's session log over this take to a WAV file", () => stage.renderTake(from, to)),
-    button('Save script', 'Everything you evaluated during this take, in order, with when', () => stage.saveTranscript(from, to)),
+    button('Render WAV', "Play the engine's session log over this replay to a WAV file", () => stage.renderTake(from, to)),
+    button('Save script', 'Everything you evaluated during this replay, in order, with when', () => stage.saveTranscript(from, to)),
     close,
   );
 }
@@ -1098,22 +1101,15 @@ window.addEventListener(
   { passive: false },
 );
 
-// Performance mode keeps the code, what is playing and the way to stop; the sidebar can go too.
+// The sidebar can be hidden to give the code the whole window; the choice is remembered.
 const modeKey = 'niminal-stage-mode';
-function setMode(name: 'perform' | 'no-rail', on: boolean) {
-  document.body.classList.toggle(name, on);
-  const saved = new Set((localStorage.getItem(modeKey) ?? '').split(',').filter(Boolean));
-  if (on) saved.add(name);
-  else saved.delete(name);
-  localStorage.setItem(modeKey, [...saved].join(','));
+function setSidebarHidden(hidden: boolean) {
+  document.body.classList.toggle('no-rail', hidden);
+  localStorage.setItem(modeKey, hidden ? 'no-rail' : '');
   view?.requestMeasure();
 }
-for (const name of (localStorage.getItem(modeKey) ?? '').split(',')) {
-  if (name === 'perform' || name === 'no-rail') document.body.classList.add(name);
-}
-const togglePerform = () => setMode('perform', !document.body.classList.contains('perform'));
-$('perform').addEventListener('click', togglePerform);
-const toggleRail = () => setMode('no-rail', !document.body.classList.contains('no-rail'));
+setSidebarHidden((localStorage.getItem(modeKey) ?? '').split(',').includes('no-rail'));
+const toggleRail = () => setSidebarHidden(!document.body.classList.contains('no-rail'));
 
 // The divider between the code and the sidebar: drag it, or use the arrow keys, to give either more room.
 const railKey = 'niminal-stage-rail';
@@ -1138,38 +1134,59 @@ const laneView = new LaneView($('lanes'), (action, target, change) => {
   else void act({ action, target, change });
 });
 
-/** The file browse panel: opens pieces, plays samples, and writes the one chosen where the cursor is. */
-const files = new FileBrowse({
-  fileDir,
-  status,
-  openPiece: path => void openPath(path),
-  insert: make => {
-    if (!view) return;
-    const { from, to } = view.state.selection.main;
-    const start = view.state.doc.lineAt(from);
-    const end = view.state.doc.lineAt(to);
-    const text = make(start.text.slice(0, from - start.from), end.text.slice(to - end.from));
-    view.dispatch({ changes: { from, to, insert: text }, selection: { anchor: from + text.length } });
-    view.focus();
-  },
-});
-$('workbench').prepend(files.element);
+/** Files dropped on the window: audio goes into the code where it lands, as `sample("path")`, and a piece opens
+ *  in a tab. Tauri reports the drop in physical pixels over the whole window, so the editor is found from that. */
+function overEditor(x: number, y: number) {
+  if (!view) return false;
+  const box = view.dom.getBoundingClientRect();
+  return x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
+}
+function listenForDrops() {
+  void getCurrentWebview()
+    .onDragDropEvent(event => {
+      const drop = event.payload;
+      if (drop.type === 'leave') {
+        view?.dom.classList.remove('dropping');
+        return;
+      }
+      const x = drop.position.x / window.devicePixelRatio;
+      const y = drop.position.y / window.devicePixelRatio;
+      if (drop.type !== 'drop') {
+        view?.dom.classList.toggle('dropping', overEditor(x, y));
+        return;
+      }
+      view?.dom.classList.remove('dropping');
+      for (const path of drop.paths.filter(p => /\.nml$/i.test(p))) void openPath(path);
+      if (!view) return;
+      const told = dropInto(view, drop.paths, overEditor(x, y) ? view.posAtCoords({ x, y }, false) : null, fileDir());
+      if (told) status(told);
+    })
+    .catch(error => status(`Dropping files is not connected: ${error}`));
+}
+if (isTauri()) {
+  try {
+    listenForDrops();
+  } catch (error) {
+    // a window without the native side (a test, a plain browser) has nothing to drop onto
+    console.warn('dropping files is not available', error);
+  }
+}
 
 /** The sound card, sample rate and buffer size. Changing them starts the engine again. */
 const BUFFERS = [64, 128, 256, 512, 1024];
-const audioPanel = document.createElement('div');
-audioPanel.id = 'audio-panel';
-audioPanel.className = 'audio-panel';
-audioPanel.hidden = true;
+const audioPanel = document.createElement('section');
+audioPanel.className = 'settings-section';
 audioPanel.innerHTML = `
-  <label>output <select id="audio-output"></select></label>
-  <label>sample rate <select id="audio-rate"></select></label>
-  <label>buffer <select id="audio-buffer"></select></label>
-  <button id="audio-apply" title="Start the engine on these settings">Apply</button>
-  <div id="audio-note" class="audio-note"></div>
-  <label title="Controls bound with osc_in hear OSC sent to this UDP port on this machine">OSC in port <input id="audio-osc" inputmode="numeric" placeholder="off" /></label>
-  <button id="osc-apply" title="Listen for OSC on this port, or stop if it is empty">Listen</button>`;
-document.body.append(audioPanel);
+  <h3>Audio</h3>
+  <p class="settings-note">Changing the sound card, sample rate or buffer starts the engine again.</p>
+  <div class="settings-row"><label for="audio-output">Output<small>the sound card to play through</small></label><select id="audio-output"></select></div>
+  <div class="settings-row"><label for="audio-rate">Sample rate</label><select id="audio-rate"></select></div>
+  <div class="settings-row"><label for="audio-buffer">Buffer<small>smaller is quicker to respond, larger is safer against glitches</small></label><select id="audio-buffer"></select></div>
+  <div class="settings-row"><div id="audio-note" class="audio-note"></div><button id="audio-apply" title="Start the engine on these settings">Apply</button></div>
+  <div class="settings-row" title="Controls bound with osc_in hear OSC sent to this UDP port on this machine">
+    <label for="audio-osc">OSC in port<small>the UDP port to listen on; empty is off</small></label>
+    <span class="settings-inline"><input id="audio-osc" inputmode="numeric" placeholder="off" /><button id="osc-apply" title="Listen for OSC on this port, or stop if it is empty">Listen</button></span>
+  </div>`;
 
 function fillSelect(select: HTMLSelectElement, options: { value: string; label: string }[], chosen: string) {
   select.replaceChildren(
@@ -1202,20 +1219,20 @@ function showAudio(state: AudioState) {
   input('audio-osc').value = state.osc_port ? String(state.osc_port) : '';
 }
 
-async function openAudio() {
+/** Show what the engine is playing through now, each time the settings page opens. */
+async function refreshAudio() {
   if (!(await ensureConnected())) return;
   try {
     showAudio(await stage.audioState());
-    audioPanel.hidden = false;
   } catch (error) {
     status(String(error));
   }
 }
 
-$('audio-toggle').addEventListener('click', () => {
-  if (audioPanel.hidden) void openAudio();
-  else audioPanel.hidden = true;
-});
+loadLook();
+const settings = settingsPage({ sections: [audioPanel], onOpen: () => void refreshAudio() });
+document.body.append(settings.element);
+
 // choosing another card offers its own sample rates
 audioPanel.querySelector('#audio-output')!.addEventListener('change', async () => {
   try {
@@ -1260,16 +1277,11 @@ $('audio-apply').addEventListener('click', async () => {
     });
   }
 });
-$('browse-toggle').addEventListener('click', () => files.toggle());
 
 $('evaluate').addEventListener('click', () => void evaluate());
 $('evaluate-file').addEventListener('click', () => void evaluate('file'));
 const newTab = () => addTab('', null, 'untitled');
-$('new').addEventListener('click', newTab);
 $('evaluate-all').addEventListener('click', () => void evaluateAll());
-$('open').addEventListener('click', () => void openFile());
-$('open-project').addEventListener('click', () => void openProject());
-$('save').addEventListener('click', () => void saveFile());
 $('rec').addEventListener('click', toggleRecording);
 $('midi').addEventListener('click', () => {
   stage.openMidi('').then(
@@ -1347,10 +1359,16 @@ $('reconnect').addEventListener('click', () => void reconnect());
 window.addEventListener('keydown', event => {
   const mod = event.metaKey || event.ctrlKey;
   if (!mod) {
-    if (event.key === 'Escape') showBanner([]);
+    if (event.key === 'Escape') {
+      if (settings.isOpen) settings.close();
+      else showBanner([]);
+    }
     return;
   }
-  if (event.key === '=' || event.key === '+') {
+  if (event.key === ',') {
+    event.preventDefault();
+    settings.toggle();
+  } else if (event.key === '=' || event.key === '+') {
     event.preventDefault();
     stepZoom(1);
   } else if (event.key === '-') {
@@ -1359,12 +1377,6 @@ window.addEventListener('keydown', event => {
   } else if (event.key === '0') {
     event.preventDefault();
     setZoom(1);
-  } else if (event.key.toLowerCase() === 'p' && event.shiftKey) {
-    event.preventDefault();
-    togglePerform();
-  } else if (event.key.toLowerCase() === 'l' && event.shiftKey) {
-    event.preventDefault();
-    files.toggle();
   } else if (event.key.toLowerCase() === 't' && !event.shiftKey) {
     event.preventDefault();
     newTab();
@@ -1409,12 +1421,11 @@ const menuActions: Record<string, () => void> = {
   'close-tab': () => void closeTab(current),
   undo: () => view && undo(view),
   redo: () => view && redo(view),
-  browse: () => files.toggle(),
   sidebar: toggleRail,
-  perform: togglePerform,
   'zoom-in': () => stepZoom(1),
   'zoom-out': () => stepZoom(-1),
   'zoom-reset': () => setZoom(1),
+  settings: settings.toggle,
   'previous-tab': () => step(-1),
   'next-tab': () => step(1),
 };

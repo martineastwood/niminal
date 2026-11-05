@@ -249,41 +249,24 @@ async fn save_file_as(source: String) -> Result<Option<String>, String> {
     save_nml_as(source, "piece.nml").await
 }
 
-/// Save what was evaluated during a take as a script, for reading or for pasting back into a piece.
+/// Save what was evaluated during a replay as a script, for reading or for pasting back into a piece.
 #[tauri::command]
 async fn save_transcript(state: State<'_, AppState>, from: u64, to: u64) -> Result<Option<String>, String> {
     let text = session::transcript(&state.shared, from, to)?;
     if text.is_empty() {
-        return Err("Nothing was evaluated during that take.".into());
+        return Err("Nothing was evaluated during that replay.".into());
     }
-    save_nml_as(text, "take.nml").await
+    save_nml_as(text, "replay.nml").await
 }
 
-/// Render a take to audio by replaying the engine's session log over its stretch.
+/// Render a replay to audio by replaying the engine's session log over its stretch.
 #[tauri::command]
 async fn render_take(state: State<'_, AppState>, from: u64, to: u64) -> Result<Option<String>, String> {
-    let Some(path) = ask_save_path("WAV audio", "wav", "take.wav").await else {
+    let Some(path) = ask_save_path("WAV audio", "wav", "replay.wav").await else {
         return Ok(None);
     };
     let shared = state.shared.clone();
     blocking(move || session::render_take(&shared, from, to, &path)).await?.map(Some)
-}
-
-/// The piece and audio files under a folder, for the file browse panel.
-#[tauri::command]
-async fn list_files(dir: String) -> Result<Vec<String>, String> {
-    blocking(move || {
-        niminal_lang::files_under(Path::new(&dir), |path| {
-            niminal_lang::is_audio(path) || path.extension().is_some_and(|e| e == "nml")
-        })
-    })
-    .await
-}
-
-/// An audio file as WAV bytes, sent as they are rather than as a list of numbers.
-#[tauri::command]
-async fn read_sample(path: String) -> Result<tauri::ipc::Response, String> {
-    blocking(move || niminal_lang::audition_wav(Path::new(&path))).await?.map(tauri::ipc::Response::new)
 }
 
 /// Ask a yes or no question in a native dialog. The webview's own `confirm` does nothing here, so a tab with
@@ -297,15 +280,6 @@ async fn confirm(message: String) -> bool {
         .show()
         .await
         == rfd::MessageDialogResult::Yes
-}
-
-/// Ask for a folder; its path, or nothing if the dialog was closed.
-#[tauri::command]
-async fn pick_folder() -> Result<Option<String>, String> {
-    Ok(rfd::AsyncFileDialog::new()
-        .pick_folder()
-        .await
-        .map(|folder| folder.path().to_string_lossy().into_owned()))
 }
 
 /// The same LSP implementation as `niminal lsp`, without a child process. Compilation stays off the
@@ -330,7 +304,7 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             None => builder.build(app),
         }
     };
-    let file = SubmenuBuilder::new(app, "File")
+    let mut file = SubmenuBuilder::new(app, "File")
         .item(&item("new", "New Tab (⌘T)", None)?)
         .item(&item("open", "Open…", Some("CmdOrCtrl+O"))?)
         .item(&item("open-project", "Open Project Folder…", Some("CmdOrCtrl+Shift+O"))?)
@@ -340,8 +314,12 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .separator()
         .item(&item("close-tab", "Close Tab", Some("CmdOrCtrl+W"))?)
         .separator()
-        .item(&item("install-vscode", "Install VS Code Extension…", None)?)
-        .build()?;
+        .item(&item("install-vscode", "Install VS Code Extension…", None)?);
+    // on the Mac, settings live in the program's own menu, where people look for them
+    if !cfg!(target_os = "macos") {
+        file = file.separator().item(&item("settings", "Settings… (Ctrl+,)", None)?);
+    }
+    let file = file.build()?;
     let edit = SubmenuBuilder::new(app, "Edit")
         .item(&item("undo", "Undo", Some("CmdOrCtrl+Z"))?)
         .item(&item("redo", "Redo", Some("CmdOrCtrl+Shift+Z"))?)
@@ -352,9 +330,7 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .select_all()
         .build()?;
     let view = SubmenuBuilder::new(app, "View")
-        .item(&item("browse", "Browse (⇧⌘L)", None)?)
         .item(&item("sidebar", "Sidebar (⌘B)", None)?)
-        .item(&item("perform", "Performance Mode (⇧⌘P)", None)?)
         .separator()
         .item(&item("zoom-in", "Bigger Text (⌘+)", None)?)
         .item(&item("zoom-out", "Smaller Text (⌘−)", None)?)
@@ -366,6 +342,8 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let mut menu = MenuBuilder::new(app);
     if cfg!(target_os = "macos") {
         let name = SubmenuBuilder::new(app, "niminal stage")
+            .item(&item("settings", "Settings… (⌘,)", None)?)
+            .separator()
             .hide()
             .separator()
             .quit()
@@ -442,10 +420,7 @@ fn main() {
             open_project,
             save_file,
             save_file_as,
-            list_files,
             open_path,
-            read_sample,
-            pick_folder,
             save_transcript,
             render_take,
             lsp_message

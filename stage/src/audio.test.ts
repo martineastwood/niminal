@@ -35,7 +35,7 @@ async function open() {
   vi.resetModules();
   await import('./main');
   await new Promise(r => setTimeout(r, 20));
-  document.getElementById('audio-toggle')!.click();
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: ',', metaKey: true }));
   await new Promise(r => setTimeout(r, 20));
 }
 
@@ -45,10 +45,10 @@ beforeEach(() => {
   localStorage.clear();
 });
 
-describe('the audio panel', () => {
+describe('the audio settings', () => {
   it('lists the sound cards and offers the sample rates of the one chosen', async () => {
     await open();
-    expect(document.getElementById('audio-panel')!.hidden).toBe(false);
+    expect(document.getElementById('settings')!.hidden).toBe(false);
     expect(names('audio-output')).toEqual(['system default', 'MacBook Pro Speakers', 'Scarlett 2i2']);
     select('audio-output').value = 'Scarlett 2i2';
     select('audio-output').dispatchEvent(new Event('change'));

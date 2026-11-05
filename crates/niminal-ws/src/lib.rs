@@ -1,6 +1,7 @@
 //! JSON-RPC over WebSocket: one thread per client, and one that pushes a service's notifications
 //! out to them. The server is a service, and so is any client that serves an API of its own.
 
+mod crash;
 pub mod launch;
 pub mod worker;
 

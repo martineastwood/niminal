@@ -799,3 +799,24 @@ fn late_events_use_definitions_waiting_at_the_current_sample() {
     measured(&mut renderer, 64, &mut audio);
     assert!(audio.iter().all(|sample| *sample == 0.5));
 }
+
+#[test]
+fn a_backed_up_midi_output_retries_note_offs_without_heap_work() {
+    let mut s = Session::new(48_000., Layout::Mono);
+    s.eval("midi_out synth(port: \"test\", channel: 2)", None).unwrap();
+    let notes = [0, 1].map(|at| niminal_server::Op::Note {
+        target: "synth".into(), to: None, at: niminal_server::At::Sample(at),
+        args: [("freq".into(), niminal_score::Value::Note(60))].into(),
+        dur: Some(niminal_score::Time::Seconds(4. / 48_000.)), id: None, tag: None,
+    });
+    s.send_events(0, notes.into()).unwrap();
+    let mut renderer = s.start_realtime(RealtimeConfig::default());
+    let (tx, mut rx) = rtrb::RingBuffer::new(1);
+    renderer.set_midi_output(tx, None);
+    let mut audio = [0.; 256];
+    measured(&mut renderer, 256, &mut audio);
+    assert!(rx.pop().unwrap().on);
+    measured(&mut renderer, 256, &mut audio);
+    assert!(!rx.pop().unwrap().on);
+    assert!(rx.pop().is_err());
+}

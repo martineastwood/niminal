@@ -1,14 +1,15 @@
+import { look } from './look';
+
 /** One animation-frame loop for the whole window. It runs only while something is moving, so an idle window
  *  costs nothing between polls. Each callback returns whether it still has work for the next frame. */
 const callbacks: (() => boolean)[] = [];
 let running = false;
 
-/** About 30 frames a second is plenty for a playhead and a lit note, and half the work of 60. */
-const FRAME_MS = 30;
 let lastRun = 0;
 
 function tick(now: number) {
-  if (now - lastRun < FRAME_MS) {
+  // 30 frames a second is plenty for a playhead and a lit note, and half the work of 60; the look can ask for more
+  if (now - lastRun < (look.fps === 60 ? 14 : 30)) {
     requestAnimationFrame(tick);
     return;
   }

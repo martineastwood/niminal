@@ -300,13 +300,14 @@ fn map_command(program: &Program, set: &super::VoiceMap, at: u64) -> Command {
 }
 
 /// A `midi_out` note on or off, if anyone is listening. Allocates nothing.
+/// On a full queue, callers reject a new note-on or retain a note-off to retry.
 fn send_midi(
     tx: &mut Option<Producer<crate::MidiEvent>>,
     wake: &Option<std::thread::Thread>,
     at: u64,
     on: bool,
     note: &niminal_lang::MidiNote,
-) {
+) -> bool {
     if let Some(tx) = tx {
         let sent = tx
             .push(crate::MidiEvent {
@@ -321,6 +322,9 @@ fn send_midi(
         if sent && let Some(thread) = wake {
             thread.unpark();
         }
+        sent
+    } else {
+        true
     }
 }
 
@@ -693,36 +697,35 @@ impl Session {
         let Some(mut planner) = self.live.take() else {
             return false;
         };
-        while let Ok(retired) = planner.retired.pop() {
-            match retired {
-                Retired::Window(window) => drop(window),
-                Retired::Voice(voice) => drop(voice),
-                Retired::Injected(injected) => drop(injected),
-            }
-        }
-        let revision = planner.state.revision.load(Ordering::Acquire);
-        if revision != planner.revision {
-            let swap_epoch = planner.state.swap_epoch.load(Ordering::Acquire);
-            planner.refresh |= swap_epoch != planner.swap_epoch;
-            planner.swap_epoch = swap_epoch;
-            planner.replan = true;
-            planner.deferred.clear();
-            planner.stopped.clear();
-            planner.revision = revision;
-            planner.prepared_until = self.clock;
-            // the windows to come will take in everything that was added
-            self.fresh.clear();
-        }
-        planner.prepared_until = planner.prepared_until.max(self.clock);
-        self.inject_fresh(&mut planner);
-        // The planner must survive a panic in planning, or the renderer starves for good: start clean instead.
+        // Keep the planner owned across failures in retirement, injection and window construction.
         let planned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            while let Ok(retired) = planner.retired.pop() {
+                match retired {
+                    Retired::Window(window) => drop(window),
+                    Retired::Voice(voice) => drop(voice),
+                    Retired::Injected(injected) => drop(injected),
+                }
+            }
+            let revision = planner.state.revision.load(Ordering::Acquire);
+            if revision != planner.revision {
+                let swap_epoch = planner.state.swap_epoch.load(Ordering::Acquire);
+                planner.refresh |= swap_epoch != planner.swap_epoch;
+                planner.swap_epoch = swap_epoch;
+                planner.replan = true;
+                planner.deferred.clear();
+                planner.stopped.clear();
+                planner.revision = revision;
+                planner.prepared_until = self.clock;
+                // the windows to come will take in everything that was added
+                self.fresh.clear();
+            }
+            planner.prepared_until = planner.prepared_until.max(self.clock);
+            self.inject_fresh(&mut planner);
             self.plan_ahead(&mut planner, revision, max_windows)
         }));
         let more = planned.as_ref().is_ok_and(|more| *more);
         if planned.is_err() {
             planner.state.planner_panics.fetch_add(1, Ordering::Relaxed);
-            self.restart_realtime();
         }
         let metrics = planner.state.metrics();
         if metrics.late_events > planner.reported.late_events {
@@ -739,7 +742,7 @@ impl Session {
         }
         if metrics.capacity_drops > planner.reported.capacity_drops {
             self.notify(format!(
-                "{} notes exceeded the reserved live voice capacity",
+                "{} notes exceeded live voice or MIDI output capacity",
                 metrics.capacity_drops - planner.reported.capacity_drops
             ));
         }
@@ -762,6 +765,9 @@ impl Session {
         }
         planner.reported = metrics;
         self.live = Some(planner);
+        if planned.is_err() {
+            self.restart_realtime();
+        }
         more
     }
 
@@ -1384,18 +1390,26 @@ impl RealtimeRenderer {
 
     /// Every sounding `midi_out` note off, as `panic` and a reset do.
     fn all_midi_off(&mut self) {
-        for (_, _, note, _) in self.sounding.midi.drain(..) {
-            send_midi(&mut self.midi_tx, &self.midi_wake, self.clock, false, &note);
+        for (off, _, _, _) in &mut self.sounding.midi {
+            *off = self.clock;
         }
+        self.release_midi_due();
     }
 
-    /// The `midi_out` notes whose time is up go off.
+    /// Retain overdue notes until their note-offs are queued, including after panic/reset.
     fn release_midi_due(&mut self) {
         let mut i = 0;
         while i < self.sounding.midi.len() {
-            if self.sounding.midi[i].0 <= self.clock {
-                let (_, _, note, _) = self.sounding.midi.swap_remove(i);
-                send_midi(&mut self.midi_tx, &self.midi_wake, self.clock, false, &note);
+            if self.sounding.midi[i].0 <= self.clock
+                && send_midi(
+                    &mut self.midi_tx,
+                    &self.midi_wake,
+                    self.clock,
+                    false,
+                    &self.sounding.midi[i].2,
+                )
+            {
+                self.sounding.midi.swap_remove(i);
             } else {
                 i += 1;
             }
@@ -1558,15 +1572,12 @@ impl RealtimeRenderer {
                 change
                     .stop_players
                     .retain(|key| super::definitions::owns_node(*client, key));
-                let mut i = 0;
-                while i < self.sounding.midi.len() {
-                    if self.sounding.midi[i].3 == *client {
-                        let (_, _, note, _) = self.sounding.midi.remove(i);
-                        send_midi(&mut self.midi_tx, &self.midi_wake, self.clock, false, &note);
-                    } else {
-                        i += 1;
+                for (off, _, _, owner) in &mut self.sounding.midi {
+                    if *owner == *client {
+                        *off = self.clock;
                     }
                 }
+                self.release_midi_due();
                 super::plan_transfers(&self.program, &change.program, transfers);
                 self.mixer.silence_owner(*client);
                 for (render_node, transfer) in change.program.nodes.iter().zip(transfers.iter_mut())
@@ -1668,13 +1679,16 @@ impl RealtimeRenderer {
                     && *off > self.clock
                     && self.sounding.midi.len() < self.sounding.midi.capacity()
                 {
-                    send_midi(&mut self.midi_tx, &self.midi_wake, self.clock, true, &note);
-                    self.sounding.midi.push((
-                        *off,
-                        *key,
-                        note,
-                        voice.as_ref().map_or(0, |v| v.owner()),
-                    ));
+                    if send_midi(&mut self.midi_tx, &self.midi_wake, self.clock, true, &note) {
+                        self.sounding.midi.push((
+                            *off,
+                            *key,
+                            note,
+                            voice.as_ref().map_or(0, |v| v.owner()),
+                        ));
+                    } else {
+                        self.state.capacity_drops.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
                 let target = render_node
                     .as_ref()
@@ -1733,9 +1747,7 @@ impl RealtimeRenderer {
                     limiter.clear();
                 }
                 self.sounding.held.clear();
-                for (_, _, note, _) in self.sounding.midi.drain(..) {
-                    send_midi(&mut self.midi_tx, &self.midi_wake, self.clock, false, &note);
-                }
+                self.all_midi_off();
                 self.state.reset_epoch.store(*epoch, Ordering::Release);
                 self.install(change);
             }
@@ -1748,7 +1760,6 @@ impl RealtimeRenderer {
         let started = std::time::Instant::now();
         let _flush = niminal_engine::denormals::FlushToZero::new();
         let end = self.clock.saturating_add(frames as u64);
-        let mut block = std::mem::take(&mut self.block);
         let max_block = niminal_engine::block_size() as u64;
         let mut stale_budget = self.config.queued_windows;
         while self.clock < end {
@@ -1914,27 +1925,26 @@ impl RealtimeRenderer {
             self.mixer
                 .set_clock(niminal_engine::Clock { sample: self.clock });
             self.mixer
-                .process_retained(&mut block[..self.channels], n, &mut self.finished);
+                .process_retained(&mut self.block[..self.channels], n, &mut self.finished);
             self.state
                 .silenced
                 .fetch_add(self.mixer.take_silenced(), Ordering::Relaxed);
             if let Some(limiter) = &mut self.limiter {
-                limiter.process_block(&mut block[..self.channels], n);
+                limiter.process_block(&mut self.block[..self.channels], n);
             }
             let peaks = self
                 .master_meter
-                .observe(&block[..self.channels], n, self.clock);
+                .observe(&self.block[..self.channels], n, self.clock);
             for (peak, value) in self.state.peaks.iter().zip(&peaks) {
                 peak.fetch_max(value.to_bits(), Ordering::Relaxed);
             }
-            sink(&block[..self.channels], n);
+            sink(&self.block[..self.channels], n);
             self.clock += n as u64;
             self.state.clock.store(self.clock, Ordering::Release);
             self.state
                 .voices
                 .store(self.mixer.active_voices(), Ordering::Relaxed);
         }
-        self.block = block;
         self.return_voices();
         if self.retired.slots() == 0 {
             self.state.retire_pressure.fetch_add(1, Ordering::Relaxed);
@@ -1950,3 +1960,6 @@ impl RealtimeRenderer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

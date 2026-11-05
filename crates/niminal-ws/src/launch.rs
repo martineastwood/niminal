@@ -19,31 +19,7 @@ fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
-/// Record a panic of `app` (with its `version`) in `~/.niminal/crash.log`, beside the ones `niminal` writes, as
-/// well as reporting it as before. So a crash in an app can be looked at afterwards.
-pub fn install_crash_log(app: &'static str, version: &'static str) {
-    let log = home().map(|home| home.join(".niminal"));
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        previous(info);
-        let Some(dir) = &log else { return };
-        let _ = std::fs::create_dir_all(dir);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        let thread = std::thread::current();
-        let report = format!(
-            "[{now}] {app} {version} panicked in thread `{}`: {info}\n{}\n",
-            thread.name().unwrap_or("?"),
-            std::backtrace::Backtrace::force_capture()
-        );
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
-            use std::io::Write;
-            let _ = file.write_all(report.as_bytes());
-            eprintln!("{app}: details are in {}", dir.join("crash.log").display());
-        }
-    }));
-}
+pub use crate::crash::{defer_panic_reports, install_crash_log};
 
 /// The editors on this Mac that take VS Code extensions, with their command line programs. The apps' own
 /// copies come first because the `code` command is rarely on the PATH of a program opened from Finder.
