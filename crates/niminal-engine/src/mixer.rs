@@ -592,6 +592,7 @@ struct ChunkRef {
 // SAFETY: the chunks of a wave are different voices (of different nodes, or different stretches of
 // one node's), and nothing else touches a node's voices until the wave is done.
 unsafe impl Send for ChunkRef {}
+// SAFETY: as for `Send` above.
 unsafe impl Sync for ChunkRef {}
 
 const NO_CHUNK: ChunkRef = ChunkRef {

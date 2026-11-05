@@ -36,3 +36,4 @@ opt-level = 3
 # Same rule as the workspace (see the root Cargo.toml).
 [lints.clippy]
 unwrap_used = "warn"
+undocumented_unsafe_blocks = "warn"

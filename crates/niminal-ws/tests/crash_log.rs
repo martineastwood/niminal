@@ -5,7 +5,7 @@
 fn a_panic_is_recorded_with_the_app_that_had_it() {
     let home = std::env::temp_dir().join(format!("niminal-crash-log-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
-    // this is the only test in this program, so nothing else reads HOME while it changes
+    // SAFETY: this is the only test in this program, so nothing else reads HOME while it changes.
     unsafe { std::env::set_var("HOME", &home) };
     niminal_ws::launch::install_crash_log("niminal-test-app", "9.9.9");
     let _ = std::thread::Builder::new()

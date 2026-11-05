@@ -6,6 +6,8 @@ members = ["crates/*"]
 # Tests may unwrap freely (clippy.toml).
 [workspace.lints.clippy]
 unwrap_used = "warn"
+# Every `unsafe` block says why it is sound (a `// SAFETY:` comment above it).
+undocumented_unsafe_blocks = "warn"
 
 [workspace.package]
 version = "0.0.1"

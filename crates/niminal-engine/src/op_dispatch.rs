@@ -18,17 +18,19 @@ macro_rules! op_enum {
                 let tid = (*boxed).type_id();
                 $(
                     if tid == TypeId::of::<$IT>() {
-                        // SAFETY: TypeId verified — the fat-to-thin pointer cast
-                        // extracts the data pointer, which points to a valid $IT
-                        // that was heap-allocated by the same global allocator.
                         let ptr = Box::into_raw(boxed) as *mut $IT;
-                        return Op::$IV(unsafe { *Box::from_raw(ptr) });
+                        // SAFETY: the TypeId matched, so the fat-to-thin cast keeps the data pointer of
+                        // a valid $IT that this global allocator allocated as a `Box<$IT>` would be.
+                        let inline = unsafe { *Box::from_raw(ptr) };
+                        return Op::$IV(inline);
                     }
                 )*
                 $(
                     if tid == TypeId::of::<$BT>() {
                         let ptr = Box::into_raw(boxed) as *mut $BT;
-                        return Op::$BV(unsafe { Box::from_raw(ptr) });
+                        // SAFETY: as above: the TypeId matched, so this is a `Box<$BT>` allocation.
+                        let boxed = unsafe { Box::from_raw(ptr) };
+                        return Op::$BV(boxed);
                     }
                 )*
                 Op::Dynamic(boxed)

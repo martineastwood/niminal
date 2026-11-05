@@ -595,6 +595,7 @@ mod tests {
     }
     #[global_allocator]
     static ALLOCATOR: CountingAllocator = CountingAllocator;
+    // SAFETY: every method forwards to `System` with the arguments it was given, after counting.
     unsafe impl GlobalAlloc for CountingAllocator {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
             COUNTING.with(|on| {
@@ -602,9 +603,11 @@ mod tests {
                     ALLOCATIONS.with(|n| n.set(n.get() + 1));
                 }
             });
+            // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract, which `System` shares.
             unsafe { System.alloc(layout) }
         }
         unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            // SAFETY: `ptr` and `layout` come from the caller's earlier allocation by `System`.
             unsafe { System.dealloc(ptr, layout) }
         }
         unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
@@ -613,6 +616,7 @@ mod tests {
                     ALLOCATIONS.with(|n| n.set(n.get() + 1));
                 }
             });
+            // SAFETY: `ptr`, `layout` and `size` are the caller's, and the block came from `System`.
             unsafe { System.realloc(ptr, layout, size) }
         }
     }

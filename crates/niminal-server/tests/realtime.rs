@@ -1,4 +1,6 @@
 #![allow(clippy::unwrap_used)]
+// the counting allocator forwards every call to `System` unchanged
+#![allow(clippy::undocumented_unsafe_blocks)]
 use niminal_server::{RealtimeConfig, RealtimeRenderer, Session};
 mod support;
 use niminal_lang::Layout;
