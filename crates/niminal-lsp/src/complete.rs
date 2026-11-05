@@ -260,7 +260,7 @@ pub fn preset_items(line_before: &str) -> Option<Vec<Value>> {
     let already: Vec<&str> = taken.split(',').map(str::trim).collect();
     if shelf.trim() == "std/samples" {
         let source = niminal_lang::embedded_module("std/samples")?;
-        let symbols = niminal_lang::symbols(source).ok()?;
+        let symbols = niminal_compose::symbols(source).ok()?;
         return Some(
             symbols
                 .iter()

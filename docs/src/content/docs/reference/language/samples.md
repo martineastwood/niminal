@@ -7,7 +7,9 @@ description: WAV samples, kits, slices, SFZ multisamples, and playing them from 
 
 ## Starter recordings
 
-`niminal samples --out samples/starter` exports twelve original synthesized recordings, source patches and a ready-made kit. See the [standard library](/reference/language/standard-library/#original-starter-recordings). All recordings are rooted at `c3`; no additional download is needed.
+`use std/samples.{drums, electric_piano}` makes the bundled kit and piano recording ready to play. The other pitched recordings are `fm_keys`, `struck_string` and `metal_bar`. All are rooted at `c3`. They are embedded in both Stage and the CLI, decoded into memory when needed, and require no downloads or sample folder.
+
+`niminal samples --out samples/starter` optionally exports WAVs, source patches and a kit file for editing. See the [standard library](/reference/language/standard-library/#original-starter-recordings).
 
 ## Samples and kits
 

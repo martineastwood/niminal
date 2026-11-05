@@ -10,7 +10,15 @@ then trimmed and faded over its final 10 ms. Most peaks are adjusted toward -6 d
 sub-heavy 808 is set to -1.94 dBFS peak so it remains audible beside the other hits. They are dry: no master limiter or effects are recorded.
 The hat recordings share a choke group in starter.nml.
 
-Export from an installed niminal:
+Normally the recordings can be used directly, without exporting:
+
+    use std/samples.{drums, electric_piano}
+
+Use drums as a clip's instrument, or drums.kick for one member. The other pitched
+recordings are fm_keys, struck_string and metal_bar. They are embedded in Stage
+and the CLI; no .niminal sample folder is created.
+
+Export an editable copy from an installed niminal:
 
     niminal samples --out samples/starter
 

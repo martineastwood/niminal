@@ -16,7 +16,8 @@ fn a_selected_recording_plays_without_creating_any_files() {
     let dir = missing_project();
     assert!(!dir.exists());
     let expanded = expand("use std/samples.{electric_piano}\n", &dir).unwrap();
-    let program = compile(&expanded.text).unwrap();
+    let joined = expand(&expanded.text, &dir).unwrap();
+    let program = compile(&joined.text).unwrap();
     assert_eq!(
         program.instruments.len(),
         1,

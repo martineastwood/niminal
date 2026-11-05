@@ -129,8 +129,10 @@ const DEFINES: [&str; 14] = [
 /// Nobody may write `rig::_name`: it is the private `_name` of `rig`. `words` are the identifiers of a
 /// text in order (`None` for anything else). A text that defines `rig::_name` itself is allowed to
 /// use it: that is a text whose modules have been joined in already, as the engine is sent.
+/// Parsed definitions also cover bindings such as `name = sample(...)` and `name = kit {...}`.
 pub fn check_private_words(
     words: &[Option<(String, Span)>],
+    definitions: &[String],
     at: Option<Span>,
 ) -> Result<(), Diagnostic> {
     let defined: Vec<&str> = words
@@ -141,6 +143,7 @@ pub fn check_private_words(
             }
             _ => None,
         })
+        .chain(definitions.iter().map(String::as_str))
         .collect();
     for (name, span) in words.iter().flatten() {
         if let Some((module, private)) = name.split_once("::")
@@ -521,7 +524,12 @@ fn check_private(source: &str, at: Option<Span>) -> Result<(), Diagnostic> {
             _ => None,
         })
         .collect();
-    check_private_words(&words, at)
+    let definitions: Vec<String> = symbols(source)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    check_private_words(&words, &definitions, at)
 }
 
 /// Rename what a module defines so it cannot meet other files' names: public

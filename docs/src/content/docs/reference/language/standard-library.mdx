@@ -190,29 +190,44 @@ Try `fm_keys(ratio: 1, index: 3, decay: 700ms)` for bass, `ratio: 1.5, index: 1.
 
 ## Original starter recordings
 
-Export twelve original synthesized recordings, their source patches, license and ready-made kit into your project:
-
-```sh
-niminal samples --out samples/starter
-```
-
-The directory must be new, so an export cannot replace edited recordings. The pack contains eight drum hits and four pitched sounds, all mono 48 kHz PCM WAVs rooted at `c3`. They are dry recordings with trimmed, faded tails and peaks adjusted toward -6 dBFS (the sub-heavy 808 uses -1.94 dBFS). There are no third-party samples. The pack and source patches use the repository's MIT license.
+Twelve original recordings are embedded in both Stage and the CLI. Import them directly: no exported WAVs, downloads or `.niminal` sample folder are needed. A recording is decoded into memory on first use, then shared between sessions.
 
 ```nml
-use samples/starter/starter as sounds
+use std/samples.{drums, electric_piano}
+tempo 120bpm
 
 clip beat {
-  instrument: sounds::drums
+  instrument: drums
   notes: grid {
     kick:  x... x... x... x...
     snare: .... x... .... x...
     hat:   x.x. x.x. x.x. x.x.
   }
 }
+clip keys {
+  instrument: electric_piano
+  notes: [c4 e4 g4 b4]
+  gain: -6db
+}
 beat.start
+keys.start
 ```
 
-Pitched recordings include `sounds::electric_piano`, `sounds::fm_keys`, `sounds::struck_string` and `sounds::metal_bar`. See [Samples](/reference/language/samples/) for tuning, slicing and stretching.
+`drums` contains `kick`, `snare`, `clap`, `hat`, `open`, `tom`, `cowbell` and `crash`. Use an individual member with `instrument: drums.kick`. The four pitched recordings are `electric_piano`, `fm_keys`, `struck_string` and `metal_bar`. All are rooted at `c3`; other notes transpose them. Hats share a choke group.
+
+These are ordinary samples, with the usual playback, slicing and stretching capabilities. Importing only `drums` keeps the pitched recording names free for synth presets. To use a recording and synthesizer with the same name, import the module with an alias: `use std/samples as recordings`, then `instrument: recordings::electric_piano`.
+
+### Exporting an editable copy
+
+For your own WAVs, standalone source patches, license and kit file:
+
+```sh
+niminal samples --out samples/starter
+```
+
+The directory must be new, so an export cannot replace edited recordings. Import the local copy with `use samples/starter/starter as sounds`, then use `instrument: sounds::drums` or `sounds::electric_piano`.
+
+The recordings are dry mono 48 kHz PCM WAVs with trimmed, faded tails. Most peaks are adjusted toward -6 dBFS; the sub-heavy 808 uses -1.94 dBFS. There are no third-party samples. The recordings and source patches use the repository's MIT license. See [Samples](/reference/language/samples/) for playback controls.
 
 ## Auditioning and editing the collection
 

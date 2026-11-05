@@ -37,7 +37,12 @@ impl ModuleRules for ComposeRules {
                 _ => None,
             })
             .collect();
-        niminal_lang::check_private_words(&words, at)
+        let definitions: Vec<String> = symbols(source)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        niminal_lang::check_private_words(&words, &definitions, at)
     }
 }
 

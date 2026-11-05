@@ -33,8 +33,11 @@ Rebuild the original starter recordings after deliberately changing their patche
     cargo run -p niminal-lang --example audition -- --starter crates/niminal-lang/assets/starter
 
 The command refreshes WAVs, standalone source patches and starter.nml; README.md
-and LICENSE are maintained alongside them. Source and audio ship inside the CLI,
-so `niminal samples --out DIR` works without a repository or network connection.
+and LICENSE are maintained alongside them. Source and audio live in niminal-lang and ship inside every host, including Stage
+and the CLI. `use std/samples.{drums, electric_piano}` loads selected recordings
+from memory, without extraction. The export command uses the same embedded bytes.
+Imports retain the private members of a selected kit while omitting unrelated
+recordings; a sample kit must not shadow a synth with the same public name.
 
 ## Audio changes in the 0.3 curation
 
