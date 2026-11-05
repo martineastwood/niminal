@@ -1,7 +1,6 @@
 // The same percussion-and-pluck groove: dry, shifted with resets off, shifted with resets on.
 // Evaluate the whole file. All three passes have identical timing, source levels and noise seeds.
 // niminal render examples/spectral_transients.nml --out /tmp/spectral_transients.wav
-use std/spectral
 
 config { channels: stereo }
 tempo 100bpm
@@ -24,7 +23,7 @@ instr groove(wet: 0..1 = 1, transients: 0..1 = 1) {
     (osc(tri, a3) + osc(saw, a3) * 0.2).lpf(cutoff: 2khz) * perc(attack: 5ms, decay: 190ms) * 0.17
   }
   source = (kick + snare + hat + pluck) * env[0 5ms 1 | 100ms 0]
-  shifted = spectral_pitch(source, shift: 5, transients: transients, size: 2048, overlap: 8)
+  shifted = spectral_warp(source, shift: 5, transients: transients, size: 2048, overlap: 8)
   out = ((source * (1 - wet) + shifted * wet) * 1.8).pan(angle: 0deg)
 }
 

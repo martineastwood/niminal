@@ -1,0 +1,35 @@
+// Original recordings, ready to play: `use std/samples.{drums, electric_piano}`.
+// They are embedded in every niminal host. No exported files or downloads are needed.
+// The drum recordings are private members of the public kit, so importing it cannot shadow synth presets.
+_kick = sample("std://samples/kick_808.wav").root(c3)
+_snare = sample("std://samples/snare_tri.wav").root(c3)
+_clap = sample("std://samples/clap.wav").root(c3)
+_hat = sample("std://samples/hat_closed.wav").root(c3).choke(hats)
+_open = sample("std://samples/hat_open.wav").root(c3).choke(hats)
+_tom = sample("std://samples/tom.wav").root(c3)
+_cowbell = sample("std://samples/cowbell.wav").root(c3)
+_crash = sample("std://samples/crash.wav").root(c3)
+
+/// A ready-made kit of eight original drum recordings. c3 plays each at its original tuning.
+drums = kit {
+  kick: _kick
+  snare: _snare
+  clap: _clap
+  hat: _hat
+  open: _open
+  tom: _tom
+  cowbell: _cowbell
+  crash: _crash
+}
+
+/// An original electric-piano recording, rooted at c3.
+electric_piano = sample("std://samples/electric_piano.wav").root(c3)
+
+/// An original FM keyboard recording, rooted at c3.
+fm_keys = sample("std://samples/fm_keys.wav").root(c3)
+
+/// An original struck-string recording, rooted at c3.
+struck_string = sample("std://samples/struck_string.wav").root(c3)
+
+/// An original metal-bar recording, rooted at c3.
+metal_bar = sample("std://samples/metal_bar.wav").root(c3)

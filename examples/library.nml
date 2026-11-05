@@ -2,7 +2,6 @@
 // envelope and made to sing; a band-pass picks out a vowel-like formant; a Chebyshev table adds
 // harmonics to a sine.
 // Render with:  niminal render examples/library.nml --out library.wav
-use std/filters
 
 tempo 108bpm
 

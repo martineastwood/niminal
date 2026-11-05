@@ -65,7 +65,8 @@ vi.mock('@tauri-apps/api/core', () => ({
   isTauri: () => true,
   invoke: async (command: string, args?: Record<string, any>) => {
     calls.push(command);
-    if (command === 'eval') sent.push(args ?? {});
+    if (command === 'eval' || command === 'perform') sent.push(args ?? {});
+    if (command === 'confirm') return true;
     if (command === 'snapshot') return snapshot;
     if (command === 'lsp_message') return [];
     return undefined;
@@ -106,6 +107,12 @@ describe('the stage app', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: '2', metaKey: true }));
     await new Promise(resolve => setTimeout(resolve, 50));
     expect(sent.at(-1)!.source).toBe('chorus.start');
+  });
+
+  it('runs `new` from shift-command-N, clearing the session', async () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'N', metaKey: true, shiftKey: true }));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(sent.at(-1)).toMatchObject({ action: 'new' });
   });
 
   it('stops a scene that is already playing when it is pressed again', async () => {

@@ -89,12 +89,3 @@ fn phase_accumulate(frequency: [num], size: const int = 2048, hop: const 1..6553
   phase = atan2(sin(next), cos(next))
   phase
 }
-
-/// Peak-locked pitch shifting with transient handling and independent spectral-envelope control.
-/// preserve: 1 retains the source envelope; formant shifts its colour independently in semitones.
-/// transients: 1 resets growing peak regions on attacks; 0 keeps phase integration uninterrupted.
-fn spectral_pitch(x, shift: -48..48 = 0, size: const int = 2048, overlap: const int = 4,
-                  formant: -48..48 = 0, preserve: 0..1 = 0, transients: 0..1 = 1, detail: const int = 32) {
-  spectral_warp(x, shift: shift, formant: formant, preserve: preserve, transients: transients,
-                size: size, overlap: overlap, detail: detail)
-}

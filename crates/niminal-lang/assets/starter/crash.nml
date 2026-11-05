@@ -1,0 +1,19 @@
+// Original starter recording source. Rebuild with the audition example's --starter option.
+
+/// A synthetic crash: six inharmonic square oscillators under a bright noise wash.
+/// Metal balances the ringing oscillators against noise; tone sets the high-pass edge.
+instr crash(
+  freq: hz = c3,
+  decay: 100ms..5sec = 2.2sec,
+  tone: 500hz..10khz = 4khz,
+  metal: 0..1 = 0.45,
+  gain: db = 0db
+) {
+  tuning = (freq / c3).max(0).min(8)
+  ring = osc(square, 205hz * tuning) + osc(square, 304hz * tuning) + osc(square, 369hz * tuning) + osc(square, 522hz * tuning) + osc(square, 800hz * tuning) + osc(square, 1141hz * tuning)
+  balance = metal.max(0).min(1)
+  voice = ring * balance / 6 + noise(seed: 47) * (1 - balance)
+  voice.hpf(cutoff: tone).lpf(cutoff: 14khz) * perc(attack: 1ms, decay: decay) * 0.3 * gain
+}
+
+crash(freq: c3) for 1sec

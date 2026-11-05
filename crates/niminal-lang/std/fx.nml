@@ -274,3 +274,62 @@ fx soft_clip(
   wet = in.map(tanh(it * push)) / tanh(push)
   out = in.crossfade(wet, mix)
 }
+
+// folder: filters
+
+/// A vowel filter, morphing through A, E, I, O and U as vowel moves from 0 to 1.
+/// A small beat-synced sweep adds movement around the chosen vowel.
+fx vowel_filter(
+  vowel: 0..1 = 0,
+  sweep: 0..1 = 0,
+  beats: 0.25..32 = 4,
+  mix: 0..1 = 0.5
+) {
+  moving = (vowel + synced_lfo(beats).smooth * sweep * 0.5).max(0).min(1)
+  out = in.crossfade(in.formant(vowel: moving), mix)
+}
+
+// folder: time/glitch
+
+/// Repeat the last musical division while hold is on. Gate shortens each repeat; pitch transposes it.
+fx stutter(
+  hold: 0..1 = 0,
+  length: division = 1/4beat,
+  gate: 0.05..1 = 1,
+  pitch: -24..24 = 0,
+  mix: 0..1 = 1
+) {
+  out = in.crossfade(in.repeat_last(hold: hold, length: length, gate: gate, pitch: pitch), mix)
+}
+
+/// Hold the last moment as a grain cloud. Spread smears the grains; pitch transposes the held sound.
+fx frozen(
+  hold: 0..1 = 0,
+  length: division = 1/2beat,
+  spread: 0..1 = 0.5,
+  pitch: -24..24 = 0,
+  mix: 0..1 = 1
+) {
+  out = in.crossfade(in.freeze(hold: hold, length: length, spread: spread, pitch: pitch), mix)
+}
+
+/// Shuffle the last musical division into slices while hold is on. Seed chooses a repeatable shuffle.
+fx slice_shuffle(
+  hold: 0..1 = 0,
+  length: division = 1bar,
+  slices: 2..32 = 8,
+  seed: 0..999 = 0,
+  reverse: 0..1 = 0,
+  mix: 0..1 = 1
+) {
+  out = in.crossfade(in.scatter(hold: hold, length: length, slices: slices, seed: seed, reverse: reverse, max: 4sec), mix)
+}
+
+/// A click-free performance gate. Automate open with a row of steps; attack and release round the edges.
+fx trance_gate(
+  open: 0..1 = 1,
+  attack: 0.1ms..100ms = 2ms,
+  release: 0.1ms..500ms = 8ms
+) {
+  out = in * open.follow(attack: attack, release: release)
+}

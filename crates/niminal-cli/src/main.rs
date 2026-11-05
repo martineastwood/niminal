@@ -3,12 +3,11 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use engine_commands::{ReplayArgs, ServerArgs};
+use niminal_cli::render::{End, RenderOptions, SAMPLE_RATE, render, render_session, write_wav};
 use play::PlayArgs;
-use niminal_cli::render::{
-    End, RenderOptions, SAMPLE_RATE, render, render_session, write_wav,
-};
 
 mod engine_commands;
+mod library;
 mod play;
 
 #[derive(Parser)]
@@ -72,6 +71,17 @@ enum Command {
     Devices,
     /// Print the built-in opcode reference as Markdown, for the docs site.
     Docs,
+    /// List editable std presets, or print one with its source and helpers.
+    Presets {
+        name: Option<String>,
+        #[arg(long, value_parser = ["instrument", "fx"])]
+        kind: Option<String>,
+    },
+    /// Export original synthesized starter recordings and their source into a new directory.
+    Samples {
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Render a piece to a WAV file.
     Render(RenderArgs),
     /// Show what each instrument runs every sample and what runs once per block.
@@ -134,6 +144,8 @@ fn main() -> ExitCode {
             print!("{}", engine_commands::opcode_reference());
             Ok(())
         }
+        Command::Presets { name, kind } => library::presets(name.as_deref(), kind.as_deref()),
+        Command::Samples { out } => library::samples(&out),
         Command::Render(args) => run_render(args),
         Command::Explain { file, control_step } => run_explain(&file, control_step),
         Command::Lsp => {

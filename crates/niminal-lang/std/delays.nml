@@ -14,6 +14,6 @@ fn echoes(x, count: const int = 4, spacing: const sec = 120ms, fade: 0..1 = 0.6)
 
 /// A feedback delay whose echoes are darker each time round: `time` between repeats, `feedback` kept
 /// of each, and `damp` the cutoff of the low-pass in the loop. `max` is the longest time, in seconds.
-fn tape(x, time: sec, feedback: 0..1 = 0.5, damp: hz = 4khz, max: const sec = 2sec) {
+fn dark_echo(x, time: sec, feedback: 0..1 = 0.5, damp: hz = 4khz, max: const sec = 2sec) {
   x + x.delay(time, feedback: feedback, damp: damp, max: max)
 }

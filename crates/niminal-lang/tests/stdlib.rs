@@ -35,11 +35,8 @@ fn finite(x: &[f32]) -> bool {
 }
 
 /// The level of a sine at `hz` after `filter`, once settled.
-fn gain(module: &str, filter: &str, hz: u32) -> f32 {
-    let out = render(
-        &format!("use {module}\ninstr a() {{ osc(sine, {hz}hz).{filter} }}"),
-        400,
-    );
+fn gain(filter: &str, hz: u32) -> f32 {
+    let out = render(&format!("instr a() {{ osc(sine, {hz}hz).{filter} }}"), 400);
     assert!(finite(&out), "{filter} at {hz}");
     rms(&out[out.len() / 2..]) / (0.5f32).sqrt()
 }
@@ -47,8 +44,8 @@ fn gain(module: &str, filter: &str, hz: u32) -> f32 {
 #[test]
 fn the_ladder_lets_low_through_and_stops_high() {
     let (low, high) = (
-        gain("std/filters", "ladder(1khz, res: 0)", 100),
-        gain("std/filters", "ladder(1khz, res: 0)", 8000),
+        gain("ladder(1khz, res: 0)", 100),
+        gain("ladder(1khz, res: 0)", 8000),
     );
     assert!(low > 0.9, "{low}");
     assert!(high < 0.02, "{high}");
@@ -59,9 +56,7 @@ fn raising_the_ladders_resonance_lifts_the_cutoff() {
     // a quiet signal, so the stages' `tanh` is nearly linear
     let level = |res: &str| {
         let out = render(
-            &format!(
-                "use std/filters\ninstr a() {{ (osc(sine, 1khz) * 0.02).ladder(1khz, res: {res}) }}"
-            ),
+            &format!("instr a() {{ (osc(sine, 1khz) * 0.02).ladder(1khz, res: {res}) }}"),
             400,
         );
         rms(&out[out.len() / 2..]) / (0.02 * 0.5f32.sqrt())
@@ -72,20 +67,17 @@ fn raising_the_ladders_resonance_lifts_the_cutoff() {
 
 #[test]
 fn the_ladder_stays_bounded_when_it_sings() {
-    let out = render(
-        "use std/filters\ninstr a() { noise().ladder(2khz, res: 1) }",
-        600,
-    );
+    let out = render("instr a() { noise().ladder(2khz, res: 1) }", 600);
     assert!(finite(&out));
     assert!(out.iter().any(|v| v.abs() > 0.01));
 }
 
 #[test]
 fn biquads_pass_and_stop_the_right_bands() {
-    let lp = |hz| gain("std/filters", "biquad_lp(1khz)", hz);
-    let hp = |hz| gain("std/filters", "biquad_hp(1khz)", hz);
-    let bp = |hz| gain("std/filters", "biquad_bp(1khz, q: 4)", hz);
-    let notch = |hz| gain("std/filters", "biquad_notch(1khz, q: 4)", hz);
+    let lp = |hz| gain("biquad_lp(1khz)", hz);
+    let hp = |hz| gain("biquad_hp(1khz)", hz);
+    let bp = |hz| gain("biquad_bp(1khz, q: 4)", hz);
+    let notch = |hz| gain("biquad_notch(1khz, q: 4)", hz);
     assert!(
         lp(100) > 0.95 && lp(10_000) < 0.05,
         "{} {}",
@@ -104,14 +96,14 @@ fn biquads_pass_and_stop_the_right_bands() {
 
 #[test]
 fn one_pole_filters_split_a_signal() {
-    let lp = gain("std/filters", "onepole_lp(1khz)", 100);
-    let hp = gain("std/filters", "onepole_hp(1khz)", 100);
+    let lp = gain("onepole_lp(1khz)", 100);
+    let hp = gain("onepole_hp(1khz)", 100);
     assert!(lp > 0.9 && hp < 0.2, "{lp} {hp}");
 }
 
 #[test]
 fn every_library_module_compiles() {
-    for module in ["filters", "physical", "delays", "spectral"] {
+    for module in ["physical", "delays", "spectral", "samples"] {
         let expanded = expand(
             &format!("use std/{module}\ninstr a() {{ osc(sine, 1hz) }}"),
             Path::new("."),
@@ -269,9 +261,9 @@ fn taps_are_delays_and_echoes_is_a_train_of_them() {
 }
 
 #[test]
-fn a_tape_delay_repeats_and_each_repeat_is_quieter_and_darker() {
+fn a_dark_echo_repeats_and_each_repeat_is_quieter_and_darker() {
     let out = render(
-        "use std/delays\ninstr a() { (impulse(0.2hz) * 0.5).tape(100ms, feedback: 0.6, damp: 2khz) }",
+        "use std/delays\ninstr a() { (impulse(0.2hz) * 0.5).dark_echo(100ms, feedback: 0.6, damp: 2khz) }",
         400,
     );
     let peak = |at: usize| {
@@ -396,16 +388,20 @@ fn the_instrument_library_compiles_and_every_instrument_sounds() {
     assert_eq!(
         names,
         [
-            "kick",
-            "snare",
-            "hat",
             "bass",
             "pluck",
             "pad",
             "lead",
             "bell",
             "bowed_string",
-            "reed_wind"
+            "reed_wind",
+            "electric_piano",
+            "organ",
+            "pwm",
+            "fm_keys",
+            "struck_string",
+            "metal_bar",
+            "morph_pad"
         ]
     );
     for instrument in &program.instruments {
@@ -484,7 +480,7 @@ fn the_drum_library_compiles_and_every_preset_sounds() {
 #[test]
 fn no_drum_preset_is_named_like_a_choice_of_the_drum_voice() {
     let text = include_str!("../std/drums.nml");
-    let helpers = &niminal_lang::presets::find("kick_808").unwrap().helpers;
+    let helpers = &niminal_lang::presets::find("kick_deep").unwrap().helpers;
     let voice = &helpers[helpers.find("fn drum(").unwrap()..];
     let signature = &voice[..voice.find(") {").unwrap()];
     let choices: Vec<&str> = signature
@@ -1150,7 +1146,7 @@ fn the_preset_catalog_is_complete() {
             .iter()
             .filter(|p| p.kind == PresetKind::Instrument)
             .count(),
-        31
+        35
     );
     assert!(
         presets
@@ -1172,11 +1168,11 @@ fn the_preset_catalog_is_complete() {
     }
     assert_eq!(find("kick_808").unwrap().folder, "drums/kicks");
     assert!(
-        find("kick_808")
+        find("kick_deep")
             .unwrap()
             .helpers
             .starts_with("/// A drum voice")
-            || find("kick_808").unwrap().helpers.contains("fn drum(")
+            || find("kick_deep").unwrap().helpers.contains("fn drum(")
     );
     assert!(find("echo").unwrap().helpers.is_empty());
     assert_eq!(find("echo").unwrap().name, "Echo");

@@ -258,6 +258,29 @@ pub fn preset_items(line_before: &str) -> Option<Vec<Value>> {
         return None;
     }
     let already: Vec<&str> = taken.split(',').map(str::trim).collect();
+    if shelf.trim() == "std/samples" {
+        let source = niminal_lang::embedded_module("std/samples")?;
+        let symbols = niminal_lang::symbols(source).ok()?;
+        return Some(
+            symbols
+                .iter()
+                .filter(|s| !s.name.starts_with('_') && !already.contains(&s.name.as_str()))
+                .map(|s| {
+                    let detail = if s.kind == SymbolKind::Kit {
+                        "Bundled drum kit"
+                    } else {
+                        "Bundled recording · root c3"
+                    };
+                    item(
+                        &s.name,
+                        symbol_kind(s.kind),
+                        detail,
+                        "Original recordings included with niminal. No files or downloads needed.",
+                    )
+                })
+                .collect(),
+        );
+    }
     Some(
         niminal_lang::presets::of_shelf(shelf.trim())
             .filter(|p| !already.contains(&p.id.as_str()))

@@ -1,0 +1,22 @@
+// Original starter recording source. Rebuild with the audition example's --starter option.
+
+/// A struck string: a short noise excitation circulates in a pitch-compensated comb.
+/// Ring controls feedback and tone controls damping. Harder notes excite more high frequencies.
+instr struck_string(
+  freq: hz = c4,
+  ring: 0.8..0.9995 = 0.992,
+  tone: 0..1 = 0.5,
+  release: 20ms..2sec = 200ms,
+  gain: db = 0db
+) {
+  tuned = freq.max(20hz).min(4khz)
+  damp = 0.85 - tone.max(0).min(1) * 0.75
+  hit = (1 * gain).max(0).min(1)
+  burst = 1sec / tuned.num
+  excitation = noise(seed: 67).lpf(cutoff: 800hz + hit * 9khz) * env[1 burst 0]
+  voice = excitation.comb(time: 1sec / tuned.num - 1sec * damp / (1 - damp) / sample_rate.num,
+    feedback: ring, damp: damp, max: 60ms)
+  voice * env[1 | release 0] * 0.7 * gain
+}
+
+struck_string(freq: c3) for 1sec

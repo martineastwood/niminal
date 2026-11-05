@@ -8,14 +8,13 @@ description: Spectral morphing, peak-locked pitch shifting, independent freezing
 ## Pitch, phase locking and attacks
 
 ```nml
-use std/spectral
 instr colour(freq: hz, shift: -48..48 = 7, formant: -48..48 = 0) {
   source = osc(saw, freq) * env[0 10ms 1 | 100ms 0] * 0.1
-  out = spectral_pitch(source, shift: shift, formant: formant, preserve: 1)
+  out = spectral_warp(source, shift: shift, formant: formant, preserve: 1)
 }
 ```
 
-`spectral_pitch` wraps the native `spectral_warp` opcode, which takes the same controls. It identifies spectral peaks, assigns surrounding bins to their nearest peak, and translates each region as a group. Overlapping regions add together, rather than overwriting or skipping narrow partials during downward shifts. Peak phases accumulate the measured instantaneous frequency; surrounding bins retain their phase relative to the peak. Regions move by integer bin offsets, while phase accumulation provides continuous pitch between bin centres. Peak tracks match the nearest previous peak within four bins; rapidly moving or newly appearing peaks can restart.
+`spectral_warp` is a native opcode and needs no import. It identifies spectral peaks, assigns surrounding bins to their nearest peak, and translates each region as a group. Overlapping regions add together, rather than overwriting or skipping narrow partials during downward shifts. Peak phases accumulate the measured instantaneous frequency; surrounding bins retain their phase relative to the peak. Regions move by integer bin offsets, while phase accumulation provides continuous pitch between bin centres. Peak tracks match the nearest previous peak within four bins; rapidly moving or newly appearing peaks can restart.
 
 | Control | Default | Meaning |
 | --- | --- | --- |
@@ -132,7 +131,7 @@ Start the freeze after a sound has developed: freezing an empty frame holds sile
 
 `spectral_shift(x, shift: 100hz, lowest: 500hz)` adds a fixed Hz offset to spectral peak regions whose measured peak frequency is at least `lowest`. The default shift and cutoff are both 0 Hz. Negative shifts move regions downward. Whole peak regions move together, with phase locking and attack resets as in `spectral_warp`; bins outside the output spectrum are discarded. Frequencies below the cutoff retain their tuning.
 
-Adding Hz changes harmonic spacing relative to the fundamental, producing inharmonic and bell-like textures. This differs from `spectral_pitch`, which multiplies frequencies to transpose in semitones. Moving regions across the cutoff can change their shift abruptly; use a steady cutoff for predictable results.
+Adding Hz changes harmonic spacing relative to the fundamental, producing inharmonic and bell-like textures. This differs from `spectral_warp`, which multiplies frequencies to transpose in semitones. Moving regions across the cutoff can change their shift abruptly; use a steady cutoff for predictable results.
 
 ## Track and resynthesize partials
 

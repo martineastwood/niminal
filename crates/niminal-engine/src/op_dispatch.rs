@@ -324,6 +324,7 @@ op_enum! {
         BufferReadBank(ops::BufferReadBank),
         ArrayRead(ops::ArrayRead),
         Lag(ops::Lag),
+        OnePole(ops::OnePole),
         Comb(ops::Comb),
         Allpass(ops::Allpass),
         Eq(ops::Eq),

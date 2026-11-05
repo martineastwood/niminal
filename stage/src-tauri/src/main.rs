@@ -146,6 +146,7 @@ async fn perform(
     }
     let source = match (action.as_str(), target.as_deref(), change.as_deref()) {
         ("hush", _, _) => "hush".to_string(),
+        ("new", _, _) => "new".to_string(),
         ("unsolo", None, _) => "unsolo".to_string(),
         ("edit", Some(target), Some(change)) => format!("{target}.{change}"),
         ("edit", _, _) => {
@@ -157,8 +158,8 @@ async fn perform(
         }
     };
     // Buttons land when the same words typed in the code would, unless the land box says otherwise.
-    // Only hush is immediate, since it is for stopping things now.
-    let quantize = if action == "hush" { quantize.or_else(|| Some("now".into())) } else { quantize };
+    // Only hush and new are immediate, since they are for stopping things now.
+    let quantize = if action == "hush" || action == "new" { quantize.or_else(|| Some("now".into())) } else { quantize };
     eval(state, source, quantize, None, None).await
 }
 
@@ -306,6 +307,7 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     };
     let mut file = SubmenuBuilder::new(app, "File")
         .item(&item("new", "New Tab (⌘T)", None)?)
+        .item(&item("new-session", "New Session (⇧⌘N)", None)?)
         .item(&item("open", "Open…", Some("CmdOrCtrl+O"))?)
         .item(&item("open-project", "Open Project Folder…", Some("CmdOrCtrl+Shift+O"))?)
         .separator()

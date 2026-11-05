@@ -7,6 +7,7 @@ node_modules/
 *.log
 score/
 !examples/**/*.wav
+!crates/niminal-lang/assets/starter/*.wav
 TODO.md
 goals.md
 design/

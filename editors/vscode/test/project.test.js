@@ -20,7 +20,7 @@ test("usedModules reads names and ignores aliases", () => {
 
 test("main.nml leads and its modules follow, once each", () => {
   const dir = folder({
-    "main.nml": "use drums\nuse std/filters\nuse bass\n",
+    "main.nml": "use drums\nuse std/physical\nuse bass\n",
     "drums.nml": "use bass\n",
     "bass.nml": "",
     "lib/pads.nml": "",

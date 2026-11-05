@@ -24,6 +24,8 @@ cargo install --path crates/niminal-cli
 | `niminal explain FILE` | Compile a `.nml` file and list, for each instrument and node chain, the ops that run every sample and the ones that run once per block (see [control scopes](/reference/language/units-and-rates/)). |
 | `niminal lsp` | The language server on stdio, for editors: see [Editor and LSP](/reference/editor/). |
 | `niminal devices` | List the sound cards with the ids `--out-device` and `--in-device` take. |
+| `niminal presets [NAME]` | List the editable sound catalog, or print one preset with its helpers. Filter with `--kind instrument` or `--kind fx`. |
+| `niminal samples --out DIR` | Export the original starter sample pack, kit, source patches and license into a new directory. |
 | `niminal docs` | Emit the built-in opcode reference as Markdown (used when building this site). |
 
 ## Play

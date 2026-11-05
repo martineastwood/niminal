@@ -1,0 +1,24 @@
+// Original synthesized starter recordings. All roots are c3.
+kick_808 = sample("kick_808.wav").root(c3)
+snare_tri = sample("snare_tri.wav").root(c3)
+clap = sample("clap.wav").root(c3)
+hat_closed = sample("hat_closed.wav").root(c3).choke(hats)
+hat_open = sample("hat_open.wav").root(c3).choke(hats)
+tom = sample("tom.wav").root(c3)
+cowbell = sample("cowbell.wav").root(c3)
+crash = sample("crash.wav").root(c3)
+electric_piano = sample("electric_piano.wav").root(c3)
+metal_bar = sample("metal_bar.wav").root(c3)
+struck_string = sample("struck_string.wav").root(c3)
+fm_keys = sample("fm_keys.wav").root(c3)
+
+drums = kit {
+  kick: kick_808
+  snare: snare_tri
+  clap: clap
+  hat: hat_closed
+  open: hat_open
+  tom: tom
+  cowbell: cowbell
+  crash: crash
+}

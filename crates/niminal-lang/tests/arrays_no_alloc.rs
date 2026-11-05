@@ -191,7 +191,7 @@ fn wsola_sample_alignment_does_not_allocate_while_processing() {
 #[test]
 fn phase_vocoder_with_dense_overlap_does_not_allocate_while_processing() {
     let source = niminal_lang::expand(
-        "use std/spectral\ninstr a() { spectral_pitch(osc(saw, 220hz), shift: 7, size: 512, overlap: 8) }",
+        "use std/spectral\ninstr a() { spectral_warp(osc(saw, 220hz), shift: 7, size: 512, overlap: 8) }",
         std::path::Path::new("."),
     ).unwrap();
     let program = niminal_lang::compile(&source.text).unwrap();

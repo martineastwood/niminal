@@ -533,10 +533,14 @@ fn a_clip_node_replaces_an_instrument_of_its_name_from_another_file() {
 #[test]
 fn a_std_use_line_is_joined_in_when_code_is_sent_from_a_folder() {
     let mut s = Offline::new(SR, Layout::Stereo).without_limiter();
-    let sent = "use std/spectral\ninstr shifted(freq: hz = a3) { spectral_pitch(osc(saw, freq), shift: -5) }\nshifted() for 1beat\n";
+    let sent = "use std/spectral\ninstr shifted(freq: hz = a3) { robot(osc(saw, freq)) }\nshifted() for 1beat\n";
     let dir = std::env::temp_dir();
-    s.eval_parsed(niminal_sequencer::ParsedEval::from_dir(sent, &dir, Some("now")))
-        .expect("the `use` line is read");
+    s.eval_parsed(niminal_sequencer::ParsedEval::from_dir(
+        sent,
+        &dir,
+        Some("now"),
+    ))
+    .expect("the `use` line is read");
     assert!(
         s.eval(sent, Some("now")).is_err(),
         "without a folder the `use` line is not expanded"

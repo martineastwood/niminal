@@ -2,10 +2,10 @@ acid.nml: 2x406403
 array_bank.nml: 1x196427
 break_variations.nml: 2x354462
 breakbeat.nml: 2x354462
-clip_send.nml: 2x680578
+clip_send.nml: 2x709251
 composition.nml: 1x105973
 control_rate.nml: 1x115440
-drum_voice.nml: 2x381627
+drum_voice.nml: 2x381652
 drums.nml: 2x488426
 envelope_transfer.nml: 2x440457
 functions.nml: 2x293633
@@ -27,6 +27,7 @@ multitap.nml: 2x460688
 oscillator_controls.nml: 2x374423
 partial_morph.nml: 2x481248
 physical_models.nml: 1x488452
+preset_keys.nml: 2x424812
 room.nml: 1x222063
 saw_lead.nml: 1x158399
 score_prog.nml: 1x384240

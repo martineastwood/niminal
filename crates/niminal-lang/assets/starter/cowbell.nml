@@ -1,0 +1,23 @@
+// Original starter recording source. Rebuild with the audition example's --starter option.
+
+/// A struck cowbell with two body modes and a short, inharmonic metallic clatter.
+/// Metal brings out the higher modes; tone softens the strike. Notes transpose the whole bell.
+instr cowbell(
+  freq: hz = c3,
+  decay: 20ms..2sec = 260ms,
+  tone: 500hz..12khz = 4khz,
+  metal: 0..1 = 0.6,
+  gain: db = 0db
+) {
+  hit = (1 * gain).max(0).min(1)
+  tuning = (freq / c3).max(0).min(16)
+  length = decay.max(20ms).min(2sec)
+  clang = metal.max(0).min(1)
+  bend = 1 + env[0.008 12ms.exp 0]
+  body = osc(sine, 540hz * tuning * bend) * perc(attack: 0.3ms, decay: length) + osc(sine, 800hz * tuning * bend) * perc(attack: 0.3ms, decay: length * 0.75) * 0.8
+  upper = osc(sine, 1123hz * tuning) * perc(attack: 0.2ms, decay: length * 0.45) + osc(sine, 1645hz * tuning) * perc(attack: 0.2ms, decay: length * 0.3) * 0.7 + osc(sine, 2471hz * tuning) * perc(attack: 0.1ms, decay: length * 0.18) * 0.4
+  strike = noise(seed: 31).bpf(cutoff: 2400hz, res: 0.2) * perc(attack: 0.1ms, decay: 25ms) * (0.15 + hit * 0.15)
+  (body + upper * clang * (0.5 + hit * 0.5) + strike).lpf(cutoff: tone * (0.5 + hit * 0.5)) * 0.27 * gain
+}
+
+cowbell(freq: c3) for 1sec

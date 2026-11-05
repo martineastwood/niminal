@@ -1,7 +1,6 @@
 // A held vocal-like harmony changes colour; a rising phrase compares envelope preservation.
 // Evaluate the whole file; + times restart the piece wherever the live clock has reached.
 // niminal render examples/spectral_formants.nml --out /tmp/spectral_formants.wav
-use std/spectral
 
 config { channels: stereo }
 tempo 100bpm
@@ -15,7 +14,7 @@ instr colour(freq: hz = a3, shift: -48..48 = 0, preserve: 0..1 = 0,
   voice = excitation.bpf(cutoff: 650hz, res: 0.35) + excitation.bpf(cutoff: 1500hz, res: 0.3) * 0.6
   movement = env[-3 2beats 3 2beats -3]
   source = voice * env[0 90ms 1 | 250ms 0]
-  shifted = spectral_pitch(source, shift: shift, preserve: preserve, formant: formant + movement * sweep, detail: 32, overlap: 8)
+  shifted = spectral_warp(source, shift: shift, preserve: preserve, formant: formant + movement * sweep, detail: 32, overlap: 8)
   out = shifted.gain(amp).pan(angle: az)
 }
 

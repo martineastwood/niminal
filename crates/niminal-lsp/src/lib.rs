@@ -824,6 +824,18 @@ mod tests {
     }
 
     #[test]
+    fn bundled_sample_imports_offer_public_names_without_private_kit_members() {
+        let mut server = Server::new();
+        let source = "use std/samples.{drums, ";
+        open(&mut server, source);
+        let completion = request(&mut server, 1, "textDocument/completion", at(0, source.len() as u32));
+        let labels: Vec<_> = completion["items"].as_array().unwrap().iter()
+            .map(|item| item["label"].as_str().unwrap()).collect();
+        assert!(labels.contains(&"electric_piano") && labels.contains(&"fm_keys"));
+        assert!(!labels.contains(&"drums") && !labels.iter().any(|name| name.starts_with('_')));
+    }
+
+    #[test]
     fn a_preset_name_typed_anywhere_offers_to_use_it_or_copy_it() {
         let mut server = Server::new();
         open(

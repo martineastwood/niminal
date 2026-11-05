@@ -246,7 +246,23 @@ pub fn read_wav_info(path: &Path) -> Option<WavInfo> {
 
 fn read_wav(path: &Path) -> Result<Vec<Table>, String> {
     let fail = |e: &dyn std::fmt::Display| format!("can't read {}: {e}", path.display());
-    let mut reader = hound::WavReader::open(path).map_err(|e| fail(&e))?;
+    let reader = hound::WavReader::open(path).map_err(|e| fail(&e))?;
+    decode_wav(reader, &path.display().to_string())
+}
+
+/// Decode an embedded WAV without extracting it to the filesystem.
+pub fn read_wav_bytes(bytes: &[u8]) -> Result<Vec<Table>, String> {
+    let reader = hound::WavReader::new(std::io::Cursor::new(bytes))
+        .map_err(|e| format!("can't read embedded WAV: {e}"))?;
+    decode_wav(reader, "embedded WAV")
+}
+
+fn decode_wav(
+    reader: hound::WavReader<impl std::io::Read>,
+    label: &str,
+) -> Result<Vec<Table>, String> {
+    let fail = |e: &dyn std::fmt::Display| format!("can't read {label}: {e}");
+    let mut reader = reader;
     let spec = reader.spec();
     let channels = usize::from(spec.channels);
     let interleaved: Vec<f32> = match spec.sample_format {
@@ -264,7 +280,7 @@ fn read_wav(path: &Path) -> Result<Vec<Table>, String> {
         }
     };
     if channels == 0 || interleaved.is_empty() {
-        return Err(format!("{} has no audio in it", path.display()));
+        return Err(format!("{label} has no audio in it"));
     }
     let mut buffers = vec![Vec::with_capacity(interleaved.len() / channels); channels];
     for frame in interleaved.chunks_exact(channels) {
@@ -282,6 +298,28 @@ fn read_wav(path: &Path) -> Result<Vec<Table>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_wav_preserves_channels_values_and_rate() {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 44_100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::new(&mut bytes, spec).unwrap();
+        for value in [0_i16, 16384, -16384, 8192] {
+            writer.write_sample(value).unwrap();
+        }
+        writer.finalize().unwrap();
+        let channels = read_wav_bytes(bytes.get_ref()).unwrap();
+        assert_eq!(channels.len(), 2);
+        assert_eq!(channels[0].sample_rate(), Some(44_100.0));
+        assert_eq!(channels[0].data(), &[0.0, -0.5]);
+        assert_eq!(channels[1].data(), &[0.5, 0.25]);
+        assert!(read_wav_bytes(b"not a WAV").is_err());
+    }
 
     #[test]
     fn a_scala_file_is_degrees_in_semitones() {

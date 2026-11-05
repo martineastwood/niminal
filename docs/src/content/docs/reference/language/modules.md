@@ -18,7 +18,7 @@ out = sig.av::shimmer(size: 0.9)
 
 ## Where modules are found
 
-`use std/filters` and the other `std/` modules come with niminal and are read from the program itself: see the [standard library](/reference/language/standard-library/).
+`use std/physical` and the other `std/` modules come with niminal and are read from the program itself: see the [standard library](/reference/language/standard-library/).
 
 In order: next to the file that uses it, a `lib` folder under the project folder, then the installed packages. `use score/verse` looks for `score/verse.nml`.
 

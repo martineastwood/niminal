@@ -1,0 +1,30 @@
+// Original starter recording source. Rebuild with the audition example's --starter option.
+
+/// A weighty sine kick with a short pitch drop and a rounded amplitude shoulder.
+/// A quiet octave component keeps the body audible on smaller speakers; drive adds warmth and click a beater.
+instr kick_808(
+  freq: hz = c3,
+  decay: 20ms..3sec = 450ms,
+  punch: 0..48 = 30,
+  click: 0..0.5 = 0.08,
+  drive: 0..1 = 0.25,
+  gain: db = 0db
+) {
+  hit = (1 * gain).max(0).min(1)
+  length = decay.max(20ms).min(3sec)
+  push = drive.max(0).min(1)
+  tuning = 52hz * (freq / c3).max(0).min(16)
+  drop = env[1 25ms.exp 0] * punch.max(0).min(48) * (0.8 + hit * 0.2)
+  level = env[0 0.5ms 1 (length * 0.15).exp 0.85 (length * 0.85).exp 0]
+  voice = oversample(2) {
+    pitch_drop = tuning * exp(drop * 0.057762265)
+    fundamental = osc(sine, pitch_drop)
+    body_harmonic = osc(sine, pitch_drop * 2) * (0.18 + push * 0.35)
+    thump = (fundamental + body_harmonic) * level
+    beater = noise(seed: 79).hpf(cutoff: 2khz) * perc(attack: 0.1ms, decay: 5ms) * click.max(0).min(0.5)
+    (thump * (1 + push * (1 + hit)) + beater).tanh
+  }
+  voice * 0.75 * gain
+}
+
+kick_808(freq: c3) for 1sec

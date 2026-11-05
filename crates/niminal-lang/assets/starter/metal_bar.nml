@@ -1,0 +1,19 @@
+// Original starter recording source. Rebuild with the audition example's --starter option.
+
+/// A struck free metal bar with inharmonic modes. Tone balances the upper modes;
+/// hard notes add a brighter strike. Decay is the time for the resonances to fall by 60db.
+instr metal_bar(
+  freq: init hz = c4,
+  tone: 0..1 = 0.5,
+  decay: 50ms..5sec = 900ms,
+  gain: db = 0db
+) {
+  hit = (1 * gain).max(0).min(1)
+  strike = noise(seed: 71) * perc(attack: 0.1ms, decay: 2ms)
+  // modal has unity gain for sustained input; compensate its brief excitation for decay and sample rate.
+  excitation = strike * decay.num.max(0.05).min(5) * sample_rate.num / 160
+  modes = excitation.modal(freq, [1, 2.756, 5.404, 8.933, 13.34, 18.64], decay: decay)
+  modes.lpf(cutoff: 1200hz + tone * hit * 12khz) * env[1 | 150ms 0] * 0.25 * gain
+}
+
+metal_bar(freq: c3) for 1sec

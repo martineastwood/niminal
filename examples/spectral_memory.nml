@@ -1,7 +1,6 @@
 // One bowed gesture becomes a held note, a forward/reverse scan, then a looping minor chord.
 // Evaluate the whole file: one voice owns one capture for the entire performance.
 // niminal render examples/spectral_memory.nml --out /tmp/spectral_memory.wav
-use std/spectral
 
 config { channels: stereo }
 tempo 100bpm
@@ -26,8 +25,8 @@ instr remembered() {
   // position: 0 is oldest, 1 newest. A held position keeps oscillating at its captured pitch.
   captured = spectral_memory(source, record: recording, position: position, frames: 256, size: 2048, overlap: 8)
   bloom = env[0 11beats 0 1beat 1]
-  third = spectral_pitch(captured, shift: 3, overlap: 8)
-  fifth = spectral_pitch(captured, shift: 7, overlap: 8)
+  third = spectral_warp(captured, shift: 3, overlap: 8)
+  fifth = spectral_warp(captured, shift: 7, overlap: 8)
   out = (captured.pan(angle: 0deg) * 0.8
     + third.pan(angle: -30deg) * bloom * 0.38
     + fifth.pan(angle: 30deg) * bloom * 0.38) * env[0 30ms 1 | 350ms 0]

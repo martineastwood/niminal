@@ -5,6 +5,10 @@ description: WAV samples, kits, slices, SFZ multisamples, and playing them from 
 
 **Compiled by niminal.** Samples and kits are loaded and played by the server.
 
+## Starter recordings
+
+`niminal samples --out samples/starter` exports twelve original synthesized recordings, source patches and a ready-made kit. See the [standard library](/reference/language/standard-library/#original-starter-recordings). All recordings are rooted at `c3`; no additional download is needed.
+
 ## Samples and kits
 
 | Declaration | What it is |

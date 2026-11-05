@@ -1,0 +1,53 @@
+// Four keyboard colours over one unchanged drum groove: electric piano, FM mallet, FM bell and FM bass.
+// Render: niminal render examples/preset_keys.nml --out preset_keys.wav
+// Softer notes change brightness as well as level. Try tine/bark on the piano and ratio/index/contour on FM.
+use std/instruments.{electric_piano, fm_keys}
+use std/drums.{kick_808, snare_tri, hat_closed}
+config { channels: stereo }
+tempo 110bpm
+
+drums = kit { kick: kick_808, snare: snare_tri, hat: hat_closed }
+clip beat {
+  instrument: drums
+  notes: grid {
+    kick:  x... .... x... ....
+    snare: .... x... .... x...
+    hat:   x.x. x.x. x.x. x.x.
+  }
+  gain: -9db
+}
+
+clip piano {
+  instrument: electric_piano(tone: 0.4, tine: 0.2, bark: 0.4)
+  notes: [c3 e4 g4 b4 e3 g4 b4 d5]
+  gain: [-6db -12db -6db -3db -6db -12db -6db 0db]
+  length: 1bar
+}
+clip mallet {
+  instrument: fm_keys(ratio: 1.5, index: 1.6, contour: 0.25, decay: 450ms)
+  notes: [c4 e4 g4 b4 d5 b4 g4 e4]
+  gain: -6db
+  length: 1bar
+}
+clip bells {
+  instrument: fm_keys(ratio: 3.5, index: 4, contour: 0.8, decay: 3sec)
+  notes: [c4 ~ g4 ~ e4 ~ b4 ~]
+  gain: -9db
+  length: 1bar
+}
+clip bass {
+  instrument: fm_keys(ratio: 1, index: 3, contour: 0.4, decay: 700ms)
+  notes: [c2 ~ c3 g2 e2 ~ g2 b2]
+  gain: -6db
+  length: 1bar
+}
+
+beat.start
+piano.start
+at +1bar piano.stop
+at +1bar mallet.start
+at +2bars mallet.stop
+at +2bars bells.start
+at +3bars bells.stop
+at +3bars bass.start
+at +4bars hush

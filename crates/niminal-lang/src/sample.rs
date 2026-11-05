@@ -98,6 +98,9 @@ impl Samples {
 
     /// Load an audio or numeric file as one table per channel.
     pub fn load(&self, path: &str) -> Result<Vec<Arc<Table>>, String> {
+        if let Some(name) = path.strip_prefix(crate::recordings::PREFIX) {
+            return crate::recordings::load(name);
+        }
         self.load_file(&self.resolve(path))
     }
 

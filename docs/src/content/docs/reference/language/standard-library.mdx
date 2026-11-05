@@ -1,13 +1,13 @@
 ---
 title: Standard library
-description: One-pole filters, physical models, delays, spectral effects, and ready-made instruments and effects, written in niminal and shipped with it.
+description: Editable instrument and effect presets, DSP recipes, and an original starter sample pack.
 ---
 
 import Example from '../../../../components/Example.astro';
 
 **Compiled by niminal.** These modules are ordinary source, compiled by the engine.
 
-The modules under `std/` come with niminal. They are ordinary niminal source, read from the program itself, so `use std/filters` works anywhere and nothing needs installing. They are also the best examples of what [functions](/reference/language/functions/) can do, so read them: they are short.
+The modules under `std/` come with niminal. They are ordinary niminal source, read from the program itself, so `use std/physical` works anywhere and nothing needs installing. They are also the best examples of what [functions](/reference/language/functions/) can do, so read them: they are short.
 
 ```nml
 instr pad(freq: hz) {
@@ -16,7 +16,7 @@ instr pad(freq: hz) {
 }
 ```
 
-A function from a module is called like any other, as a method or with the signal first. Parameters marked `init` are read when a note starts. The ratios and other tables the functions use are public too (`drum_modes`, `fdn_lengths`, and so on), so you can use them or write your own.
+A function from a module is called like any other, as a method or with the signal first. Parameters marked `init` are read when a note starts. The ratios and other tables the functions use are public too (`drum_modes`, `free_bar_modes`, and `bell_modes`), so you can use them or write your own.
 
 ## Building blocks that are opcodes
 
@@ -24,18 +24,14 @@ The filters, resonators and reverbs everything else is made of run natively and 
 
 | Opcode | What it is |
 | --- | --- |
+| `onepole_lp(x, cutoff)`, `onepole_hp(x, cutoff)` | Complementary one-pole filters, 6db per octave. Cutoff is clamped to 0..Nyquist. No import. |
 | `ladder(x, cutoff, res: 0.3, drive: 1)` | A four-pole low-pass with a `tanh` in each stage, like a transistor ladder. `res` near 1 rings and then sings at the cutoff. Loud input, or a higher `drive`, saturates the stages, as it should. |
 | `biquad_lp`, `biquad_hp`, `biquad_bp`, `biquad_notch`, `biquad_allpass` `(x, cutoff, q)` | Two-pole sections. `q` is the height of the peak at the cutoff; 0.707 is flat. |
 | `biquad(x, b0, b1, b2, a1, a2)` | One biquad section from its coefficients, for building your own. |
 | `modal(x, freq, ratios, decay: 300ms)` | A resonator for each of `ratios` times `freq`, in parallel: bars, bells and drums. |
 | `delay(x, time, feedback, damp)` | A delay line; `damp` darkens each echo, like a tape delay. |
 | `fdn_reverb(x, time, damp, size)` | A feedback delay network of eight lines. |
-
-## std/filters
-
-| Function | What it is |
-| --- | --- |
-| `onepole_lp(x, cutoff)`, `onepole_hp(x, cutoff)` | One pole: 6db an octave. |
+| `spectral_warp(x, shift: 0, size: 2048, overlap: 4, formant: 0, preserve: 0, transients: 1, detail: 32)` | Peak-locked pitch shifting with independent spectral-envelope control and local attack resets. Shift and formant are semitones (−48 to +48). |
 
 ## std/physical
 
@@ -90,7 +86,7 @@ For echoes at times of your own, add `delay`s: `x + x.delay(120ms) * 0.6 + x.del
 | Function | What it is |
 | --- | --- |
 | `echoes(x, count: 4, spacing: 120ms, fade: 0.6)` | `x` followed by `count` echoes, `spacing` apart, each `fade` times the level of the one before. |
-| `tape(x, time, feedback: 0.5, damp: 4khz, max: 2sec)` | `x` plus a feedback delay with a low-pass in the loop, so each repeat is darker. |
+| `dark_echo(x, time, feedback: 0.5, damp: 4khz, max: 2sec)` | `x` plus a feedback delay with a low-pass in the loop, so each repeat is darker. |
 
 ## std/spectral
 
@@ -106,9 +102,8 @@ These effects analyze overlapping spectral frames. Each is `size` samples late (
 | `envelope_transfer(carrier, donor, amount: 1, detail: 32, size: 1024)` | Applies the donor's broad spectral shape to the carrier, retaining the carrier's phase and fine structure. |
 | `phase_frequency(phase, size: 2048, hop: 512)` | Stateful phase unwrapping: real-FFT phases in radians to instantaneous frequencies in cycles/sample. Call once per frame with the matching FFT size and hop. |
 | `phase_accumulate(frequency, size: 2048, hop: 512)` | Stateful integration of cycles/sample into wrapped synthesis phases in radians. Call once per frame with the matching size and hop. |
-| `spectral_pitch(x, shift: 0, size: 2048, overlap: 4, formant: 0, preserve: 0, transients: 1, detail: 32)` | Peak-locked pitch shifting with independent spectral-envelope control and local attack resets. Shift and formant are semitones (−48 to +48). |
 
-`spectral_pitch` delegates to the native `spectral_warp` opcode. It moves complete peak regions, sums overlapping regions and preserves relative phases around each peak. `transients` controls local phase resets on spectral growth (0 off, 1 full); FFT windowing can still smear attacks. `preserve: 1` retains the original broad spectral envelope as pitch changes, while `formant` shifts that envelope independently. Envelope correction is limited to 32× gain per bin, so leave headroom. Stereo channels are independent. Neutral settings reconstruct the source with the declared latency.
+`spectral_warp` is a native opcode and needs no import. It moves complete peak regions, sums overlapping regions and preserves relative phases around each peak. `transients` controls local phase resets on spectral growth (0 off, 1 full); FFT windowing can still smear attacks. `preserve: 1` retains the original broad spectral envelope as pitch changes, while `formant` shifts that envelope independently. Envelope correction is limited to 32× gain per bin, so leave headroom. Stereo channels are independent. Neutral settings reconstruct the source with the declared latency.
 
 The built-in `spectral_memory` captures a fixed ring of spectral frames, then holds or scans them when recording stops. It shares pitch, formant and preservation controls with `spectral_warp`. See [Spectral processing](/reference/language/spectral/) for controls, storage limits and examples.
 
@@ -123,46 +118,120 @@ For envelope transfer, `amount: 0` returns the carrier delayed by one frame, and
 
 ## std/instruments
 
-Finished instruments with a few controls each, for when you want a sound and not a function. `use std/instruments.{kick, bass}`, then play them by name (`instrument: kick`, or `kick(freq: c2) for 1beat`). Each is complete on its own, so you can copy one into your file and change it. `std/instruments`, `std/drums` and `std/fx` are *shelves*: you name what you take, and only that is added. `niminal presets` lists everything on them with a description (`--kind fx` narrows it), `niminal presets kick_808` prints one to paste and change, and the editor completes the names inside `use std/drums.{`. Type the start of any preset name elsewhere in a file and the editor offers it twice: the name, which adds it to your `use` lines, and `(copy source)`, which pastes its definition (with the functions it needs) for you to change. A comment line `// folder: drums/kicks` between definitions files the ones after it under that folder.
+Fourteen melodic instruments, with controls chosen for each sound. `use std/instruments.{bass, electric_piano}`, then play by name (`electric_piano(freq: c4, gain: -6db) for 1beat`). The note's `gain` controls loudness and also shapes brightness or excitation: softer playing changes the sound, not just its level. Percussive sounds such as `pluck` and `bell` ring for their decay; sustained sounds follow note-off and their release.
 
-| Instrument | What it is |
+| Instrument | Sound and controls |
 | --- | --- |
-| `kick(freq: 55hz, punch, decay)` | A sine that drops in pitch, with a click on the front. |
-| `snare(freq: 180hz, snap, decay)` | A short triangle thump under band-passed noise. |
-| `hat(open)` | High-passed, crushed noise; `open` goes from a tick to a wash. The note's pitch is ignored. |
-| `bass(freq, cutoff: 600hz, res)` | A saw with a sine an octave down, through a low-pass. |
-| `pluck(freq, tone, decay)` | A plucked string that is bright at the start and dulls as it dies away. |
-| `pad(freq, attack, release, detune)` | Three slightly detuned saws, softened by a low-pass, with a slow envelope. |
-| `lead(freq, cutoff: 2500hz, vibrato)` | A saw with vibrato, through a low-pass. |
-| `bell(freq, decay)` | A struck bell from two sines, one bending the phase of the other. |
-| `bowed_string(freq, pressure, position, speed, brightness, attack, release)` | A sustained bowed string. Light pressure or extreme settings can whistle or stop speaking. |
-| `reed_wind(freq, pressure, stiffness, breath, brightness, attack, release)` | A sustained reed wind with a clarinet-like bore. Some settings choke or overblow. |
+| `bass` | Saw and sub sine; `cutoff`, `res`. |
+| `pluck` | A bright subtractive pluck; `tone`, `decay`. |
+| `pad` | Three detuned saws; `attack`, `release`, `detune`. |
+| `lead` | A filtered saw lead; `cutoff`, `vibrato`. |
+| `bell` | A struck phase-modulated bell; `decay`. |
+| `bowed_string` | A sustained waveguide string; `pressure`, `position`, `speed`, `brightness`, `attack`, `release`. |
+| `reed_wind` | A sustained reed bore; `pressure`, `stiffness`, `breath`, `brightness`, `attack`, `release`. |
+| `electric_piano` | Warm body and struck tine; `tone`, `tine`, `bark`, `decay`, `release`. |
+| `organ` | Drawbar-style additive organ; `drawbar`, `percussion`, `vibrato`. |
+| `pwm` | Moving pulse width through a ladder filter; `width`, `motion`, `rate`, `tone`. |
+| `fm_keys` | Two-operator FM keyboard; `ratio`, `index` (radians), `contour`, `decay`, `release`. |
+| `struck_string` | Noise-excited, pitch-compensated comb string; `ring`, `tone`, `release`. |
+| `metal_bar` | A struck bank of inharmonic bar modes; `tone`, `decay`. |
+| `morph_pad` | Morphing harmonic wavetables; `colour`, `motion`, `attack`, `release`. |
+
+`std/instruments`, `std/drums` and `std/fx` are shelves: take presets by name, rather than importing the whole shelf. Each copied preset stands alone. `niminal presets` lists the catalog, `--kind instrument` or `--kind fx` narrows it, and `niminal presets electric_piano` prints editable source with its helpers. Editor completions offer both an import and a copy of the source.
 
 ## std/drums
 
-A drum machine voice and twenty-one presets of it. `drum` is a function with the controls of a drum voice: an oscillator (`wave` sine, tri, square or saw; `freq`, `attack`, `decay`) with a pitch modulation (`mod_mode` `drop`, `wobble` or `random`; `mod_amount` in semitones, `mod_rate`), a noise source with its own filter (`noise_filter` low, band or high; `noise_freq`, `noise_q`) and envelope (`noise_shape` `soft`, `linear` or `burst`; `noise_attack`, `noise_decay`), a `mix` between the two, `drive`, one EQ band (`eq_freq`, `eq_gain`) and `amp`, and a velocity: `vel` (how hard the note is played) with `osc_vel`, `noise_vel` and `mod_vel` saying how much it changes the oscillator, the noise and the pitch modulation. The choices shape the instrument and are fixed when it is compiled; the numbers stay live. The output is soft-clipped, so every setting is bounded.
+Twenty-one drums and sound effects, tuned as designed at `c3`. The note transposes the sound; `gain` sets both loudness and strike response. Every preset's `decay` controls the audible tail, including noise-only hats and claps. Hats share a choke group: a closed hat ends an open one.
 
-`use std/drums.{kick_808, snare_tri}`, then play a preset by name, or call `drum(...)` inside an instrument of your own. Each preset takes the note as a tuning (`c3` plays it as designed), takes the note's `gain` as its velocity, and exposes the same numeric controls, so any lane can reshape any sound. The hats share a choke group, so a closed hat ends an open one.
+```nml
+use std/drums.{kick_808, snare_tri, hat_closed}
+```
 
-| Presets | |
+| Family | Presets and controls (besides `freq` and `gain`) |
 | --- | --- |
-| `kick_deep`, `kick_808`, `kick_punch`, `kick_click`, `kick_dirty` | Kicks from a long sub to a hard, driven one. |
-| `snare_tri`, `snare_tight`, `snare_fat` | Snares with a triangle body and band-passed noise. |
-| `clap`, `clap_room` | Noise chopped into bursts, dry and with a long tail. |
-| `hat_closed`, `hat_open`, `hat_tick` | Hi-hats from high-passed noise. |
-| `tom` | A tom; play different notes for a set. |
-| `rim`, `cowbell` | Square-wave percussion: a rim shot and a driven cowbell. |
-| `zap`, `blip`, `wobble_bass`, `sweep`, `crash` | Effects: a laser, random-pitch bubbles, a slow wobble, a rising noise band, a cymbal. |
+| Kicks | `kick_deep`, `kick_808`, `kick_punch`, `kick_click`, `kick_dirty`: `decay`, `punch`, `click`, `drive`. |
+| Snares | `snare_tri`, `snare_tight`, `snare_fat`: `decay`, `snap`, `tone`, `drive`. |
+| Claps | `clap`, `clap_room`: `decay`, `tone`, `spread` (burst rate). |
+| Hats | `hat_closed`, `hat_open`, `hat_tick`: `decay`, `tone`. |
+| Tom | `tom`: `decay`, `punch`, `rate`, `drive`. |
+| Rim | `rim`: `decay`, `knock`, `rate`, `drive`. |
+| Cowbell | `cowbell`: struck inharmonic body and upper modes; `decay`, `tone`, `metal`. |
+| Crash | `crash`: six inharmonic square oscillators plus noise; `decay`, `tone`, `metal`. |
+| Sound effects | `zap` (`decay`, `drop`, `rate`, `drive`), `blip` (`decay`, `scatter`, `rate`, `drive`), `wobble_bass` (`decay`, `wobble`, `rate`, `drive`), `sweep` (`rise`, `decay`, `tone`). |
 
-Keep a preset's name different from the choice words above (a preset called `wobble` would quietly stop a file playing), and from the instruments in `std/instruments`.
+For a complete drum-machine voice, call `drum(...)` inside your own instrument. It remains an editable NML function in the language prelude, with oscillator, pitch modulation, filtered noise, separate envelopes, drive, EQ and velocity sensitivity. Presets choose those settings and expose only useful performance controls. Cowbell, crash and sweep have their own patches rather than forcing every sound through that one voice.
 
 ## std/fx
 
-`std/fx` is a shelf, not a module to take whole: `use std/fx` alone is an error, and `use std/fx.{echo, room_reverb}` adds just those two effects to your piece (any module can be used this way; functions and constants always come with it). Effects that read `in`: `lowpass`, `ladder_lowpass` (a warmer, resonant low-pass with a `drive`), `highpass`, `bandpass`, `band_cut`, `equalizer`, `echo`, `room_reverb`, `studio_reverb` (a stereo reverb with a dense, smooth tail), `glitch`, `ensemble`, `swirl` (a phaser), `tremolo`, `compressor`, `overdrive`, `lofi` and `soft_clip` (rounds off peaks with no delay). Each has typed, ranged parameters and, where it makes sense, a `mix`. The ones that move on their own keep to the beat: the filters' `sweep_beats`, the `beats` of `ensemble`, `swirl` and `tremolo` are the length of one cycle in beats, so a tempo change speeds them up or slows them down without them losing their place. `compressor` has a `knee` and a `link` (at 1 the loudest channel decides the squeeze for all, so a stereo image stays put), `overdrive` runs at four times the sample rate so it doesn't alias. There is no limiter among them: a lookahead limiter delays the sound, so it belongs once, at the end, and the master already has one. `glitch` chains six glitches on the same sound, each switched on by its own control: a stutter that repeats the last piece (and rolls faster the longer it is held, when `stutter_shrink` is below 1; `stutter_gate` cuts each repeat short, `stutter_reverse` plays it backwards, `stutter_shape` fades it out or swells it in, `stutter_damp` darkens each repeat more than the last, `stutter_attack` and `stutter_bend` shape each repeat's envelope, and `stutter_accent` softens every second repeat), a rewind that plays it backwards, a slow-down like a stopping tape, a scatter that cuts the last bar into `scatter_slices` and plays them shuffled (a new shuffle each pass, the same `scatter_seed` giving the same shuffles every time, `scatter_reverse`, `scatter_repeat`, `scatter_drop` and `scatter_detune` the chance a slice runs backwards, is swapped for another, drops out, or is pitched up or down), a freeze that hangs the last `freeze_length` of sound in the air as a cloud of grains (`freeze_spread` smears it, `freeze_pitch` and `freeze_detune` bend it), and a bit-and-rate crush. `scatter_length` and `freeze_length` are lengths that snap to a musical division of your tempo, a bar by default for the scatter. The `gate` control starts open: a row of steps for it in a clip is a trance gate (`x` lets the sound through, `.` cuts it), rounded by `gate_attack` and `gate_release`. A gate is best drawn in a gesture clip, which has a step for every sixteenth whatever else is playing, so it chops a held sound too. With every control at zero the sound passes through untouched. The pieces are the opcodes `repeat_last`, `rewind_last`, `slow_down`, `scatter` and `freeze` (`x.repeat_last(hold:, length:)`, see the [opcode list](/reference/opcodes/)), and the function `apply`, which needs no `use` and runs any function on a sound as much as a control says (`x.apply(fn(s) { s.bitcrush(bits: 5) }, when: crush)`), so a filter, a reverb throw or a gain dip can be a stage in the chain too. Each fades in and out over `blend` (3ms by default) so a hold starts and ends without a click. Like the instruments, each stands alone: read the module for the controls of each one. A clip draws when each control is on with [lanes for an effect](/reference/language/patterns/#lanes-for-an-effect).
+Twenty-three effects, taken by name. Effects read `in`; most provide a dry/wet `mix`.
+
+| Family | Effects |
+| --- | --- |
+| Filters | `lowpass`, `ladder_lowpass`, `highpass`, `bandpass`, `band_cut`: cutoff, resonance and optional beat-synced sweep. `vowel_filter`: A/E/I/O/U formants, optional beat-synced movement. |
+| Tone and dynamics | `equalizer`, `compressor` (knee and stereo linking), `overdrive` (4× oversampling), `lofi`, `soft_clip`. |
+| Space | `echo` (independent left/right times), `room_reverb`, `studio_reverb`. |
+| Modulation | `ensemble` (chorus), `swirl` (phaser), `tremolo`; movement follows the tempo. |
+| Focused performance effects | `stutter`, `frozen`, `slice_shuffle`, `trance_gate`. |
+| Performance rack | `glitch`: stutter, rewind, slow-down, scatter, freeze, crush and gate in a fixed chain. |
+
+Start with the focused effects when you only need one operation. `stutter`, `frozen` and `slice_shuffle` pass through while `hold` is zero. Automate `hold` to capture and change the sound. `trance_gate` starts open; automate its `open` control with steps to chop a sustained sound without clicks. The larger `glitch` rack remains available for coordinated changes across several operations. See the [opcode reference](/reference/opcodes/) for the individual glitch algorithms and [effect lanes](/reference/language/patterns/#lanes-for-an-effect) for automation.
 
 ```nml
-use std/fx.{echo, room_reverb}
+use std/fx.{echo, room_reverb, stutter}
 ```
+
+## Keyboard colours
+
+The electric piano has a rounded body and a separate struck tine; `bark` responds most on harder notes. Its decay shortens up the keyboard, and `release` controls key damping. FM `index` is a conventional phase index in radians, converted to the oscillator's cycles internally. `contour` changes the lifetime of its brighter attack, while a little modulation remains in the tail.
+
+Try `fm_keys(ratio: 1, index: 3, decay: 700ms)` for bass, `ratio: 1.5, index: 1.6, contour: 0.25, decay: 450ms` for mallets, or `ratio: 3.5, index: 4, contour: 0.8, decay: 3sec` for bells.
+
+<Example file="preset_keys.nml" />
+
+## Original starter recordings
+
+Export twelve original synthesized recordings, their source patches, license and ready-made kit into your project:
+
+```sh
+niminal samples --out samples/starter
+```
+
+The directory must be new, so an export cannot replace edited recordings. The pack contains eight drum hits and four pitched sounds, all mono 48 kHz PCM WAVs rooted at `c3`. They are dry recordings with trimmed, faded tails and peaks adjusted toward -6 dBFS (the sub-heavy 808 uses -1.94 dBFS). There are no third-party samples. The pack and source patches use the repository's MIT license.
+
+```nml
+use samples/starter/starter as sounds
+
+clip beat {
+  instrument: sounds::drums
+  notes: grid {
+    kick:  x... x... x... x...
+    snare: .... x... .... x...
+    hat:   x.x. x.x. x.x. x.x.
+  }
+}
+beat.start
+```
+
+Pitched recordings include `sounds::electric_piano`, `sounds::fm_keys`, `sounds::struck_string` and `sounds::metal_bar`. See [Samples](/reference/language/samples/) for tuning, slicing and stretching.
+
+## Auditioning and editing the collection
+
+From a repository checkout:
+
+```sh
+cargo run -p niminal-lang --example audition -- target/audition
+```
+
+Open `target/audition/index.html` for each instrument's default, soft, short and long notes, plus melodic chords. Preview gain targets -20 dBFS RMS over the default note's first half-second, capped by a -6 dBFS peak and 18 dB of boost. That gain is fixed across each preset's variations, preserving velocity differences. `report.csv` contains the original levels and preview gains, and each patch is saved beside its audio. The preview is for comparison; it does not change the preset's output gain.
+
+## Migrating to language 0.3
+
+- Remove `use std/filters`; `onepole_lp` and `onepole_hp` are now native and need no import.
+- Replace `spectral_pitch(...)` with `spectral_warp(...)`; its arguments and latency are unchanged.
+- Replace `std/delays`'s `tape(...)` with `dark_echo(...)`. This is a damped delay recipe, without a tape model.
+- Take drums from `std/drums`. The introductory `kick`, `snare` and `hat` patches were removed from `std/instruments`; editable teaching versions remain in `examples/synth_drums.nml`.
+- Drum presets now expose musical controls rather than every `drum` parameter. For hats and claps, use `decay` instead of `noise_decay`, and `tone` instead of `noise_freq`. Kicks use `punch` instead of `mod_amount` and `click` instead of `mix`; snares use `snap` instead of `mix`. Use `niminal presets NAME` for each full signature, or copy a patch and call `drum(...)` for the full machine.
+- A drum note's `gain` now changes its actual output level as well as its strike. Zero gain is silent. Existing patterns that relied on the old velocity-only behavior will play more softly.
 
 ## Examples
 

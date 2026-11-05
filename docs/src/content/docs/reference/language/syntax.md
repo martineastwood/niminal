@@ -17,7 +17,7 @@ A file can say which versions of the language it is written for, on a line of it
 
 ```nml
 niminal 0.1                  // that version or newer
-niminal >=0.1, <0.3          // or a range
+niminal >=0.1, <0.4          // or a range
 ```
 
 - **Bare version:** `niminal 0.1` means 0.1 or newer. Conditions are `>=`, `>`, `<=`, `<` and `==`, joined by commas. Versions are `major.minor`.

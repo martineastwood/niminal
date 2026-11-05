@@ -11,9 +11,9 @@ use niminal_engine::ops::{
     Allpass, Biquad, BiquadMode, Bitcrush, Chorus, Clip, Comb, Compressor, Convolve, DcBlock,
     Delay, Distortion, Eq, EqMode, Fdn, FilterMode, FinishWhen, Fn1, Fold, Follow, Formant, Freeze,
     Func, GLITCH_MAX_SECONDS, Gain, Gate, Granular, Impulse, IrSpectrum, Ladder, Lag, Limiter,
-    Modal, Mverb, Noise, NoiseColor, NoteRandom, Osc, PartialMorph, Phaser, Phasor, PitchShift,
-    RepeatLast, Resonator, Reverb, RewindLast, SampleHold, Scatter, SlowDown, SpectralDelay,
-    SpectralEdit, SpectralEditKind, SpectralFreeze, SpectralMemory, SpectralMorph,
+    Modal, Mverb, Noise, NoiseColor, NoteRandom, OnePole, Osc, PartialMorph, Phaser, Phasor,
+    PitchShift, RepeatLast, Resonator, Reverb, RewindLast, SampleHold, Scatter, SlowDown,
+    SpectralDelay, SpectralEdit, SpectralEditKind, SpectralFreeze, SpectralMemory, SpectralMorph,
     SpectralPartials, SpectralWarp, Svf, Waveshape, Wavetable,
 };
 
@@ -326,7 +326,7 @@ impl Registry {
             ),
             OpSpec::new(
                 "osc",
-                "An oscillator: `osc(saw, 440hz)`. The waveform is sine, saw, square, pulse or tri, a table (`harmonics([...])`), or a `bank([...])` of tables; `phase_mod` bends the phase for FM; `position` morphs a bank; `width` controls pulse duty cycle (0.01..0.99); `phase` sets the starting/reset phase in cycles; `sync` resets at a master frequency in hz (0 disables sync). Hard sync uses fractional reset timing and polynomial discontinuity corrections.",
+                "An oscillator: `osc(saw, 440hz)`. The waveform is sine, saw, square, pulse or tri, a table (`harmonics([...])`), or a `bank([...])` of tables; `phase_mod` bends the phase in cycles (1 is a full turn; divide a radian index by 2*pi) for FM; `position` morphs a bank; `width` controls pulse duty cycle (0.01..0.99); `phase` sets the starting/reset phase in cycles; `sync` resets at a master frequency in hz (0 disables sync). Hard sync uses fractional reset timing and polynomial discontinuity corrections.",
                 vec![
                     req("wave", Kind::Wave),
                     req("freq", Kind::Signal(Unit::Hz)),
@@ -567,6 +567,18 @@ impl Registry {
                 "fract",
                 "The part of a signal after the point: `x - floor(x)`.",
                 |_| Ok(Box::new(Func(Fn1::Fract))),
+            ),
+            OpSpec::new(
+                "onepole_lp",
+                "A one-pole low-pass, 6db per octave. Cutoff clamps to 0..Nyquist; zero holds the previous low-pass value. Its complementary high-pass is onepole_hp. No import needed.",
+                vec![req("x", SIGNAL), req("cutoff", Kind::Signal(Unit::Hz))],
+                Build::Builtin(|_| Ok(Box::new(OnePole::lowpass()))),
+            ),
+            OpSpec::new(
+                "onepole_hp",
+                "A complementary one-pole high-pass: x minus onepole_lp(x, cutoff). Cutoff clamps to 0..Nyquist. No import needed.",
+                vec![req("x", SIGNAL), req("cutoff", Kind::Signal(Unit::Hz))],
+                Build::Builtin(|_| Ok(Box::new(OnePole::highpass()))),
             ),
             // --- new opcodes ---
             OpSpec::new(

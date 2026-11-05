@@ -772,6 +772,23 @@ mod tests {
     }
 
     #[test]
+    fn bundled_samples_play_from_an_unsaved_tab() {
+        let shared = Arc::new(Shared::new());
+        shared.no_audio.store(true, Ordering::Relaxed);
+        connect_with(&shared, 0, None).unwrap();
+        start_worker(shared.clone());
+        let source = "use std/samples.{drums, electric_piano}\nclip keys { instrument: electric_piano\n notes: [c3 e3 g3 b3] }\nkeys.start\n";
+        let outcome = eval(&shared, source, Some("now"), None, 1).unwrap();
+        assert!(outcome.problems.is_empty(), "{:?}", outcome.problems.iter().map(|p| &p.message).collect::<Vec<_>>());
+        let deadline = Instant::now() + Duration::from_secs(4);
+        loop {
+            if snapshot(&shared).transport.as_ref().is_some_and(|t| t.voices > 0) { break; }
+            assert!(Instant::now() < deadline, "the bundled recording did not play in Stage");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
     fn code_sent_over_the_socket_plays_in_the_stage_and_both_hear_what_lands() {
         let shared = Arc::new(Shared::new());
         shared.no_audio.store(true, Ordering::Relaxed);

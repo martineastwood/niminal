@@ -1,7 +1,7 @@
-// The drum presets in `std/drums`, played as a beat. Every preset is the `drum` function with its
-// settings chosen, and a note tunes it: c3 plays a preset as designed, other notes transpose it.
-// Each preset has the same controls (`decay`, `drive`, `mix`, `noise_freq`, `eq_gain`...), so any
-// lane can reshape any sound, and the open and closed hats choke each other. `my_snare` shows `drum` called directly, with the settings you pick.
+// Curated drums played as a beat. c3 is each preset's reference tuning.
+// Each preset exposes controls that suit its sound; decay always changes the audible tail.
+// Gain changes both loudness and strike, and the open and closed hats choke each other.
+// my_snare shows how to call the full drum machine directly.
 // Render with:  niminal render examples/drum_voice.nml --out drum_voice.wav --bars 4
 use std/drums.{kick_808, kick_punch, snare_tri, clap, hat_closed, hat_open, cowbell, rim, tom, blip, zap, wobble_bass}
 
@@ -19,7 +19,7 @@ clip snare_lane { instrument: snare_tri, notes: [~ ~ ~ ~  c3 ~ ~ ~  ~ ~ ~ ~  c3 
 clip layer { instrument: my_snare, notes: [~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ c3] }
 clip clap_lane { instrument: clap, notes: [~ ~ ~ ~  c3 ~ ~ ~  ~ ~ ~ ~  c3 ~ ~ ~] }
 // a note's gain is its velocity: the hats accent every other hit, and each preset decides how much a
-// softer hit changes the oscillator and the noise (`osc_vel`, `noise_vel`)
+// softer hit changes its body or brightness as well as its output level
 clip hats {
   instrument: hat_closed
   notes: [c3   c3    c3   c3     c3   c3    c3   ~      c3   c3    c3   c3     c3   c3    ~    ~]

@@ -833,6 +833,11 @@ async function act(action: Action) {
   }
 }
 
+/** Run `new`, after asking, since it clears every clip, scene and the rest of what the session holds. */
+async function newSession() {
+  if (await ask('New session: what is playing stops and your clips and scenes are cleared. Continue?')) await act({ action: 'new' });
+}
+
 async function cancelPending(id: number) {
   try {
     await stage.cancel(id);
@@ -1429,6 +1434,10 @@ window.addEventListener('keydown', event => {
   } else if (event.key === '0') {
     event.preventDefault();
     setZoom(1);
+  } else if (event.key.toLowerCase() === 'n' && event.shiftKey) {
+    // the same as running `new`: clear the session's clips, scenes and the rest
+    event.preventDefault();
+    void newSession();
   } else if (event.key.toLowerCase() === 't' && !event.shiftKey) {
     event.preventDefault();
     newTab();
@@ -1466,6 +1475,7 @@ window.addEventListener('keydown', event => {
 /** The menu bar: each item runs what its button or key already does. */
 const menuActions: Record<string, () => void> = {
   new: newTab,
+  'new-session': () => void newSession(),
   open: () => void openFile(),
   'open-project': () => void openProject(),
   save: () => void saveFile(),

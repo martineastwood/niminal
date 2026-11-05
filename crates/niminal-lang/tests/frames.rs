@@ -270,7 +270,7 @@ instr a() { x = osc(saw, 997hz) * 0.2 + noise(seed: 17) * 0.1\n through(x) - x }
 fn spectral_pitch_moves_an_off_bin_tone_and_is_independent_of_chunks() {
     for shift in [-12, -7, 0, 7, 12] {
         let source = format!(
-            "use std/spectral\ninstr a() {{ spectral_pitch(osc(sine, 997hz) * 0.2, shift: {shift}, size: 512) }}"
+            "use std/spectral\ninstr a() {{ spectral_warp(osc(sine, 997hz) * 0.2, shift: {shift}, size: 512) }}"
         );
         let out = render_chunk(&source, 24_000, block_size());
         let tail = &out[8192..];
@@ -299,12 +299,12 @@ fn spectral_pitch_moves_an_off_bin_tone_and_is_independent_of_chunks() {
 #[test]
 fn spectral_pitch_zero_is_identity_and_out_of_band_energy_is_removed() {
     let out = render(
-        "use std/spectral\ninstr a() { x = noise(seed: 31) * 0.1\n spectral_pitch(x, size: 512) - x }",
+        "use std/spectral\ninstr a() { x = noise(seed: 31) * 0.1\n spectral_warp(x, size: 512) - x }",
         100,
     );
     assert!(rms(&out[2048..]) < 1e-5, "{}", rms(&out[2048..]));
     let high = render(
-        "use std/spectral\ninstr a() { spectral_pitch(osc(sine, 18000hz) * 0.2, shift: 12, size: 512) }",
+        "use std/spectral\ninstr a() { spectral_warp(osc(sine, 18000hz) * 0.2, shift: 12, size: 512) }",
         100,
     );
     assert!(rms(&high[4096..]) < 0.005, "{}", rms(&high[4096..]));
@@ -314,7 +314,7 @@ fn spectral_pitch_zero_is_identity_and_out_of_band_energy_is_removed() {
 fn spectral_pitch_follows_a_shift_envelope_without_restarting() {
     let out = render_chunk(
         "use std/spectral\ninstr a() {
-  spectral_pitch(osc(sine, 997hz) * 0.2, shift: env[0 100ms 0 100ms 12], size: 512)
+  spectral_warp(osc(sine, 997hz) * 0.2, shift: env[0 100ms 0 100ms 12], size: 512)
 }",
         24_000,
         block_size(),
@@ -336,7 +336,7 @@ fn peak_remapping_retains_narrow_partials_on_large_downward_shifts() {
     for shift in [-24, -36, -48] {
         let out = render_chunk(
             &format!(
-                "use std/spectral\ninstr a() {{ spectral_pitch(osc(sine, 997hz) * 0.2, shift: {shift}, size: 512, transients: 0) }}"
+                "use std/spectral\ninstr a() {{ spectral_warp(osc(sine, 997hz) * 0.2, shift: {shift}, size: 512, transients: 0) }}"
             ),
             48_000,
             block_size(),
@@ -415,7 +415,7 @@ fn independent_formant_control_changes_colour_at_unchanged_pitch() {
             &format!(
                 "use std/spectral\ninstr a() {{
   source=osc(saw, 93.75hz).bpf(cutoff: 1500hz, res: 0.7) * 0.2
-  spectral_pitch(source, formant: {formant}, detail: 32, size: 1024)
+  spectral_warp(source, formant: {formant}, detail: 32, size: 1024)
 }}"
             ),
             24000,
@@ -455,7 +455,7 @@ fn envelope_preservation_keeps_a_resonance_below_the_shifted_pitch_envelope() {
             &format!(
                 "use std/spectral\ninstr a() {{
   source=osc(saw, 93.75hz).bpf(cutoff: 1500hz, res: 0.7) * 0.2
-  spectral_pitch(source, shift: 12, preserve: {preserve}, detail: 32, size: 1024)
+  spectral_warp(source, shift: 12, preserve: {preserve}, detail: 32, size: 1024)
 }}"
             ),
             24000,
@@ -487,7 +487,7 @@ fn envelope_preservation_keeps_a_resonance_below_the_shifted_pitch_envelope() {
 fn peak_remapping_keeps_off_bin_tones_tuned_on_large_upward_shifts() {
     for shift in [24, 36, 48] {
         let source = format!(
-            "use std/spectral\ninstr a() {{ spectral_pitch(osc(sine, 997hz) * 0.1, shift: {shift}, size: 512, transients: 0) }}"
+            "use std/spectral\ninstr a() {{ spectral_warp(osc(sine, 997hz) * 0.1, shift: {shift}, size: 512, transients: 0) }}"
         );
         let out = render_chunk(&source, 24000, block_size());
         let tail = &out[8192..];

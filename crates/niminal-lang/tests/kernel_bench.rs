@@ -158,13 +158,10 @@ const FRAMES: &str = "fn spectral(x) {
 #[test]
 #[ignore = "a benchmark"]
 fn library() {
-    bench(
-        "std ladder",
-        "use std/filters\ninstr a() { osc(saw, 110hz).ladder(800hz) }",
-    );
+    bench("std ladder", "instr a() { osc(saw, 110hz).ladder(800hz) }");
     bench(
         "std biquad_lp",
-        "use std/filters\ninstr a() { osc(saw, 110hz).biquad_lp(800hz) }",
+        "instr a() { osc(saw, 110hz).biquad_lp(800hz) }",
     );
     bench(
         "std string",

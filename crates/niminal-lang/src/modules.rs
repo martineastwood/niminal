@@ -207,6 +207,41 @@ pub fn expand_with_rules(
     })
 }
 
+/// A sample declared in an imported file belongs to that file's directory. Resolve literal
+/// paths before modules are joined, so identically named recordings in different modules cannot clash.
+fn sample_paths(source: &str, dir: &Path) -> String {
+    let Ok(tokens) = crate::lexer::lex(source) else {
+        return source.into();
+    };
+    let mut edits = Vec::new();
+    for triple in tokens.windows(3) {
+        if let [
+            crate::lexer::Token {
+                tok: Tok::Ident(name),
+                ..
+            },
+            crate::lexer::Token {
+                tok: Tok::LParen, ..
+            },
+            crate::lexer::Token {
+                tok: Tok::Str(path),
+                span,
+            },
+        ] = triple
+            && matches!(name.as_str(), "sample" | "kit" | "sfz")
+            && Path::new(path).is_relative()
+            && !path.starts_with(crate::recordings::PREFIX)
+        {
+            edits.push((*span, format!("{:?}", dir.join(path).to_string_lossy())));
+        }
+    }
+    let mut out = source.to_string();
+    for (span, path) in edits.into_iter().rev() {
+        out.replace_range(span.start..span.end, &path);
+    }
+    out
+}
+
 struct Done {
     path: PathBuf,
     name: String,
@@ -253,7 +288,7 @@ impl Walk<'_> {
             } = parse_use(rest, span)?;
             let path = self.find(name, dir).ok_or_else(|| {
                 Diagnostic::new(format!("no module `{name}`"), used_at).with_help(format!(
-                    "looked for {name}.nml next to the file, in lib/ and in the installed packages; the library that comes with niminal is `use std/filters`, `std/physical`, `std/delays`, `std/spectral`, `std/instruments`, `std/drums` and `std/fx`; the last three are shelves of presets, taken by name: `use std/fx.{{echo}}`"
+                    "looked for {name}.nml next to the file, in lib/ and in the installed packages; the library that comes with niminal is `use std/physical`, `std/delays`, `std/spectral`, `std/samples`, `std/instruments`, `std/drums` and `std/fx`; the last three are shelves of presets, taken by name: `use std/fx.{{echo}}`"
                 ))
             })?;
             if self.stack.contains(&path) {
@@ -296,9 +331,12 @@ impl Walk<'_> {
             }
             let module_source = match embedded(name) {
                 Some(source) => source.to_string(),
-                None => std::fs::read_to_string(&path).map_err(|e| {
-                    Diagnostic::new(format!("can't read {}: {e}", path.display()), used_at)
-                })?,
+                None => {
+                    let source = std::fs::read_to_string(&path).map_err(|e| {
+                        Diagnostic::new(format!("can't read {}: {e}", path.display()), used_at)
+                    })?;
+                    sample_paths(&source, path.parent().unwrap_or(dir))
+                }
             };
             self.stack.push(path.clone());
             let body = self.visit(&module_source, path.parent().unwrap_or(dir), Some(used_at))?;
@@ -335,9 +373,9 @@ impl Walk<'_> {
 /// The path the library that comes with niminal is reported under; there is no file.
 pub const STD_DIR: &str = "<std>";
 
-/// The modules that come with niminal: `use std/filters`.
+/// The modules that come with niminal: `use std/physical`.
 const STD: [(&str, &str); 7] = [
-    ("std/filters", include_str!("../std/filters.nml")),
+    ("std/samples", include_str!("../std/samples.nml")),
     ("std/physical", include_str!("../std/physical.nml")),
     ("std/delays", include_str!("../std/delays.nml")),
     ("std/spectral", include_str!("../std/spectral.nml")),
@@ -427,13 +465,41 @@ fn keep_only(source: &str, module: &str, keep: &[String], at: Span) -> Result<St
             at,
         ));
     }
+    let makes_something = |kind| {
+        matches!(
+            kind,
+            SymbolKind::Fx
+                | SymbolKind::Node
+                | SymbolKind::Instrument
+                | SymbolKind::Sample
+                | SymbolKind::Kit
+        )
+    };
+    let tokens = crate::lexer::lex(source)?;
+    let mut wanted: std::collections::HashSet<&str> = keep.iter().map(String::as_str).collect();
+    let mut pending: Vec<_> = defs
+        .iter()
+        .filter(|d| wanted.contains(d.name.as_str()) || !makes_something(d.kind))
+        .collect();
+    // Keep the dependencies of a selected kit or sample as well as the selected definition itself.
+    while let Some(def) = pending.pop() {
+        for token in tokens
+            .iter()
+            .filter(|t| t.span.start >= def.span.start && t.span.end <= def.span.end)
+        {
+            let Tok::Ident(name) = &token.tok else {
+                continue;
+            };
+            if let Some(dependency) = defs.iter().find(|d| d.name == *name)
+                && wanted.insert(dependency.name.as_str())
+            {
+                pending.push(dependency);
+            }
+        }
+    }
     let mut out = source.to_string();
     for d in defs.iter().rev() {
-        let makes_something = matches!(
-            d.kind,
-            SymbolKind::Fx | SymbolKind::Node | SymbolKind::Instrument
-        );
-        if makes_something && !keep.contains(&d.name) {
+        if makes_something(d.kind) && !wanted.contains(d.name.as_str()) {
             let blank: String = out[d.span.start..d.span.end]
                 .chars()
                 .map(|c| if c == '\n' { c } else { ' ' })
@@ -639,5 +705,26 @@ mod tests {
         assert!(err.message.contains("different names"), "{}", err.message);
         let err = expand_here("use rig as 1x\n", &dir).err().unwrap();
         assert!(err.message.contains("isn't a name"), "{}", err.message);
+    }
+    #[test]
+    fn recordings_are_relative_to_the_module_that_declares_them() {
+        let dir = project(&[
+            ("a/voice.nml", "hit_a = sample(\"hit.wav\")\n"),
+            ("b/voice.nml", "hit_b = sample(\"hit.wav\")\n"),
+        ]);
+        let expanded = expand_here("use a/voice\nuse b/voice\n", &dir).unwrap();
+        assert!(
+            expanded
+                .text
+                .contains(&format!("{:?}", dir.join("a/hit.wav").to_string_lossy()))
+        );
+        assert!(
+            expanded
+                .text
+                .contains(&format!("{:?}", dir.join("b/hit.wav").to_string_lossy()))
+        );
+        // The piece's own declarations retain their original paths.
+        let root = expand_here("root = sample(\"hit.wav\")\n", &dir).unwrap();
+        assert_eq!(root.text, "root = sample(\"hit.wav\")\n");
     }
 }

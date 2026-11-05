@@ -1,46 +1,6 @@
-// Ready-made instruments, a shelf to take from: `use std/instruments.{kick, bass}`, then play them by name.
-// Each is a short, finished
-// sound with a few controls. They are complete on their own, so the tracker copies one into a
-// project as it stands and you can edit it from there.
-
-// folder: drums/kicks
-
-/// A kick: a sine that drops in pitch, with a click on the front. `punch` is how far and how hard it
-/// drops; `decay` is how long it rings.
-instr kick(
-  freq: hz = 55hz,
-  punch: 0..1 = 0.5,
-  decay: 80ms..1sec = 300ms
-) {
-  sweep = env[(freq * (2 + punch * 4)) 40ms freq]
-  thump = osc(sine, sweep) * perc(decay: decay)
-  click = noise().hpf(cutoff: 2khz) * env[1 3ms 0] * 0.3 * punch
-  (thump + click).tanh * 0.9
-}
-
-// folder: drums/snares
-
-/// A snare: a short triangle thump under a burst of band-passed noise. `snap` brings the noise up.
-instr snare(
-  freq: hz = 180hz,
-  snap: 0..1 = 0.6,
-  decay: 60ms..600ms = 160ms
-) {
-  tone = osc(tri, freq) * perc(decay: decay * 0.7) * 0.4
-  air = pinknoise().bpf(cutoff: 4khz, res: 0.3) * perc(decay: decay)
-  (tone + air * (0.3 + snap * 0.7)).clip(level: 0.9) * 0.85
-}
-
-// folder: drums/hats
-
-/// A hi-hat from high-passed, crushed noise. `open` lengthens it from a tick to a wash. The pitch of
-/// the note does not matter.
-instr hat(
-  freq: hz = 8khz,
-  open: 0..1 = 0
-) {
-  noise().hpf(cutoff: 7khz).bitcrush(rate: 22khz, bits: 12) * perc(decay: 40ms + open * 180ms) * 0.22
-}
+// Finished melodic instruments: `use std/instruments.{bass, electric_piano, organ}`.
+// For drums use std/drums. Each sound stands alone when copied into a project.
+// gain is the note's loudness and also shapes brightness or excitation.
 
 // folder: synths/bass
 
@@ -48,11 +8,12 @@ instr hat(
 instr bass(
   freq: hz,
   cutoff: hz = 600hz,
-  res: 0..1 = 0.3
+  res: 0..1 = 0.3,
+  gain: db = 0db
 ) {
   level = env[0 5ms 1 150ms 0.8 | 120ms 0]
   voice = osc(saw, freq) * 0.6 + osc(sine, freq * 0.5) * 0.5
-  voice.lpf(cutoff: cutoff, res: res).tanh * level * 0.5
+  voice.lpf(cutoff: cutoff * (0.35 + (1 * gain).max(0).min(1) * 0.65), res: res).tanh * level * 0.5 * gain
 }
 
 // folder: synths/plucks
@@ -62,11 +23,12 @@ instr bass(
 instr pluck(
   freq: hz,
   tone: 0..1 = 0.5,
-  decay: 100ms..3sec = 700ms
+  decay: 100ms..3sec = 700ms,
+  gain: db = 0db
 ) {
   level = perc(decay: decay)
   voice = osc(saw, freq) + osc(tri, freq * 2.003) * 0.3
-  voice.lpf(cutoff: 250hz + level * (800hz + tone * 6khz), res: 0.2) * level * 0.5
+  voice.lpf(cutoff: 250hz + level * (800hz + tone * (1 * gain).max(0).min(1) * 6khz), res: 0.2) * level * 0.5 * gain
 }
 
 // folder: synths/pads
@@ -77,11 +39,12 @@ instr pad(
   freq: hz,
   attack: 20ms..4sec = 400ms,
   release: 50ms..6sec = 1500ms,
-  detune: 0..1 = 0.3
+  detune: 0..1 = 0.3,
+  gain: db = 0db
 ) {
   spread = 1 + detune * 0.012
   voice = osc(saw, freq) + osc(saw, freq * spread) + osc(saw, freq / spread)
-  voice.lpf(cutoff: 1800hz, res: 0.1) * env[0 attack 1 | release 0] * 0.12
+  voice.lpf(cutoff: 1800hz * (0.5 + (1 * gain).max(0).min(1) * 0.5), res: 0.1) * env[0 attack 1 | release 0] * 0.12 * gain
 }
 
 // folder: synths/leads
@@ -90,11 +53,12 @@ instr pad(
 instr lead(
   freq: hz,
   cutoff: hz = 2500hz,
-  vibrato: 0..1 = 0.2
+  vibrato: 0..1 = 0.2,
+  gain: db = 0db
 ) {
   bend = 1 + osc(sine, 5.5hz) * vibrato * 0.01
   level = env[0 8ms 1 200ms 0.7 | 250ms 0]
-  osc(saw, freq * bend).lpf(cutoff: cutoff, res: 0.15) * level * 0.3
+  osc(saw, freq * bend).lpf(cutoff: cutoff * (0.4 + (1 * gain).max(0).min(1) * 0.6), res: 0.15) * level * 0.3 * gain
 }
 
 // folder: synths/bells
@@ -102,10 +66,11 @@ instr lead(
 /// A struck bell: two sines, one bending the phase of the other. `decay` is how long it rings.
 instr bell(
   freq: hz,
-  decay: 300ms..4sec = 2sec
+  decay: 300ms..4sec = 2sec,
+  gain: db = 0db
 ) {
   shimmer = osc(sine, freq * 3.5) * perc(decay: decay * 0.5) * 2
-  osc(sine, freq, phase_mod: shimmer) * perc(decay: decay) * 0.3
+  osc(sine, freq, phase_mod: shimmer * (0.25 + (1 * gain).max(0).min(1) * 0.75)) * perc(decay: decay) * 0.3 * gain
 }
 
 // folder: acoustic/strings
@@ -119,11 +84,12 @@ instr bowed_string(
   speed: 0..1 = 0.6,
   brightness: 0..1 = 0.5,
   attack: 5ms..1sec = 40ms,
-  release: 20ms..3sec = 200ms
+  release: 20ms..3sec = 200ms,
+  gain: db = 0db
 ) {
   level = env[0 attack 1 | release 0]
-  bowed(freq, pressure: pressure, position: position, velocity: speed * level,
-    brightness: brightness) * level * 0.8
+  bowed(freq, pressure: pressure, position: position, velocity: speed * level * (0.5 + (1 * gain).max(0).min(1) * 0.5),
+    brightness: brightness) * level * 0.8 * gain
 }
 
 // folder: acoustic/winds
@@ -137,9 +103,161 @@ instr reed_wind(
   breath: 0..1 = 0.1,
   brightness: 0..1 = 0.5,
   attack: 5ms..1sec = 30ms,
-  release: 20ms..3sec = 180ms
+  release: 20ms..3sec = 180ms,
+  gain: db = 0db
 ) {
   level = env[0 attack 1 | release 0]
-  reed(freq, pressure: pressure * level, stiffness: stiffness, breath: breath,
-    brightness: brightness) * level * 0.35
+  reed(freq, pressure: pressure * level * (0.7 + (1 * gain).max(0).min(1) * 0.3), stiffness: stiffness, breath: breath,
+    brightness: brightness) * level * 0.35 * gain
+}
+
+// folder: keys/electric
+
+/// A warm tine-style electric piano: a rounded, barking body and a brighter struck tine.
+/// Tone sets brightness, tine blends the bell pair, and bark adds bite on harder notes.
+/// Higher notes naturally decay faster; release sets how quickly a lifted key damps the tone.
+instr electric_piano(
+  freq: hz = c4,
+  tone: 0..1 = 0.45,
+  tine: 0..1 = 0.25,
+  bark: 0..1 = 0.35,
+  decay: 200ms..8sec = 3sec,
+  release: 20ms..1sec = 180ms,
+  gain: db = 0db
+) {
+  hit = (1 * gain).max(0).min(1)
+  brightness = tone.max(0).min(1)
+  bell_mix = tine.max(0).min(1)
+  bite = bark.max(0).min(1) * hit * hit
+  register = (220hz / freq.max(30hz)).sqrt.max(0.5).min(1.8)
+  length = decay.max(200ms).min(8sec) * register
+  voice = oversample(2) {
+    body_shape = env[0 1ms 1 (length * 0.4).exp 0.25]
+    body_mod = osc(sine, freq) * body_shape * (0.12 + brightness * 0.65 + bite * 1.4)
+    body = osc(sine, freq, phase_mod: body_mod / (2 * pi)) * perc(attack: 2ms, decay: length)
+    tine_mod = osc(sine, freq * 14) * perc(attack: 0.5ms, decay: length * 0.18) * (0.1 + brightness * hit * 0.9)
+    bell_voice = osc(sine, freq * 1.0007, phase_mod: tine_mod / (2 * pi)) * perc(attack: 1ms, decay: length * 0.5)
+    hammer = noise(seed: 73).bpf(cutoff: 1800hz, res: 0.1) * perc(attack: 0.1ms, decay: 8ms) * hit * hit * 0.015
+    (body * (1 - bell_mix * 0.35) + bell_voice * bell_mix * (0.35 + hit * 0.65) + hammer).tanh
+  }
+  voice * env[1 | release.exp 0] * 0.32 * gain
+}
+
+// folder: keys/organ
+
+/// A drawbar-style organ. Drawbar brings in upper registers; percussion adds a short octave strike.
+/// Vibrato gently bends the sustained tone. Release follows the key, without a long piano tail.
+instr organ(
+  freq: hz = c4,
+  drawbar: 0..1 = 0.5,
+  percussion: 0..1 = 0.3,
+  vibrato: 0..1 = 0.15,
+  gain: db = 0db
+) {
+  hit = (1 * gain).max(0).min(1)
+  tuned = freq * (1 + osc(sine, 6hz) * vibrato * 0.004)
+  body = osc(sine, tuned) + osc(sine, tuned * 0.5) * 0.3
+  upper = osc(sine, tuned * 2) * 0.5 + osc(sine, tuned * 3) * 0.25 + osc(sine, tuned * 4) * 0.15
+  strike = osc(sine, tuned * 2) * perc(decay: 120ms) * percussion.max(0).min(1) * hit
+  (body + upper * drawbar.max(0).min(1) * (0.5 + hit * 0.5) + strike) * env[0 3ms 1 | 35ms 0] * 0.18 * gain
+}
+
+// folder: synths/leads
+
+/// A hollow pulse lead with moving pulse width. Width sets the centre; motion is the sweep depth.
+/// Tone opens a ladder filter, and hard notes open it further.
+instr pwm(
+  freq: hz = c4,
+  width: 0.1..0.9 = 0.4,
+  motion: 0..1 = 0.5,
+  rate: 0.1hz..8hz = 0.7hz,
+  tone: 200hz..12khz = 3khz,
+  gain: db = 0db
+) {
+  duty = (width + osc(sine, rate) * motion * 0.2).max(0.05).min(0.95)
+  voice = osc(pulse, freq, width: duty)
+  voice.ladder(cutoff: tone * (0.3 + (1 * gain).max(0).min(1) * 0.7), res: 0.2) * env[0 5ms 1 | 120ms 0] * 0.25 * gain
+}
+
+// folder: keys/fm
+
+/// A two-operator FM keyboard, from rounded basses to mallets and metallic bells.
+/// Ratio is modulator/carrier; index is phase deviation in radians. Contour sets how long the
+/// bright attack lasts relative to decay, with a little modulation retained in the tail.
+instr fm_keys(
+  freq: hz = c4,
+  ratio: 0.25..12 = 2,
+  index: 0..8 = 2.2,
+  contour: 0..1 = 0.6,
+  decay: 50ms..8sec = 1.6sec,
+  release: 10ms..2sec = 140ms,
+  gain: db = 0db
+) {
+  hit = (1 * gain).max(0).min(1)
+  depth = index.max(0).min(8) * (0.15 + hit * hit * 0.85)
+  length = decay.max(50ms).min(8sec)
+  bright_time = length * (0.08 + contour.max(0).min(1) * 0.92)
+  voice = oversample(2) {
+    modulation = osc(sine, freq * ratio.max(0.25).min(12))
+    shape = 0.12 + perc(attack: 1ms, decay: bright_time) * 0.88
+    osc(sine, freq, phase_mod: modulation * shape * depth / (2 * pi)) * perc(attack: 2ms, decay: length)
+  }
+  voice * env[1 | release.exp 0] * 0.3 * gain
+}
+
+// folder: acoustic/strings
+
+/// A struck string: a short noise excitation circulates in a pitch-compensated comb.
+/// Ring controls feedback and tone controls damping. Harder notes excite more high frequencies.
+instr struck_string(
+  freq: hz = c4,
+  ring: 0.8..0.9995 = 0.992,
+  tone: 0..1 = 0.5,
+  release: 20ms..2sec = 200ms,
+  gain: db = 0db
+) {
+  tuned = freq.max(20hz).min(4khz)
+  damp = 0.85 - tone.max(0).min(1) * 0.75
+  hit = (1 * gain).max(0).min(1)
+  burst = 1sec / tuned.num
+  excitation = noise(seed: 67).lpf(cutoff: 800hz + hit * 9khz) * env[1 burst 0]
+  voice = excitation.comb(time: 1sec / tuned.num - 1sec * damp / (1 - damp) / sample_rate.num,
+    feedback: ring, damp: damp, max: 60ms)
+  voice * env[1 | release 0] * 0.7 * gain
+}
+
+// folder: acoustic/metal
+
+/// A struck free metal bar with inharmonic modes. Tone balances the upper modes;
+/// hard notes add a brighter strike. Decay is the time for the resonances to fall by 60db.
+instr metal_bar(
+  freq: init hz = c4,
+  tone: 0..1 = 0.5,
+  decay: 50ms..5sec = 900ms,
+  gain: db = 0db
+) {
+  hit = (1 * gain).max(0).min(1)
+  strike = noise(seed: 71) * perc(attack: 0.1ms, decay: 2ms)
+  // modal has unity gain for sustained input; compensate its brief excitation for decay and sample rate.
+  excitation = strike * decay.num.max(0.05).min(5) * sample_rate.num / 160
+  modes = excitation.modal(freq, [1, 2.756, 5.404, 8.933, 13.34, 18.64], decay: decay)
+  modes.lpf(cutoff: 1200hz + tone * hit * 12khz) * env[1 | 150ms 0] * 0.25 * gain
+}
+
+// folder: synths/pads
+
+/// A wavetable pad that morphs from a round fundamental through hollow harmonics to a bright stack.
+/// Colour chooses the table; motion sweeps through it. Harder notes open the filter.
+instr morph_pad(
+  freq: hz = c4,
+  colour: 0..1 = 0.4,
+  motion: 0..1 = 0.3,
+  attack: 10ms..3sec = 200ms,
+  release: 20ms..4sec = 700ms,
+  gain: db = 0db
+) {
+  tables = bank([harmonics([1]), harmonics([1, 0, 0.33, 0, 0.2]), harmonics([1, 0.5, 0.33, 0.25, 0.2, 0.16])])
+  position = (colour + osc(sine, 0.15hz) * motion * 0.3).max(0).min(1)
+  voice = osc(tables, freq, position: position) + osc(tables, freq * 1.003, position: position) * 0.5
+  voice.lpf(cutoff: 800hz + (1 * gain).max(0).min(1) * 5khz) * env[0 attack 1 | release 0] * 0.18 * gain
 }

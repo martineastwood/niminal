@@ -1,0 +1,27 @@
+// Original starter recording source. Rebuild with the audition example's --starter option.
+
+/// A two-operator FM keyboard, from rounded basses to mallets and metallic bells.
+/// Ratio is modulator/carrier; index is phase deviation in radians. Contour sets how long the
+/// bright attack lasts relative to decay, with a little modulation retained in the tail.
+instr fm_keys(
+  freq: hz = c4,
+  ratio: 0.25..12 = 2,
+  index: 0..8 = 2.2,
+  contour: 0..1 = 0.6,
+  decay: 50ms..8sec = 1.6sec,
+  release: 10ms..2sec = 140ms,
+  gain: db = 0db
+) {
+  hit = (1 * gain).max(0).min(1)
+  depth = index.max(0).min(8) * (0.15 + hit * hit * 0.85)
+  length = decay.max(50ms).min(8sec)
+  bright_time = length * (0.08 + contour.max(0).min(1) * 0.92)
+  voice = oversample(2) {
+    modulation = osc(sine, freq * ratio.max(0.25).min(12))
+    shape = 0.12 + perc(attack: 1ms, decay: bright_time) * 0.88
+    osc(sine, freq, phase_mod: modulation * shape * depth / (2 * pi)) * perc(attack: 2ms, decay: length)
+  }
+  voice * env[1 | release.exp 0] * 0.3 * gain
+}
+
+fm_keys(freq: c3) for 1sec

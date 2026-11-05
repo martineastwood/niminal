@@ -18,7 +18,9 @@ mod op_dispatch;
 mod opcode;
 pub mod ops;
 mod sample_file;
-pub use sample_file::{AUDIO_EXTENSIONS, WavInfo, is_audio, read_sample_file, read_wav_info};
+pub use sample_file::{
+    AUDIO_EXTENSIONS, WavInfo, is_audio, read_sample_file, read_wav_bytes, read_wav_info,
+};
 mod table;
 mod voice;
 mod waveform;

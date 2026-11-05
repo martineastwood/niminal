@@ -51,7 +51,7 @@ fn a_module_with_private_names_plays() {
 
 #[test]
 fn the_library_that_comes_with_niminal_plays() {
-    let source = "use std/filters\ntempo 100bpm\ninstr pad(freq: hz) { osc(saw, freq).biquad_lp(2khz) * env[0 20ms 1 | 400ms 0] }\npad(freq: a3) for 2beats\n";
+    let source = "use std/instruments.{pad}\ntempo 100bpm\npad(freq: a3) for 2beats\n";
     assert!(peak(source, Path::new(".")) > 0.1);
 }
 
@@ -77,7 +77,10 @@ const USES_RIG: &str = "tempo 120bpm\nuse rig\nclip c { instrument: tone, notes:
 fn a_syntax_error_in_a_module_names_the_module_and_the_use_line() {
     let e = render_error(
         USES_RIG,
-        &[("rig.nml", "\ninstr tone(freq: hz = 220hz) { osc(sine, freq) +* }\n")],
+        &[(
+            "rig.nml",
+            "\ninstr tone(freq: hz = 220hz) { osc(sine, freq) +* }\n",
+        )],
     );
     assert!(e.contains("in rig.nml line 2:"), "{e}");
     assert!(e.contains("main.nml:2:1"), "points at the `use` line: {e}");
@@ -87,8 +90,14 @@ fn a_syntax_error_in_a_module_names_the_module_and_the_use_line() {
 fn a_version_a_module_asks_for_is_checked_and_located_the_same_way() {
     let e = render_error(
         USES_RIG,
-        &[("rig.nml", "niminal 99.0\ninstr tone(freq: hz = 220hz) { osc(sine, freq) }\n")],
+        &[(
+            "rig.nml",
+            "niminal 99.0\ninstr tone(freq: hz = 220hz) { osc(sine, freq) }\n",
+        )],
     );
-    assert!(e.contains("in rig.nml line 1: this file is for niminal 99.0"), "{e}");
+    assert!(
+        e.contains("in rig.nml line 1: this file is for niminal 99.0"),
+        "{e}"
+    );
     assert!(e.contains("main.nml:2:1"), "{e}");
 }

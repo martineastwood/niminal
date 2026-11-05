@@ -1,0 +1,33 @@
+// Original starter recording source. Rebuild with the audition example's --starter option.
+
+/// A warm tine-style electric piano: a rounded, barking body and a brighter struck tine.
+/// Tone sets brightness, tine blends the bell pair, and bark adds bite on harder notes.
+/// Higher notes naturally decay faster; release sets how quickly a lifted key damps the tone.
+instr electric_piano(
+  freq: hz = c4,
+  tone: 0..1 = 0.45,
+  tine: 0..1 = 0.25,
+  bark: 0..1 = 0.35,
+  decay: 200ms..8sec = 3sec,
+  release: 20ms..1sec = 180ms,
+  gain: db = 0db
+) {
+  hit = (1 * gain).max(0).min(1)
+  brightness = tone.max(0).min(1)
+  bell_mix = tine.max(0).min(1)
+  bite = bark.max(0).min(1) * hit * hit
+  register = (220hz / freq.max(30hz)).sqrt.max(0.5).min(1.8)
+  length = decay.max(200ms).min(8sec) * register
+  voice = oversample(2) {
+    body_shape = env[0 1ms 1 (length * 0.4).exp 0.25]
+    body_mod = osc(sine, freq) * body_shape * (0.12 + brightness * 0.65 + bite * 1.4)
+    body = osc(sine, freq, phase_mod: body_mod / (2 * pi)) * perc(attack: 2ms, decay: length)
+    tine_mod = osc(sine, freq * 14) * perc(attack: 0.5ms, decay: length * 0.18) * (0.1 + brightness * hit * 0.9)
+    bell_voice = osc(sine, freq * 1.0007, phase_mod: tine_mod / (2 * pi)) * perc(attack: 1ms, decay: length * 0.5)
+    hammer = noise(seed: 73).bpf(cutoff: 1800hz, res: 0.1) * perc(attack: 0.1ms, decay: 8ms) * hit * hit * 0.015
+    (body * (1 - bell_mix * 0.35) + bell_voice * bell_mix * (0.35 + hit * 0.65) + hammer).tanh
+  }
+  voice * env[1 | release.exp 0] * 0.32 * gain
+}
+
+electric_piano(freq: c3) for 1sec
