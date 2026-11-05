@@ -960,6 +960,11 @@ fn substitute_item(item: &mut Item, name: &str, value: &Expr) {
 fn substitute_at(at: &mut AtPos, name: &str, value: &Expr) {
     match at {
         AtPos::Time(e) | AtPos::After(e) => substitute_expr(e, name, value),
+        AtPos::Marker { offset, .. } => {
+            if let Some((_, e)) = offset {
+                substitute_expr(e, name, value);
+            }
+        }
         AtPos::Bar { bar, beat } => {
             substitute_expr(bar, name, value);
             if let Some(b) = beat {
@@ -1113,6 +1118,12 @@ fn check_note(
         None => Time::Beats(0.0),
         Some(AtPos::Time(e) | AtPos::After(e)) => literal_time(e)?,
         Some(AtPos::Bar { bar, beat }) => bar_position(bar, beat.as_ref(), tempo)?,
+        Some(AtPos::Marker { section, .. }) => {
+            return Err(Diagnostic::new(
+                "a section marker only places a command in an arrangement",
+                section.span,
+            ));
+        }
     };
     let dur = literal_time(&note.dur)?;
 

@@ -142,6 +142,20 @@ arrangement song {
 
 A section's bars are its own: `over(8bars)` in `7/8` is eight bars of three and a half beats, at that section's tempo, and its clips cycle with that bar. The change is a step at the start of the section. For a tempo that moves gradually, write `tempo: env[84bpm 64bars 84bpm 8bars.log 96bpm]` instead of the list: an envelope over the whole piece, with levels in bpm and times in bars of music. It is played as steps of an eighth of a bar, and a clip playing through a change speeds up with it. Arrangements can also move an fx parameter over the whole piece (`bass_filter.tone: env[800hz 88bars 3khz]`). Per-section tempo and meter, and these envelopes, apply when an arrangement is rendered (`niminal render file.nml song`); a live session takes the tempo from `tempo` commands. Notes whose lengths are written in beats (a `dur` lane, an instrument time in beats) still count beats at the file's tempo. `--from` and `--to` positions also count bars at the file's tempo.
 
+**Place things by the sections.** Every section can be named in an `at` line, so a riser can lead into a chorus without counting bars. A section is named after its scene (the first time the scene appears); a repeat takes its name with `as`:
+
+```nml
+arrangement song {
+  sections: [verse.over(16bars) chorus.over(16bars) verse.over(16bars) chorus.over(16bars) as last_chorus]
+  at chorus.start - 4bars      riser.start
+  at chorus.start              riser.stop
+  at last_chorus.start - 4bars riser.start
+  at last_chorus.end           hush
+}
+```
+
+`name.start` and `name.end` are the section's edges, and `+` or `-` moves from there. The offset counts in the tempo and meter of the section named, so `chorus.start - 4bars` is four bars of the chorus even if the verse before it is slower. A clip of the next section that you start early (`at chorus.start - 1bar lead.start`) is not restarted when the section begins; it carries on. Two sections with the same name are an error, and so is a position before the start of the piece.
+
 See [Score model](/reference/score-model/) for arrangement-level lanes.
 
 ## Live commands

@@ -368,6 +368,28 @@ impl Parser {
             self.bump();
             return Ok(AtPos::After(self.expr()?));
         }
+        if matches!(self.peek(), Tok::Ident(_))
+            && self.peek_at(1) == &Tok::Dot
+            && matches!(self.peek_at(2), Tok::Ident(s) if s == "start" || s == "end")
+        {
+            let section = self.ident("a section name")?;
+            self.bump();
+            let end = self.is_keyword("end");
+            self.bump();
+            let offset = match self.peek() {
+                Tok::Plus | Tok::Minus => {
+                    let negative = self.peek() == &Tok::Minus;
+                    self.bump();
+                    Some((negative, self.expr()?))
+                }
+                _ => None,
+            };
+            return Ok(AtPos::Marker {
+                section,
+                end,
+                offset,
+            });
+        }
         if !self.is_keyword("bar") {
             return Ok(AtPos::Time(self.expr()?));
         }

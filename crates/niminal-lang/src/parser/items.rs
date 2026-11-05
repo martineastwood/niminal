@@ -312,6 +312,12 @@ impl Parser {
         } else if self.is_keyword("at") {
             self.bump();
             let at = self.at_pos()?;
+            if let AtPos::Marker { section, .. } = &at {
+                return Err(Diagnostic::new(
+                    format!("`{}.start` and `.end` are only known inside an arrangement with `sections`", section.name),
+                    section.span,
+                ));
+            }
             let at_bar = matches!(at, AtPos::Bar { .. });
             if self.at_command() || self.is_edit() {
                 if at_bar {
@@ -497,7 +503,17 @@ impl Parser {
                 self.expect(&Tok::LParen)?;
                 let length = self.expr()?;
                 self.expect(&Tok::RParen)?;
-                list.push(SectionRef { scene, length });
+                let label = if self.is_keyword("as") {
+                    self.bump();
+                    Some(self.ident("a name for this section")?)
+                } else {
+                    None
+                };
+                list.push(SectionRef {
+                    scene,
+                    length,
+                    label,
+                });
                 self.eat(&Tok::Comma);
             }
             self.expect(&Tok::RBracket)?;

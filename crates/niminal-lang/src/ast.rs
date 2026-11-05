@@ -143,6 +143,13 @@ pub enum AtPos {
     },
     /// `+4bars`: that long after the code lands.
     After(Expr),
+    /// `chorus.start - 4bars`, in an arrangement with `sections`: the start or end of a section, and an
+    /// optional offset (`negative` for a minus).
+    Marker {
+        section: Ident,
+        end: bool,
+        offset: Option<(bool, Expr)>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -253,6 +260,9 @@ pub struct ArrangementLane {
 pub struct SectionRef {
     pub scene: Ident,
     pub length: Expr,
+    /// `chorus.over(8bars) as last`: a name for this one section, for `last.start` and `last.end`.
+    /// Without it the first section of a scene is named after the scene.
+    pub label: Option<Ident>,
 }
 
 /// Where a sample or kit comes from.

@@ -1305,6 +1305,85 @@ mod tests {
     }
 
     #[test]
+    fn lines_can_be_placed_by_the_start_and_end_of_a_section() {
+        // 4/4 at 120bpm: a bar is 2s, so the sections begin at 0, 8 and 16s
+        let s = song(
+            "clip riff { instrument: pluck, notes: [g4] }\n\
+             scene b { lead4 }\n\
+             arrangement song {\n\
+               sections: [s.over(4bars) b.over(4bars) s.over(4bars) as again]\n\
+               at again.start - 1bar riff.start\n\
+               at b.end + 1beat riff.start\n\
+               at b.start riff.start\n\
+             }",
+        );
+        let riff: Vec<f64> = notes(&s, 0.0, 40.0)
+            .into_iter()
+            .filter(|n| n.1 == "riff")
+            .map(|n| n.0)
+            .collect();
+        // `riff` is already playing from 8s, so only the first start of it lands; the rest carry on
+        assert_eq!(riff.first().copied(), Some(8.0), "{riff:?}");
+    }
+
+    #[test]
+    fn a_clip_started_ahead_of_its_section_carries_on_into_it() {
+        // `riff` belongs to the second scene but comes in 1 bar (2s) early; the section start must not restart it
+        let s = song(
+            "clip riff { instrument: pluck, notes: [g4 g4] }\n\
+             scene b { lead4, riff }\n\
+             arrangement song {\n\
+               sections: [s.over(4bars) b.over(4bars)]\n\
+               at b.start - 1bar riff.start\n\
+             }",
+        );
+        let riff: Vec<f64> = notes(&s, 0.0, 8.5)
+            .into_iter()
+            .filter(|n| n.1 == "riff")
+            .map(|n| n.0)
+            .collect();
+        // started at 6s: two notes a bar, so 6, 7, 8, 9... and 8s is one of them, not a second start
+        assert_eq!(riff.first().copied(), Some(6.0), "{riff:?}");
+        assert_eq!(riff.iter().filter(|t| (**t - 8.0).abs() < 1e-9).count(), 1, "{riff:?}");
+    }
+
+    #[test]
+    fn a_marker_offset_is_counted_in_the_tempo_of_its_section() {
+        let s = song(
+            "clip riff { instrument: pluck, notes: [g4] }\n\
+             scene b { lead4 }\n\
+             arrangement song {\n\
+               sections: [s.over(4bars) b.over(4bars)]\n\
+               tempo: [120bpm 60bpm]\n\
+               at b.start + 1bar riff.start\n\
+             }",
+        );
+        // b starts at 8s and its bars are 4s long
+        let first = notes(&s, 0.0, 40.0)
+            .into_iter()
+            .find(|n| n.1 == "riff")
+            .map(|n| n.0);
+        assert_eq!(first, Some(12.0));
+    }
+
+    #[test]
+    fn a_marker_names_a_section_and_a_repeat_needs_its_own_name() {
+        let src = |body: &str| {
+            format!(
+                "{STAGE}clip lead4 {{ instrument: pluck, notes: [c4] }}\nscene s {{ lead4 }}\narrangement song {{\n{body}\n}}"
+            )
+        };
+        let error = |body: &str| {
+            let e = compile(&src(body)).err().expect("an error");
+            e.iter().map(|d| d.message.clone()).collect::<Vec<_>>().join("\n")
+        };
+        assert!(error("sections: [s.over(2bars)]\nat verse.start lead.start").contains("no section called `verse`"));
+        assert!(error("sections: [s.over(2bars) s.over(2bars) as s]\n").contains("two sections are called `s`"));
+        assert!(error("sections: [s.over(2bars)]\nat s.start - 1bar lead.start").contains("before the start"));
+        assert!(compile(&src("sections: [s.over(2bars) s.over(2bars)]\nat s.end lead.start")).is_ok());
+    }
+
+    #[test]
     fn a_gradual_tempo_change_speeds_up_the_notes_of_the_clip_playing_through_it() {
         // 4 notes a bar, for 8bars, the tempo rising evenly from 60bpm to 240bpm
         let s =

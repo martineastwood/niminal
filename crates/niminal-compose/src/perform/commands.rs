@@ -27,6 +27,10 @@ impl Perform<'_> {
         match at {
             None => Ok(Time::Beats(0.0)),
             Some(AtPos::Time(e) | AtPos::After(e)) => time_of(e, self),
+            Some(AtPos::Marker { section, .. }) => Err(Diagnostic::new(
+                format!("`{}.start` is only known inside an arrangement with `sections`", section.name),
+                section.span,
+            )),
             Some(AtPos::Bar { bar, beat }) => {
                 let number = |e: &Expr| self.plain(e).map(|r| r.to_f64());
                 let bar_n = number(bar)?;
@@ -41,6 +45,11 @@ impl Perform<'_> {
 
     pub(super) fn command(&self, stmt: &CommandStmt) -> Res<Vec<Scheduled>> {
         let at = self.at_time(&stmt.at)?;
+        self.command_at(stmt, at)
+    }
+
+    /// The command placed at `at`, whatever the statement says.
+    fn command_at(&self, stmt: &CommandStmt, at: Time) -> Res<Vec<Scheduled>> {
         let quantize = stmt.quantize;
         let schedule = |action| Scheduled {
             at,
@@ -251,6 +260,8 @@ impl Perform<'_> {
         let mut actions = Vec::new();
         let mut previous: Vec<usize> = Vec::new();
         let mut tempos: Vec<(f64, Tempo)> = Vec::new();
+        // each named section: its label, where it starts and ends in seconds, and its tempo for offsets
+        let mut markers: Vec<(String, f64, f64, Tempo)> = Vec::new();
         for (i, section) in decl.sections.iter().enumerate() {
             let mut tempo = self.cx.tempo;
             if let Some(e) = decl.tempos.as_ref().map(|l| &l[i]) {
@@ -285,6 +296,7 @@ impl Perform<'_> {
             }
             previous = now;
             let bars = length.to_f64();
+            let start_seconds = seconds;
             match &ramp {
                 None => {
                     if own {
@@ -310,6 +322,26 @@ impl Perform<'_> {
                 }
             }
             bars_so_far += bars;
+            let label = match &section.label {
+                Some(l) => Some(l),
+                None if !decl.sections[..i]
+                    .iter()
+                    .any(|s| s.scene.name == section.scene.name || s.label.as_ref().is_some_and(|l| l.name == section.scene.name)) =>
+                {
+                    Some(&section.scene)
+                }
+                None => None,
+            };
+            if let Some(label) = label {
+                if markers.iter().any(|m| m.0 == label.name) {
+                    return Err(Diagnostic::new(
+                        format!("two sections are called `{}`", label.name),
+                        label.span,
+                    )
+                    .with_help("name one of them: `chorus.over(8bars) as last`"));
+                }
+                markers.push((label.name.clone(), start_seconds, seconds, tempo));
+            }
         }
         if !decl.sections.is_empty() {
             actions.push(Scheduled {
@@ -320,7 +352,42 @@ impl Perform<'_> {
         }
         // lines placed from the start of the arrangement, such as `at +4bars bass.mute`
         for stmt in &decl.commands {
-            actions.extend(self.command(stmt)?);
+            if let Some(AtPos::Marker {
+                section,
+                end,
+                offset,
+            }) = &stmt.at
+            {
+                let Some((_, start, finish, tempo)) =
+                    markers.iter().find(|m| m.0 == section.name)
+                else {
+                    let mut d = Diagnostic::new(
+                        format!("no section called `{}` in arrangement `{}`", section.name, decl.name.name),
+                        section.span,
+                    );
+                    if let Some(c) = closest(&section.name, markers.iter().map(|m| m.0.as_str())) {
+                        d = d.with_help(format!("did you mean `{c}`?"));
+                    } else {
+                        d = d.with_help("sections are named after their scene; a scene used twice needs `as name` on the repeats");
+                    }
+                    return Err(d);
+                };
+                let mut t = if *end { *finish } else { *start };
+                if let Some((negative, e)) = offset {
+                    // an offset counts at the tempo and meter of the section it is measured from
+                    let off = time_of(e, self)?.to_seconds(*tempo);
+                    t += if *negative { -off } else { off };
+                }
+                if t < 0.0 {
+                    return Err(Diagnostic::new(
+                        "that is before the start of the arrangement",
+                        section.span,
+                    ));
+                }
+                actions.extend(self.command_at(stmt, Time::Seconds(t))?);
+            } else {
+                actions.extend(self.command(stmt)?);
+            }
         }
         let mut lanes = Vec::new();
         for lane in &decl.lanes {
