@@ -2716,6 +2716,24 @@ fn an_arrangement_can_hold_timed_lines() {
 }
 
 #[test]
+fn a_live_arrangement_starts_its_parameter_lanes_where_they_were_placed() {
+    let src = "bus src\ninstr pluck(freq: hz) {\n  out = osc(sine, freq)\n  src += out\n}\nfx g(open: 0..1 = 0) { out = src * open }\nclip a { instrument: pluck\nnotes: [c4] }\nscene one { a }\nscene two { a }\narrangement song {\n  sections: [one.over(2bars) two.over(2bars)]\n  at two.start g.open: env[0.2 1bar 1.0]\n}\n";
+    // at 120bpm a bar is 2s, so the lane starts at 4s; started later, it moves with the arrangement
+    let p = ok(&format!("{src}song.start"));
+    assert!(
+        p.performance
+            .iter()
+            .any(|s| matches!(&s.action, Action::Lane { control, .. } if control == "g::open"))
+    );
+    let open = fx_levels(&p, "g::open", 0.0, 20.0);
+    assert_eq!(open.first().copied(), Some((4.0, 0.2)), "{open:?}");
+    assert!(open.iter().all(|(at, _)| *at >= 4.0), "{open:?}");
+    let later = ok(&format!("{src}at +2bars song.start"));
+    let open = fx_levels(&later, "g::open", 0.0, 20.0);
+    assert_eq!(open.first().map(|o| o.0), Some(8.0), "{open:?}");
+}
+
+#[test]
 fn on_runs_commands_when_something_arrives() {
     let p = ok(&stage(
         "on midi.note(36) lead.start\non midi.note(37, 10) {\n  bass.start\n  lead.stop\n}\non osc_in(\"/go\") hush\n",

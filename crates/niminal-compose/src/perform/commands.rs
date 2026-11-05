@@ -101,10 +101,10 @@ impl Perform<'_> {
         match &stmt.command {
             Command::Start { name, .. } if self.arrangements.contains_key(&name.name) => {
                 let arrangement = &self.arrangements[&name.name];
-                if !arrangement.tempos.is_empty() || !arrangement.lanes.is_empty() {
+                if !arrangement.tempos.is_empty() {
                     return Err(Diagnostic::new(
                         format!(
-                            "`{0}` sets its own tempo or moves a parameter over the whole piece, which only a render of it can follow",
+                            "`{0}` sets its own tempo or meter for its sections, which only a render of it can follow",
                             name.name
                         ),
                         name.span,
@@ -113,7 +113,7 @@ impl Perform<'_> {
                 }
                 let tempo = self.cx.tempo;
                 let base = at.to_seconds(tempo);
-                return Ok(self.arrangements[&name.name]
+                let mut scheduled: Vec<Scheduled> = arrangement
                     .actions
                     .iter()
                     .filter(|a| !matches!(a.action, Action::Hush) || a.at.to_seconds(tempo) > 0.0)
@@ -122,7 +122,19 @@ impl Perform<'_> {
                         action: a.action.clone(),
                         quantize,
                     })
-                    .collect());
+                    .collect();
+                // its parameter lanes start from where they were placed
+                for (control, lane, placed) in &arrangement.lanes {
+                    scheduled.push(Scheduled {
+                        at: Time::Seconds(base + placed.to_seconds(tempo)),
+                        action: Action::Lane {
+                            control: control.clone(),
+                            lane: lane.clone(),
+                        },
+                        quantize,
+                    });
+                }
+                return Ok(scheduled);
             }
             Command::Stop(name) if self.arrangements.contains_key(&name.name) => {
                 return Ok(vec![schedule(Action::Cancel {

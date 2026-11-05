@@ -62,6 +62,11 @@ pub(crate) enum NamedAction {
     Panic,
     /// Stop everything; bars count from here.
     Reset,
+    /// A parameter lane of an arrangement, from this moment.
+    Lane {
+        control: String,
+        lane: niminal_compose::EnvLane,
+    },
     /// Bars count from here. The session starts with one, so a new tempo or meter can stretch it
     /// along with the clips.
     Origin,
@@ -1940,6 +1945,10 @@ pub(crate) fn name_action(program: &Composition, action: &Action) -> Option<Name
         Action::Hush => NamedAction::Hush,
         Action::Panic => NamedAction::Panic,
         Action::Reset => NamedAction::Reset,
+        Action::Lane { control, lane } => NamedAction::Lane {
+            control: control.clone(),
+            lane: lane.clone(),
+        },
         Action::Capture { .. } | Action::Cancel { .. } => return None,
     })
 }
@@ -1969,6 +1978,10 @@ pub(crate) fn schedule_for(program: &Composition, history: &[HistoryEntry]) -> S
                 NamedAction::Hush => Action::Hush,
                 NamedAction::Panic => Action::Panic,
                 NamedAction::Reset => Action::Reset,
+                NamedAction::Lane { control, lane } => Action::Lane {
+                    control: control.clone(),
+                    lane: lane.clone(),
+                },
                 NamedAction::Origin => return None,
             };
             Some(Scheduled {

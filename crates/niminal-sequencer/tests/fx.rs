@@ -352,3 +352,25 @@ fn the_shelf_chorus_phaser_and_glitch_play_at_any_tempo() {
         }
     }
 }
+
+#[test]
+fn a_live_arrangement_moves_an_effect_parameter_from_where_its_lane_is_placed() {
+    // the effect is shut until the arrangement's lane opens it a bar (2 s at 120bpm) in
+    let source = "bus src: stereo\ninstr drone(freq: hz) {\n  src += osc(sine, freq) * 0.5\n}\nfx gate(open: 0..1 = 0) {\n  out = src * open\n}\nclip c {\n  instrument: drone\n  length: 8bars\n  notes: [c4]\n  dur: 8bars\n}\nscene s { c }\narrangement song {\n  sections: [s.over(4bars)]\n  at +1bar gate.open: env[1 10ms 1]\n}\n";
+    let mut session = Offline::new(48_000.0, Layout::Stereo);
+    session.eval(source, Some("now")).unwrap();
+    session.eval("song.start", Some("now")).unwrap();
+    let before = session.process(80_000).remove(0);
+    assert!(
+        peak(&before[12_000..]) < 0.001,
+        "shut before the lane starts: {}",
+        peak(&before[12_000..])
+    );
+    session.process(24_000);
+    let after = session.process(48_000).remove(0);
+    assert!(
+        peak(&after) > 0.05,
+        "open after it: {}",
+        peak(&after)
+    );
+}

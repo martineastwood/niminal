@@ -307,6 +307,8 @@ impl Schedule {
         let mut segments: Vec<Segment> = Vec::new();
         let mut gates = Vec::new();
         let mut panics = Vec::new();
+        // lanes the arrangement placed, and lanes that commands started (a live arrangement's)
+        let mut placed_lanes = lanes.to_vec();
 
         let close = |segments: &mut Vec<Segment>, node: Option<usize>, at: f64| {
             for s in segments
@@ -385,6 +387,9 @@ impl Schedule {
                 Action::Unmute { node } => gates.push((at, Gate::Unmute(*node))),
                 Action::Solo { node } => gates.push((at, Gate::Solo(*node))),
                 Action::Unsolo { node } => gates.push((at, Gate::Unsolo(*node))),
+                Action::Lane { control, lane } => {
+                    placed_lanes.push((control.clone(), lane.clone(), Time::Seconds(at)));
+                }
                 Action::Capture { .. } | Action::Cancel { .. } => {}
             }
         }
@@ -395,7 +400,7 @@ impl Schedule {
             panics,
             tempo,
             sections: sections.to_vec(),
-            lanes: lanes.to_vec(),
+            lanes: placed_lanes,
         }
     }
 

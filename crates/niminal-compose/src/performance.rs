@@ -308,6 +308,12 @@ pub enum Action {
     Cancel {
         arrangement: String,
     },
+    /// Move an fx parameter from this moment, as an arrangement's lane does in a render: `control` is the
+    /// parameter's name (`bass_filter::cutoff`) and `lane` the envelope.
+    Lane {
+        control: String,
+        lane: EnvLane,
+    },
     /// Write the last `bars` of playing clips to `score/{name}.nms`. Only a live
     /// session does the write; a render ignores it.
     Capture {

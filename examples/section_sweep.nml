@@ -1,6 +1,7 @@
 // Moving an effect's parameter over a stretch of a piece. Lines in an arrangement can start at a section:
 // the filter opens across the whole verse, then closes over the first two bars of the chorus.
 // Render with:  niminal render examples/section_sweep.nml song --out sweep.wav
+// ...or play it live: evaluate the file, then `song.start`.
 config { channels: stereo }
 tempo 110bpm
 
