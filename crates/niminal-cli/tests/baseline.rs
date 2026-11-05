@@ -148,7 +148,10 @@ fn examples_render_as_they_did() {
         let _ = std::fs::remove_file(&out);
         let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_niminal"));
         command.arg("render").arg(&file);
-        if file.file_name().is_some_and(|name| name == "song.nml") {
+        if file
+            .file_name()
+            .is_some_and(|name| name == "song.nml" || name == "section_sweep.nml")
+        {
             command.arg("song");
         }
         let run = command

@@ -1,0 +1,28 @@
+// Moving an effect's parameter over a stretch of a piece. Lines in an arrangement can start at a section:
+// the filter opens across the whole verse, then closes over the first two bars of the chorus.
+// Render with:  niminal render examples/section_sweep.nml song --out sweep.wav
+config { channels: stereo }
+tempo 110bpm
+
+bus bass_bus: stereo
+
+instr bass_voice(freq: hz) {
+  voice = osc(saw, freq) * env[0 2ms 1 300ms.exp 0]
+  bass_bus += voice.pan(angle: 0deg).gain(-6db)
+}
+
+// the filter is an fx, so its cutoff is a parameter an arrangement can move
+fx bass_filter(cutoff: 100hz..8khz = 400hz) {
+  out = bass_bus.lpf(cutoff: cutoff, res: 0.3)
+}
+
+clip bass { instrument: bass_voice, notes: [c2 ~ c2 eb2 ~ g1 bb1 ~] }
+clip bass_up = bass.transpose(+5st)
+scene verse  { bass }
+scene chorus { bass_up }
+
+arrangement song {
+  sections: [verse.over(8bars) chorus.over(8bars)]
+  at verse.start   bass_filter.cutoff: env[300hz 8bars.exp 4khz]
+  at chorus.start  bass_filter.cutoff: env[4khz 2bars 400hz]
+}

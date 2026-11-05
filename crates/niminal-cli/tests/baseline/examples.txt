@@ -30,6 +30,7 @@ physical_models.nml: 1x488452
 room.nml: 1x222063
 saw_lead.nml: 1x158399
 score_prog.nml: 1x384240
+section_sweep.nml: 2x407061
 song.nml: 2x583731
 spectral.nml: 2x432522
 spectral_delay.nml: 2x473639
