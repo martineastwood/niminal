@@ -336,5 +336,6 @@ pub struct Arrangement {
     /// Where each section's own tempo and meter begin, in seconds. Empty if the piece has just the file's.
     pub tempos: Vec<(f64, niminal_score::Tempo)>,
     /// Envelopes moving part parameters over the piece: the control's name (`bass::tone`) and the shape.
-    pub lanes: Vec<(String, EnvLane)>,
+    /// and when each starts (from the start of the piece unless the arrangement placed it).
+    pub lanes: Vec<(String, EnvLane, Time)>,
 }

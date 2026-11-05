@@ -154,7 +154,17 @@ arrangement song {
 }
 ```
 
-`name.start` and `name.end` are the section's edges, and `+` or `-` moves from there. The offset counts in the tempo and meter of the section named, so `chorus.start - 4bars` is four bars of the chorus even if the verse before it is slower. A clip of the next section that you start early (`at chorus.start - 1bar lead.start`) is not restarted when the section begins; it carries on. Two sections with the same name are an error, and so is a position before the start of the piece.
+`name.start` and `name.end` are the section's edges, and `+` or `-` moves from there. The offset counts in the tempo and meter of the section named, so `chorus.start - 4bars` is four bars of the chorus even if the verse before it is slower. A clip of the next section that you start early (`at chorus.start - 1bar lead.start`) is not restarted when the section begins; it carries on. A parameter lane can start at a marker too, which is how to fade or sweep over a stretch of the piece instead of all of it. The lane moves an fx parameter, as above, from where it is placed, and holds its last level after:
+
+```nml
+arrangement song {
+  sections: [verse.over(16bars) chorus.over(16bars) as last]
+  at last.start - 4bars  bass_filter.tone: env[400hz 4bars.exp 3khz]
+  at last.end - 2bars    bass_filter.tone: env[3khz 2bars.exp 200hz]
+}
+```
+
+The same parameter can have several placed lanes. Two sections with the same name are an error, and so is a position before the start of the piece.
 
 See [Score model](/reference/score-model/) for arrangement-level lanes.
 

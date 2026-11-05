@@ -48,6 +48,47 @@ impl Perform<'_> {
         self.command_at(stmt, at)
     }
 
+    /// Where a line of an arrangement happens: a section marker with its offset, or any other time.
+    fn place(
+        &self,
+        at: &Option<AtPos>,
+        markers: &[(String, f64, f64, Tempo)],
+        arrangement: &str,
+    ) -> Res<Time> {
+        let Some(AtPos::Marker {
+            section,
+            end,
+            offset,
+        }) = at
+        else {
+            return self.at_time(at);
+        };
+        let Some((_, start, finish, tempo)) = markers.iter().find(|m| m.0 == section.name) else {
+            let mut d = Diagnostic::new(
+                format!("no section called `{}` in arrangement `{arrangement}`", section.name),
+                section.span,
+            );
+            d = match closest(&section.name, markers.iter().map(|m| m.0.as_str())) {
+                Some(c) => d.with_help(format!("did you mean `{c}`?")),
+                None => d.with_help("sections are named after their scene; a scene used twice needs `as name` on the repeats"),
+            };
+            return Err(d);
+        };
+        let mut t = if *end { *finish } else { *start };
+        if let Some((negative, e)) = offset {
+            // an offset counts at the tempo and meter of the section it is measured from
+            let off = time_of(e, self)?.to_seconds(*tempo);
+            t += if *negative { -off } else { off };
+        }
+        if t < 0.0 {
+            return Err(Diagnostic::new(
+                "that is before the start of the arrangement",
+                section.span,
+            ));
+        }
+        Ok(Time::Seconds(t))
+    }
+
     /// The command placed at `at`, whatever the statement says.
     fn command_at(&self, stmt: &CommandStmt, at: Time) -> Res<Vec<Scheduled>> {
         let quantize = stmt.quantize;
@@ -352,42 +393,8 @@ impl Perform<'_> {
         }
         // lines placed from the start of the arrangement, such as `at +4bars bass.mute`
         for stmt in &decl.commands {
-            if let Some(AtPos::Marker {
-                section,
-                end,
-                offset,
-            }) = &stmt.at
-            {
-                let Some((_, start, finish, tempo)) =
-                    markers.iter().find(|m| m.0 == section.name)
-                else {
-                    let mut d = Diagnostic::new(
-                        format!("no section called `{}` in arrangement `{}`", section.name, decl.name.name),
-                        section.span,
-                    );
-                    if let Some(c) = closest(&section.name, markers.iter().map(|m| m.0.as_str())) {
-                        d = d.with_help(format!("did you mean `{c}`?"));
-                    } else {
-                        d = d.with_help("sections are named after their scene; a scene used twice needs `as name` on the repeats");
-                    }
-                    return Err(d);
-                };
-                let mut t = if *end { *finish } else { *start };
-                if let Some((negative, e)) = offset {
-                    // an offset counts at the tempo and meter of the section it is measured from
-                    let off = time_of(e, self)?.to_seconds(*tempo);
-                    t += if *negative { -off } else { off };
-                }
-                if t < 0.0 {
-                    return Err(Diagnostic::new(
-                        "that is before the start of the arrangement",
-                        section.span,
-                    ));
-                }
-                actions.extend(self.command_at(stmt, Time::Seconds(t))?);
-            } else {
-                actions.extend(self.command(stmt)?);
-            }
+            let at = self.place(&stmt.at, &markers, &decl.name.name)?;
+            actions.extend(self.command_at(stmt, at)?);
         }
         let mut lanes = Vec::new();
         for lane in &decl.lanes {
@@ -408,7 +415,8 @@ impl Perform<'_> {
                 decl.name.name, node.name, param.name, node.name
             );
             self.bind_env(&mut curve, &node.name, &param.name, &who, param.span)?;
-            lanes.push((format!("{}::{}", node.name, param.name), curve));
+            let origin = self.place(&lane.at, &markers, &decl.name.name)?;
+            lanes.push((format!("{}::{}", node.name, param.name), curve, origin));
         }
         Ok(Arrangement {
             name: decl.name.name.clone(),

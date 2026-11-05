@@ -250,6 +250,8 @@ pub struct ArrangementDecl {
 /// `bass.tone: env[800hz 8bars 3khz]` in an arrangement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArrangementLane {
+    /// `at last_chorus.end - 4bars bass.gain: env[...]`: where it starts. From the start of the piece if not given.
+    pub at: Option<AtPos>,
     pub node: Ident,
     pub param: Ident,
     pub value: EnvLit,

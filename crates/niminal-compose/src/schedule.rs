@@ -226,7 +226,7 @@ pub struct Schedule {
     tempo: Tempo,
     sections: Vec<(f64, Tempo)>,
     /// Envelopes over the whole piece (an arrangement's lanes): the control they move and the shape.
-    lanes: Vec<(String, EnvLane)>,
+    lanes: Vec<(String, EnvLane, Time)>,
 }
 
 impl Composition {
@@ -288,7 +288,7 @@ impl Schedule {
         node_names: Vec<String>,
         commands: &[Scheduled],
         sections: &[(f64, Tempo)],
-        lanes: &[(String, EnvLane)],
+        lanes: &[(String, EnvLane, Time)],
     ) -> Schedule {
         let tempo_at = |at: f64| {
             sections
@@ -795,7 +795,8 @@ impl Schedule {
         to: f64,
         out: &mut Vec<ControlSet>,
     ) -> Result<(), ScheduleError> {
-        for (control, lane) in &self.lanes {
+        for (control, lane, placed) in &self.lanes {
+            let origin = self.seconds_from(0.0, *placed);
             let fail = |why: String| ScheduleError(format!("arrangement lane `{control}`: {why}"));
             let unit = lane
                 .unit
@@ -805,7 +806,7 @@ impl Schedule {
             };
             let start = level(lane.start)?;
             let mut steps = Vec::with_capacity(lane.segments.len());
-            let mut at = 0.0;
+            let mut at = origin;
             for (dur, shape, to_level) in &lane.segments {
                 let seconds = self.seconds_from(at, *dur);
                 steps.push((seconds, *shape, level(*to_level)?));
@@ -816,7 +817,7 @@ impl Schedule {
                 start,
                 &steps,
                 lane.looped,
-                0.0,
+                origin,
                 from.max(0.0),
                 to,
                 out,
@@ -1345,6 +1346,30 @@ mod tests {
         // started at 6s: two notes a bar, so 6, 7, 8, 9... and 8s is one of them, not a second start
         assert_eq!(riff.first().copied(), Some(6.0), "{riff:?}");
         assert_eq!(riff.iter().filter(|t| (**t - 8.0).abs() < 1e-9).count(), 1, "{riff:?}");
+    }
+
+    #[test]
+    fn a_lane_can_start_at_a_section_marker() {
+        // sections start at 0, 8 and 16s; the lane starts a bar (2s) before the third and takes a bar
+        let s = song(
+            "scene b { lead4 }\n\
+             bus src\n\
+             fx g(open: 0..1 = 0) { out = src * open }\n\
+             arrangement song {\n\
+               sections: [s.over(4bars) b.over(4bars) s.over(4bars) as again]\n\
+               at again.start - 1bar g.open: env[0.2 1bar 0.9]\n\
+               at again.start g.open: env[0.9 1bar 0.1]\n\
+             }",
+        );
+        let c = s.controls(0.0, 40.0).unwrap();
+        let at: Vec<(f64, f64)> = c
+            .iter()
+            .filter(|c| c.name.ends_with("::open"))
+            .map(|c| (c.at, c.target))
+            .collect();
+        assert_eq!(at.first().map(|c| c.0), Some(14.0), "{at:?}");
+        assert!(at.iter().any(|c| (c.0 - 16.0).abs() < 1e-9), "{at:?}");
+        assert!(at.iter().all(|c| c.0 >= 14.0), "nothing before the lane starts: {at:?}");
     }
 
     #[test]

@@ -393,9 +393,18 @@ impl Parser {
             if self.peek() == &Tok::RBrace {
                 break;
             }
+            let mut lane_at = None;
             if self.is_keyword("at") {
                 self.bump();
                 let at = self.at_pos()?;
+                if matches!(self.peek(), Tok::Ident(_))
+                    && self.peek_at(1) == &Tok::Dot
+                    && matches!(self.peek_at(2), Tok::Ident(_))
+                    && self.peek_at(3) == &Tok::Colon
+                {
+                    // a lane that starts there: `at chorus.end - 4bars bass.gain: env[...]`
+                    lane_at = Some(at);
+                } else {
                 if matches!(at, AtPos::Bar { .. }) || !(self.at_command() || self.is_edit()) {
                     return Err(self.unexpected(
                         "a command placed with `at +4bars`, such as `at +4bars chorus.start`",
@@ -408,6 +417,7 @@ impl Parser {
                 };
                 commands.push(command);
                 continue;
+                }
             }
             let key = self.ident("`sections`")?;
             if self.peek() == &Tok::Dot {
@@ -424,9 +434,10 @@ impl Parser {
                             )),
                     );
                 };
-                if lanes
-                    .iter()
-                    .any(|l| l.node.name == key.name && l.param.name == param.name)
+                if lane_at.is_none()
+                    && lanes.iter().any(|l| {
+                        l.at.is_none() && l.node.name == key.name && l.param.name == param.name
+                    })
                 {
                     return Err(Diagnostic::new(
                         format!("lane `{}.{}` is given twice", key.name, param.name),
@@ -434,6 +445,7 @@ impl Parser {
                     ));
                 }
                 lanes.push(ArrangementLane {
+                    at: lane_at,
                     node: key,
                     param,
                     value: lit,
