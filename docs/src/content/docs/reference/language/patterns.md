@@ -207,6 +207,24 @@ Every event accepts:
 | `dur` | Note hold time |
 | `nudge` | Small timing offset (swing, feel) |
 
+## Changing patterns and clips
+
+Every change is a plain verb written after the thing it changes, and they chain. The same verbs work on a pattern, on a clip and on a grid. On a clip they change the lanes they make sense for, and `clip b = a.change` makes a new clip from another one.
+
+```niminal
+riff = [c4 e4 g4 b4 g4 e4 d4 ~]
+
+riff.stereo_copy(reverse)                    // original on the left, the reversed copy on the right
+riff.overlay(transpose(+12st), after: 1/8beat) // an octave-up copy, an eighth of a beat late
+riff.every(2, reverse).sometimes(25%, fast(2)) // chained
+riff.rotate(1)                               // the same rhythm, the notes moved one step along
+riff.where(grid[x... x...], transpose(+12st))  // change only the notes on the grid's hits
+
+clip lead_wide = lead.stereo_copy(reverse)   // a new clip from a clip
+```
+
+A change you give to another verb, as in `stereo_copy(reverse)` or `every(2, fast(2).reverse)`, is written with the pattern left out. See `examples/transforms.nml` for these played in turn.
+
 ## Pattern operations
 
 Numbers in `fast`, `slow`, `every`, `repeat_each`, `spread_evenly` and `start_later` can be patterns: `fast([<1 2>])`, `spread_evenly(hits: [<3 5>], steps: 8)`. A pattern in an argument is written in brackets. So can the amounts in `transpose`, `drop`, `swing`, `take`, `strum` and the chance in `sometimes`: `transpose([<0st +7st>])`, `drop([<10% 50%>])`, `sometimes([<10% 50%>], fast(2))`.
@@ -237,6 +255,8 @@ Arithmetic is an operation too: `sometimes(25%, add(7st))`.
 | `to_steps(16)` | Read a signal 16 times a cycle |
 | `loop_start(25%)` | Loop the start of the cycle |
 | `where(note < c3, transpose(+12st))` | Change the notes that pass a test on `note` (or `note.freq`) |
+| `where(grid[x . x .], transpose(+12st))` | Change the notes that fall on the grid's hits |
+| `rotate(1)` | Move the notes along one step and keep the rhythm: `c e g` becomes `e g c` |
 | `grid[x.x.].invert` | Swap hits and rests in a grid |
 | `back_and_forth` | Forwards one cycle, backwards the next |
 | `take(75%)` | Play only the first part of each cycle |
@@ -293,6 +313,7 @@ A lane such as `gain: [..]` is read where each note starts. These operations ins
 | `begin(25%)` | Start each sample note a quarter of the way in |
 | `stereo_copy(reverse)` | The original on the left and the changed copy on the right (`angle: 45deg` sets how far out; the default is 30deg, a hard pan in stereo) |
 | `chop(8)` | Cut each sample note into 8 pieces, each playing the next part of the sample |
+| `slice(4, [0 2 1 3])` | Play the four quarters of the sample in that order and rhythm |
 | `interleave_chops(4)` | Play the pattern once for each of 4 parts of the sample, in turn |
 
 `pan` and `gain` also work as lanes (`pan: [-30deg 30deg]`). Chopping a note whose instrument isn't a sample reports that it has no `begin` parameter when the note plays.

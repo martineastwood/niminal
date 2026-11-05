@@ -1,0 +1,64 @@
+// Transforming patterns and clips. Every change is a plain verb you write after what it changes, and they chain:
+// `riff.every(2, reverse).transpose(+5st)`. A change works on a pattern, on a clip (all its lanes that it makes
+// sense for) and on a grid, and `clip b = a.change` makes a new clip from another.
+// Render with:  niminal render examples/transforms.nml --out transforms.wav --bars 8
+// Live, try:  lead.stereo_copy(reverse)   then   lead.rotate(1)   then   lead.undo
+config { channels: stereo }
+tempo 110bpm
+
+instr pluck(freq: hz) {
+  out = osc(saw, freq).lpf(cutoff: freq * 5, res: 0.2) * perc(decay: 300ms) * 0.4
+}
+
+riff = [c4 e4 g4 b4 g4 e4 d4 ~]
+
+clip lead {
+  instrument: pluck
+  notes: riff
+}
+
+// The original on the left and a changed copy, here reversed, on the right.
+clip lead_wide {
+  instrument: pluck
+  notes: riff.stereo_copy(reverse)
+}
+
+// Stack a changed copy on top of the notes, here an octave up and an eighth of a beat late.
+clip lead_echo = lead.overlay(transpose(+12st), after: 1/8beat)
+
+// Change every second cycle, and a random quarter of the notes now and then.
+clip lead_busy = lead.every(2, reverse).sometimes(25%, fast(2))
+
+// Move the notes one step along and keep the rhythm: `c4 e4 g4 b4` becomes `e4 g4 b4 c4`.
+clip lead_rotated = lead.rotate(1)
+
+// Change only the notes on a grid's hits, or only those that pass a test.
+clip lead_accents {
+  instrument: pluck
+  notes: riff.where(grid[x... x...], transpose(+12st)).where(note < d4, transpose(-12st))
+}
+
+scene plain  { lead }
+scene wide   { lead_wide }
+scene echoes { lead_echo }
+scene busy   { lead_busy }
+scene turned { lead_rotated }
+scene accents { lead_accents }
+
+// In an arrangement a scene start only starts, so each line also stops the scene it replaces.
+arrangement tour {
+  at +0bars  plain.start
+  at +2bars  plain.stop
+  at +2bars  wide.start
+  at +3bars  wide.stop
+  at +3bars  echoes.start
+  at +4bars  echoes.stop
+  at +4bars  busy.start
+  at +5bars  busy.stop
+  at +5bars  turned.start
+  at +6bars  turned.stop
+  at +6bars  accents.start
+  at +8bars  hush
+}
+
+tour.start

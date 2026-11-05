@@ -30,7 +30,7 @@ for (const entry of [
   "project.js",
   "panel.js",
   "learn.js",
-  "live.js",
+  "compat.js",
   "binaries.js",
   "live-client.js",
   "language-configuration.json",

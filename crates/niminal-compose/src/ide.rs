@@ -401,7 +401,7 @@ pub fn pattern_ops() -> Vec<OpInfo> {
         op("loop_start", "Loop the start of each cycle to fill it: `loop_start(25%)`.", &[("length", "percent", true)]),
         op(
             "where",
-            "Change only the notes that pass a test: `where(note < c3, transpose(+12st))`. The test compares `note` (or `note.freq`) with a note or value.",
+            "Change only the notes that pass a test: `where(note < c3, transpose(+12st))`. The test compares `note` (or `note.freq`) with a note or value, or is a grid: `where(grid[x . x .], transpose(+12st))` changes the notes that fall on its hits.",
             &[("when", "test", true), ("change", "transform", true)],
         ),
         op("gain", "Set how loud each note is: `gain(-6db)` or `gain([0db -6db])`.", &[("level", "db", true)]),
@@ -421,6 +421,16 @@ pub fn pattern_ops() -> Vec<OpInfo> {
             "interleave_chops",
             "Play the pattern once for each part of the sample, in turn: `interleave_chops(4)`.",
             &[("pieces", "number", true)],
+        ),
+        op(
+            "slice",
+            "Cut the sample into parts and play them in the order and rhythm of a pattern: `slice(4, [0 2 1 3])`.",
+            &[("parts", "number", true), ("order", "pattern", true)],
+        ),
+        op(
+            "rotate",
+            "Move the notes along by this many steps and keep the rhythm: `rotate(1)` turns `c e g` into `e g c`.",
+            &[("by", "number", true)],
         ),
         op("take", "Play only the first part of each cycle: `take(75%)`.", &[("length", "percent", true)]),
         op("crop", "Stretch part of each cycle to fill it: `crop(25%, 75%)`.", &[("from", "percent", true), ("to", "percent", true)]),

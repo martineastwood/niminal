@@ -265,7 +265,7 @@ clip lead { instrument: tone }
 
 /// Programs that are legal but ask for far more than any machine can play.
 /// None may take long to accept, and the session must keep rendering audio.
-const GREEDY: [&str; 20] = [
+const GREEDY: [&str; 24] = [
     "lead.__update([c4*1024])",
     "lead.__update([[c4*1024]*1024])",
     "lead.__update([[[c4*1024]*1024]*1024])",
@@ -286,6 +286,10 @@ const GREEDY: [&str; 20] = [
     "lead.__update([c4*1024].chop(1024).chop(1024))",
     "lead.__update([c4*1024].interleave_chops(1024))",
     "lead.__update([c4*64].stereo_copy(chop(64).stereo_copy(fast(64))))",
+    "lead.__update([c4*1024 e4*1024].rotate(1000000000000))",
+    "lead.__update([c4*1024].slice(1024, [0*1024 1*1024]).slice(1024, [0*1024]))",
+    "lead.__update([c4*1024].where(grid[xxxxxxxx x.x.x.x.], fast(1000)).where(grid[xx.x], fast(1000)))",
+    "lead.__update([c4*256].rotate([1 2 3]).slice(1000, [0 500 999]).rotate(-1))",
 ];
 
 #[test]

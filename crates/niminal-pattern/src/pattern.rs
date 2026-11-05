@@ -990,6 +990,16 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
         })
     }
 
+    /// Move the values `n` events along within each cycle, wrapping round, and keep the rhythm.
+    pub fn rotate_values(&self, n: i64) -> Pattern<T> {
+        self.rewrite_cycles(move |events, _| {
+            let len = events.len() as i64;
+            (0..len)
+                .map(|i| events[(i + n).rem_euclid(len) as usize].value.clone())
+                .collect()
+        })
+    }
+
     /// Change a different `1/n` of the cycle each cycle, in turn.
     pub fn in_turn(&self, n: i64, f: impl Fn(Pattern<T>) -> Pattern<T>) -> Pattern<T> {
         if n < 1 {

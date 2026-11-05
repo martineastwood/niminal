@@ -342,9 +342,21 @@ impl Perform<'_> {
             "where" => {
                 // `where(note < c3, change)`: change only the notes that pass the test
                 let e = self.arg(name, rest, "when", span)?;
+                // `where(grid[x . x .], change)`: change the notes that fall on its hits
+                if !matches!(e.kind, ExprKind::Compare { .. })
+                    && let PerfValue::Grid(g) = self.eval(e, it)?
+                {
+                    let hits = g.map(|_| true);
+                    let rests = g.invert(Hit::new(Strength::Normal)).map(|_| true);
+                    let change = self.transformer::<Step>(self.arg(name, rest, "change", span)?, &p)?;
+                    return Ok(PerfValue::Pattern(Pattern::stack(vec![
+                        p.mask(&rests),
+                        change(p.mask(&hits)),
+                    ])));
+                }
                 let bad = || {
                     Diagnostic::new(
-                        "`where` takes a test on the note, such as `note < c3`",
+                        "`where` takes a test on the note, such as `note < c3`, or a grid such as `grid[x . x .]`",
                         e.span,
                     )
                     .with_help("write `note` or `note.freq`, a comparison and a note or value")
@@ -450,6 +462,15 @@ impl Perform<'_> {
                 // each piece plays the next stretch of the sample
                 p.pieces(n, |s, i, n| Step {
                     begin: Some(slice_start(s.begin, i, n)),
+                    ..*s
+                })
+            }
+            "slice" => {
+                // `slice(4, [0 2 1 3])`: play those quarters of the sample, in that order and rhythm
+                let n = self.whole(self.arg(name, rest, "parts", span)?, "slice")?;
+                let order = self.num_param(self.arg(name, rest, "order", span)?, it)?.pattern();
+                p.combine(&order, Structure::Right, move |s, i| Step {
+                    begin: Some(slice_start(s.begin, i.floor().rem_euclid(n), n)),
                     ..*s
                 })
             }

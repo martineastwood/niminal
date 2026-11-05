@@ -3265,3 +3265,38 @@ kit_a = kit { kick: tick }
 clip d { instrument: kit_a\n notes: drum_grid(theme: techno) }\nd.start");
     assert!(m.contains("isn't a sample in a kit"), "{m}");
 }
+
+#[test]
+fn rotate_moves_the_notes_and_keeps_the_rhythm() {
+    let n = notes_of("lead.__update([c4 e4 g4].rotate(1))", 1);
+    assert_eq!(
+        n.iter().map(|e| e.0).collect::<Vec<_>>(),
+        [r(0, 1), r(1, 3), r(2, 3)]
+    );
+    assert_eq!(
+        n.iter().map(|e| e.1).collect::<Vec<_>>(),
+        [midi(64), midi(67), midi(60)]
+    );
+    let back = values_of("lead.__update([c4 e4 g4].rotate(-1))", 1);
+    assert_eq!(back, [midi(67), midi(60), midi(64)]);
+}
+
+#[test]
+fn slice_plays_the_parts_in_the_order_given() {
+    let s = steps_of("lead.__update([c4].slice(4, [0 2 1 3]))", 1);
+    assert_eq!(
+        s.iter().map(|e| (e.0, e.1.begin.unwrap())).collect::<Vec<_>>(),
+        [(r(0, 1), 0.0), (r(1, 4), 0.5), (r(1, 2), 0.25), (r(3, 4), 0.75)]
+    );
+}
+
+#[test]
+fn where_takes_a_grid_and_changes_the_notes_on_its_hits() {
+    let v = values_of("lead.__update([c4 c4 c4 c4].where(grid[x . x .], transpose(+12st)))", 1);
+    let mut v = v;
+    v.sort_by_key(|x| match x {
+        Value::Note(n) => *n,
+        _ => 0,
+    });
+    assert_eq!(v, [midi(60), midi(60), midi(72), midi(72)]);
+}

@@ -29,6 +29,8 @@ impl Perform<'_> {
             "begin" => &["share"],
             "stereo_copy" => &["change", "angle"],
             "chop" | "interleave_chops" => &["pieces"],
+            "slice" => &["parts", "order"],
+            "rotate" => &["by"],
             "in_scale" | "snap_to" => &["scale", "root"],
             "chord" => &["kind"],
             "arpeggiate" => &["order"],

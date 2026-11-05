@@ -82,6 +82,8 @@ impl Perform<'_> {
                 | "stereo_copy"
                 | "chop"
                 | "interleave_chops"
+                | "slice"
+                | "rotate"
         );
         let mut lanes = Vec::with_capacity(clip.lanes.len());
         for (lane, pattern) in &clip.lanes {
@@ -300,6 +302,16 @@ impl Perform<'_> {
                 }
                 let slots = Rational::ONE / every;
                 amount.apply(&p, move |p, x| p.swing(Rational::from_f64(x), slots))
+            }
+            "rotate" => {
+                let e = self.arg(name, rest, "by", span)?;
+                let by = self.num_param(e, it)?;
+                if let Param::Const(n) = &by
+                    && !n.is_integer()
+                {
+                    return Err(Diagnostic::new("`rotate` takes a whole number", e.span));
+                }
+                by.apply(&p, |p, n| p.rotate_values(n.floor()))
             }
             "start_later" => {
                 let times = self.num_param(self.arg(name, rest, "parts", span)?, it)?;
