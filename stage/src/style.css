@@ -548,9 +548,8 @@ body.large-transport .landing { font-size: calc(15px * var(--z)); padding: calc(
 
 /* ---- arrangements: a piece laid out in sections, played through from the start --------------- */
 /* a row of their own, in blue and rounded, so they are not taken for scenes (square, orange) */
-.arrangements { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: calc(5px * var(--z)); }
+.arrangements { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: calc(5px * var(--z)); }
 .arrangements:empty { display: none; }
-.arrangements::before { content: 'arrangement'; color: var(--blue); font-size: calc(9px * var(--z)); letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.8; margin-right: calc(2px * var(--z)); }
 .arrangement { position: relative; overflow: hidden; display: flex; align-items: center; gap: calc(6px * var(--z)); height: calc(30px * var(--z)); padding: 0 calc(14px * var(--z)); background: rgba(140, 188, 231, 0.08); border: 1px solid rgba(140, 188, 231, 0.45); border-radius: calc(15px * var(--z)); font-size: calc(13px * var(--z)); }
 .arrangement:hover { background: rgba(140, 188, 231, 0.18); }
 .arrangement .scene-icon { color: var(--blue); }
