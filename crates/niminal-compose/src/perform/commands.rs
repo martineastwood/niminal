@@ -315,6 +315,7 @@ impl Perform<'_> {
         let mut tempos: Vec<(f64, Tempo)> = Vec::new();
         // each named section: its label, where it starts and ends in seconds, and its tempo for offsets
         let mut markers: Vec<(String, f64, f64, Tempo)> = Vec::new();
+        let mut marks: Vec<SectionMark> = Vec::new();
         for (i, section) in decl.sections.iter().enumerate() {
             let mut tempo = self.cx.tempo;
             if let Some(e) = decl.tempos.as_ref().map(|l| &l[i]) {
@@ -385,6 +386,16 @@ impl Perform<'_> {
                 }
                 None => None,
             };
+            marks.push(SectionMark {
+                name: section
+                    .label
+                    .as_ref()
+                    .unwrap_or(&section.scene)
+                    .name
+                    .clone(),
+                start: start_seconds,
+                end: seconds,
+            });
             if let Some(label) = label {
                 if markers.iter().any(|m| m.0 == label.name) {
                     return Err(Diagnostic::new(
@@ -430,11 +441,17 @@ impl Perform<'_> {
             let origin = self.place(&lane.at, &markers, &decl.name.name)?;
             lanes.push((format!("{}::{}", node.name, param.name), curve, origin));
         }
+        let length = actions
+            .iter()
+            .map(|a| a.at.to_seconds(self.cx.tempo))
+            .fold(seconds, f64::max);
         Ok(Arrangement {
             name: decl.name.name.clone(),
             actions,
             tempos,
             lanes,
+            sections: marks,
+            length,
         })
     }
 

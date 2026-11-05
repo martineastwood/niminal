@@ -19,7 +19,7 @@ mod sync;
 pub use link::InProcess;
 pub use live::{
     Accepted, Begin, CancelDone, CancelJob, ClipStatus, ControlSignal, EvalDone, EvalJob, Landed,
-    Levels, Live, ParsedEval, PendingInfo, SceneStatus, Transport,
+    ArrangementStatus, Levels, Live, ParsedEval, PendingInfo, SceneStatus, Transport,
 };
 pub use log::{Expression, LiveInput, LiveLogEntry};
 

@@ -40,6 +40,17 @@ export type Scene = {
   running: number;
 };
 
+export type Arrangement = {
+  name: string;
+  running: boolean;
+  /** How long it runs, in seconds, and how far it has got while it runs. */
+  length: number;
+  elapsed: number | null;
+  /** The section it is in. */
+  section: string | null;
+  sections: { name: string; start: number; end: number }[];
+};
+
 export type Pending = {
   id: number;
   lands_at: number;
@@ -67,6 +78,7 @@ export type Snapshot = {
   channels: number;
   clips: Clip[];
   scenes: Scene[];
+  arrangements: Arrangement[];
   pending: Pending[];
   landed: { id: number; at: number; position: { bar: number; beat: number }; changes: string[] }[];
   notices: string[];

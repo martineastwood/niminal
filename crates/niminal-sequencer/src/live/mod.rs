@@ -207,6 +207,19 @@ pub struct SceneStatus {
     pub running: usize,
 }
 
+/// An arrangement as an editor shows it: whether it is playing, and its sections.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ArrangementStatus {
+    pub name: String,
+    pub running: bool,
+    /// How long it runs, in seconds, and how far it has got while it is running.
+    pub length: f64,
+    pub elapsed: Option<f64>,
+    /// The section it is in, if it has sections.
+    pub section: Option<String>,
+    pub sections: Vec<niminal_compose::SectionMark>,
+}
+
 impl SceneStatus {
     pub fn active(&self) -> bool {
         !self.clips.is_empty() && self.running == self.clips.len()
@@ -269,6 +282,9 @@ pub struct Live {
     /// The control change each `midi.learn` control took, and what is waiting to be reported.
     learned: BTreeMap<String, u8>,
     learned_out: Vec<(String, String)>,
+
+    /// When each arrangement that was started began, in session seconds, until it is stopped.
+    arrangement_starts: BTreeMap<String, f64>,
 
     project: Project,
     program: Arc<Composition>,
@@ -421,6 +437,7 @@ impl Live {
             .expect("an empty project compiles");
         let schedule = program.schedule();
         Live {
+            arrangement_starts: BTreeMap::new(),
             link,
             tempo_sent: std::cell::Cell::new(false),
             linked_sent: std::cell::RefCell::new(HashMap::new()),
@@ -865,6 +882,36 @@ impl Live {
             .collect()
     }
 
+    /// The project's arrangements, and for each whether it is running, and where it has got to.
+    pub fn arrangements(&self) -> Vec<ArrangementStatus> {
+        let now = self.seconds(self.clock);
+        self.defined("arrangement")
+            .into_iter()
+            .map(|name| {
+                let known = self.program.arrangements.iter().find(|a| a.name == name);
+                let started = self.arrangement_starts.get(&name).copied();
+                let length = known.map_or(0.0, |a| a.length);
+                let elapsed = started.map(|s| (now - s).max(0.0));
+                let running = elapsed.is_some_and(|e| e < length);
+                let section = known.filter(|_| running).and_then(|a| {
+                    let e = elapsed?;
+                    a.sections
+                        .iter()
+                        .find(|s| e >= s.start && e < s.end)
+                        .map(|s| s.name.clone())
+                });
+                ArrangementStatus {
+                    sections: known.map_or_else(Vec::new, |a| a.sections.clone()),
+                    elapsed: elapsed.filter(|_| running),
+                    name,
+                    running,
+                    length,
+                    section,
+                }
+            })
+            .collect()
+    }
+
     /// The names of the project's definitions of one kind (`scene`, `clip`...), in order.
     pub fn defined(&self, kind: &str) -> Vec<String> {
         let prefix = format!("{kind}:");
@@ -1200,12 +1247,42 @@ impl Live {
             .target()
             .filter(|t| statement.starts() && program.arrangements.iter().any(|a| a.name == *t))
             .map(str::to_string);
+        if let Some(name) = &arrangement {
+            // its lines are placed from where the command was (`at +2bars song.start`), so the start is the
+            // earliest of them, less where the arrangement itself begins
+            let own = program
+                .arrangements
+                .iter()
+                .find(|a| a.name == *name)
+                .map_or(0.0, |a| {
+                    a.actions
+                        .iter()
+                        .map(|s| s.at.to_seconds(tempo))
+                        .chain(a.lanes.iter().map(|(_, _, t)| t.to_seconds(tempo)))
+                        .fold(f64::INFINITY, f64::min)
+                });
+            let first = program
+                .performance
+                .iter()
+                .filter(|s| !matches!(s.action, Action::Cancel { .. } | Action::Capture { .. }))
+                .map(|s| s.at.to_seconds(tempo))
+                .fold(f64::INFINITY, f64::min);
+            if own.is_finite() && first.is_finite() {
+                let begun = if statement.has_at() {
+                    origin + first - own
+                } else {
+                    landing_seconds + first - own
+                };
+                self.arrangement_starts.insert(name.clone(), begun);
+            }
+        }
         for scheduled in &program.performance {
             if let Action::Capture { bars, name } = &scheduled.action {
                 captures.push((*bars, name.clone()));
                 continue;
             }
             if let Action::Cancel { arrangement } = &scheduled.action {
+                self.arrangement_starts.remove(arrangement);
                 self.history.retain(|h| {
                     h.arrangement.as_deref() != Some(arrangement) || h.at <= landing_seconds
                 });

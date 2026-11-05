@@ -36,7 +36,7 @@ pub use niminal_lang::{Tok, Token, lex};
 pub use perform::PITCH_PARAM;
 pub use performance::{
     Action, Arrangement, Clip, EnvLane, Keys, LaneEvent, LanePreview, Quantize, QuantizeRelation,
-    QuantizeUnit, Scene, Scheduled,
+    QuantizeUnit, Scene, Scheduled, SectionMark,
 };
 pub use schedule::{ControlSet, Finish, Found, PartState, Schedule, ScheduleError};
 pub use score_file::{

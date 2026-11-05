@@ -344,4 +344,17 @@ pub struct Arrangement {
     /// Envelopes moving part parameters over the piece: the control's name (`bass::tone`) and the shape.
     /// and when each starts (from the start of the piece unless the arrangement placed it).
     pub lanes: Vec<(String, EnvLane, Time)>,
+    /// Each of its `sections` as shown to a person: the name, and where it starts and ends in seconds from the
+    /// start of the arrangement.
+    pub sections: Vec<SectionMark>,
+    /// How long it runs, in seconds from its start: to its last line or the end of its last section.
+    pub length: f64,
+}
+
+/// One section of an arrangement.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct SectionMark {
+    pub name: String,
+    pub start: f64,
+    pub end: f64,
 }

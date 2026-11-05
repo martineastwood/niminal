@@ -1153,3 +1153,41 @@ fn key_and_param_set_play_an_instrument_and_status_lists_its_ranges() {
     let reply = call(&mut d, c, 6, "key", json!({"channel": 1, "note": 69}));
     assert!(reply["error"].is_object(), "{reply}");
 }
+
+#[test]
+fn status_follows_a_running_arrangement_through_its_sections() {
+    let (mut d, c) = ready();
+    let source = "tempo 120bpm\ninstr pluck(freq: hz) { osc(sine, freq) * env[1 | 10ms 0] }\nclip a { instrument: pluck, notes: [c4] }\nclip b { instrument: pluck, notes: [e4] }\nscene one { a }\nscene two { b }\narrangement song { sections: [one.over(2bars) two.over(2bars) as last] }";
+    call(&mut d, c, 2, "eval", json!({"source": source, "quantize": "now"}));
+    let song = |d: &mut Server, id: u64| {
+        let status = call(d, c, id, "status", json!({}));
+        status["result"]["arrangements"][0].clone()
+    };
+    // defined but not started: it knows its sections and length (4 bars of 2s)
+    let idle = song(&mut d, 3);
+    assert_eq!(idle["name"], "song");
+    assert_eq!(idle["running"], false);
+    assert_eq!(idle["length"], 8.0);
+    assert_eq!(idle["sections"][1]["name"], "last");
+    assert_eq!(idle["sections"][1]["start"], 4.0);
+
+    call(&mut d, c, 4, "eval", json!({"source": "song.start", "quantize": "now"}));
+    d.process(48_000);
+    let first = song(&mut d, 5);
+    assert_eq!(first["running"], true, "{first}");
+    assert_eq!(first["section"], "one", "{first}");
+    d.process(144_000); // about 4s in
+    let second = song(&mut d, 6);
+    assert_eq!(second["section"], "last", "{second}");
+    assert!(second["elapsed"].as_f64().unwrap() > 3.5, "{second}");
+    d.process(240_000); // past the end
+    assert_eq!(song(&mut d, 7)["running"], false);
+
+    // stopping it takes it back to idle
+    call(&mut d, c, 8, "eval", json!({"source": "song.start", "quantize": "now"}));
+    d.process(48_000);
+    assert_eq!(song(&mut d, 9)["running"], true);
+    call(&mut d, c, 10, "eval", json!({"source": "song.stop", "quantize": "now"}));
+    d.process(4_800);
+    assert_eq!(song(&mut d, 11)["running"], false);
+}

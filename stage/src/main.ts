@@ -14,13 +14,14 @@ import { LaneView } from './laneview';
 import { Highlighter, evaluated, flashLines, markProblems, markSent } from './highlight';
 import { mod } from './shortcuts';
 import { sceneCommand, sceneStates } from './scenes';
+import { arrangementCommand, arrangementLabel, arrangementProgress } from './arrangements';
 import { HealthWatch } from './health';
 import { learnedRange } from './learn';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { dropInto } from './samples';
 import { divider } from './divider';
 import { Bar, loudest } from './meters';
-import { Action, AudioState, EvalOutcome, OpenedFile, Problem, Queued, Scene, Snapshot, beatsUntil, queuedStates, stage } from './live';
+import { Action, Arrangement, AudioState, EvalOutcome, OpenedFile, Problem, Queued, Scene, Snapshot, beatsUntil, queuedStates, stage } from './live';
 import { StoredTabs, loadTabs, moveItem, tabTitle, tabsKey } from './tabs';
 import './style.css';
 
@@ -92,6 +93,7 @@ app.innerHTML = `
     <section id="stage">
       <div class="stage-head">
         <div class="scenes" id="scenes"></div>
+        <div class="arrangements" id="arrangements"></div>
         <div class="stage-hint" id="stage-hint"></div>
       </div>
       <div class="stage-scroll"><div id="lanes"></div></div>
@@ -118,6 +120,7 @@ const meter = $('meter');
 const voices = $('voices');
 const waiting = $('waiting');
 const scenes = $('scenes');
+const arrangements = $('arrangements');
 const pending = $('pending');
 const notices = $('notices');
 const problems = $('problems');
@@ -137,6 +140,7 @@ let tabCount = 0;
 let connected = false;
 let connectedOnce = false;
 let lastSceneSignature = '';
+let lastArrangementSignature = '';
 let lastClipCount = -1;
 
 /** The code an evaluation sends and where it begins in the editor: the selection, else the block the cursor is in. */
@@ -397,6 +401,52 @@ function updateScenes(snapshot: Snapshot) {
   const shown = sceneStates(list);
   scenes.replaceChildren(...list.map((scene, index) => sceneButton(scene, index, shown, queued.get(scene.name))));
   stageHint.textContent = list.length === 0 ? 'no scenes yet' : `${list.length} scene${list.length === 1 ? '' : 's'}`;
+}
+
+/** One arrangement: press it to play it through, or to stop it. It shows the section it is in and how far it has got. */
+function arrangementRow(arrangement: Arrangement) {
+  const button = document.createElement('button');
+  button.className = 'arrangement';
+  button.classList.toggle('active', arrangement.running);
+  button.title = arrangement.running
+    ? `${arrangement.name} is playing; click to stop it and let go of what is sounding`
+    : `Play ${arrangement.name} from the start`;
+  const icon = document.createElement('span');
+  icon.className = 'scene-icon';
+  icon.textContent = arrangement.running ? '■' : '▶';
+  const name = document.createElement('span');
+  name.className = 'scene-name';
+  name.textContent = arrangement.name;
+  const label = document.createElement('span');
+  label.className = 'arrangement-label';
+  label.textContent = arrangementLabel(arrangement);
+  const progress = document.createElement('span');
+  progress.className = 'arrangement-progress';
+  progress.style.width = `${(arrangementProgress(arrangement) * 100).toFixed(1)}%`;
+  button.append(icon, name, label, progress);
+  button.addEventListener('click', () => void playArrangement(arrangement));
+  return button;
+}
+
+async function playArrangement(arrangement: Arrangement) {
+  if (!(await ensureConnected())) return;
+  try {
+    // stopping is for now; starting lands where the land box says, as a scene does
+    const when = arrangement.running ? 'now' : input('quantize').value.trim();
+    showOutcome(await stage.evaluate(arrangementCommand(arrangement), when, null, 0));
+    await refresh();
+  } catch (error) {
+    status(String(error));
+  }
+}
+
+function updateArrangements(snapshot: Snapshot) {
+  const list = snapshot.arrangements ?? [];
+  // the section and the position change as it plays, so they are part of what is compared
+  const signature = JSON.stringify(list.map(a => [a.name, a.running, a.section, Math.round((a.elapsed ?? 0) * 2), a.length]));
+  if (signature === lastArrangementSignature) return;
+  lastArrangementSignature = signature;
+  arrangements.replaceChildren(...list.map(arrangementRow));
 }
 
 /** Flash the editor: green when a change lands, amber when one is sent, red when it is refused. */
@@ -946,6 +996,7 @@ function offline(): Snapshot {
     channels: 0,
     clips: [],
     scenes: [],
+    arrangements: [],
     pending: [],
     landed: [],
     notices: [],
@@ -1016,6 +1067,7 @@ function draw(snapshot: Snapshot) {
     ['health', () => updateHealth(snapshot)],
     ['midi', () => updateMidi(snapshot)],
     ['scenes', () => updateScenes(snapshot)],
+    ['arrangements', () => updateArrangements(snapshot)],
     ['pending', () => updatePending(snapshot)],
     ['notices', () => updateNotices(snapshot)],
     ['tools', () => updateToolsProblem(snapshot)],

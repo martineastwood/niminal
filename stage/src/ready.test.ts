@@ -13,6 +13,7 @@ function snapshot(overrides: Partial<Snapshot>): Snapshot {
     channels: 2,
     clips: [],
     scenes: [],
+    arrangements: [],
     pending: [],
     landed: [],
     notices: [],

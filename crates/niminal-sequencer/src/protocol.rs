@@ -836,7 +836,18 @@ fn status_json(live: &mut Live) -> Value {
             "running": s.running,
             "active": s.active(),
         })).collect::<Vec<_>>(),
-        "arrangements": live.defined("arrangement"),
+        "arrangements": live.arrangements().iter().map(|a| json!({
+            "name": a.name,
+            "running": a.running,
+            "length": a.length,
+            "elapsed": a.elapsed,
+            "section": a.section,
+            "sections": a.sections.iter().map(|s| json!({
+                "name": s.name,
+                "start": s.start,
+                "end": s.end,
+            })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
         "defined_clips": live.defined("clip"),
         "clips": live.clips().iter().map(|c| json!({
             "name": c.name,

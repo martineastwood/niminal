@@ -12,7 +12,7 @@ use niminal_host::host::{Host, HostConfig};
 use niminal_lang::Problem;
 use niminal_sequencer::{
     Accepted, Begin, ClipStatus, InProcess, Landed, Levels, Live, LiveServer, ParsedEval, PendingInfo,
-    SceneStatus, Transport,
+    ArrangementStatus, SceneStatus, Transport,
 };
 use niminal_sequencer::input::LiveShared;
 use niminal_ws::{Server, ServerConfig};
@@ -600,6 +600,7 @@ pub fn snapshot(shared: &Shared) -> Snapshot {
         // clips named `__…` are the app's own
         clips: live.clips().into_iter().filter(|c| !c.name.starts_with("__")).collect(),
         scenes: live.scenes(),
+        arrangements: live.arrangements(),
         pending: live.pending(),
         landed: tap.landed,
         notices: tap.notices.into_iter().chain(lock(&shared.faults).drain(..)).collect(),
@@ -713,6 +714,7 @@ pub struct Snapshot {
     pub channels: usize,
     pub clips: Vec<ClipStatus>,
     pub scenes: Vec<SceneStatus>,
+    pub arrangements: Vec<ArrangementStatus>,
     pub pending: Vec<PendingInfo>,
     pub landed: Vec<Landed>,
     pub notices: Vec<String>,
