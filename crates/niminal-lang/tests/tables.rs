@@ -1,4 +1,5 @@
 //! Table constructors and readers through the compiler.
+#![allow(clippy::unwrap_used)]
 
 use niminal_lang::compile;
 

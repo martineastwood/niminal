@@ -1,6 +1,7 @@
 //! A function without state is inlined into the instrument's graph; one with state is compiled to a
 //! per-sample kernel. They are two compilers for one language, so each case here is run through both
 //! (the second just adds an unused `state` line) and must sound the same, sample for sample.
+#![allow(clippy::unwrap_used)]
 
 use niminal_engine::{Voice, block_size};
 use niminal_lang::compile;

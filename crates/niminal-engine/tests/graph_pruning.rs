@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use niminal_engine::ops::{Custom, Instr, Kernel, Mul, Osc, Tap, TapOut, Wave};
 use niminal_engine::{Buses, GraphBuilder, Src, Voice};
 use std::sync::Arc;

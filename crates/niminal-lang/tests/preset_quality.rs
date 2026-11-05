@@ -1,4 +1,5 @@
 //! Musical contracts beyond compilation: velocity, release, and controls that do audible work.
+#![allow(clippy::unwrap_used)]
 
 use niminal_engine::{Voice, block_size};
 use niminal_lang::presets::{PresetKind, all};

@@ -1,5 +1,6 @@
 //! Offline timings of audio-rate and control-rate modulation. Run with
 //! `cargo test --release -p niminal-lang --test control_bench -- --ignored --nocapture`.
+#![allow(clippy::unwrap_used)]
 
 use std::time::Instant;
 

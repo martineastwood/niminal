@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "The niminal DSP language: parser, unit checker, and compiler to engine graphs"
 
+[lints]
+workspace = true
+
 [dependencies]
 niminal-engine = { path = "../niminal-engine" }
 niminal-score = { path = "../niminal-score" }

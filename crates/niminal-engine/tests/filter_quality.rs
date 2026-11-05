@@ -1,4 +1,5 @@
 //! Response and live-control contracts, independent of the filter implementation.
+#![allow(clippy::unwrap_used)]
 use niminal_engine::ops::{Biquad, BiquadMode, Eq, EqMode, FilterMode, Formant, Svf};
 use niminal_engine::{Opcode, ProcessCtx};
 

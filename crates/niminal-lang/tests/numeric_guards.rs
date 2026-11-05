@@ -1,4 +1,5 @@
 //! Maths with no real answer gives 0, never NaN, whichever way the program is compiled.
+#![allow(clippy::unwrap_used)]
 
 use niminal_engine::{Voice, block_size};
 use niminal_lang::compile;

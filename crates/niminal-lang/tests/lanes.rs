@@ -1,4 +1,5 @@
 //! Vector forms against the scalar loops they replace: the same sound, in far fewer instructions.
+#![allow(clippy::unwrap_used)]
 
 use niminal_engine::{Voice, block_size};
 use niminal_lang::compile;

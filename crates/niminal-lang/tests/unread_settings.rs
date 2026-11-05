@@ -1,4 +1,5 @@
 //! A line in an instrument's body that sets a number nobody reads is a setting spelt wrong.
+#![allow(clippy::unwrap_used)]
 
 use niminal_lang::compile;
 

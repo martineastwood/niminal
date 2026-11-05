@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 mod audio_input;
 mod basics;
 mod channels;

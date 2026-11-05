@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use niminal_lang::Layout;
 use niminal_server::{EngineServer, PROTOCOL_VERSION, RealtimeConfig, Session};
 use serde_json::{Value, json};

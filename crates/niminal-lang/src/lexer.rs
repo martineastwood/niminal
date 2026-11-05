@@ -356,7 +356,7 @@ fn lex_with(src: &str, dsp: bool) -> Result<Vec<Token>, Diagnostic> {
                     b'^' => Tok::Caret,
                     b'|' => Tok::Bar,
                     _ => {
-                        let ch = src[start..].chars().next().unwrap();
+                        let ch = src[start..].chars().next().expect("the lexer stopped on a byte, so text remains");
                         return Err(Diagnostic::new(
                             format!("unexpected character `{ch}`"),
                             Span::new(start, start + ch.len_utf8()),
@@ -539,13 +539,13 @@ fn lex_number(src: &str, start: usize) -> (Tok, usize) {
     if bytes.get(end) == Some(&b'.') && bytes.get(end + 1).is_some_and(u8::is_ascii_digit) {
         end = digits(end + 1);
     }
-    let mut value: f64 = src[start..end].parse().unwrap();
+    let mut value: f64 = src[start..end].parse().expect("a run of ASCII digits with an optional fraction is a float");
 
     // `1/8beat`: a rational is one literal only when a unit follows it.
     if bytes.get(end) == Some(&b'/') && bytes.get(end + 1).is_some_and(u8::is_ascii_digit) {
         let den_end = digits(end + 1);
         if bytes.get(den_end).is_some_and(u8::is_ascii_alphabetic) {
-            value /= src[end + 1..den_end].parse::<f64>().unwrap();
+            value /= src[end + 1..den_end].parse::<f64>().expect("a run of ASCII digits is a float");
             end = den_end;
         }
     }

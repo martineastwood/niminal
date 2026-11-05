@@ -404,12 +404,12 @@ pub fn execution_order(nodes: &[NodeDef]) -> Result<Vec<usize>, Vec<usize>> {
     let stuck: Vec<usize> = (0..n).filter(|i| !order.contains(i)).collect();
     let mut path = vec![stuck[0]];
     loop {
-        let here = *path.last().unwrap();
+        let here = *path.last().expect("the path starts with one node");
         let before = stuck
             .iter()
             .copied()
             .find(|&w| edges[w].contains(&here))
-            .unwrap();
+            .expect("every stuck node is waiting on another stuck node");
         if let Some(at) = path.iter().position(|&p| p == before) {
             let mut cycle = path[at..].to_vec();
             cycle.reverse();
@@ -1371,7 +1371,7 @@ impl Mixer {
                 if node.fade.elapsed >= node.fade.frames && node.fade.previous.is_some() {
                     if let Some(retired) = retired.as_deref_mut() {
                         if retired.len() < retired.capacity() {
-                            retired.push(node.fade.previous.take().unwrap());
+                            retired.push(node.fade.previous.take().expect("checked is_some above"));
                         }
                     } else {
                         node.fade.previous = None;

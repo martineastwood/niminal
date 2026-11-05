@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 mod capture;
 mod clock;
 mod common;

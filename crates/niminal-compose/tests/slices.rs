@@ -1,4 +1,5 @@
 //! `name.slices([...])` at the top level of a file, where the lexer keeps a bracketed list as raw text.
+#![allow(clippy::unwrap_used)]
 
 use niminal_compose::{SymbolKind, compile, symbols};
 

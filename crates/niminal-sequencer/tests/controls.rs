@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use niminal_lang::Layout;
 use niminal_sequencer::{ControlSignal, Offline};
 use niminal_server::{from_lines, to_lines};

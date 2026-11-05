@@ -751,7 +751,7 @@ pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, V
         let index = choices
             .iter()
             .position(|(_, _, b)| Arc::ptr_eq(b, data))
-            .unwrap();
+            .expect("the owner's choices include the buffer they were chosen by");
         if let Some(control) = names.controls.iter_mut().find(|c| c.name == name) {
             control.initial = index as f32;
         }

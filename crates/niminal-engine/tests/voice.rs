@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 mod common;
 use common::*;
 use niminal_engine::ops::{Env, FilterMode, Gain, Mul, Osc, Svf, Wave};

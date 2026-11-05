@@ -1,5 +1,6 @@
 //! Every effect on the std shelf stays finite whatever its controls are set to, and an effect that
 //! was silenced for going wrong plays again once it is redefined.
+#![allow(clippy::unwrap_used)]
 
 use niminal_lang::Layout;
 use niminal_lang::presets::{PresetKind, of_shelf};

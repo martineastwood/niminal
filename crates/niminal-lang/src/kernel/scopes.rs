@@ -240,7 +240,7 @@ impl Kb<'_> {
         let op: Box<dyn niminal_engine::Opcode> = if name == "spawn" {
             wires.extend([
                 NativeInput::Reg(first.expect("spawn has a trigger").reg),
-                NativeInput::Reg(duration.unwrap().reg),
+                NativeInput::Reg(duration.expect("spawn has a duration").reg),
             ]);
             Box::new(niminal_engine::ops::Spawn::new(custom, max.unwrap_or(8)))
         } else if control {

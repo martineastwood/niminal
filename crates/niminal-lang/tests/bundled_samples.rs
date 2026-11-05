@@ -1,4 +1,5 @@
 //! Bundled recordings work without a project folder, exported files, or a writable cache directory.
+#![allow(clippy::unwrap_used)]
 
 use niminal_engine::{Voice, block_size};
 use niminal_lang::{Samples, compile, expand};

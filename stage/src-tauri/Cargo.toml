@@ -32,3 +32,7 @@ debug = "line-tables-only"
 # slower: loading a 2 MB loop took 5 seconds. Only Stage's own small crate is left unoptimised.
 [profile.dev.package."*"]
 opt-level = 3
+
+# Same rule as the workspace (see the root Cargo.toml).
+[lints.clippy]
+unwrap_used = "warn"

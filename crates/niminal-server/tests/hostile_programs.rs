@@ -1,5 +1,6 @@
 //! Programs written by a user, not the shelf: whatever they do, what a default session plays is finite and no
 //! louder than the limiter's ceiling, and a long run of redefinitions, tempo changes and panics keeps it so.
+#![allow(clippy::unwrap_used)]
 
 use niminal_engine::DEFAULT_CEILING;
 use niminal_lang::Layout;

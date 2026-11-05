@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "The niminal live sequencer: clips, scenes, quantized changes and keyboards, driving the engine through its public event API"
 
+[lints]
+workspace = true
+
 [dependencies]
 niminal-ws = { path = "../niminal-ws" }
 niminal-pattern = { path = "../niminal-pattern" }

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Render the preset shelf for listening, or rebuild the original starter sample pack.
 //! cargo run -p niminal-lang --example audition -- target/audition
 //! cargo run -p niminal-lang --example audition -- --starter crates/niminal-lang/assets/starter

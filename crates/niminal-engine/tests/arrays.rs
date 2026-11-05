@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use niminal_engine::ops::{Interp, read_array, read_at};
 use niminal_engine::{Array, wrapped_index};
 

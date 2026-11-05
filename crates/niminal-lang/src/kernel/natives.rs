@@ -256,7 +256,7 @@ impl Kb<'_> {
             return Ok(KVal::Record(result));
         }
         Ok(if outputs == 1 {
-            values.into_iter().next().unwrap()
+            values.into_iter().next().expect("one output means one value")
         } else {
             KVal::Array(values.into())
         })

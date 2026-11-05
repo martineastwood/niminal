@@ -331,7 +331,7 @@ impl Kb<'_> {
         if let Kind::Choice(options) = &param.kind {
             return match &e.kind {
                 ExprKind::Name(n) if options.contains(n) => {
-                    let i = options.iter().position(|o| o == n).unwrap();
+                    let i = options.iter().position(|o| o == n).expect("the guard checked n is an option");
                     Ok(KVal::Num(self.constant(Unit::Num, i as f64)))
                 }
                 _ => Err(Diagnostic::new(

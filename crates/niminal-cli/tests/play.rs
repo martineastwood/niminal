@@ -1,4 +1,5 @@
 //! `niminal play FILE` plays a file and plays it again, with what it uses, each time it changes.
+#![allow(clippy::unwrap_used)]
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};

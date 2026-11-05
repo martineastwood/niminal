@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use niminal_lang::Layout;
 use niminal_sequencer::{InProcess, Live, Offline};
 use niminal_server::{At, EngineServer, LogInput, Op, Session};

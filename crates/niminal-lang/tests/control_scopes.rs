@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use niminal_engine::{Voice, block_size};
 use niminal_lang::compile;
 

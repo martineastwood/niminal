@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use niminal_compose::compile;
 use niminal_engine::{Buses, MAX_BLOCK, Voice};
 

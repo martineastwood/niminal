@@ -1,5 +1,6 @@
 //! A control step other than the default. The step is fixed for the life of the process, so these
 //! tests live in a file of their own.
+#![allow(clippy::unwrap_used)]
 
 use niminal_engine::{Voice, block_size, set_control_step};
 use niminal_lang::compile;

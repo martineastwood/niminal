@@ -1,4 +1,5 @@
 //! A `niminal 0.1` line is honoured wherever source is read, and a file without one runs as it is.
+#![allow(clippy::unwrap_used)]
 
 use niminal_lang::{LANGUAGE_VERSION, compile, parse_composition};
 

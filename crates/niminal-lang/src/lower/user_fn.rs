@@ -190,7 +190,7 @@ impl Lower<'_> {
             let v = if let PKind::Choice(options) = &p.kind {
                 match &arg.value.kind {
                     ExprKind::Name(n) if options.contains(n) => {
-                        let i = options.iter().position(|o| o == n).unwrap();
+                        let i = options.iter().position(|o| o == n).expect("the guard checked n is an option");
                         Datum::Sig(Sig::constant(Unit::Num, i as f64))
                     }
                     _ => {
@@ -259,7 +259,7 @@ impl Lower<'_> {
                             let ExprKind::Name(n) = &d.kind else {
                                 unreachable!("checked")
                             };
-                            let i = options.iter().position(|o| o == n).unwrap();
+                            let i = options.iter().position(|o| o == n).expect("the guard checked n is an option");
                             Datum::Sig(Sig::constant(Unit::Num, i as f64))
                         } else {
                             self.value(d)?

@@ -1,4 +1,5 @@
 //! The array path must allocate before rendering, never on the audio thread.
+#![allow(clippy::unwrap_used)]
 use niminal_engine::{Buses, Voice, block_size};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;

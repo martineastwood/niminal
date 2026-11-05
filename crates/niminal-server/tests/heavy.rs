@@ -1,5 +1,6 @@
 //! CPU benchmark for the parallel-DSP work: how long heavy pieces take to render.
 //! `cargo test --release -p niminal-server --test heavy -- --ignored --nocapture`
+#![allow(clippy::unwrap_used)]
 
 mod support;
 

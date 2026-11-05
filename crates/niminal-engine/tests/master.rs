@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use niminal_engine::Master;
 
 const SR: f32 = 48_000.0;

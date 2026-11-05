@@ -1,4 +1,5 @@
 //! `niminal lsp` is the language server for editors: it answers over stdin and stdout.
+#![allow(clippy::unwrap_used)]
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};

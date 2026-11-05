@@ -1,4 +1,5 @@
 //! The installed command can discover presets and supply a playable sample kit without downloads.
+#![allow(clippy::unwrap_used)]
 
 use std::process::Command;
 

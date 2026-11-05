@@ -43,7 +43,7 @@ pub(super) fn literal_args(
                     d
                 })?;
                 instr
-                    .param_value(instr.param(path).unwrap().1, value, tempo)
+                    .param_value(instr.param(path).expect("the path came from this instrument's own parameters").1, value, tempo)
                     .map_err(|e| arg_error(e, arg.value.span))?;
                 if out.insert(path.clone(), value).is_some() {
                     return Err(Diagnostic::new(

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use niminal_lang::Layout;
 use niminal_score::{Time, Value};
 use niminal_server::{At, Endpoint, Op, RoutingEdit as Edit, Session};

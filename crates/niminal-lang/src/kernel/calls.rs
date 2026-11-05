@@ -501,8 +501,8 @@ impl Kb<'_> {
     /// `min(a, b)`, `max(a, b)`, `pow(x, y)` and `a.mod(b)`.
     pub(super) fn combine(&mut self, name: &Ident, args: &[Arg]) -> Res<KVal> {
         let mut values = self.plain_args(name, args, 2)?;
-        let (b, b_span) = values.pop().unwrap();
-        let (a, _) = values.pop().unwrap();
+        let (b, b_span) = values.pop().expect("plain_args returned two values");
+        let (a, _) = values.pop().expect("plain_args returned two values");
         self.zip_values(a, b, b_span, |this, a, b| {
             this.combine_scalar(name, a, b, b_span)
         })

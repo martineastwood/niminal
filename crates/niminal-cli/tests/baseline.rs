@@ -2,6 +2,7 @@
 //! Compare render dimensions exactly and block RMS levels with a tolerance: DSP math can
 //! round differently across platforms. Set `BLESS=1` to update dimensions, and `REFERENCE=1`
 //! to update audio references after an understood change.
+#![allow(clippy::unwrap_used)]
 
 use std::path::{Path, PathBuf};
 

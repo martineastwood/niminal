@@ -1,4 +1,5 @@
 //! The engine's `events.send`: each op, validation, late events and replay.
+#![allow(clippy::unwrap_used)]
 
 use niminal_server::{At, Op, Session};
 mod support;

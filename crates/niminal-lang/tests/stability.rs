@@ -1,6 +1,7 @@
 //! The shelf instruments and drums stay finite whatever their controls are set to,
 //! including values far outside the range they declare: a user can type anything, and automation
 //! can overshoot.
+#![allow(clippy::unwrap_used)]
 
 use niminal_engine::{Voice, block_size};
 use niminal_lang::{compile, expand};

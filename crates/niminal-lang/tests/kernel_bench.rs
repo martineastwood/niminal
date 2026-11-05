@@ -7,6 +7,7 @@
 //! Each case renders 16 voices for 10 seconds on one thread and reports the cost of a voice's sample.
 //! The numbers depend on the machine, so compare runs on one machine; `design/fn-extensions.md` keeps
 //! the baseline and what each step changed.
+#![allow(clippy::unwrap_used)]
 
 use std::time::Instant;
 

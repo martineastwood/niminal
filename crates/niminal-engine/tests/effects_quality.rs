@@ -1,4 +1,5 @@
 //! Live automation must preserve continuity, tails and deterministic timing.
+#![allow(clippy::unwrap_used)]
 use niminal_engine::ops::{Allpass, Compressor, Delay, Fdn, Mverb};
 use niminal_engine::{Opcode, ProcessCtx};
 

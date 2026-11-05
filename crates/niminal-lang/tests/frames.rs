@@ -1,4 +1,5 @@
 //! Frame scopes: code that runs on a window of samples every half window, with `fft` and `ifft`.
+#![allow(clippy::unwrap_used)]
 
 use niminal_engine::{Voice, block_size};
 use niminal_lang::{compile, expand};

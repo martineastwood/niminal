@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "The niminal composition language: clips, scenes, patterns and commands, compiled to timed events for a niminal server"
 
+[lints]
+workspace = true
+
 [dependencies]
 niminal-engine = { path = "../niminal-engine" }
 niminal-lang = { path = "../niminal-lang" }

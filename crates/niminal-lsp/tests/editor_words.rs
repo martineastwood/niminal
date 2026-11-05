@@ -1,5 +1,6 @@
 //! The words the editors colour come from the compiler's own list. The editors keep their own copy
 //! of it (`editors/codemirror/language.ts`), so this keeps the two from drifting apart.
+#![allow(clippy::unwrap_used)]
 
 use std::collections::BTreeSet;
 

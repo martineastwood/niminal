@@ -248,7 +248,7 @@ fn finite(x: f32, default: f32) -> f32 {
 fn value(p: &[f32], index: usize) -> f32 {
     p.get(index)
         .copied()
-        .unwrap_or(PORTS[index].default.unwrap())
+        .unwrap_or_else(|| PORTS[index].default.expect("every granular port has a default"))
 }
 fn next_random(state: &mut u32) -> u32 {
     *state ^= *state << 13;
@@ -606,14 +606,10 @@ impl Granular {
         if self.grains.len() < self.config.max_grains {
             self.grains.push(grain); // the entire pool was reserved before processing
         } else {
-            let slot = self
-                .grains
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, g)| g.birth)
-                .unwrap()
-                .0;
-            self.grains[slot] = grain;
+            // the pool is full: steal the oldest grain (with no pool at all, drop the new one)
+            if let Some((slot, _)) = self.grains.iter().enumerate().min_by_key(|(_, g)| g.birth) {
+                self.grains[slot] = grain;
+            }
         }
     }
 
@@ -850,7 +846,7 @@ impl Opcode for Granular {
         self.frame(inputs, ctx.gate || ctx.envelopes_active)[0]
     }
     fn process(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-        let mut p: [f32; PORTS.len()] = std::array::from_fn(|i| PORTS[i].default.unwrap());
+        let mut p: [f32; PORTS.len()] = std::array::from_fn(|i| PORTS[i].default.expect("every granular port has a default"));
         for (i, out) in out.iter_mut().enumerate() {
             for (v, input) in p.iter_mut().zip(inputs) {
                 *v = input[i];
@@ -865,7 +861,7 @@ impl Opcode for Granular {
         outs: &mut [Vec<f32>],
         frames: usize,
     ) {
-        let mut p: [f32; PORTS.len()] = std::array::from_fn(|i| PORTS[i].default.unwrap());
+        let mut p: [f32; PORTS.len()] = std::array::from_fn(|i| PORTS[i].default.expect("every granular port has a default"));
         for i in 0..frames {
             for (v, input) in p.iter_mut().zip(inputs) {
                 *v = input[i];

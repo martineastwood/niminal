@@ -146,7 +146,7 @@ pub(crate) fn prepare(
     let mut ports = Vec::<(&str, Src)>::new();
     for (name, value, unit) in values {
         let key = format!("{prefix}::{name}");
-        let src = graph.param(&key, value as f32).unwrap();
+        let src = graph.param(&key, value as f32).map_err(|e| e.to_string())?;
         controls.push(niminal_lang::ControlDef {
             range: if name == "rate" {
                 Some((0.25, 4.))

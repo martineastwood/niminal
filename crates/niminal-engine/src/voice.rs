@@ -274,7 +274,7 @@ impl Voice {
                 self.mappings[index] = old.mappings[previous].take();
                 self.mappings[index]
                     .as_mut()
-                    .unwrap()
+                    .expect("the mapping was just moved in, and the guard checked it exists")
                     .set_range(param.range);
                 self.slots[index].copy_from_slice(&old.slots[previous]);
             }

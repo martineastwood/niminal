@@ -9,6 +9,9 @@ description = "The niminal command: the engine as a server, offline rendering, a
 name = "niminal"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 niminal-sequencer = { path = "../niminal-sequencer" }
 niminal-host = { path = "../niminal-host" }

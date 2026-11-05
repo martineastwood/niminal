@@ -109,7 +109,9 @@ pub(crate) fn compile_instr(
                 .iter()
                 .find(|(_, (_, b))| Arc::ptr_eq(b, &data))
                 .map(|(n, _)| n.as_str())
-                .unwrap();
+                .ok_or_else(|| {
+                    Diagnostic::new("buffer default is a named shared buffer", default.span)
+                })?;
             let owner = resource.split_once("::").map(|(o, _)| o).unwrap_or("");
             let mut choices: Vec<_> = names
                 .buffers
@@ -125,7 +127,7 @@ pub(crate) fn compile_instr(
             let index = choices
                 .iter()
                 .position(|(_, b)| Arc::ptr_eq(b, &data))
-                .unwrap();
+                .expect("the owner's choices include the buffer they were chosen by");
             let src = lower
                 .g
                 .param(&p.name.name, index as f32)
@@ -196,7 +198,7 @@ pub(crate) fn compile_instr(
                 }
                 Datum::Sig(Sig::constant(
                     Unit::Num,
-                    options.iter().position(|o| o == n).unwrap() as f64,
+                    options.iter().position(|o| o == n).expect("the branch checked n is an option") as f64,
                 ))
             } else {
                 lower.value(default)?

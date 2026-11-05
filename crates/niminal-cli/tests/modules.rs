@@ -1,4 +1,5 @@
 //! Modules through the whole path: joined by the sequencer, sent to the engine, and played.
+#![allow(clippy::unwrap_used)]
 
 use std::path::Path;
 

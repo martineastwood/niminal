@@ -1,4 +1,5 @@
 //! The library that comes with niminal (`use std/...`), tested by what it does to a sound.
+#![allow(clippy::unwrap_used)]
 
 use std::path::Path;
 

@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "The niminal audio server: generic timestamped events and DSP definitions"
 
+[lints]
+workspace = true
+
 [dependencies]
 niminal-engine = { path = "../niminal-engine" }
 niminal-lang = { path = "../niminal-lang" }

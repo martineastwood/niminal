@@ -1,4 +1,5 @@
 //! A tempo change that lands on a bar line must not swallow the note on that downbeat.
+#![allow(clippy::unwrap_used)]
 
 use std::process::Command;
 

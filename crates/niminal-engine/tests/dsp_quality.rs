@@ -1,4 +1,5 @@
 //! Audible DSP contracts: pitch, tuning, neutral tone and fractional-delay loss.
+#![allow(clippy::unwrap_used)]
 use niminal_engine::ops::{Chorus, Comb, Distortion, Ladder, PitchShift};
 use niminal_engine::{Opcode, ProcessCtx};
 

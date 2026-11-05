@@ -75,6 +75,7 @@ Why: a bug that blows up live, or makes a loud noise, is the one kind we cannot 
 dependencies are optimised even in test builds) that running all of it each time costs little.
 
 How to apply:
+- No `.unwrap()` in non-test code (clippy's `unwrap_used` is on for the workspace and Stage; tests may unwrap). Return an error, or use `.expect("why this cannot fail")` for a true invariant. A panic on the live path drops the set.
 - The limiter must stay on in everything that plays live. `without_limiter` is for tests and offline renders only; do not add a way to turn it off on the live path.
 - When a new opcode, instrument or effect is added, add it to the extreme-controls coverage (a shelf preset is picked up automatically) and make sure it cannot produce NaN or infinity from any input.
 - A change that moves audio on purpose: check how far it moved before re-recording with `BLESS=1 REFERENCE=1 cargo test -p niminal-cli --test baseline`, and say how far in the commit. The first run without those variables prints how far each example moved.

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

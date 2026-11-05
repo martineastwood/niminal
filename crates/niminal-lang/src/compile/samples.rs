@@ -727,7 +727,7 @@ pub(super) fn table_from_const(value: Datum, span: Span) -> Res<Arc<niminal_engi
             for item in items.iter() {
                 match item {
                     Datum::Sig(s) if s.konst().is_some() && s.unit() == crate::unit::Unit::Num => {
-                        values.push(s.konst().unwrap());
+                        values.push(s.konst().expect("the guard checked it is constant"));
                     }
                     _ => {
                         return Err(Diagnostic::new(

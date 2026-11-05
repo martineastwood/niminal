@@ -1,4 +1,5 @@
 //! End-to-end frequency, selection, capture and latency contracts for spectral tools.
+#![allow(clippy::unwrap_used)]
 use niminal_engine::Voice;
 use niminal_lang::compile;
 

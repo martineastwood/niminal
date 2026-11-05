@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use niminal_engine::ops::{Gain, Mul};
 use niminal_engine::{
     ChainInput, GraphBuilder, Mixer, NodeDef, Route, Src, block_size, execution_order,

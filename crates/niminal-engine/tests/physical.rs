@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use niminal_engine::ops::{Bowed, Reed};
 use niminal_engine::{Opcode, ProcessCtx};
 

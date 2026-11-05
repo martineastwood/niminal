@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use std::path::{Path, PathBuf};
 
 use niminal_compose::{Composition as Program, compile_with};

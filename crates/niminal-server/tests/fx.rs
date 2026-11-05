@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use niminal_lang::Layout;
 use niminal_score::Time;
 use niminal_server::{At, Op, Session};

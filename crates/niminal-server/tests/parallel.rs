@@ -1,4 +1,5 @@
 //! Sharing a block's voices among threads changes nothing about the sound, and costs no allocation.
+#![allow(clippy::unwrap_used)]
 
 use niminal_lang::Layout;
 use niminal_score::{Time, Value};

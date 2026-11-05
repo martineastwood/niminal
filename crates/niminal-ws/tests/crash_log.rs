@@ -1,4 +1,5 @@
 //! A panic in an app is written to `~/.niminal/crash.log`, with the app's name and version.
+#![allow(clippy::unwrap_used)]
 
 #[test]
 fn a_panic_is_recorded_with_the_app_that_had_it() {

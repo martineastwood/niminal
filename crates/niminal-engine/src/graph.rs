@@ -516,7 +516,12 @@ impl Graph {
                 .iter()
                 .find(|(old, _)| *old == p.name)
                 .map_or(p.name.as_str(), |(_, new)| *new);
-            slots.push(g.param(name, p.default).unwrap());
+            // two controls exposed under one public name share a parameter instead of clashing
+            let src = match g.params.iter().position(|q| q.name == name) {
+                Some(i) => Src::Param(i),
+                None => g.param(name, p.default).expect("no parameter of this name yet"),
+            };
+            slots.push(src);
         }
         slots.extend(self.consts.iter().map(|v| Src::Const(*v)));
         for _ in 0..self.n_inputs {
@@ -528,13 +533,13 @@ impl Graph {
                 .control_info()
                 .filter(|(key, _)| keys.iter().any(|(old, _)| old == key))
             {
-                let public = keys.iter().find(|(old, _)| *old == key).unwrap().1;
+                let public = keys.iter().find(|(old, _)| *old == key).expect("the filter above matched this key").1;
                 let src = g
                     .params
                     .iter()
                     .position(|p| p.name == public)
                     .map(Src::Param)
-                    .unwrap_or_else(|| g.param(public, value).unwrap());
+                    .unwrap_or_else(|| g.param(public, value).expect("no parameter of this name yet"));
                 slots.push(src);
             } else {
                 let ports: Vec<_> = node
@@ -618,8 +623,8 @@ impl Graph {
         let mut g = GraphBuilder::new();
         let mut slots = Vec::new();
         for p in &self.params {
-            slots.push(g.param(&p.name, p.default).unwrap());
-            g.params.last_mut().unwrap().range = p.range;
+            slots.push(g.param(&p.name, p.default).expect("the source graph's parameter names are distinct"));
+            g.params.last_mut().expect("a parameter was just added").range = p.range;
         }
         slots.extend(self.consts.iter().map(|&v| Src::Const(v)));
         let target = latencies.iter().copied().max().unwrap_or(0);

@@ -29,3 +29,31 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+
+  # Stage (clippy, cargo test, tsc, vitest) and the extension's tests, which the Linux job cannot build. This is what
+  # `scripts/check.sh --test --apps` runs locally, so a broken window or extension fails on the push, not at release.
+  apps:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      RUSTFLAGS: -C target-cpu=apple-m1
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+      NIMINAL_BIN: ${{ github.workspace }}/target/debug/niminal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            stage/src-tauri
+      - run: |
+          for app in stage editors/vscode; do
+            (cd "$app" && npm ci)
+          done
+      - run: scripts/check.sh --test --apps

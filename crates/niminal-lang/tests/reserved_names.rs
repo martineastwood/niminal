@@ -1,4 +1,5 @@
 //! The reserved-words page lists exactly the names the compiler refuses, in the two groups it has.
+#![allow(clippy::unwrap_used)]
 
 use std::collections::BTreeSet;
 

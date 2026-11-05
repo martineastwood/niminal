@@ -1,4 +1,5 @@
 //! Oscillator controls through both graph and sample-kernel compilation.
+#![allow(clippy::unwrap_used)]
 use niminal_engine::{Buses, Voice, block_size};
 use niminal_lang::compile;
 

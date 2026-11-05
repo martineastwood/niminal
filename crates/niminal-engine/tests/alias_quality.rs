@@ -1,4 +1,5 @@
 //! Aliasing and passband of the oscillators and the oversampler, measured on the spectrum.
+#![allow(clippy::unwrap_used)]
 mod common;
 use common::SR;
 use niminal_engine::ops::{Delay, Distortion, Gain, Ladder, Osc, Oversample, Wave};

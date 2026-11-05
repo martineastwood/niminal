@@ -1,6 +1,7 @@
 //! Effects that feed back on themselves must settle to exact silence, never lingering in the range of
 //! numbers too small to be normal. These render through a bare `Voice`, which has no hardware flush-to-zero
 //! (the mixer's guard), so they hold on any machine and in a browser too.
+#![allow(clippy::unwrap_used)]
 
 mod common;
 use common::*;

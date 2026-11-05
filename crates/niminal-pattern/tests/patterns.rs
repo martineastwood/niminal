@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use niminal_pattern::{
     Hap, Hit, Param, Pattern, Rational, Span, Strength, euclid_steps, grid, parse, parse_with,
 };

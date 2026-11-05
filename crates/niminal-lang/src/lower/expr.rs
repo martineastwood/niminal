@@ -442,7 +442,7 @@ impl Lower<'_> {
             ));
         }
         if sigs.iter().all(|s| s.konst.is_some()) {
-            let data = Arc::new(Table::from_f64(sigs.iter().map(|s| s.konst.unwrap()), None));
+            let data = Arc::new(Table::from_f64(sigs.iter().map(|s| s.konst.expect("every signal was checked constant")), None));
             return self.table_read(data, unit, pos, interp, Edge::Wrap, span);
         }
         let op = ArrayRead::new(sigs.len(), interp);

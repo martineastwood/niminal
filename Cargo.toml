@@ -2,6 +2,11 @@
 resolver = "3"
 members = ["crates/*"]
 
+# A panic on the live path drops the set, so production code says why an invariant holds (`expect`) or returns an error.
+# Tests may unwrap freely (clippy.toml).
+[workspace.lints.clippy]
+unwrap_used = "warn"
+
 [workspace.package]
 version = "0.0.1"
 license = "MIT"

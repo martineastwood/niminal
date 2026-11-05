@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "JSON-RPC over WebSocket: the server that fronts the server, and a client for it"
 
+[lints]
+workspace = true
+
 [dependencies]
 niminal-server = { path = "../niminal-server" }
 serde_json = "1"

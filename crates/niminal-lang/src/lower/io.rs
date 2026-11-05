@@ -70,11 +70,10 @@ impl Lower<'_> {
             Some((wrap(lo), wrap(hi)))
         };
         let (first, last) = match args {
-            [a] if ends(a).is_some() => {
-                let (lo, hi) = ends(a).unwrap();
-                (channel(&lo)?, channel(&hi)?)
-            }
-            [a] => (channel(a)?, channel(a)?),
+            [a] => match ends(a) {
+                Some((lo, hi)) => (channel(&lo)?, channel(&hi)?),
+                None => (channel(a)?, channel(a)?),
+            },
             _ => {
                 return Err(Diagnostic::new(
                     "`input` takes a channel, or a range of them",

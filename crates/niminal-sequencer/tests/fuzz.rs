@@ -3,6 +3,7 @@
 //! (which compiles it, schedules it and renders a little audio).
 //!
 //! `NIMINAL_FUZZ_CASES=20000 cargo test --release -p niminal-sequencer --test fuzz` runs it longer.
+#![allow(clippy::unwrap_used)]
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::{Duration, Instant};

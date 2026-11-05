@@ -1,4 +1,5 @@
 //! The math helpers every file can call without defining them, checked against the numbers they should give.
+#![allow(clippy::unwrap_used)]
 use niminal_engine::{Buses, Voice, block_size};
 use niminal_lang::compile;
 

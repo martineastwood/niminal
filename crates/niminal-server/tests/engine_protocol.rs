@@ -1,4 +1,5 @@
 //! The engine server: JSON-RPC over whatever carries the messages.
+#![allow(clippy::unwrap_used)]
 
 use niminal_lang::Layout;
 use niminal_server::{ClientId, EngineServer, PROTOCOL_VERSION, Session};

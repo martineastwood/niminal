@@ -1,4 +1,5 @@
 //! A clip's `then:` runs when its last pass ends, so a render has to be played through a session to hear it.
+#![allow(clippy::unwrap_used)]
 
 use std::process::Command;
 

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use niminal_engine::{GlideCurve, GraphBuilder, Voice, block_size};
 use std::sync::Arc;
 

@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "The niminal language server: diagnostics, completion, hover and go-to-definition over stdio"
 
+[lints]
+workspace = true
+
 [dependencies]
 niminal-lang = { path = "../niminal-lang" }
 niminal-compose = { path = "../niminal-compose" }

@@ -344,7 +344,7 @@ impl EngineServer {
     /// A client that collects its own notifications instead of using the network server's outbox.
     pub fn connect_local(&mut self) -> ClientId {
         let id = self.connect();
-        self.clients.get_mut(&id).unwrap().local = true;
+        self.clients.get_mut(&id).expect("connect just added this client").local = true;
         id
     }
 

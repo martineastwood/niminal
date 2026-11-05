@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Renders the spec's first example, wired by hand, to `saw_lead.wav`.
 //! `cargo run -p niminal-engine --example saw_lead`
 

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 mod support;
 use niminal_lang::Layout;
 use niminal_server::{RealtimeConfig, Session};

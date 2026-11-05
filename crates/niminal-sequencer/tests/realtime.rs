@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use niminal_lang::Layout;
 use niminal_sequencer::Offline;
 use niminal_server::{RealtimeConfig, RealtimeRenderer};

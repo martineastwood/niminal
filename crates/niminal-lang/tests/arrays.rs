@@ -1,4 +1,5 @@
 //! Numeric behavior at compiler/runtime boundaries, not only compile success.
+#![allow(clippy::unwrap_used)]
 use niminal_engine::{Buses, Voice, block_size};
 use niminal_lang::{Program, compile};
 
