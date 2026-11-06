@@ -70,6 +70,8 @@ pub enum Item {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ControlInput {
     pub source: InputSource,
+    /// The ends of `.range(lo..hi)`; the control starts at `lo` unless `.starts_at(...)` says otherwise.
+    pub lo: Expr,
     pub hi: Expr,
     /// `.quantize(1/8beat)`: a change lands on the next such boundary, not at once.
     pub quantize: Option<Expr>,

@@ -16,7 +16,7 @@ fn audio(expression: &str, bpm: f64) -> Vec<f32> {
     out.remove(0)
 }
 
-fn level(out: &[f32], seconds: f64, expected: f32) {
+pub(crate) fn level(out: &[f32], seconds: f64, expected: f32) {
     let got = out[(seconds * SR).round() as usize];
     assert!(
         (got - expected).abs() < 0.003,
@@ -180,5 +180,60 @@ fn an_fx_generator_reopens_after_a_long_silent_run() {
     }
     for time in [0.050, 0.450, 0.550, 0.950] {
         level(&out, time, 0.0);
+    }
+}
+
+/// Like `audio`, with a whole body for the effect so a multi-row grid can be kept in a name.
+pub(crate) fn audio_body(body: &str) -> Vec<f32> {
+    let src = format!(
+        "use std/blocks\ntempo 120bpm\nbus source\ninstr steady() {{ source += env[1 | 5ms 0] }}\nsteady() for 2sec\nfx chopped {{\n{body}\n}}"
+    );
+    let src = niminal_lang::expand(&src, std::path::Path::new("."))
+        .unwrap_or_else(|d| panic!("{}", d.message))
+        .text;
+    let p = program(&src);
+    let schedule = p.schedule();
+    let mut session =
+        niminal_sequencer::Offline::new(SR as f32, niminal_lang::Layout::Mono).without_limiter();
+    session.play_program(p, schedule).unwrap();
+    let mut out = session.process((1.1 * SR) as usize);
+    let notices = session.take_notices();
+    assert!(notices.is_empty(), "{notices:?}");
+    out.remove(0)
+}
+
+#[test]
+fn each_row_of_a_grid_block_is_its_own_level_signal_with_its_own_length() {
+    // A beat is 500ms. Row 1 has four steps (125ms each), row 2 two steps (250ms each), row 3 one.
+    let body = "rows = grid {\n  1: x...\n  2: .x\n  3: x\n}.over(1beat)\n\
+                out = source * (rows[0] + rows[1] * 0.5 + rows[2] * 0.25)";
+    let out = audio_body(body);
+    level(&out, 0.050, 1.0 + 0.25); // row 1 open, row 2 closed
+    level(&out, 0.150, 0.25); // row 1 closed
+    level(&out, 0.300, 0.5 + 0.25); // row 2 open
+    level(&out, 0.600, 1.0 + 0.25); // the next beat: row 1 again
+    // Rows loop independently: row 2 is open on the second half of every beat.
+    level(&out, 0.800, 0.5 + 0.25);
+}
+
+#[test]
+fn a_single_row_block_is_still_an_array_and_gate_wants_one_row() {
+    let out = audio_body("rows = grid {\n  a: .x..\n}.over(1beat)\nout = source * rows[0]");
+    level(&out, 0.050, 0.0);
+    level(&out, 0.150, 1.0);
+    for (expr, expected) in [
+        ("0.5.gate(grid {\n a: x.\n b: .x\n})", "one row of steps"),
+        ("(grid {\n a x.\n})[0]", "name: x..."),
+        ("(grid {\n a(gain: 1): x.\n})[0]", "no settings or mini-notation"),
+        ("(grid {\n a: [x .]\n})[0]", "no settings or mini-notation"),
+        ("(grid {\n a: x..\n})[0] + grid[xx].over(1sec)", "positive beats or bars"),
+    ] {
+        let src = format!("fx chopped {{ out = {expr} }}");
+        let errors = compile(&src).err().expect("expected a grid error");
+        assert!(
+            errors.iter().any(|e| e.message.contains(expected)),
+            "{expr}: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
     }
 }

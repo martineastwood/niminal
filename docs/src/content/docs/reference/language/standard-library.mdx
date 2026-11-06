@@ -88,6 +88,35 @@ For echoes at times of your own, add `delay`s: `x + x.delay(120ms) * 0.6 + x.del
 | `echoes(x, count: 4, spacing: 120ms, fade: 0.6)` | `x` followed by `count` echoes, `spacing` apart, each `fade` times the level of the one before. |
 | `dark_echo(x, time, feedback: 0.5, damp: 4khz, max: 2sec)` | `x` plus a feedback delay with a low-pass in the loop, so each repeat is darker. |
 
+## std/blocks
+
+Building blocks to wire together, in the manner of modules in a rack. A block takes signals in, so a grid, an envelope or a random signal can drive any of its parameters.
+
+| Function | What it is |
+| --- | --- |
+| `harmonic_osc(freq, gates, count: 16, brightness: 0.5, odd_even: 0, gate_smooth: 4ms)` | A bank of sine partials at whole-number multiples of `freq`. `brightness` sets how fast the levels fall away up the series; `odd_even` takes it to its odd partials (up to 1) or its even ones (down to -1). `gates` opens and closes the first partials, one signal each; partials without a gate stay open. |
+| `function_gen(cycle: 8, rise: 0.5, curve: 1)` | A shape from 0 up to 1 and back, `cycle` beats long, rising for the first `rise` of it (a share) and falling for the rest. `curve` bends both sides: above 1 holds back at the bottom, below 1 hurries away from it. It follows the transport, so it always peaks on the same beat. |
+| `wobble(beats: 0.5, shape: stepped, seed: 0)` | Random values from -1 to 1, a new one every `beats` beats. `stepped` holds each until the next; `smooth` slides to it. The same `seed` is the same run every time. |
+| `clock_div(beats: 1, width: 0.5)` | A gate that follows the transport: high for the first `width` of every `beats` beats. `clock_div(3/2)` drifts against the bar and meets it again. |
+| `echo_loop(x, time: 3/16beat, feedback: 0.5, filter: 3khz, duck: 0, ping_pong: off, max: 2sec)` | The echoes of `x` and nothing else, to blend with the dry sound: `x.crossfade(x.echo_loop(...), mix)`. `time` follows the tempo; `filter` is a low-pass in the loop, so each repeat is darker; `duck` pulls the echoes down while `x` is loud; `ping_pong: on` bounces them between left and right, the first on the right. `max` must be at least twice `time` for a ping-pong. |
+
+```nml
+use std/blocks
+
+instr additive(freq: hz) {
+  gates = grid {
+    1: x... x... x... x...
+    2: ..x. ..x. ..x.
+    3: x.x. ...x x.
+  }.over(1bar).width(55%)
+  harmonic_osc(freq, gates: gates, brightness: 0.6).pan(angle: 0deg) * env[0 3ms 1 | 120ms 0]
+}
+```
+
+`function_gen`, `wobble` and `clock_div` read the transport (`clock.beat`, `clock.bpm`), so they follow the tempo as it changes. Their outputs are plain signals: scale one with `.range(...)`, multiply it into a gain or add it to a control.
+
+Partials above 45% of the sample rate are left out, and the sum is scaled by the loudest the series could be, so it never exceeds 1 however the controls are set.
+
 ## std/spectral
 
 These effects analyze overlapping spectral frames. Each is `size` samples late (1024 unless listed otherwise); the compiler delays parallel dry paths to match. The frame helpers remain available for writing custom processing.

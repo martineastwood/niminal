@@ -4,6 +4,7 @@
 
 mod analysis;
 mod compile;
+mod controls;
 pub mod drums;
 mod dsp;
 mod ide;
@@ -24,12 +25,13 @@ pub use analysis::{
 };
 pub use compile::{
     Composition, ControlBinding, MacroDef, MacroTarget, QuantizeConfig, Trigger, compile,
-    compile_with, interpolate,
+    compile_with, compile_with_bank, interpolate,
 };
 pub use dsp::{
     BeatControl, beat_controls, division_controls, dsp_source, resolve_musical_time, warnings,
 };
 pub use ide::{RESERVED_WORDS, Symbol, SymbolKind, SymbolParam, pattern_ops, symbols};
+pub use controls::ControlBank;
 pub use modules::expand;
 pub use niminal_lang::ast::{ControlInput, InputSource};
 pub use niminal_lang::{Tok, Token, lex};

@@ -1861,7 +1861,9 @@ impl RealtimeRenderer {
                     log_op: change.log_op,
                     at: self.clock,
                 });
-                if change.at < self.clock {
+                // a knob moved "now" reaches the audio thread a block or so after the sample it was given: that is
+                // how live input arrives, not a change that missed its deadline
+                if change.at < self.clock && !change.now {
                     self.state.late_events.fetch_add(1, Ordering::Relaxed);
                 }
                 if self

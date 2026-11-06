@@ -1,0 +1,85 @@
+// Building blocks to wire together, in the manner of modules in a rack: `use std/blocks`.
+// A block takes signals in, so another block (a grid, an envelope, a random signal) can drive any of its parameters.
+
+/// A bank of sine partials at whole-number multiples of `freq`, each with a level of its own.
+/// `brightness` sets how fast the levels fall off up the series (0 is a dark, nearly pure tone, 1 almost as
+/// loud at the top as at the bottom), and `odd_even` takes the series to its odd partials (up to 1) or its even
+/// ones (down to -1). `gates` opens and closes the first partials one by one, partial 1 first: a signal for each,
+/// such as the rows of a grid, `gates: grid { 1: x... 2: ..x. }.over(1bar)`; partials without a gate stay open.
+/// `gate_smooth` rounds each gate's edges. Partials above 45% of the sample rate are left out, and the sum is
+/// scaled by the loudest the series could be, so it never exceeds 1 however the controls are set.
+fn harmonic_osc(
+  freq: hz,
+  gates: [num] = [1],
+  count: const int = 16,
+  brightness: 0..1 = 0.5,
+  odd_even: -1..1 = 0,
+  gate_smooth: sec = 4ms
+) {
+  _slope = 2 - 1.9 * brightness
+  _levels = for i in 0..<count {
+    _parity = if i.mod(2) == 0 { 1 + odd_even.min(0) } else { 1 - odd_even.max(0) }
+    pow(i + 1, 0 - _slope) * _parity * if freq * (i + 1) < sample_rate * 0.45 { 1 } else { 0 }
+  }
+  _heard = for i in 0..<count {
+    _levels[i] * if i < gates.len { gates[i].smooth(gate_smooth) } else { 1 }
+  }
+  _frequencies = (0..<count).map(freq * (it + 1))
+  (osc(sine, _frequencies) * _heard).sum / _levels.sum.max(0.001)
+}
+
+/// A shape that repeats against the transport, from 0 up to 1 and back: `cycle` beats long, rising for the first
+/// `rise` of them (a share, 0 to 1) and falling for the rest. `curve` bends both sides: 1 is straight, above 1
+/// holds back at the bottom, below 1 hurries away from it. It follows the tempo and the bar, so a swell
+/// `function_gen(cycle: 32, rise: 0.75)` always peaks on the same beat of every eight bars of four beats.
+fn function_gen(cycle: num = 8, rise: 0..1 = 0.5, curve: 0.1..10 = 1) {
+  _phase = (clock.beat / cycle.max(0.001)).mod(1)
+  _up = _phase / rise.max(0.001)
+  _down = (1 - _phase) / (1 - rise).max(0.001)
+  pow(_up.min(_down).max(0).min(1), curve.max(0.001))
+}
+
+/// Random values from -1 to 1, a new one every `beats` beats: `stepped` holds each until the next, `smooth` slides
+/// to it over most of the beats. The same `seed` is the same run every time, and another seed is another run.
+fn wobble(beats: num = 0.5, shape: (stepped | smooth) = stepped, seed: const num = 0) {
+  _rate = 1hz * (clock.bpm / 60 / beats.max(0.001))
+  if shape == stepped {
+    random_steps(_rate, seed: seed)
+  } else {
+    random_glide(_rate, glide: clock.beat_length * beats.max(0.001) * 0.9, seed: seed).smooth(10ms)
+  }
+}
+
+/// A gate that follows the transport: high for the first `width` (a share, 0 to 1) of every `beats` beats, so
+/// `clock_div(1/2)` is eighth notes, `clock_div(3/2)` is a dotted quarter against the bar, and `clock_div(4)` is a
+/// bar of four. Several at different `beats` make clocks that drift against each other and meet again.
+fn clock_div(beats: num = 1, width: 0..1 = 0.5) {
+  if (clock.beat / beats.max(0.001)).mod(1) < width { 1 } else { 0 }
+}
+
+/// Echoes of `x` and nothing else, to be blended with the dry sound: `x.crossfade(x.echo_loop(...), mix)`.
+/// `time` follows the tempo (`3/16beat` is a dotted eighth) and `feedback` is how much of each echo goes round
+/// again. `filter` is a low-pass in the loop, so each repeat is darker than the one before. `duck` (0 to 1) pulls the
+/// echoes down while `x` is loud and lets them back up when it stops, so they clear the way for the next note.
+/// `ping_pong: on` mixes `x` to one channel and bounces the echoes between left and right, the first on the right. `max` is the
+/// longest the loop can be, in seconds, and for a ping-pong at least twice `time`.
+fn echo_loop(
+  x,
+  time: division = 3/16 * clock.beat_length,
+  feedback: 0..0.95 = 0.5,
+  filter: 20hz..20khz = 3khz,
+  duck: 0..1 = 0,
+  ping_pong: (off | on) = off,
+  max: const sec = 2sec
+) {
+  _mono = x.sum / x.channels.len
+  _wet = if ping_pong == on {
+    // the right hears echoes 1, 3, 5... and the left 2, 4, 6..., each `feedback` quieter than the one before
+    _first = _mono.delay(time, damp: filter, max: max)
+    _right = _first + _first.delay(time * 2, feedback: feedback * feedback, damp: filter, max: max) * feedback * feedback
+    [_right.delay(time, damp: filter, max: max) * feedback, _right]
+  } else {
+    x.delay(time, feedback: feedback, damp: filter, max: max)
+  }
+  _wet * (1 - duck * (follow(_mono, attack: 5ms, release: 200ms) * 3).min(1))
+}

@@ -25,7 +25,7 @@ export async function connectLanguageServer(status: (message: string) => void) {
 const theme = editorTheme('calc(14px * var(--z))');
 
 /** What an evaluation sends: the selection or the block around the cursor, or the whole file. */
-export type Scope = 'chunk' | 'file';
+export type Scope = 'chunk' | 'paragraph' | 'step' | 'file';
 
 export function niminalEditor(source: string, uri: string, apply: (scope: Scope) => void, changed?: (state: EditorState, docChanged: boolean) => void) {
   return EditorState.create({
@@ -37,6 +37,20 @@ export function niminalEditor(source: string, uri: string, apply: (scope: Scope)
             key: 'Mod-Enter',
             run: () => {
               apply('chunk');
+              return true;
+            },
+          },
+          {
+            key: 'Shift-Enter',
+            run: () => {
+              apply('step');
+              return true;
+            },
+          },
+          {
+            key: 'Alt-Enter',
+            run: () => {
+              apply('paragraph');
               return true;
             },
           },

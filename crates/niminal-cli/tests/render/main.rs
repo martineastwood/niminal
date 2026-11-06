@@ -1,10 +1,12 @@
 #![allow(clippy::unwrap_used)]
 mod audio_input;
 mod basics;
+mod blocks;
 mod channels;
 mod command_line;
 mod common;
 mod effects;
+mod echo_loop;
 mod envelope_shortcuts;
 mod functions;
 mod gaps;

@@ -377,10 +377,11 @@ impl Walk<'_> {
 pub const STD_DIR: &str = "<std>";
 
 /// The modules that come with niminal: `use std/physical`.
-const STD: [(&str, &str); 7] = [
+const STD: [(&str, &str); 8] = [
     ("std/samples", include_str!("../std/samples.nml")),
     ("std/physical", include_str!("../std/physical.nml")),
     ("std/delays", include_str!("../std/delays.nml")),
+    ("std/blocks", include_str!("../std/blocks.nml")),
     ("std/spectral", include_str!("../std/spectral.nml")),
     ("std/instruments", include_str!("../std/instruments.nml")),
     ("std/drums", include_str!("../std/drums.nml")),

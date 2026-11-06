@@ -46,7 +46,12 @@ pub struct Health {
     pub input_errors: AtomicUsize,
     /// Set when the output stream reported an error: the device may be gone.
     pub lost: AtomicBool,
+    /// Set when the program is about to quit: the output fades to silence instead of stopping mid-wave.
+    pub closing: AtomicBool,
 }
+
+/// How long the output takes to fade to silence on quitting.
+const FADE_OUT: std::time::Duration = std::time::Duration::from_millis(40);
 
 impl Output {
     /// Open the default output device. If `sample_rate` is `None` the device's
@@ -159,6 +164,16 @@ impl Output {
     }
 }
 
+/// Turn `data` down by `step` per frame from `gain`, never below silence, and leave the gain where it ended.
+fn fade_block(data: &mut [f32], channels: usize, gain: &mut f32, step: f32) {
+    for frame in data.chunks_mut(channels) {
+        *gain = (*gain - step).max(0.0);
+        for sample in frame {
+            *sample *= *gain;
+        }
+    }
+}
+
 /// The output stream, reading from `playback` and flagging the device as lost when it reports an error.
 fn build_stream(
     device: &cpal::Device,
@@ -166,7 +181,10 @@ fn build_stream(
     playback: &Arc<Mutex<Playback>>,
     health: &Arc<Health>,
 ) -> Result<cpal::Stream, String> {
-    let (playback, lost) = (playback.clone(), health.clone());
+    let (playback, lost, closing) = (playback.clone(), health.clone(), health.clone());
+    let channels = usize::from(config.channels).max(1);
+    let step = 1.0 / (FADE_OUT.as_secs_f32() * config.sample_rate as f32);
+    let mut gain = 1.0_f32;
     let stream = device
         .build_output_stream::<f32, _, _>(
             config,
@@ -182,6 +200,10 @@ fn build_stream(
                         playback.read(data)
                     }
                     Err(_) => data.fill(0.0),
+                }
+                // quitting: ramp down over a few milliseconds so the speakers are not cut off mid-wave
+                if closing.closing.load(Ordering::Acquire) || gain < 1.0 {
+                    fade_block(data, channels, &mut gain, step);
                 }
             },
             move |_e| {
@@ -291,6 +313,13 @@ pub struct Running {
 }
 
 impl Running {
+    /// Fade the output to silence and wait for it to be heard, so that quitting does not click.
+    pub fn fade_out(&self) {
+        self.health.closing.store(true, Ordering::Release);
+        // the fade, and the buffer the device still holds
+        std::thread::sleep(FADE_OUT + std::time::Duration::from_millis(60));
+    }
+
     /// Whether the output stream has reported an error since it was last opened.
     pub fn device_lost(&self) -> bool {
         self.health.lost.load(Ordering::Acquire)
@@ -738,5 +767,28 @@ mod tests {
         }
         drop(guard);
         drop(helpers);
+    }
+}
+
+#[cfg(test)]
+mod fade_tests {
+    use super::fade_block;
+
+    #[test]
+    fn a_fade_reaches_silence_without_a_step_and_stays_there() {
+        let mut gain = 1.0;
+        let mut data = vec![1.0_f32; 2 * 100];
+        fade_block(&mut data, 2, &mut gain, 0.02);
+        // both channels of a frame are turned down together, and by no more than one step between frames
+        for pair in data.chunks(2) {
+            assert_eq!(pair[0], pair[1]);
+        }
+        for frames in data.chunks(2).collect::<Vec<_>>().windows(2) {
+            assert!(frames[0][0] - frames[1][0] <= 0.02 + 1e-6);
+        }
+        assert_eq!(data[data.len() - 1], 0.0);
+        let mut more = vec![0.7_f32; 8];
+        fade_block(&mut more, 2, &mut gain, 0.02);
+        assert!(more.iter().all(|s| *s == 0.0));
     }
 }

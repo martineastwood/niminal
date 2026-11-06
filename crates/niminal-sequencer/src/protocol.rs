@@ -69,6 +69,8 @@ pub struct Tap {
     pub landed: Vec<Landed>,
     /// `(control, source)` of each control that learned a MIDI binding.
     pub learned: Vec<(String, String)>,
+    /// The controls and macros that moved, each once, so their names can light.
+    pub moved: Vec<String>,
     pub notices: Vec<String>,
     /// The loudest sample on each output channel since the tap was last taken; empty before any reading.
     pub peaks: Vec<f32>,
@@ -573,10 +575,16 @@ impl LiveServer {
         let live = &mut self.player.live;
         let landed = live.take_landed();
         let learned = live.take_learned();
+        let moved = live.take_moved();
         let notices = live.take_notices();
         if let Some(tap) = &mut self.tap {
             tap.landed.extend(landed.iter().cloned());
             tap.learned.extend(learned.iter().cloned());
+            for name in moved {
+                if !tap.moved.contains(&name) {
+                    tap.moved.push(name);
+                }
+            }
             tap.notices.extend(notices.iter().cloned());
         }
         for landed in landed {

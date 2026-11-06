@@ -7,6 +7,7 @@ use super::*;
 pub(super) struct PrepareConfig {
     layout: Layout,
     samples: Samples,
+    bank: niminal_compose::ControlBank,
 }
 
 #[derive(Clone)]
@@ -398,7 +399,7 @@ pub(super) fn prepare_pending(
         // notes remember where they were written, in the terms of the client that sent them
         let mut options = options(cfg.layout, &cfg.samples);
         options.origins = Some(project.origins());
-        let program = compile_with(&full, &options).map_err(|diags| {
+        let program = niminal_compose::compile_with_bank(&full, &options, Some(&cfg.bank)).map_err(|diags| {
             diags
                 .iter()
                 .map(|d| Problem::from_diagnostic(d, snippet, map.locate(d.span)))
@@ -928,6 +929,7 @@ impl Live {
         PrepareConfig {
             layout: self.layout,
             samples: self.samples.clone(),
+            bank: self.program.bank.clone(),
         }
     }
 

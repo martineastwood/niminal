@@ -147,6 +147,8 @@ pub(crate) struct Compiled {
 }
 
 pub(crate) struct Context<'a> {
+    /// The values of the controls, which a name in a pattern argument can read as they move.
+    pub bank: &'a crate::ControlBank,
     /// The macros, which a clip lane can move.
     pub macros: &'a [crate::compile::MacroDef],
     pub tempo: Tempo,

@@ -25,7 +25,10 @@ fn __niminal_rhythm_gate(__rg_levels: [num], __rg_before: [num], __rg_after: [nu
 "#;
 
 struct Grid<'a> {
-    raw: &'a str,
+    /// The steps of each row: one for `grid[...]`, one for each line of `grid { ... }`.
+    rows: Vec<String>,
+    /// `grid { ... }` makes an array of signals even when it has a single row.
+    multi: bool,
     span: Span,
     over: Option<&'a Expr>,
     width: Option<&'a Expr>,
@@ -36,7 +39,15 @@ type Res<T> = Result<T, Diagnostic>;
 fn grid(expr: &Expr) -> Res<Option<Grid<'_>>> {
     match &expr.kind {
         ExprKind::Grid(raw) => Ok(Some(Grid {
-            raw,
+            rows: vec![raw.clone()],
+            multi: false,
+            span: expr.span,
+            over: None,
+            width: None,
+        })),
+        ExprKind::Rows(raw) => Ok(Some(Grid {
+            rows: rows(raw, expr.span)?,
+            multi: true,
             span: expr.span,
             over: None,
             width: None,
@@ -77,6 +88,36 @@ fn grid(expr: &Expr) -> Res<Option<Grid<'_>>> {
     }
 }
 
+/// The steps of each row of `grid { name: x... }`. The names are for the reader: a row's signal is
+/// its place in the array.
+fn rows(raw: &str, span: Span) -> Res<Vec<String>> {
+    let mut rows = Vec::new();
+    for line in raw.lines() {
+        let line = line.split("//").next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((name, steps)) = line.split_once(':') else {
+            return Err(Diagnostic::new(
+                "each row of a DSP grid is `name: x...`",
+                span,
+            ));
+        };
+        let steps = steps.trim();
+        if name.trim().is_empty() || name.contains('(') || steps.starts_with('[') {
+            return Err(Diagnostic::new(
+                "a DSP grid row is a name and a row of steps, `1: x.x.`: no settings or mini-notation",
+                span,
+            ));
+        }
+        rows.push(steps.to_string());
+    }
+    if rows.is_empty() {
+        return Err(Diagnostic::new("a DSP grid needs at least one row", span));
+    }
+    Ok(rows)
+}
+
 fn text<'a>(source: &'a str, expr: &Expr) -> &'a str {
     &source[expr.span.start..expr.span.end]
 }
@@ -101,27 +142,6 @@ fn signal(
     release: Option<&Expr>,
     shaped: bool,
 ) -> Res<String> {
-    let mut levels = Vec::new();
-    for c in grid.raw.chars().filter(|c| !c.is_whitespace()) {
-        levels.push(match c {
-            'x' => 1.0,
-            'X' => 10f64.powf(3.0 / 20.0),
-            'o' => 10f64.powf(-12.0 / 20.0),
-            '.' => 0.0,
-            _ => {
-                return Err(Diagnostic::new(
-                    format!("`{c}` isn't a grid step: use x, X, o or ."),
-                    grid.span,
-                ));
-            }
-        });
-    }
-    if levels.is_empty() {
-        return Err(Diagnostic::new(
-            "a DSP gate grid needs at least one step",
-            grid.span,
-        ));
-    }
     let beats = match grid.over {
         None => "clock.meter".to_string(),
         Some(expr) => match &expr.kind {
@@ -167,6 +187,51 @@ fn signal(
         if let Some(expr) = expr {
             nonnegative(expr, name)?;
         }
+    }
+    let mut calls = Vec::new();
+    for raw in &grid.rows {
+        calls.push(row_call(
+            raw, grid.span, &beats, width, attack, release, shaped, source,
+        )?);
+    }
+    Ok(if grid.multi {
+        format!("[{}]", calls.join(","))
+    } else {
+        calls.remove(0)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn row_call(
+    raw: &str,
+    span: Span,
+    beats: &str,
+    width: Option<&Expr>,
+    attack: Option<&Expr>,
+    release: Option<&Expr>,
+    shaped: bool,
+    source: &str,
+) -> Res<String> {
+    let mut levels = Vec::new();
+    for c in raw.chars().filter(|c| !c.is_whitespace()) {
+        levels.push(match c {
+            'x' => 1.0,
+            'X' => 10f64.powf(3.0 / 20.0),
+            'o' => 10f64.powf(-12.0 / 20.0),
+            '.' => 0.0,
+            _ => {
+                return Err(Diagnostic::new(
+                    format!("`{c}` isn't a grid step: use x, X, o or ."),
+                    span,
+                ));
+            }
+        });
+    }
+    if levels.is_empty() {
+        return Err(Diagnostic::new(
+            "a DSP gate grid needs at least one step",
+            span,
+        ));
     }
     let always_open = levels.iter().all(|v| *v > 0.0);
     let n = levels.len();
@@ -218,6 +283,12 @@ fn gate<'a>(source: &str, expr: &'a Expr, args: &'a [Arg]) -> Res<String> {
             pattern.value.span,
         )
     })?;
+    if pattern.multi {
+        return Err(Diagnostic::new(
+            "`audio.gate` takes one row of steps, `grid[x.x.]`",
+            pattern.span,
+        ));
+    }
     let mut width = None;
     let mut attack = None;
     let mut release = None;
@@ -277,7 +348,7 @@ fn visit(source: &str, expr: &Expr, edits: &mut Vec<(Span, String)>) -> Res<()> 
 
 /// Only DSP definitions are passed here; score grids keep their event semantics.
 pub(crate) fn lower(source: &str) -> Res<Option<String>> {
-    if !lex(source)?.iter().any(|t| matches!(t.tok, Tok::Grid(_))) {
+    if !lex(source)?.iter().any(|t| matches!(t.tok, Tok::Grid(_) | Tok::Rows(_))) {
         return Ok(None);
     }
     let items = parse_spanned(source)?;

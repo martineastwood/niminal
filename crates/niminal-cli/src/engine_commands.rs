@@ -2,6 +2,7 @@
 
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use clap::Args;
@@ -212,10 +213,14 @@ pub fn run_server(args: ServerArgs) -> Result<(), String> {
         host.sample_rate(),
         host.output_description()
     );
-    loop {
+    let stop = crate::stop_requested()?;
+    while !stop.load(Ordering::Acquire) {
         std::thread::sleep(Duration::from_millis(250));
         host.tick();
     }
+    // asked to stop: fade out rather than cutting the speakers off mid-wave
+    host.fade_out();
+    Ok(())
 }
 
 /// The built-in opcodes as a docs page, straight from the registry so it can't drift.

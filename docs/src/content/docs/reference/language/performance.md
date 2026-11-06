@@ -347,6 +347,15 @@ ctl grit   = 0.3
 fx bass { out = in.lpf(cutoff: filth.range(200hz..4khz)).distortion(drive: grit) }
 ```
 
+**Where a control starts:** a control bound to a controller holds the bottom of its range until the knob first moves. `.starts_at(...)` starts it elsewhere in the range, which matters when the bottom is silence, such as a `density` or a `window` size:
+
+```nml
+ctl density = midi.cc(3).range(0..1).starts_at(0.8)
+ctl cutoff  = midi.cc(21).range(200hz..4khz).starts_at(1khz).smooth(10ms)
+```
+
+The knob still sweeps the whole range once it moves. Stage listens to every MIDI input when it opens; click the MIDI chip to look again for one connected later.
+
 **Learning a controller:** write `midi.learn` and move the knob you want. The next control change binds to it, and the server tells the editor to rewrite the line to what it heard.
 
 ```nml

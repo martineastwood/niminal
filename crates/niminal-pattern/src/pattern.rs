@@ -1000,6 +1000,45 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
         })
     }
 
+    /// Loop a window of the cycle: `size` of it (above 0, up to 1) starting `start` of the way through, played at the
+    /// speed it has and over and over. A window that runs past the end of the cycle carries on from its start.
+    /// The window plays the cycle it begins in, so `<a b>` still takes a turn each cycle.
+    pub fn window(&self, start: Rational, size: Rational) -> Pattern<T> {
+        if size <= Rational::ZERO {
+            return Pattern::silence();
+        }
+        let size = size.min(Rational::ONE);
+        let start = start.fract();
+        let p = self.clone();
+        Pattern::new(move |span| {
+            // The window repeats every `size`: repeat `r` starts at `r * size` and plays the source from
+            // its own cycle plus `start`.
+            let first = (span.start / size).floor();
+            let last = if span.is_instant() {
+                first
+            } else {
+                (span.end / size).ceil() - 1
+            };
+            let mut out = Vec::new();
+            for r in first..=last.max(first) {
+                let from = Rational::int(r) * size;
+                let (x, y) = if span.is_instant() {
+                    (span.start, span.end)
+                } else {
+                    (span.start.max(from), span.end.min(from + size))
+                };
+                if y < x || (!span.is_instant() && x == y) {
+                    continue;
+                }
+                let shift = Rational::int(from.floor()) + start - from;
+                for h in p.query(Span::new(x + shift, y + shift)) {
+                    out.push(h.map_times(|t| t - shift));
+                }
+            }
+            out
+        })
+    }
+
     /// Change a different `1/n` of the cycle each cycle, in turn.
     pub fn in_turn(&self, n: i64, f: impl Fn(Pattern<T>) -> Pattern<T>) -> Pattern<T> {
         if n < 1 {

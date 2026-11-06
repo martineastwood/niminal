@@ -822,3 +822,66 @@ fn set_from_takes_a_value_where_each_event_starts() {
         ["a1", "b1", "c", "d"]
     );
 }
+
+#[test]
+fn a_window_loops_part_of_the_cycle_at_its_own_speed() {
+    let p = parse("a b c d e f g h").unwrap();
+    // The middle half: c d e f, played at the speed they have, twice in a cycle.
+    let w = p.window(r(1, 4), r(1, 2));
+    let got: Vec<String> = onsets(&w, cycles(0, 1)).into_iter().map(|e| e.2).collect();
+    assert_eq!(got, ["c", "d", "e", "f", "c", "d", "e", "f"]);
+    // and each keeps the length it had
+    let first = &onsets(&w, cycles(0, 1))[0];
+    assert_eq!((first.0, first.1), (r(0, 1), r(1, 8)));
+}
+
+#[test]
+fn a_window_that_runs_past_the_end_wraps_round() {
+    let p = parse("a b c d e f g h").unwrap();
+    // A quarter starting at three quarters is g h and then a b.
+    let w = p.window(r(3, 4), r(1, 2));
+    let got: Vec<String> = onsets(&w, cycles(0, 1)).into_iter().map(|e| e.2).collect();
+    assert_eq!(got, ["g", "h", "a", "b", "g", "h", "a", "b"]);
+}
+
+#[test]
+fn a_window_that_does_not_divide_the_cycle_carries_on_across_it() {
+    let p = parse("a b c d e f g h").unwrap();
+    // Three eighths is a window of three steps: a b c, a b c, then the third repeat is cut by the cycle's end.
+    let w = p.window(r(0, 1), r(3, 8));
+    let got: Vec<String> = onsets(&w, cycles(0, 2)).into_iter().map(|e| e.2).collect();
+    assert_eq!(
+        got,
+        ["a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b", "c", "a"]
+    );
+}
+
+#[test]
+fn the_whole_cycle_is_the_pattern_and_nothing_is_silence() {
+    let p = parse("a b c d").unwrap();
+    assert_eq!(
+        onsets(&p.window(r(0, 1), r(1, 1)), cycles(0, 2)),
+        onsets(&p, cycles(0, 2))
+    );
+    assert!(onsets(&p.window(r(0, 1), r(0, 1)), cycles(0, 1)).is_empty());
+}
+
+#[test]
+fn a_window_plays_the_cycle_it_begins_in() {
+    let p = parse("<a b> c").unwrap();
+    let w = p.window(r(0, 1), r(1, 1));
+    let got: Vec<String> = onsets(&w, cycles(0, 2)).into_iter().map(|e| e.2).collect();
+    assert_eq!(got, ["a", "c", "b", "c"]);
+}
+
+#[test]
+fn querying_a_window_in_pieces_gives_what_one_query_does() {
+    let p = parse("a b c d e f g h").unwrap();
+    let w = p.window(r(3, 8), r(5, 8));
+    let whole = onsets(&w, cycles(0, 3));
+    let mut pieces = Vec::new();
+    for k in 0..24 {
+        pieces.extend(onsets(&w, Span::new(r(k, 8), r(k + 1, 8))));
+    }
+    assert_eq!(whole, pieces);
+}

@@ -34,6 +34,8 @@ export class HealthWatch {
       }
     }
     this.last = health ?? null;
-    return { ok: now >= this.until, detail: this.what.join(', '), known: health != null };
+    // late notes are a matter of timing; the others mean the engine ran out of time to compute the sound
+    const load = this.what.some(what => !what.endsWith('late notes'));
+    return { ok: now >= this.until, detail: this.what.join(', '), known: health != null, load };
   }
 }

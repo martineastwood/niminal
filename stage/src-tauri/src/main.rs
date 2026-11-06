@@ -29,7 +29,12 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) 
 #[tauri::command]
 async fn engine_start(state: State<'_, AppState>) -> Result<(), String> {
     let shared = state.shared.clone();
-    blocking(move || session::start(&shared)).await?
+    blocking(move || {
+        session::start(&shared)?;
+        session::listen_to_midi(&shared);
+        Ok(())
+    })
+    .await?
 }
 
 /// Listen for OSC on UDP `port`, or stop listening with none. The port is kept for next time.
@@ -389,8 +394,10 @@ fn main() {
             move |_| {
                 // the engine starts with the program: nothing needs asking for it
                 std::thread::spawn(move || {
-                    if let Err(e) = session::start(&shared) {
-                        eprintln!("niminal: the engine did not start: {e}");
+                    match session::start(&shared) {
+                        // controllers are heard from the start, as they were before the engine moved in
+                        Ok(()) => session::listen_to_midi(&shared),
+                        Err(e) => eprintln!("niminal: the engine did not start: {e}"),
                     }
                 });
                 std::thread::spawn(|| {
@@ -429,5 +436,9 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("the stage starts")
-        .run(|_, _| {});
+        .run(move |_, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                session::fade_out(&shared);
+            }
+        });
 }

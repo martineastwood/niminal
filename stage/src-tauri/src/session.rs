@@ -424,6 +424,14 @@ pub fn open_midi(shared: &Arc<Shared>, filter: &str) -> Result<Vec<String>, Stri
     }
 }
 
+/// Listen to every MIDI input there is, as the stage starts, so a controller is ready without asking. No inputs
+/// is not a failure; one that can't be opened is told and the stage goes on.
+pub fn listen_to_midi(shared: &Arc<Shared>) {
+    if let Err(e) = open_midi(shared, "") {
+        lock(&shared.faults).push(format!("MIDI input is off: {e}"));
+    }
+}
+
 /// The names of the MIDI inputs and outputs, for choosing where the clock comes from and goes to.
 #[derive(Serialize)]
 pub struct MidiPorts {
@@ -616,6 +624,7 @@ pub fn snapshot(shared: &Shared) -> Snapshot {
             .into_iter()
             .map(|(control, source)| Learned { control, source })
             .collect(),
+        moved: tap.moved,
         midi: {
             let midi = lock(&shared.midi);
             let last = lock(&midi.last).clone();
@@ -696,6 +705,13 @@ pub fn eval(
     })
 }
 
+/// Fade what is playing out, for quitting: stopping the sound card mid-wave clicks.
+pub fn fade_out(shared: &Shared) {
+    if let Some(host) = lock(&shared.host).as_ref() {
+        host.fade_out();
+    }
+}
+
 pub fn cancel(shared: &Shared, id: Option<u64>) -> Result<usize, String> {
     with_live(shared, |live| live.cancel(id))
 }
@@ -734,6 +750,8 @@ pub struct Snapshot {
     pub health: Option<Health>,
     /// Controls that took a MIDI control change since the last snapshot, to be written into the code.
     pub learned: Vec<Learned>,
+    /// Controls and macros that moved since the last snapshot, so their names can light in the code.
+    pub moved: Vec<String>,
     pub midi: MidiStatus,
 }
 

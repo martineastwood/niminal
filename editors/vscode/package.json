@@ -64,6 +64,16 @@
         "category": "niminal"
       },
       {
+        "command": "niminal.evalStep",
+        "title": "Evaluate and Move to Next Statement",
+        "category": "niminal"
+      },
+      {
+        "command": "niminal.evalParagraph",
+        "title": "Evaluate Lines up to Blank Lines",
+        "category": "niminal"
+      },
+      {
         "command": "niminal.evalFile",
         "title": "Evaluate File",
         "category": "niminal"
@@ -152,6 +162,16 @@
         "command": "niminal.evalBlock",
         "key": "ctrl+enter",
         "mac": "cmd+enter",
+        "when": "editorTextFocus && editorLangId == niminal"
+      },
+      {
+        "command": "niminal.evalStep",
+        "key": "shift+enter",
+        "when": "editorTextFocus && editorLangId == niminal && !suggestWidgetVisible"
+      },
+      {
+        "command": "niminal.evalParagraph",
+        "key": "alt+enter",
         "when": "editorTextFocus && editorLangId == niminal"
       },
       {

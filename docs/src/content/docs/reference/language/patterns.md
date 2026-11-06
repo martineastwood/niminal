@@ -177,6 +177,17 @@ Route the sustained sound into `pad_audio` with a bus send; omit its dry `out` i
 
 `.gate(...)` defaults to a 2ms attack and 8ms release. Its width, attack and release can read live controls; width is clamped to 0..1 and edge times to nonnegative values. Put the grid literal and its `.over(...)`/`.width(...)` chain directly in the gate call.
 
+**Several rows.** `grid { name: x... }` gives an array of level signals, one for each row. Each row loops at its own length over the same `.over(...)`, so rows of 16, 12 and 7 steps slide against each other. The names are for the reader: a row's place in the array is its index. Settings (`.over`, `.width`) go after the closing brace and apply to every row. Rows are plain steps (`x`, `X`, `o`, `.`), without settings or mini-notation, and `.gate(...)` takes one row, not a block. Feed the array to a block that takes one gate for each partial, such as `harmonic_osc` in [`std/blocks`](/reference/language/standard-library/#stdblocks).
+
+```nml
+gates = grid {
+  1: x... x... x... x...
+  2: ..x. ..x. ..x.
+  3: x.x. ...x x.
+}.over(1bar).width(55%)
+tone = harmonic_osc(freq, gates: gates)
+```
+
 For a raw level signal with no edge shaping:
 
 ```nml
@@ -257,6 +268,9 @@ Arithmetic is an operation too: `sometimes(25%, add(7st))`.
 | `where(note < c3, transpose(+12st))` | Change the notes that pass a test on `note` (or `note.freq`) |
 | `where(grid[x . x .], transpose(+12st))` | Change the notes that fall on the grid's hits |
 | `rotate(1)` | Move the notes along one step and keep the rhythm: `c e g` becomes `e g c` |
+| `window(2, 8, steps: 16)` | Loop part of the cycle at the speed it has: 8 steps from step 2 of a 16-step pattern, over and over. Without `steps` they are shares of the cycle: `window(25%, 50%)`. `wrap` (the default) carries on from the start past the end, `clamp` stops at the end |
+| `phase(4, steps: 16)` | Start part of the way through the cycle and wrap round: the same notes, and the same rhythm, at another point |
+| `density(60%)` | Keep a share of the notes. Each note passes by a number of its own, so raising it only ever adds notes and never swaps one for another |
 | `grid[x.x.].invert` | Swap hits and rests in a grid |
 | `back_and_forth` | Forwards one cycle, backwards the next |
 | `take(75%)` | Play only the first part of each cycle |
@@ -346,3 +360,25 @@ These work on note patterns. All randomness is **seeded per cycle**, so live and
 | `markov` | Play the notes in a new order each cycle, each following what followed it in the original |
 | `random_walk(step: 2st)` | Wander from the first note, each up to `step` from the last |
 | `range(300hz, 3khz)` | Scale a 0 to 1 pattern or signal to a range |
+
+## Moving a pattern with controls
+
+Where an operation takes a number, a `ctl` can stand in for it. The pattern is not rewritten when the control moves: it is read again for each stretch of notes the sequencer asks for, so the same pattern follows the knob.
+
+```nml
+ctl position = midi.cc(1).range(0..15).quantize(1/8beat)
+ctl span     = midi.cc(2).range(1..16)
+ctl density  = midi.cc(3).range(0..1)
+
+motif = [c3 g3 d4 a3 e4 b3 f#4 c#4  e3 b3 g4 d4 a3 e4 c4 g3]
+
+clip melody {
+  instrument: pluck
+  notes: motif.window(position, span, steps: 16).density(density)
+}
+```
+
+- **When a move takes effect.** Notes are sent to the engine a tenth of a second ahead, so a move takes effect for the notes after that. `.quantize(1/8beat)` (or `bar`, `2bars`) on the control makes it wait for the next boundary: the notes before it are played as they were and the notes from it on are played with the new value, however early the move was sent.
+- **What takes a control.** Any operation that takes a number or a share: `window`, `phase`, `density`, `drop`, `take`, `rotate`, `fast`, `slow`, `transpose`, `sometimes` and the rest. A control with a unit gives its value in the control's own unit.
+- **Redefining the piece keeps the knobs.** A control that is sent again with the same starting value stays where the knob is; one that is new, or starts elsewhere, begins at its start.
+- **Replays.** The notes that came out are what is recorded, so a take or session log replays to the same audio however the knobs were moved. The live log that reads as a transcript lists what was sent and not the knob moves.

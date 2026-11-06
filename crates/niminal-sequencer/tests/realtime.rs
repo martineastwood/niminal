@@ -462,7 +462,9 @@ fn late_control_updates_record_the_sample_actually_used_for_exact_replay() {
     resume_tx.send(()).unwrap();
     let (r, out) = thread.join().unwrap();
     s.sync_realtime();
-    assert_eq!(r.metrics().late_events, 1);
+    // It lands a block after the sample it was sent for (the log below says 64), but a control sent for "now"
+    // is live input arriving as live input does, not a prepared change that missed its deadline.
+    assert_eq!(r.metrics().late_events, 0);
     let log = s.log();
     let niminal_server::LogInput::Send { ops, .. } = &log.last().unwrap().input else {
         panic!("the control is in the log");

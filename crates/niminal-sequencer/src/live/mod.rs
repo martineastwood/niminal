@@ -282,6 +282,8 @@ pub struct Live {
     /// The control change each `midi.learn` control took, and what is waiting to be reported.
     learned: BTreeMap<String, u8>,
     learned_out: Vec<(String, String)>,
+    /// The controls that moved since this was last taken, each once, for an editor to light their names.
+    moved_out: Vec<String>,
 
     /// When each arrangement that was started began, in session seconds, until it is stopped.
     arrangement_starts: BTreeMap<String, f64>,
@@ -292,6 +294,10 @@ pub struct Live {
     schedule: Schedule,
     /// Notes and parameter changes up to this sample have been taken from the schedule and sent.
     fetched_until: u64,
+    /// Control moves that wait for a boundary, as (sample, control, value), in the order they land: the bank that
+    /// patterns read takes each when the notes asked for reach its sample, so a pattern is played with the value
+    /// a control has at the time, not the one it is about to have.
+    control_changes: Vec<(u64, String, f64)>,
     /// Nodes whose clips are not searched for notes because they asked for too many.
     overloaded: Vec<usize>,
     /// How many of the schedule's panics have been sent.
@@ -457,6 +463,7 @@ impl Live {
             keyboard: Keyboard::default(),
             learned: BTreeMap::new(),
             learned_out: Vec::new(),
+            moved_out: Vec::new(),
             project: Project::default(),
             program: Arc::new(program),
             history: vec![HistoryEntry {
@@ -466,6 +473,7 @@ impl Live {
             }],
             schedule,
             fetched_until: 0,
+            control_changes: Vec::new(),
             overloaded: Vec::new(),
             next_panic: 0,
             written: Vec::new(),
@@ -1459,8 +1467,24 @@ impl Live {
     fn fetch_until(&mut self, horizon: u64) {
         // a long stretch is searched a piece at a time, so that a search that finds too much doesn't drop the rest
         while self.fetched_until < horizon {
-            let piece = (self.fetched_until + self.sample_rate as u64 / 2).min(horizon);
+            self.land_control_changes(self.fetched_until);
+            let mut piece = (self.fetched_until + self.sample_rate as u64 / 2).min(horizon);
+            // a control that moves within the stretch splits it, so that what comes before is played as it was
+            if let Some(&(at, ..)) = self.control_changes.first()
+                && at > self.fetched_until
+                && at < piece
+            {
+                piece = at;
+            }
             self.fetch_piece(piece);
+        }
+    }
+
+    /// Give the bank the control moves that are due by sample `until`.
+    fn land_control_changes(&mut self, until: u64) {
+        let due = self.control_changes.partition_point(|c| c.0 <= until);
+        for (_, name, value) in self.control_changes.drain(..due) {
+            self.program.bank.set(&name, value);
         }
     }
 

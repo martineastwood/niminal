@@ -39,7 +39,9 @@ Stage opens with a short demo piece that only defines things. Launch its scenes 
 
 | Key | Does |
 | --- | --- |
-| Cmd/Ctrl+Enter | Evaluate the selection, or the block the cursor is in (up to the nearest blank line, widened to balance brackets) |
+| Cmd/Ctrl+Enter | Evaluate the selection, or the statement the cursor is in (one line like `melody.start`, or a whole `instr { ... }` from any line inside it) |
+| Shift+Enter | Evaluate like Cmd/Ctrl+Enter, then move the cursor to the start of the next statement |
+| Alt+Enter | Evaluate the lines around the cursor, up to the nearest blank lines (widened to balance brackets) |
 | Shift+Cmd/Ctrl+Enter | Evaluate the whole file |
 | Cmd/Ctrl+1…9 | Start or stop the Nth scene |
 | Cmd/Ctrl+. | Hush: stop every clip and let what is sounding ring out |

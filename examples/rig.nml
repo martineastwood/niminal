@@ -1,0 +1,128 @@
+// A systems piece: a few motifs, an additive voice, and a set of knobs that steer how the music develops.
+// You do not play notes. You move a window around a long sequence, shift one sequence against another,
+// open and close the partials of the voice, and let random and slow signals move the timbre.
+// The knobs are on a MIDI controller (CC 1 to 9); a macro, `bloom`, moves several at once.
+// Render the opening: niminal render examples/rig.nml --bars 16 --out rig.wav
+niminal 0.3
+config { channels: stereo }
+tempo 112bpm
+
+// building blocks you wire together (harmonic_osc, function_gen, wobble, clock_div)
+use std/blocks
+
+// ---------------------------------------------------------------------------------------------
+// Material: two motifs, a long one and a short one. They are never edited while playing.
+// ---------------------------------------------------------------------------------------------
+
+motif = [c3 g3 d4 a3 e4 b3 f#4 c#4  e3 b3 g4 d4 a3 e4 c4 g3]   // 16 steps
+low   = [c2 ~ g2 ~ d2 ~ a1 ~]                                  // 8 steps, played over 5 beats so it drifts against the motif
+
+// ---------------------------------------------------------------------------------------------
+// The performance surface. Every knob acts on the running sequence, none of them rewrites it.
+// ---------------------------------------------------------------------------------------------
+
+// Where in the motif, and how much of it. A change waits for the next step so it lands on the beat.
+// Each control starts somewhere that plays (`.starts_at`) and holds it until its knob first moves.
+ctl position = midi.cc(1).range(0..15).quantize(1/8beat)         // where in the motif, in steps
+ctl span     = midi.cc(2).range(1..16).starts_at(8).quantize(1/8beat)   // how many steps
+ctl density  = midi.cc(3).range(0..1).starts_at(0.8)             // a note stays once it is let in: turning it up only adds
+ctl phase    = midi.cc(4).range(0..7).quantize(1/8beat)           // the bass against the motif, in steps
+
+// The voice.
+ctl bright   = midi.cc(5).range(0..1).starts_at(0.5).smooth(30ms)
+ctl spread   = midi.cc(6).range(0..1).starts_at(0.5).smooth(30ms)  // 0 even partials only, 0.5 all, 1 odd only
+ctl wander   = midi.cc(7).range(0..1).starts_at(0.3).smooth(100ms) // how much random moves the brightness
+
+// Space.
+ctl echo_mix = midi.cc(8).range(0..0.6).starts_at(0.25).smooth(30ms)
+
+// ---------------------------------------------------------------------------------------------
+// The voice: sixteen sine partials, each opened and closed by its own row of steps.
+// ---------------------------------------------------------------------------------------------
+
+bus voice_bus: stereo
+
+instr additive(freq: hz) {
+  // Stepped random, a new value every half beat, that lifts and drops the brightness.
+  drift = wobble(beats: 1/2, seed: 7)
+  // A slow swell that opens the upper partials once every eight bars (32 beats), peaking at three quarters.
+  swell = function_gen(cycle: 32, rise: 0.75)
+
+  // Each row loops at its own length, so the rows slide against each other: 16, 12, 10 and 7 steps over a bar.
+  gates = grid {                                                  // a multi-row grid is an array of level signals
+    1: x... x... x... x...
+    2: ..x. ..x. ..x.
+    3: x.x. ...x x.
+    4: ...x ..x
+    5: x.......
+    6: ..x.....
+    7: ....x...
+    8: x..x..x.
+  }.over(1bar).width(55%)
+
+  // Sixteen harmonics. The shape of the spectrum follows bright; the swell opens the top.
+  // Eight rows gate the first eight partials; the rest stay open.
+  tone = harmonic_osc(
+    freq,
+    gates: gates,
+    count: 16,
+    brightness: bright + swell * 0.3 + drift * wander * 0.2,
+    odd_even: spread * 2 - 1,                                     // spread: from all even, through all, to all odd
+    gate_smooth: 4ms
+  )
+
+  voice_bus += (tone * env[0 3ms 1 | 120ms 0]).pan(angle: 0deg)
+}
+
+instr sub(freq: hz) {
+  voice_bus += (osc(sine, freq) * 0.4 * env[0 10ms 1 | 300ms 0]).pan(angle: 0deg)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Space: a delay whose repeats get darker, and a reverb behind it. Both read the knobs.
+// ---------------------------------------------------------------------------------------------
+
+fx space {
+  tail = voice_bus.echo_loop(                                     // the echoes only, blended below
+    time: 3/16beat,
+    feedback: 0.55,
+    filter: 3khz,
+    duck: 0.5,
+    ping_pong: on
+  )
+  out = voice_bus.crossfade(tail, echo_mix).crossfade(voice_bus.reverb(room: 0.7, damp: 0.5), 0.25)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The sequences.
+// ---------------------------------------------------------------------------------------------
+
+clip melody {
+  instrument: additive
+  notes: motif
+    .window(position, span, steps: 16, wrap)                      // a moving slice of the motif, wrapping around
+    .density(density)                                             // a note stays once it is let in
+}
+
+clip bass {
+  instrument: sub
+  length: 5beats                                                  // against the melody's bar of four: they drift and meet every five bars
+  notes: low.phase(phase, steps: 8)                               // live offset against the other clips
+}
+
+// ---------------------------------------------------------------------------------------------
+// One knob that moves several things together.
+// ---------------------------------------------------------------------------------------------
+
+macro bloom {
+  input: midi.cc(9)
+  smooth: 50ms
+  quantize: 1beat
+  bright:   0.2..0.9
+  spread:   (0..1).curve(2)
+  density:  0.4..1
+  echo_mix: 0..0.4
+}
+
+melody.start
+bass.start

@@ -62,7 +62,12 @@ input {
 
 kbd { font: inherit; color: inherit; opacity: 0.6; margin-left: calc(3px * var(--z)); }
 
-#app { display: grid; grid-template-rows: calc(30px * var(--z)) minmax(0, 1fr) calc(22px * var(--z)); }
+#app {
+  display: grid;
+  /* one column, never wider than the window: a long top bar must not push the stage off its edge */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: calc(30px * var(--z)) minmax(0, 1fr) calc(22px * var(--z));
+}
 
 /* ---- top bar --------------------------------------------------------------------------------- */
 
@@ -77,10 +82,12 @@ kbd { font: inherit; color: inherit; opacity: 0.6; margin-left: calc(3px * var(-
   -webkit-user-select: none;
   user-select: none;
   cursor: default;
+  min-width: 0;
+  overflow: hidden;
 }
 #topbar input, #topbar select { -webkit-user-select: text; user-select: text; }
 
-.brand { display: flex; align-items: center; gap: calc(8px * var(--z)); }
+.brand { display: flex; align-items: center; gap: calc(8px * var(--z)); flex-shrink: 0; }
 .mark { color: var(--accent); font-size: calc(14px * var(--z)); }
 .name { color: var(--text); font-size: calc(13px * var(--z)); font-weight: 600; letter-spacing: 0.04em; }
 .brand-text { display: flex; align-items: baseline; gap: calc(10px * var(--z)); }
@@ -90,7 +97,7 @@ kbd { font: inherit; color: inherit; opacity: 0.6; margin-left: calc(3px * var(-
 .connection[hidden] { display: none; }
 .connection.offline { color: var(--accent-text); }
 
-.transport { display: flex; align-items: center; gap: calc(14px * var(--z)); padding: 0 calc(10px * var(--z)); border-left: 1px solid var(--edge); }
+.transport { display: flex; align-items: center; gap: calc(14px * var(--z)); padding: 0 calc(10px * var(--z)); border-left: 1px solid var(--edge); min-width: 0; overflow: hidden; }
 .position { display: flex; align-items: baseline; gap: calc(6px * var(--z)); min-width: calc(80px * var(--z)); }
 .position strong { color: var(--accent-text); font-family: var(--mono); font-size: calc(13px * var(--z)); font-weight: 600; }
 .position .beat { color: var(--dim); font-family: var(--mono); }
@@ -98,7 +105,9 @@ kbd { font: inherit; color: inherit; opacity: 0.6; margin-left: calc(3px * var(-
 .readout { display: flex; align-items: baseline; gap: calc(4px * var(--z)); color: var(--text); font-family: var(--mono); }
 .readout small { color: var(--dim); font-size: calc(9px * var(--z)); }
 
-.top-actions { display: flex; align-items: center; gap: calc(4px * var(--z)); margin-left: auto; }
+.top-actions { display: flex; align-items: center; gap: calc(4px * var(--z)); margin-left: auto; min-width: 0; }
+/* Hush, Panic and Replay always stay in reach; what gives way first is the message beside the port */
+.top-actions > button { flex-shrink: 0; }
 .port { display: flex; align-items: center; gap: calc(4px * var(--z)); color: var(--dim); }
 .port input { width: calc(44px * var(--z)); }
 #token { width: calc(80px * var(--z)); }
@@ -353,7 +362,7 @@ body.large-transport .readout { font-size: calc(14px * var(--z)); }
 body.large-transport .landing { font-size: calc(15px * var(--z)); padding: calc(2px * var(--z)) calc(10px * var(--z)); }
 
 .setup[hidden], .readout[hidden] { display: none; }
-.setup { display: flex; align-items: center; gap: calc(4px * var(--z)); }
+.setup { display: flex; align-items: center; gap: calc(4px * var(--z)); min-width: 0; }
 
 /* ---- the ready screen ------------------------------------------------------------------------ */
 
@@ -524,7 +533,7 @@ body.large-transport .landing { font-size: calc(15px * var(--z)); padding: calc(
 
 /* the sound card, sample rate and buffer size */
 .audio-note { color: var(--dim); font-size: calc(10px * var(--z)); }
-.tools-problem { color: var(--accent-text); max-width: calc(420px * var(--z)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tools-problem { color: var(--accent-text); max-width: calc(420px * var(--z)); min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 
 /* ---- the settings page ----------------------------------------------------------------------- */

@@ -17,6 +17,8 @@ pub(crate) struct Change {
     /// Which event of the batch in the log entry this came from.
     pub log_op: usize,
     pub applied: bool,
+    /// Sent for "now" (a knob, a fader), so landing a moment after the sample it was given is expected, not late.
+    pub now: bool,
 }
 
 #[derive(Clone, Copy, Debug)]

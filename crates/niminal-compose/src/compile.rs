@@ -129,6 +129,8 @@ pub struct Composition {
     /// The tempo the composition plays at; the program itself has none.
     pub tempo: Tempo,
     pub quantize: QuantizeConfig,
+    /// The current value of every `ctl`, which patterns read as they play.
+    pub bank: crate::ControlBank,
     /// The controls that MIDI or OSC drive, by control name.
     pub inputs: Vec<(String, ControlBinding)>,
     /// The macros: controls that move others.
@@ -234,6 +236,16 @@ pub fn compile_with(
     source: &str,
     options: &CompileOptions,
 ) -> Result<Composition, Vec<Diagnostic>> {
+    compile_with_bank(source, options, None)
+}
+
+/// Like [`compile_with`], reading the controls from `bank` (brought up to date with the piece's) rather than
+/// from a bank of its own, so that a sequencer that compiles again and again keeps one set of knobs.
+pub fn compile_with_bank(
+    source: &str,
+    options: &CompileOptions,
+    shared: Option<&crate::ControlBank>,
+) -> Result<Composition, Vec<Diagnostic>> {
     let parsed = parse_spanned(source).map_err(|d| vec![d])?;
     let mut items: Vec<Item> = parsed.iter().map(|(item, _)| item.clone()).collect();
     items = expand_score_fors(items).map_err(|d| vec![d])?;
@@ -309,7 +321,21 @@ pub fn compile_with(
         }
     };
 
+    let starts = || {
+        program
+            .controls
+            .iter()
+            .map(|c| (c.name.clone(), f64::from(c.initial)))
+    };
+    let bank = match shared {
+        Some(bank) => {
+            bank.sync(starts());
+            bank.clone()
+        }
+        None => crate::ControlBank::new(starts()),
+    };
     let cx = Context {
+        bank: &bank,
         macros: &macros,
         tempo,
         names: &names,
@@ -369,6 +395,7 @@ pub fn compile_with(
         source: source.to_string(),
         tempo,
         quantize,
+        bank,
         inputs,
         macros,
         triggers,
@@ -521,6 +548,13 @@ fn control_inputs(
                 block.name.clone(),
                 ControlInput {
                     source: launch_source(value, "input")?,
+                    lo: Expr {
+                        kind: ExprKind::Num {
+                            value: 0.0,
+                            unit: None,
+                        },
+                        span: value.span,
+                    },
                     hi: Expr {
                         kind: ExprKind::Num {
                             value: 1.0,
@@ -552,28 +586,28 @@ fn control_inputs(
     if driven.is_empty() {
         return Ok(out);
     }
-    // a plain number is its own upper end; anything else (`4khz`, a name, a sum) is worked out by the
+    // a plain number is its own end; anything else (`4khz`, a name, a sum) is worked out by the
     // compiler, among the definitions it may use, which compiles the program again
-    let literal: Vec<Option<f32>> = driven
+    let literal = |name: &Ident, end: &Expr| -> Option<f32> {
+        let def = program.controls.iter().find(|c| c.name == name.name)?;
+        match (&end.kind, def.unit) {
+            (ExprKind::Num { value, unit: None }, niminal_lang::Unit::Num) => Some(*value as f32),
+            _ => None,
+        }
+    };
+    let found = if driven
         .iter()
-        .map(|(name, input)| {
-            let def = program.controls.iter().find(|c| c.name == name.name)?;
-            match (&input.hi.kind, def.unit) {
-                (ExprKind::Num { value, unit: None }, niminal_lang::Unit::Num) => {
-                    Some(*value as f32)
-                }
-                _ => None,
-            }
-        })
-        .collect();
-    let found = if literal.iter().all(Option::is_some) {
+        .all(|(name, input)| literal(name, &input.lo).is_some() && literal(name, &input.hi).is_some())
+    {
         None
     } else {
         let mut text = String::new();
         for (n, (_, input)) in driven.iter().enumerate() {
             text.push_str(&format!(
                 "
+ctl __input_lo_{n} = {}
 ctl __input_hi_{n} = {}",
+                crate::dsp::control_value(source, &input.lo),
                 crate::dsp::control_value(source, &input.hi)
             ));
         }
@@ -593,31 +627,42 @@ ctl __input_hi_{n} = {}",
             .iter()
             .find(|c| c.name == name.name)
             .expect("a control is compiled");
-        let (hi_unit, hi_initial) = match (literal[n], &found) {
-            (Some(value), _) => (def.unit, value),
-            (None, Some(found)) => {
-                let hi = found
-                    .controls
-                    .iter()
-                    .find(|c| c.name == format!("__input_hi_{n}"))
-                    .expect("a control is compiled");
-                (hi.unit, hi.initial)
+        let end = |which: &str, expr: &Expr| -> (niminal_lang::Unit, f32) {
+            match (literal(name, expr), &found) {
+                (Some(value), _) => (def.unit, value),
+                (None, Some(found)) => {
+                    let end = found
+                        .controls
+                        .iter()
+                        .find(|c| c.name == format!("__input_{which}_{n}"))
+                        .expect("a control is compiled");
+                    (end.unit, end.initial)
+                }
+                (None, None) => unreachable!("a range that is not a number is compiled"),
             }
-            (None, None) => unreachable!("a range that is not a number is compiled"),
         };
-        if hi_unit != def.unit {
+        let ((lo_unit, lo), (hi_unit, hi_initial)) = (end("lo", &input.lo), end("hi", &input.hi));
+        for (unit, at) in [(lo_unit, &input.lo), (hi_unit, &input.hi)] {
+            if unit != def.unit {
+                return Err(Diagnostic::new(
+                    format!(
+                        "the range's ends need the same unit: {} and {}",
+                        def.unit.describe(),
+                        unit.describe()
+                    ),
+                    at.span,
+                ));
+            }
+        }
+        if !hi_initial.is_finite() || !lo.is_finite() || hi_initial <= lo {
             return Err(Diagnostic::new(
-                format!(
-                    "the range's ends need the same unit: {} and {}",
-                    def.unit.describe(),
-                    hi_unit.describe()
-                ),
+                "the upper end of a range must be above the lower end",
                 input.hi.span,
             ));
         }
-        if !hi_initial.is_finite() || hi_initial <= def.initial {
+        if def.initial < lo || def.initial > hi_initial {
             return Err(Diagnostic::new(
-                "the upper end of a range must be above the lower end",
+                "`.starts_at` must be within the range",
                 input.hi.span,
             ));
         }
@@ -625,7 +670,7 @@ ctl __input_hi_{n} = {}",
             name.name.clone(),
             ControlBinding {
                 source: input.source.clone(),
-                lo: def.initial,
+                lo,
                 hi: hi_initial,
                 quantize: input
                     .quantize

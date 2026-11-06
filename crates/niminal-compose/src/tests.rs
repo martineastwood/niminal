@@ -3300,6 +3300,169 @@ fn rotate_moves_the_notes_and_keeps_the_rhythm() {
 }
 
 #[test]
+fn window_loops_part_of_a_pattern_in_steps_or_shares() {
+    let motif = "[c4 d4 e4 f4 g4 a4 b4 c5]";
+    // four steps from the third, in steps, twice in the cycle
+    let steps = values_of(&format!("lead.__update({motif}.window(2, 4, steps: 8))"), 1);
+    assert_eq!(
+        steps,
+        [64, 65, 67, 69, 64, 65, 67, 69].map(midi)
+    );
+    // the same as a quarter of the cycle starting at a quarter, as shares
+    assert_eq!(
+        values_of(&format!("lead.__update({motif}.window(25%, 50%))"), 1),
+        steps
+    );
+    // wrapping by default, stopping at the end with `clamp`
+    assert_eq!(
+        values_of(&format!("lead.__update({motif}.window(6, 4, steps: 8))"), 1),
+        [71, 72, 60, 62, 71, 72, 60, 62].map(midi)
+    );
+    assert_eq!(
+        values_of(&format!("lead.__update({motif}.window(6, 4, clamp, steps: 8))"), 1),
+        [67, 69, 71, 72, 67, 69, 71, 72].map(midi)
+    );
+    // a note keeps its length, so a window is not the whole pattern squeezed
+    let n = notes_of(&format!("lead.__update({motif}.window(0, 4, steps: 8))"), 1);
+    assert_eq!(n[1].0, r(1, 8));
+}
+
+#[test]
+fn window_takes_a_pattern_of_starts_and_phase_turns_the_pattern_round() {
+    let motif = "[c4 d4 e4 f4]";
+    // a start that changes each cycle
+    assert_eq!(
+        values_of(&format!("lead.__update({motif}.window([<0 2>], 4, steps: 4))"), 2),
+        [60, 62, 64, 65, 64, 65, 60, 62].map(midi)[..4]
+            .iter()
+            .copied()
+            .chain([64, 65, 60, 62].map(midi))
+            .collect::<Vec<_>>()
+    );
+    // a phase moves where the cycle starts and keeps the rhythm
+    assert_eq!(
+        values_of(&format!("lead.__update({motif}.phase(1, steps: 4))"), 1),
+        [62, 64, 65, 60].map(midi)
+    );
+    assert_eq!(
+        values_of(&format!("lead.__update({motif}.phase(50%))"), 1),
+        [64, 65, 60, 62].map(midi)
+    );
+}
+
+#[test]
+fn window_and_phase_say_what_is_wrong() {
+    let m = |ops: &str| msg(&format!("tempo 120bpm\ninstr lead(freq: hz) {{ osc(sine, freq) }}\nclip a {{ instrument: lead\n notes: [c4 e4 g4].{ops} }}\na.start"));
+    assert!(m("window(0, 2, sideways)").contains("`wrap` or `clamp`"));
+    assert!(m("window(0, 2, steps: 0)").contains("whole number"));
+    assert!(m("window(2)").contains("size"));
+    assert!(m("phase(2hz)").contains("plain number"));
+}
+
+#[test]
+fn a_control_in_an_argument_is_read_as_the_pattern_is_played() {
+    let motif = "[c4 d4 e4 f4 g4 a4 b4 c5]";
+    let composition = ok(&stage(&format!(
+        "ctl position = 0\nctl span = 4\nctl amount = 1\nlead.__update({motif}.window(position, span, steps: 8).density(amount))"
+    )));
+    let Action::Update { clip, .. } = &composition.performance[0].action else {
+        panic!("expected a play command");
+    };
+    let notes = clip.lane("notes").unwrap();
+    let now = || events(notes, 1).into_iter().map(|e| e.1).collect::<Vec<_>>();
+    let bank = &composition.bank;
+    assert_eq!(now(), [60, 62, 64, 65, 60, 62, 64, 65].map(midi));
+    // moving a control moves the window of the same pattern, with nothing compiled again
+    bank.set("position", 4.0);
+    assert_eq!(now(), [67, 69, 71, 72, 67, 69, 71, 72].map(midi));
+    bank.set("span", 2.0);
+    assert_eq!(now().len(), 8);
+    assert_eq!(now()[..2], [67, 69].map(midi));
+    bank.set("amount", 0.0);
+    assert!(now().is_empty());
+    // a value that is not a number leaves it where it was
+    bank.set("position", f64::NAN);
+    assert!(bank.get("position") == Some(4.0));
+}
+
+#[test]
+fn a_redefined_piece_keeps_the_knobs_where_they_were() {
+    let options = niminal_lang::CompileOptions::default();
+    let a = crate::compile_with_bank(&stage("ctl x = 0.25\nctl y = 1\nlead.__update([c4])"), &options, None).unwrap();
+    a.bank.set("x", 0.9);
+    a.bank.set("y", 0.5);
+    // compiled again against the same bank, as a sequencer does each time something is sent
+    let b = crate::compile_with_bank(
+        &stage("ctl x = 0.25\nctl y = 2\nctl z = 7\nlead.__update([c4])"),
+        &options,
+        Some(&a.bank),
+    )
+    .unwrap();
+    // x was not redefined; y was given another start; z is new
+    assert_eq!(
+        (b.bank.get("x"), b.bank.get("y"), b.bank.get("z")),
+        (Some(0.9), Some(2.0), Some(7.0))
+    );
+    // and it is the one bank: a clip of the earlier piece sees the knobs the later one does
+    a.bank.set("x", 0.1);
+    assert_eq!(b.bank.get("x"), Some(0.1));
+}
+
+#[test]
+fn window_phase_and_density_take_any_number_without_breaking() {
+    for ops in [
+        "window(1e308, 1e308)",
+        "window(-1e308, 0.000001)",
+        "window(0, -3)",
+        "window(123456789012, 65536, steps: 255)",
+        "window(-5, 3, clamp, steps: 4)",
+        "phase(-1e308)",
+        "phase(1e308, steps: 65536)",
+        "density(-5)",
+    ] {
+        // either a clear error or a pattern that can be played
+        if let Ok(c) = crate::compile(&stage(&format!("lead.__update([c4 e4 g4 b4].{ops})"))) {
+            let Action::Update { clip, .. } = &c.performance[0].action else {
+                panic!("expected a play command");
+            };
+            let _ = events(clip.lane("notes").unwrap(), 4);
+        }
+    }
+    // and through a control, whatever it is set to
+    let c = ok(&stage("ctl a = 0\nctl b = 1\nlead.__update([c4 e4 g4 b4].window(a, b).phase(a).density(b))"));
+    let Action::Update { clip, .. } = &c.performance[0].action else {
+        panic!("expected a play command");
+    };
+    for (a, b) in [(1e308, 1e308), (-1e308, -1e308), (0.0, 0.0), (1e-300, 1e300), (f64::MAX, f64::MIN_POSITIVE)] {
+        c.bank.set("a", a);
+        c.bank.set("b", b);
+        let _ = events(clip.lane("notes").unwrap(), 4);
+    }
+}
+
+#[test]
+fn density_only_ever_adds_notes_as_it_goes_up() {
+    let motif = "[c4 d4 e4 f4 g4 a4 b4 c5]";
+    let kept = |amount: &str| -> Vec<Value> {
+        values_of(&format!("lead.__update({motif}.density({amount}))"), 4)
+    };
+    let mut before = Vec::new();
+    for amount in ["0%", "25%", "50%", "75%", "100%"] {
+        let now = notes_of(&format!("lead.__update({motif}.density({amount}))"), 4);
+        let times: Vec<_> = now.iter().map(|e| e.0).collect();
+        assert!(
+            before.iter().all(|t| times.contains(t)),
+            "at {amount} a note that was in has gone"
+        );
+        before = times;
+    }
+    assert!(kept("0%").is_empty());
+    assert_eq!(kept("100%").len(), 32);
+    let half = kept("50%").len();
+    assert!(half > 8 && half < 24, "{half}");
+}
+
+#[test]
 fn slice_plays_the_parts_in_the_order_given() {
     let s = steps_of("lead.__update([c4].slice(4, [0 2 1 3]))", 1);
     assert_eq!(
@@ -3317,4 +3480,24 @@ fn where_takes_a_grid_and_changes_the_notes_on_its_hits() {
         _ => 0,
     });
     assert_eq!(v, [midi(60), midi(60), midi(72), midi(72)]);
+}
+
+#[test]
+fn a_bound_control_starts_at_the_bottom_of_its_range_unless_told_otherwise() {
+    let c = ok(&stage(
+        "ctl d = midi.cc(3).range(0..1)\nctl s = midi.cc(2).range(1..16).starts_at(8)\n\
+         ctl f = midi.cc(4).range(200hz..4khz).starts_at(1khz).smooth(10ms)\nlead.__update([c4])",
+    ));
+    assert_eq!((c.bank.get("d"), c.bank.get("s")), (Some(0.0), Some(8.0)));
+    assert!((c.bank.get("f").unwrap() - 1000.0).abs() < 0.01);
+    // the knob still covers the whole range, whatever it started at
+    let (name, binding) = c.inputs.iter().find(|(n, _)| n == "s").unwrap();
+    let def = c.program.controls.iter().find(|d| d.name == *name).unwrap();
+    assert_eq!((binding.map_input(def, 0.0), binding.map_input(def, 1.0)), (1.0, 16.0));
+    let (name, binding) = c.inputs.iter().find(|(n, _)| n == "f").unwrap();
+    let def = c.program.controls.iter().find(|d| d.name == *name).unwrap();
+    assert!((binding.map_input(def, 0.0) - 200.0).abs() < 0.01);
+    // a start outside the range is a mistake
+    assert!(msg(&stage("ctl s = midi.cc(2).range(1..16).starts_at(20)")).contains("within the range"));
+    assert!(msg(&stage("ctl s = midi.cc(2).range(1..16).begin(2)")).contains("starts_at"));
 }

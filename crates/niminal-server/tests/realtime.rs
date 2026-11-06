@@ -823,3 +823,44 @@ fn a_backed_up_midi_output_retries_note_offs_without_heap_work() {
     assert!(!rx.pop().unwrap().on);
     assert!(rx.pop().is_err());
 }
+
+#[test]
+fn a_knob_moved_now_is_not_a_late_change_but_one_sent_for_a_sample_is() {
+    use niminal_server::{At, Op};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let knob = |at: At, value: f64| Op::Control {
+        name: "level".into(),
+        at,
+        value,
+        unit: None,
+        glide: None,
+        tag: None,
+    };
+    // the audio thread runs on by itself, as a sound card's does, while the knob is turned; returns the late count
+    let turn = |sent_for_now: bool| {
+        let mut s = Session::new(48_000.0, Layout::Mono).without_limiter();
+        s.eval_as(1, "ctl level = 0.5\ninstr tone(freq: hz) { osc(sine, freq) * level }\nnode lead { instrument = tone }")
+            .unwrap();
+        let mut r = s.start_realtime(RealtimeConfig::default());
+        let stop = Arc::new(AtomicBool::new(false));
+        let running = stop.clone();
+        let audio = std::thread::spawn(move || {
+            let mut sink = |_: &[Vec<f32>], _: usize| {};
+            while !running.load(Ordering::Relaxed) {
+                r.render(64, &mut sink);
+            }
+            r
+        });
+        for i in 0..2000 {
+            let at = if sent_for_now { At::Now } else { At::Sample(s.clock()) };
+            s.send_events(1, vec![knob(at, f64::from(i % 100) / 100.0)]).unwrap();
+            s.prepare_realtime();
+        }
+        stop.store(true, Ordering::Relaxed);
+        audio.join().unwrap().metrics().late_events
+    };
+    assert_eq!(turn(true), 0, "knob moves counted as late");
+    // the same changes given a sample the audio thread has already passed are late, and still counted
+    assert!(turn(false) > 0);
+}

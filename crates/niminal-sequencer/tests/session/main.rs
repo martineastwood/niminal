@@ -9,5 +9,6 @@ mod keyboard;
 mod lanes_and_outputs;
 mod redefine;
 mod scenes;
+mod structure;
 mod tempo;
 mod transactions;

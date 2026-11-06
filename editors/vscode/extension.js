@@ -8,7 +8,7 @@ const { LanguageClient } = require("vscode-languageclient/node");
 const { LiveClient: Client } = require("./live-client");
 const { findBinary, openStageCommand } = require("./binaries");
 const { releaseMismatch } = require("./compat");
-const { blockAround } = require("./blocks");
+const { blockAround, nextStatement, paragraphAround } = require("./blocks");
 const { clipDescription, sceneDescription, silencers } = require("./panel");
 const { rewriteLearned } = require("./learn");
 const { projectFiles } = require("./project");
@@ -285,12 +285,35 @@ async function evaluate(editor, range) {
 }
 
 function evalBlock() {
+  return evalAround(blockAround);
+}
+
+function evalParagraph() {
+  return evalAround(paragraphAround);
+}
+
+/** Evaluate like evalBlock, then move the cursor to the start of the next statement. */
+function evalStep() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) return;
+  const lines = editor.document.getText().split("\n");
+  const done = evalAround(blockAround);
+  const next = nextStatement(lines, editor.selection.end.line);
+  if (next !== null) {
+    const at = new vscode.Position(next, 0);
+    editor.selection = new vscode.Selection(at, at);
+    editor.revealRange(new vscode.Range(at, at));
+  }
+  return done;
+}
+
+function evalAround(find) {
   const editor = vscode.window.activeTextEditor;
   if (!editor) return;
   let range = editor.selection;
   if (range.isEmpty) {
     const lines = editor.document.getText().split("\n");
-    const block = blockAround(lines, range.active.line);
+    const block = find(lines, range.active.line);
     if (!block) return;
     range = new vscode.Range(block.start, 0, block.end, lines[block.end].length);
   } else {
@@ -397,6 +420,8 @@ function activate(context) {
     channel,
     flash,
     command("niminal.evalBlock", evalBlock),
+    command("niminal.evalParagraph", evalParagraph),
+    command("niminal.evalStep", evalStep),
     command("niminal.evalFile", evalFile),
     command("niminal.openProject", openProject),
     command("niminal.hush", () => simple("hush")),

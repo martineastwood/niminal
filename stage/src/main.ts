@@ -9,7 +9,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { demoSource } from './demo';
 import { Scope, connectLanguageServer, niminalEditor } from './editor';
-import { blockAround } from '../../editors/codemirror/blocks';
+import { blockAround, nextStatement, paragraphAround } from '../../editors/codemirror/blocks';
 import { LaneView } from './laneview';
 import { Highlighter, evaluated, flashLines, markProblems, markSent } from './highlight';
 import { mod } from './shortcuts';
@@ -76,7 +76,7 @@ app.innerHTML = `
           <label class="quantize" title="When an evaluation lands">land <input id="quantize" placeholder="next 4bars" /></label>
           <button id="evaluate-all" title="Evaluate every tab, left to right" hidden>All</button>
           <button id="evaluate-file" title="Evaluate the whole tab (Cmd/Ctrl+Shift+Enter)">File <kbd>⇧⌘↩</kbd></button>
-          <button id="evaluate" class="primary" title="Evaluate the selection, or the block the cursor is in (Cmd/Ctrl+Enter)">Evaluate <kbd>⌘↩</kbd></button>
+          <button id="evaluate" class="primary" title="Evaluate the selection, or the statement the cursor is in (Cmd/Ctrl+Enter)">Evaluate <kbd>⌘↩</kbd></button>
         </div>
       </div>
       <div id="tabs" class="tabs" role="tablist"></div>
@@ -143,7 +143,7 @@ let lastSceneSignature = '';
 let lastArrangementSignature = '';
 let lastClipCount = -1;
 
-/** The code an evaluation sends and where it begins in the editor: the selection, else the block the cursor is in. */
+/** The code an evaluation sends and where it begins in the editor: the selection, else the statement the cursor is in (the paragraph around it for `paragraph`). */
 function chunk(scope: Scope) {
   if (!view) return { text: demoSource, from: 0, to: 0 };
   const doc = view.state.doc;
@@ -153,7 +153,7 @@ function chunk(scope: Scope) {
     return { text: view.state.sliceDoc(selection.from, selection.to), from: selection.from, to: selection.to };
   }
   const lines = doc.toString().split('\n');
-  const block = blockAround(lines, doc.lineAt(selection.head).number - 1);
+  const block = (scope === 'paragraph' ? paragraphAround : blockAround)(lines, doc.lineAt(selection.head).number - 1);
   if (!block) return null;
   const from = doc.line(block.start + 1).from;
   const to = doc.line(block.end + 1).to;
@@ -566,7 +566,8 @@ let lastMidi: string | null = null;
 function updateMidi(snapshot: Snapshot) {
   const chip = $('midi');
   const { inputs, last } = snapshot.midi;
-  $('midi-readout').hidden = inputs.length === 0;
+  // always shown, so a controller plugged in (or a bridge started) after the stage can be found with a click
+  $('midi-readout').hidden = false;
   chip.textContent = inputs.length ? (last ?? `${inputs.length} in`) : 'none';
   chip.title = inputs.length
     ? `${inputs.join(', ')}${last ? ` · last: ${last}` : ''}. Click to look for inputs again.`
@@ -598,7 +599,7 @@ function writeLearned(control: string, source: string) {
 const healthWatch = new HealthWatch();
 function updateHealth(snapshot: Snapshot) {
   const chip = $('health');
-  const { ok, detail, known } = healthWatch.update(snapshot.health, performance.now());
+  const { ok, detail, known, load } = healthWatch.update(snapshot.health, performance.now());
   chip.classList.toggle('ok', ok);
   chip.classList.toggle('trouble', !ok);
   chip.textContent = ok ? 'ok' : 'dropouts';
@@ -607,7 +608,9 @@ function updateHealth(snapshot: Snapshot) {
     ? known
       ? 'The engine is keeping up'
       : 'This engine does not report its health'
-    : `The audio glitched: ${detail}. Fewer voices or lighter effects will help.`;
+    : load
+      ? `The audio glitched: ${detail}. Fewer voices or lighter effects will help.`
+      : `The audio glitched: ${detail}, which reached the engine after the moment they were for.`;
 }
 
 function updateMaster(snapshot: Snapshot) {
@@ -797,11 +800,22 @@ function showOutcome(outcome: EvalOutcome) {
   return true;
 }
 
+/** Move the cursor to the start of the next statement after what was evaluated (`to`), or after the cursor's line when there was nothing to evaluate. */
+function stepOn(to: number | null) {
+  if (!view) return;
+  const doc = view.state.doc;
+  const line = doc.lineAt(to ?? view.state.selection.main.head).number - 1;
+  const next = nextStatement(doc.toString().split('\n'), line);
+  if (next === null) return;
+  view.dispatch({ selection: { anchor: doc.line(next + 1).from }, scrollIntoView: true });
+}
+
 async function evaluate(scope: Scope = 'chunk') {
   if (!(await ensureConnected())) return;
   const code = chunk(scope);
+  if (scope === 'step') stepOn(code ? code.to : null);
   if (!code) {
-    status('put the cursor in a block of code, or select some');
+    if (scope !== 'step') status('put the cursor in a block of code, or select some');
     return;
   }
   const { text, from, to } = code;

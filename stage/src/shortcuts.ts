@@ -3,7 +3,9 @@ export const mod = typeof navigator !== 'undefined' && /Mac/i.test(navigator.pla
 
 /** The shortcuts the stage teaches, as shown on its ready screen. */
 export const shortcuts: [keys: string, what: string][] = [
-  [`${mod}↩`, 'evaluate the selection, or the block the cursor is in'],
+  [`${mod}↩`, 'evaluate the selection, or the statement the cursor is in'],
+  ['⇧↩', 'evaluate like ' + mod + '↩, then move to the next statement'],
+  ['⌥↩', 'evaluate the lines around the cursor, up to the blank lines'],
   [`⇧${mod}↩`, 'evaluate the whole file'],
   [`${mod}1…9`, 'start or stop a scene'],
   ['⌥ drag a number', 'drag a number, and send it when you let go (⇧ for tens, Esc to cancel)'],

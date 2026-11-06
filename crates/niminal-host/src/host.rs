@@ -270,6 +270,13 @@ impl Host {
     }
 
     /// Where the audio goes, in words.
+    /// Fade the sound card's output to silence. Call it before the program quits; it takes about 100 ms.
+    pub fn fade_out(&self) {
+        if let Some(audio) = &self.audio {
+            audio.fade_out();
+        }
+    }
+
     pub fn output_description(&self) -> &str {
         &self.where_to
     }

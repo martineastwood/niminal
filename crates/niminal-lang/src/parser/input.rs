@@ -137,10 +137,10 @@ impl Parser {
             kind: ExprKind::Num { value, unit: None },
             span,
         };
-        let (mut lo, mut hi, mut smooth, mut quantize) =
-            (number(0.0, start), number(1.0, start), None, None);
+        let (mut lo, mut hi, mut smooth, mut quantize, mut starts_at) =
+            (number(0.0, start), number(1.0, start), None, None, None);
         while self.eat(&Tok::Dot) {
-            let method = self.ident("`range`, `smooth` or `quantize`")?;
+            let method = self.ident("`range`, `smooth`, `quantize` or `starts_at`")?;
             self.expect(&Tok::LParen)?;
             match method.name.as_str() {
                 "range" => {
@@ -161,10 +161,11 @@ impl Parser {
                 }
                 "smooth" => smooth = Some(self.expr()?),
                 "quantize" => quantize = Some(self.expr()?),
+                "starts_at" => starts_at = Some(self.expr()?),
                 other => {
                     return Err(Diagnostic::new(
                         format!(
-                            "a control input has no `.{other}`; use `.range`, `.smooth` or `.quantize`"
+                            "a control input has no `.{other}`; use `.range`, `.smooth`, `.quantize` or `.starts_at`"
                         ),
                         method.span,
                     ));
@@ -172,14 +173,16 @@ impl Parser {
             }
             self.expect(&Tok::RParen)?;
         }
+        // the control holds this until the knob first moves: the bottom of the range, unless said otherwise
+        let first = starts_at.unwrap_or_else(|| lo.clone());
         let value = match smooth {
-            None => lo,
+            None => first,
             Some(duration) => {
-                let span = lo.span.to(duration.span);
+                let span = first.span.to(duration.span);
                 let args = vec![
                     Arg {
                         name: None,
-                        value: lo,
+                        value: first,
                         receiver: true,
                     },
                     Arg {
@@ -205,6 +208,7 @@ impl Parser {
             value,
             input: Some(ControlInput {
                 source,
+                lo,
                 hi,
                 quantize,
             }),

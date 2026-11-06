@@ -2,6 +2,7 @@
 //! playing it again each time it, or a module it uses, changes.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -98,8 +99,9 @@ pub fn run_play(args: PlayArgs) -> Result<(), String> {
         host.sample_rate()
     );
     // Events go to the engine every 25ms; the files are looked at a tenth as often, as the engine is looked after.
+    let stop = crate::stop_requested()?;
     let mut ticks = 0u32;
-    loop {
+    while !stop.load(Ordering::Acquire) {
         {
             let mut server = lock(&live);
             server.advance();
@@ -122,6 +124,9 @@ pub fn run_play(args: PlayArgs) -> Result<(), String> {
         }
         std::thread::sleep(Duration::from_millis(25));
     }
+    // asked to stop: fade out rather than cutting the speakers off mid-wave
+    host.fade_out();
+    Ok(())
 }
 
 /// The latest modification time among `files`.

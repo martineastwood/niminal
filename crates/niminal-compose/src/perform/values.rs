@@ -68,6 +68,13 @@ impl Perform<'_> {
                         .expect("checked")
                         .map(|x| Step::from(Value::Num(x))),
                 )),
+                // a control is a value that changes while the pattern plays
+                None if self.cx.bank.has(name) => {
+                    let (bank, name) = (self.cx.bank.clone(), name.clone());
+                    Ok(PerfValue::Pattern(Pattern::signal(move |_| {
+                        Step::from(Value::Num(bank.get(&name).unwrap_or(0.0)))
+                    })))
+                }
                 // a lone note or value is a one-step pattern (and a number for arithmetic)
                 None => match atom_value(name, self.cx.sample_names) {
                     Ok(v) => Ok(PerfValue::Pattern(Pattern::pure(Step::from(v)))),

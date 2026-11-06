@@ -327,3 +327,33 @@ fn pads_launch_scenes_and_each_switches_the_other_off() {
         "the chorus took over: bass stopped, drums carried on"
     );
 }
+
+#[test]
+fn the_controls_that_moved_are_named_once_for_an_editor_to_light() {
+    let mut s = session(
+        "ctl cutoff = midi.cc(21).range(0..1)\nctl width = 0.5\nctl depth = 0.5\n\
+         macro bloom {\n  input: midi.cc(9)\n  width: 0..1\n  depth: 0..1\n}\n\
+         instr flat() { cutoff + width + depth }\nflat() for 1beat",
+    );
+    let cc = |s: &mut Offline, cc: u8, value: u8| {
+        s.control_input(&ControlSignal::MidiCc {
+            cc,
+            channel: 3,
+            value,
+        })
+    };
+    assert_eq!(s.sequencer().take_moved(), Vec::<String>::new());
+    // on any channel, moved twice, named once
+    cc(&mut s, 21, 10);
+    cc(&mut s, 21, 90);
+    assert_eq!(s.sequencer().take_moved(), ["cutoff"]);
+    assert!(s.sequencer().take_moved().is_empty(), "taken");
+    // a macro names itself and what it moves
+    cc(&mut s, 9, 64);
+    let mut moved = s.sequencer().take_moved();
+    moved.sort();
+    assert_eq!(moved, ["bloom", "depth", "width"]);
+    // a controller nothing listens to moves nothing
+    cc(&mut s, 50, 64);
+    assert!(s.sequencer().take_moved().is_empty());
+}

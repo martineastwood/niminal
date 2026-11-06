@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use clap::{Args, Parser, Subcommand};
 use engine_commands::{ReplayArgs, ServerArgs};
@@ -9,6 +11,15 @@ use play::PlayArgs;
 mod engine_commands;
 mod library;
 mod play;
+
+/// A flag that is set when the program is asked to stop (Ctrl+C, or the terminate signal), so that a command that
+/// plays can fade out and return instead of being cut off mid-wave.
+pub(crate) fn stop_requested() -> Result<Arc<AtomicBool>, String> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = stop.clone();
+    ctrlc::set_handler(move || flag.store(true, Ordering::Release)).map_err(|e| format!("can't watch for Ctrl+C: {e}"))?;
+    Ok(stop)
+}
 
 #[derive(Parser)]
 #[command(name = "niminal", version = option_env!("NIMINAL_RELEASE_VERSION").unwrap_or(concat!(env!("CARGO_PKG_VERSION"), " (", env!("NIMINAL_BUILD"), ")")))]

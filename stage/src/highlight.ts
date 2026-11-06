@@ -10,6 +10,8 @@ import { look } from './look';
 const STEPS = 6;
 /** One colour per clip, so the code, the lane and the meter read as the same thing. */
 export const CLIP_COLOURS = ['#e9b66e', '#8cbce7', '#c6a1e8', '#a5c98d', '#e08b8b', '#74c7c3'];
+/** A control or macro that took a move: its own colour, so a knob reads apart from the notes it changes. */
+export const CONTROL_COLOUR = '#e6e1d3';
 
 type Evaluated = {
   /** The number the stage gave this evaluation, which the engine reports back with each note. */
@@ -218,11 +220,15 @@ export class Highlighter {
   private headed = '';
   private headedDoc: unknown = null;
   private markedSnapshot: Snapshot | null = null;
+  /** When each control or macro last moved, by `performance.now()`. */
+  private movedAt = new Map<string, number>();
+  private controlsIn: unknown = null;
+  private controls = new Map<string, { from: number; to: number }>();
 
   constructor(private view: () => EditorView | undefined) {
     onFrame(() => {
       this.paint();
-      return !!this.snapshot?.transport && (this.shown !== '' || this.snapshot.clips.some(clip => clip.running));
+      return !!this.snapshot?.transport && (this.shown !== '' || this.movedAt.size > 0 || this.snapshot.clips.some(clip => clip.running));
     });
   }
 
@@ -233,9 +239,10 @@ export class Highlighter {
     this.markedSnapshot = null;
   }
 
-  update(snapshot: Snapshot) {
+  update(snapshot: Snapshot, now = performance.now()) {
     this.snapshot = snapshot;
-    this.updatedAt = performance.now();
+    this.updatedAt = now;
+    for (const name of snapshot.moved ?? []) this.movedAt.set(name, now);
     this.settle(snapshot);
     wake();
   }
@@ -257,9 +264,9 @@ export class Highlighter {
     }
   }
 
-  paint() {
+  paint(now = performance.now()) {
     try {
-      this.light();
+      this.light(now);
     } catch (error) {
       // one bad range must not end the frame loop, or nothing would light again
       console.error('lighting the notes failed', error);
@@ -321,7 +328,39 @@ export class Highlighter {
     return this.defined;
   }
 
-  private light() {
+  /** Where each `ctl name` and `macro name` is in the text. Looked up again only when the text changes. */
+  private controlNames(view: EditorView) {
+    if (this.controlsIn === view.state.doc) return this.controls;
+    this.controlsIn = view.state.doc;
+    this.controls = new Map();
+    for (let n = 1; n <= view.state.doc.lines; n++) {
+      const line = view.state.doc.line(n);
+      const found = /^(\s*(?:ctl|macro)\s+)([A-Za-z_]\w*)/.exec(line.text);
+      if (found) this.controls.set(found[2], { from: line.from + found[1].length, to: line.from + found[1].length + found[2].length });
+    }
+    return this.controls;
+  }
+
+  /** The names of the controls and macros that moved lately, fading as notes do. */
+  private movedRanges(view: EditorView, now: number) {
+    const ranges: { from: number; to: number; step: number; colour: string }[] = [];
+    if (!this.movedAt.size) return ranges;
+    const names = this.controlNames(view);
+    for (const [name, at] of this.movedAt) {
+      const seconds = Math.max(0, (now - at) / 1000);
+      if (seconds >= look.trail) {
+        this.movedAt.delete(name);
+        continue;
+      }
+      const where = names.get(name);
+      if (!where) continue;
+      const step = Math.max(1, Math.ceil((1 - seconds / look.trail) * STEPS));
+      ranges.push({ ...where, step, colour: CONTROL_COLOUR });
+    }
+    return ranges;
+  }
+
+  private light(now = performance.now()) {
     const view = this.view();
     const snapshot = this.snapshot;
     if (!view || !snapshot) return;
@@ -366,6 +405,7 @@ export class Highlighter {
         }
       }
     });
+    ranges.push(...this.movedRanges(view, now));
     if (sounding.size) {
       const definitions = this.definitions(view);
       for (const [name, { step, colour }] of sounding) {

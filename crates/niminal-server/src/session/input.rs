@@ -45,6 +45,7 @@ impl Session {
         frames: u64,
         at: u64,
         log: (usize, usize),
+        now: bool,
     ) -> Result<(), &'static str> {
         if self.control_changes.len() >= crate::controls::CAPACITY {
             return Err("the control update queue is full");
@@ -80,6 +81,7 @@ impl Session {
             log_index: log.0,
             log_op: log.1,
             applied: !self.detached,
+            now,
         };
         if let Some(planner) = &mut self.live {
             planner
@@ -233,6 +235,8 @@ impl Session {
         // Changes of definitions go first: they are compiled, which can fail, and the
         // rest of the batch is checked against the program they leave. If anything later is wrong they are
         // taken back.
+        // which were sent for "now" (a knob, a fader), before every time is pinned to a sample for the log
+        let sent_now: Vec<bool> = ops.iter().map(|op| matches!(op.at(), At::Now)).collect();
         for op in &mut ops {
             *op.at_mut() = At::Sample(self.resolve(op.at()));
         }
@@ -384,6 +388,8 @@ impl Session {
                 at: u64,
                 op: usize,
                 tag: Option<String>,
+                /// Sent for "now" rather than for a sample.
+                now: bool,
             },
             Node {
                 key: String,
@@ -538,6 +544,7 @@ impl Session {
                         fail("use routing edits to change private instance controls".into());
                         continue;
                     }
+                    let now = sent_now.get(n).copied().unwrap_or(false);
                     let at = self.resolve(*at);
 
                     // a control the definitions waiting to land make is set once they have
@@ -602,6 +609,7 @@ impl Session {
                         at,
                         op: n,
                         tag: tag.clone(),
+                        now,
                     });
                 }
                 Op::Tempo {
@@ -649,6 +657,7 @@ impl Session {
                                     at: start,
                                     op: n,
                                     tag: tag.clone(),
+                                    now: false,
                                 });
                             }
                             Err(e) => fail(e),
@@ -705,6 +714,7 @@ impl Session {
                                 at: start,
                                 op: n,
                                 tag: tag.clone(),
+                                now: false,
                             });
                         }
                     }
@@ -1261,9 +1271,11 @@ impl Session {
                     at,
                     op,
                     tag,
+                    now,
                 } => {
                     let serial = self.next_control;
-                    match self.queue_control(&name, value, frames, at.max(clock), (log_index, op)) {
+                    let log = (log_index, op);
+                    match self.queue_control(&name, value, frames, at.max(clock), log, now) {
                         Ok(()) => self.control_owners.push(ControlOwner {
                             serial,
                             client,

@@ -95,6 +95,8 @@ export type Snapshot = {
   } | null;
   /** Controls that took a MIDI control change since the last snapshot. */
   learned: { control: string; source: string }[];
+  /** Controls and macros that moved since the last snapshot, by a controller, OSC or a macro. */
+  moved?: string[];
   midi: { inputs: string[]; last: string | null };
   /** Why the sockets other tools use are not open, if they are not. */
   tools_problem: string | null;

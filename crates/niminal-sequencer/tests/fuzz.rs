@@ -40,7 +40,10 @@ const SEEDS: [&str; 6] = [
     include_str!("../../../examples/song.nml"),
 ];
 
-const SNIPPETS: [&str; 40] = [
+const SNIPPETS: [&str; 43] = [
+    ".window(1e9, -3, steps: 0)",
+    ".phase(-1e308, steps: 65536)",
+    ".density(1e308)",
     "[",
     "]",
     "{",
@@ -83,8 +86,11 @@ const SNIPPETS: [&str; 40] = [
     "[a b c d e f g h]*64",
 ];
 
-const WORDS: [&str; 34] = [
+const WORDS: [&str; 37] = [
     "sometimes",
+    "window",
+    "phase",
+    "density",
     "only_between",
     "swing",
     "start_later",

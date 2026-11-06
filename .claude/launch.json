@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "stage-window",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "stage", "run", "dev"],
+      "port": 1421
+    }
+  ]
+}

@@ -188,3 +188,38 @@ describe('marking clip headers and problems in the source', () => {
     expect(view.dom.querySelectorAll('.cm-queued-eval, .cm-landed').length).toBe(0);
   });
 });
+
+describe('lighting the controls that move', () => {
+  const doc = 'ctl width = midi.cc(1)\nctl depth = 0.5\nmacro bloom {\n  input: midi.cc(9)\n  width: 0..1\n}\nclip a { notes: [c4].window(width, 4) }';
+
+  it('lights the name of a ctl or macro that took a move, and lets it fade', () => {
+    setLook(PRESETS.standard);
+    const { view, highlighter } = setup(doc);
+    highlighter.update({ ...snapshot([]), moved: ['bloom', 'width', 'not_here'] }, 1000);
+    highlighter.paint(1000);
+    const lit = litRanges(view);
+    // the declarations only, not where `width` is used further down
+    expect(lit.map(r => r.text)).toEqual(['width', 'bloom']);
+    expect(lit.map(r => r.from)).toEqual([doc.indexOf('width'), doc.indexOf('bloom')]);
+    expect(lit[0].class).toContain('cm-hit-6');
+    // dimmer as it fades, and gone after the trail
+    highlighter.paint(1000 + PRESETS.standard.trail * 500);
+    expect(litRanges(view)[0].class).not.toContain('cm-hit-6');
+    highlighter.paint(1000 + PRESETS.standard.trail * 1000 + 1);
+    expect(litRanges(view)).toEqual([]);
+  });
+
+  it('lights again when a control moves again', () => {
+    setLook(PRESETS.standard);
+    const { view, highlighter } = setup(doc);
+    highlighter.update({ ...snapshot([]), moved: ['depth'] }, 1000);
+    highlighter.paint(1300);
+    highlighter.update({ ...snapshot([]), moved: ['depth'] }, 1300);
+    highlighter.paint(1300);
+    expect(litRanges(view).map(r => [r.text, r.class.includes('cm-hit-6')])).toEqual([['depth', true]]);
+    // a snapshot without moves leaves what is fading to fade
+    highlighter.update(snapshot([]), 1350);
+    highlighter.paint(1350);
+    expect(litRanges(view).map(r => r.text)).toEqual(['depth']);
+  });
+});

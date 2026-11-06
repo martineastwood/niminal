@@ -28,6 +28,7 @@ oscillator_controls.nml: 2x374423
 partial_morph.nml: 2x481248
 physical_models.nml: 1x488452
 preset_keys.nml: 2x424812
+rig.nml: 2x536151
 room.nml: 1x222063
 saw_lead.nml: 1x158399
 score_prog.nml: 1x384240

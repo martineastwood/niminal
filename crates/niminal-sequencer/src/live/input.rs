@@ -61,6 +61,7 @@ impl Live {
         smooth_ms: Option<f64>,
         at: Option<u64>,
     ) -> Result<(), Vec<Problem>> {
+        let sample = at;
         let at = at.map_or(At::Now, At::Sample);
         let control =
             |name: &str, value: f64, unit: Option<String>, glide: Option<Time>| Op::Control {
@@ -83,9 +84,17 @@ impl Live {
                 events.push(control(name, at, unit.suffix().map(str::to_owned), None));
             }
         }
+        // what a pattern reads follows, now or when the change lands
+        let mut moves = vec![(name.to_string(), self.bank_value(name, value, unit))];
+        if let Some(found) = self.program.macro_of(name) {
+            moves.extend(found.values(value).map(|(n, v, u)| {
+                let v = self.bank_value(n, v, u.suffix());
+                (n.to_string(), v)
+            }));
+        }
         self.link
             .request(EngineRequest::EventsSend { events })
-            .map(|_| ())
+            .map(|_| self.move_bank(moves, sample))
             .map_err(|e| {
                 e.problems()
                     .into_iter()
@@ -94,6 +103,35 @@ impl Live {
                     .take(1)
                     .collect()
             })
+    }
+
+    /// The value of control `name` as the engine holds it, for a number given with `unit`.
+    fn bank_value(&self, name: &str, value: f64, unit: Option<&str>) -> f64 {
+        self.program
+            .controls
+            .iter()
+            .find(|c| c.name == name)
+            .and_then(|c| c.convert(value, unit, self.program.tempo).ok())
+            .map_or(value, f64::from)
+    }
+
+    /// Tell the bank that patterns read that controls moved: now, or at sample `at` if that is yet to come.
+    fn move_bank(&mut self, moves: Vec<(String, f64)>, at: Option<u64>) {
+        for (name, _) in &moves {
+            // an effect's parameter (`fx::param`) has no `ctl` line to light
+            if !name.contains("::") && !self.moved_out.contains(name) && self.moved_out.len() < 256 {
+                self.moved_out.push(name.clone());
+            }
+        }
+        for (name, value) in moves {
+            match at {
+                Some(at) if at > self.clock => {
+                    let place = self.control_changes.partition_point(|c| c.0 <= at);
+                    self.control_changes.insert(place, (at, name, value));
+                }
+                _ => self.program.bank.set(&name, value),
+            }
+        }
     }
 
     /// A message from a MIDI device or OSC sender. Every control bound to it moves. Returns how many
@@ -216,6 +254,11 @@ impl Live {
             _ => {}
         }
         self.learn(signal);
+        // A quantized control lands on the first boundary at or after what has already been sent: the engine then
+        // gets it in time, and a pattern reading it changes at the same sample as the sound. The clock is brought
+        // up to date first, since a controller's messages come between the sequencer's own steps.
+        self.tick();
+        let sent_until = self.fetched_until.max(self.clock);
         let targets: Vec<(String, f64, Option<&'static str>, Option<u64>)> = self
             .program
             .controls
@@ -261,7 +304,7 @@ impl Live {
                     _ => return None,
                 };
                 // a bound control that is quantized moves on the next boundary, so a hold begins and ends on the beat
-                let at = binding.quantize.map(|q| self.grid().landing(q, self.clock));
+                let at = binding.quantize.map(|q| self.grid().landing(q, sent_until));
                 Some((
                     def.name.clone(),
                     binding.map_input(def, t),
@@ -526,6 +569,12 @@ impl Live {
 
     /// The controls that learned a control change since this was last called, with what
     /// `midi.learn` should be rewritten to.
+    /// The controls and macros that moved since this was last called, each named once: by a controller, OSC, a
+    /// macro or a client. A macro names itself and the controls it moved.
+    pub fn take_moved(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.moved_out)
+    }
+
     pub fn take_learned(&mut self) -> Vec<(String, String)> {
         std::mem::take(&mut self.learned_out)
     }

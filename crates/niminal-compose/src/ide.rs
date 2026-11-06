@@ -432,6 +432,21 @@ pub fn pattern_ops() -> Vec<OpInfo> {
             "Move the notes along by this many steps and keep the rhythm: `rotate(1)` turns `c e g` into `e g c`.",
             &[("by", "number", true)],
         ),
+        op(
+            "window",
+            "Loop a part of the cycle at the speed it has: `window(start, size, steps: 16)` plays `size` steps from step `start`, over and over. Without `steps` they are shares of the cycle. `wrap` (the default) carries on from the start past the end, `clamp` stops at the end. Either can be a pattern or a control, and the window moves as it changes.",
+            &[("start", "number", true), ("size", "number", true), ("mode", "wrap or clamp", false), ("steps", "number", false)],
+        ),
+        op(
+            "phase",
+            "Start part of the way through the cycle and wrap round, so the same notes come at another point: `phase(4, steps: 16)`. A control moves it live.",
+            &[("by", "number", true), ("steps", "number", false)],
+        ),
+        op(
+            "density",
+            "Keep this share of the notes: `density(60%)`. Each note passes by a number of its own, so raising it only ever adds notes and never swaps one for another. A control moves it live.",
+            &[("amount", "percent", true), ("seed", "number", false)],
+        ),
         op("take", "Play only the first part of each cycle: `take(75%)`.", &[("length", "percent", true)]),
         op("crop", "Stretch part of each cycle to fill it: `crop(25%, 75%)`.", &[("from", "percent", true), ("to", "percent", true)]),
         op("squeeze", "Squeeze each cycle into part of it, silent elsewhere: `squeeze(25%, 75%)`.", &[("from", "percent", true), ("to", "percent", true)]),

@@ -30,3 +30,13 @@ describe('watching the engine', () => {
     expect(new HealthWatch().update(null, 0).known).toBe(false);
   });
 });
+
+describe('what the health chip says', () => {
+  const reading = (late: number, starved = 0) => ({ late_events: late, starved_frames: starved, deadline_misses: 0, capacity_drops: 0 });
+  it('blames the load only when the engine ran out of time, not for late notes alone', () => {
+    const watch = new HealthWatch();
+    watch.update(reading(0), 0);
+    expect(watch.update(reading(4), 100)).toMatchObject({ ok: false, detail: '4 late notes', load: false });
+    expect(watch.update(reading(4, 128), 200)).toMatchObject({ ok: false, load: true });
+  });
+});

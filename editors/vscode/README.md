@@ -30,7 +30,9 @@ Open `examples/groove.nml`, then:
 
 | Key (mac / other) | Does |
 | --- | --- |
-| Cmd+Enter / Ctrl+Enter | Evaluate the selection, or the block (lines up to the nearest blank line, widened to balance brackets) |
+| Cmd+Enter / Ctrl+Enter | Evaluate the selection, or the statement around the cursor (one line like `melody.start`, or a whole `instr { ... }` from any line inside it) |
+| Shift+Enter | Evaluate like Cmd/Ctrl+Enter, then move the cursor to the start of the next statement |
+| Alt+Enter | Evaluate the lines around the cursor, up to the nearest blank lines (widened to balance brackets) |
 | Cmd+Shift+Enter / Ctrl+Shift+Enter | Evaluate the whole file |
 | Cmd+. / Ctrl+. | Hush |
 | Cmd+1..9 | Launch the Nth scene (while a `.nml` file has focus) |

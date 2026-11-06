@@ -66,6 +66,7 @@ impl Perform<'_> {
                 | "with_rhythm_of"
                 | "keep_where"
                 | "drop"
+                | "density"
                 | "sometimes"
                 | "in_scale"
                 | "snap_to"
@@ -238,6 +239,46 @@ impl Perform<'_> {
                 };
                 let seed = self.seed(name, rest, default)?;
                 amount.apply(&p, move |p, x| p.thin(x.clamp(0.0, 1.0), seed))
+            }
+            "density" => {
+                let amount = self.share_param(name, self.arg(name, rest, "amount", span)?, it)?;
+                // Whatever the amount, a note either passes or not by its own number, so turning it up
+                // only ever lets more notes in and never swaps one for another.
+                let seed = self.seed(name, rest, 0x4445_4E53)?;
+                amount.apply(&p, move |p, x| p.thin(1.0 - x.clamp(0.0, 1.0), seed))
+            }
+            "window" => {
+                let start = self.amount_param(self.arg(name, rest, "start", span)?, it)?;
+                let size = self.amount_param(self.arg(name, rest, "size", span)?, it)?;
+                let steps = match self.find(name, rest, "steps") {
+                    Some(e) => Some(self.whole(e, "window")?),
+                    None => None,
+                };
+                let wrap = match self.find(name, rest, "mode").map(|e| (&e.kind, e.span)) {
+                    None => true,
+                    Some((ExprKind::Name(w), _)) if w == "wrap" => true,
+                    Some((ExprKind::Name(w), _)) if w == "clamp" => false,
+                    Some((_, at)) => {
+                        return Err(Diagnostic::new(
+                            "the mode of `window` is `wrap` or `clamp`, as in `window(0, 8, wrap)`",
+                            at,
+                        ));
+                    }
+                };
+                start.apply(&p, move |p, s| {
+                    size.apply(p, move |p, w| window_of(p, s, w, steps, wrap))
+                })
+            }
+            "phase" => {
+                let by = self.amount_param(self.arg(name, rest, "by", span)?, it)?;
+                let steps = match self.find(name, rest, "steps") {
+                    Some(e) => Some(self.whole(e, "phase")?),
+                    None => None,
+                };
+                by.apply(&p, move |p, s| {
+                    let whole = steps.map_or(Rational::ONE, Rational::int);
+                    window_of(p, s, whole, steps, true)
+                })
             }
             "sometimes" => {
                 let chance = self.share_param(name, self.arg(name, rest, "chance", span)?, it)?;
@@ -510,6 +551,16 @@ impl Perform<'_> {
         }
     }
 
+    /// A plain number or a percentage, fixed or a pattern: `2`, `25%`, `[<0 2>]`, or a control.
+    pub(super) fn amount_param(&self, e: &Expr, it: Option<&PerfValue>) -> Res<Param<Rational>> {
+        if let Ok((r, Some(u))) = self.quantity(e)
+            && u == "%"
+        {
+            return Ok(Param::Const(r / Rational::int(100)));
+        }
+        self.num_param(e, it)
+    }
+
     /// A share of a cycle: `25%`, `1/4`, or a length such as `2beats`.
     pub(super) fn fraction(&self, e: &Expr) -> Res<Rational> {
         match self.quantity(e)? {
@@ -672,4 +723,27 @@ impl Perform<'_> {
         }
         d
     }
+}
+
+/// `p.window(start, size)`, with `start` and `size` counted in steps if the pattern has `steps` of them, or as
+/// shares of the cycle if not. `wrap` lets the window run past the end of the cycle; without it the window
+/// stops at the end, so it moves back to fit.
+fn window_of<T: Clone + Send + Sync + 'static>(
+    p: &Pattern<T>,
+    start: Rational,
+    size: Rational,
+    steps: Option<i64>,
+    wrap: bool,
+) -> Pattern<T> {
+    let (start, size) = match steps {
+        Some(n) => (Rational::new(start.floor(), n), Rational::new(size.floor(), n)),
+        None => (start, size),
+    };
+    let size = size.min(Rational::ONE);
+    let start = if wrap {
+        start
+    } else {
+        start.min(Rational::ONE - size).max(Rational::ZERO)
+    };
+    p.window(start, size)
 }
