@@ -281,6 +281,7 @@ fn stereo_echo_controls_change_the_returned_sound() {
         ("diffusion", "0", "1"),
         ("motion", "0", "1"),
         ("duck", "0", "1"),
+        ("drive", "0", "1"),
     ] {
         let sound = |value| {
             render(
@@ -312,7 +313,7 @@ fn scanning_and_stereo_echo_stay_finite_under_extreme_modulation() {
     for body in [
         "harmonic_bank(220hz, centre: x, width: y, focus: z, gates: [x, y, z]).mixed",
         "scan_mix([osc(sine, 110hz), osc(sine, 220hz)], centre: x, width: y)",
-        "e = osc(saw, 110hz).stereo_echo(time: x * 1sec, feedback: y, colour: z, skew: x, diffusion: y, motion: z, duck: x)\n e[0] + e[1]",
+        "e = osc(saw, 110hz).stereo_echo(time: x * 1sec, feedback: y, colour: z, skew: x, diffusion: y, motion: z, duck: x, drive: y)\n e[0] + e[1]",
     ] {
         let p = program(&format!(
             "use std/blocks\ninstr a(x: num, y: num, z: num) {{ {body} }}"

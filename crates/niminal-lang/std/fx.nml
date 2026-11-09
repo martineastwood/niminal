@@ -305,7 +305,7 @@ fx trance_gate(
 
 /// Multiply the sound by a sine at `freq`, for bell-like or robotic tones. `character` sweeps the way they are combined:
 /// 0 is a plain product (ring), 0.5 lets the sine push the sound into a wavefolder, and 1 also multiplies by the positive
-/// half of the sine, so the sound comes through while the sine is positive, with rougher overtones. Silence in is
+/// half of the sine, so the sound comes through while the sine is positive, with rougher overtones (kept in check: the diode end is softer and everything above 6 kHz is rolled off). Silence in is
 /// silence out. `amount` blends from the sound as it is to the full effect.
 fx ring_mod(
   freq: 20hz..5khz = 220hz,
@@ -314,6 +314,6 @@ fx ring_mod(
   mix: 0..1 = 1
 ) {
   _tone = osc(sine, freq)
-  _wet = scan_mix([cross_mod(in, _tone, mode: ring, amount: amount).sound, cross_mod(in, _tone, mode: fold, amount: amount).sound, cross_mod(in, _tone, mode: diode, amount: amount).sound], centre: character)
+  _wet = scan_mix([cross_mod(in, _tone, mode: ring, amount: amount).sound, cross_mod(in, _tone, mode: fold, amount: amount).sound, cross_mod(in, _tone, mode: diode, amount: amount * 0.6).sound], centre: character).onepole_lp(6khz)
   out = in.crossfade(_wet, mix)
 }

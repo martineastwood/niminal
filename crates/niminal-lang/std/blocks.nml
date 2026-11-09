@@ -166,6 +166,7 @@ fn echo_loop(
 /// Motion adds independent 0.17hz/0.23hz read-head drift, up to 3ms, for tape-like pitch movement.
 /// Time changes use the native smoothed, speed-limited read head and bend pitch. Duck clears space for the incoming sound.
 /// Stereo inputs keep their channels; mono is sent to both sides. Longer arrays use first/last.
+/// Drive saturates the repeats like tape does, softly rounding peaks and adding warmth; 0 leaves them clean.
 /// This is two independent feedback lines, not a cross-feedback or ping-pong network.
 fn stereo_echo(
   x,
@@ -176,6 +177,7 @@ fn stereo_echo(
   diffusion: 0..1 = 0.2,
   motion: 0..1 = 0.1,
   duck: 0..1 = 0,
+  drive: 0..1 = 0,
   max: const sec = 4sec
 ) {
   _skew = skew.max(-1).min(1) * 0.5
@@ -188,7 +190,10 @@ fn stereo_echo(
   _smear = _wet.allpass(time: [17ms, 23ms], feedback: 0.6)
     .allpass(time: [31ms, 43ms], feedback: 0.6)
   _level = follow(_input.map(abs(it)).max, attack: 5ms, release: 200ms)
-  _wet.crossfade(_smear, diffusion.max(0).min(1)) * (1 - duck.max(0).min(1) * (_level * 3).min(1))
+  _mixed = _wet.crossfade(_smear, diffusion.max(0).min(1))
+  _push = 1 + drive.max(0).min(1) * 3
+  _tape = _mixed.crossfade((_mixed * _push).tanh / _push.sqrt, drive.max(0).min(1))
+  _tape * (1 - duck.max(0).min(1) * (_level * 3).min(1))
 }
 
 /// A wet-only stereo space. Size moves the tank geometry; decay controls its feedback.
@@ -569,7 +574,7 @@ fn random_source(
 /// through them: 0 analog (two detuned `morph_osc`), 0.25 FM (`complex_osc`), 0.5 additive (`harmonic_osc`), 0.75 a
 /// vowel (a pulse through `formant_filter`) and 1 folded (`wavefolder` on a sine). Between two models it blends them.
 /// `timbre`, `harmonics` and `morph` each do the most useful thing for the model: brightness, the number or spacing
-/// of overtones, and the shape or position. Every model runs all the time, so it costs about five voices; use the
+/// of overtones, and the shape or position. The models are trimmed to about the same loudness, so `model` can be swept without jumps. Every model runs all the time, so it costs about five voices; use the
 /// block you want directly when one sound is enough. Output stays within ±1.5.
 fn multi_voice(
   freq: hz,
@@ -588,5 +593,5 @@ fn multi_voice(
   _additive = harmonic_osc(_freq, count: 12, brightness: _timbre, odd_even: _harmonics * 2 - 1, centre: _morph, width: 3, focus: 0.5)
   _vowel = morph_osc(_freq, shape: 1, width: 0.3).sound.formant_filter(freq: 250hz + _morph * 750hz, span: _harmonics, res: _timbre * 0.8).sound * 0.5
   _folded = wavefolder(osc(sine, _freq), amount: _timbre, symmetry: _morph * 2 - 1) * (1 - _harmonics * 0.5) + osc(sine, _freq * 2) * _harmonics * 0.3
-  scan_mix([_analog_open, _fm, _additive, _vowel, _folded], centre: model.max(0).min(1)).clip(level: 1.5)
+  scan_mix([_analog_open * 3, _fm * 0.75, _additive * 1.3, _vowel * 2, _folded * 0.75], centre: model.max(0).min(1)).clip(level: 1.5)
 }

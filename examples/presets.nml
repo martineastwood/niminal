@@ -1,0 +1,38 @@
+// Two shelf presets built on the new blocks. `macro_voice` is a five-model voice steered by three macro controls
+// (model, timbre, harmonics, morph) so one patch covers analog, FM, additive, vowel and folded sounds. The end of the
+// piece shows the ring-modulator idea behind the `ring_mod` effect: a sine multiplies the sound, and a sweep moves it from
+// plain ring to folded.
+// Render: niminal render examples/presets.nml --bars 6 --out presets.wav
+config { channels: stereo }
+tempo 100bpm
+
+use std/instruments.{macro_voice}
+use std/blocks
+
+// Times are relative to where the file is evaluated, so evaluate it on a bar line.
+// Bar 1: the model knob walks through the five voices on one note.
+at +0bars macro_voice(freq: c3, model: 0.0, release: 500ms, gain: -6db) for 1beat
+at +1beat macro_voice(freq: c3, model: 0.25, timbre: 0.6, release: 500ms, gain: -6db) for 1beat
+at +2beats macro_voice(freq: c3, model: 0.5, harmonics: 0.7, release: 500ms, gain: -6db) for 1beat
+at +3beats macro_voice(freq: c3, model: 0.75, morph: 0.4, release: 500ms, gain: -6db) for 1beat
+
+// Bars 2-3: a held folded voice, brightening, over a slow vowel.
+at +1bars macro_voice(freq: g2, model: 1.0, timbre: 0.8, attack: 400ms, release: 1sec, gain: -8db) for 2bars
+at +1bars macro_voice(freq: e4, model: 0.75, morph: 0.7, attack: 600ms, release: 1sec, gain: -10db) for 2bars
+
+// Bars 4-6: a chord sent through a ring modulator. The `ring_mod` effect on the shelf is made of `cross_mod`, which is
+// used directly here so the sweep from ring to fold can follow the bar; the tone sits on C and the result is low-passed, so the chord stays tonal instead of turning to noise.
+bus ringed: stereo
+instr chord_voice(freq: hz) {
+  voice = multi_voice(freq, model: 0.25, timbre: 0.5, harmonics: 0.5, morph: 0.5) * env[0 20ms 1 | 1sec 0] * 0.3
+  ringed += voice.pan(angle: 0deg)
+}
+fx ring_bus_fx {
+  sweep = function_gen(cycle: 12, rise: 0.8)
+  _tone = osc(sine, 130.81hz)
+  wet = scan_mix([cross_mod(ringed, _tone, mode: ring, amount: 0.6).sound, cross_mod(ringed, _tone, mode: fold, amount: 0.3).sound], centre: sweep)
+  out = crossfade(ringed, wet, 0.5).onepole_lp(5khz)
+}
+at +3bars chord_voice(freq: c3) for 3bars
+at +3bars chord_voice(freq: g3) for 3bars
+at +3bars chord_voice(freq: e4) for 3bars
