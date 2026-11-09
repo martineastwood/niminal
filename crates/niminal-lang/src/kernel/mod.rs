@@ -176,6 +176,10 @@ struct Frame {
     deferred: Vec<(usize, usize)>,
     /// The value of `out`, if the body builds it.
     out: Option<Value>,
+    /// The function's named results, which may share a name with a control, as its parameters may.
+    results: Vec<String>,
+    /// The option each choice parameter holds, so a call in the body can pass the choice on.
+    chosen: HashMap<String, String>,
 }
 
 struct Kb<'a> {
@@ -319,6 +323,14 @@ fn compile_scope_depth(
         let v = kb.fit_rate(param, v, param.name.span)?;
         if let Kind::Choice(options) = &param.kind {
             kb.bind_choices(options);
+            let held = match (arg, param.default.as_ref().map(|d| &d.kind)) {
+                (KArg::Const { value, .. }, _) => options.get(*value as usize).cloned(),
+                (KArg::Missing, Some(ExprKind::Name(n))) => Some(n.clone()),
+                _ => None,
+            };
+            if let Some(held) = held {
+                kb.frame.chosen.insert(param.name.name.clone(), held);
+            }
         }
         kb.frame.scope.insert(param.name.name.clone(), v);
     }

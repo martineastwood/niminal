@@ -329,3 +329,57 @@ fn modular_blocks_do_not_allocate_while_rendering_or_completing_contours() {
     assert_eq!(ALLOCATIONS.with(Cell::get), 0);
     assert!(output.iter().flatten().all(|value| value.is_finite()));
 }
+
+#[test]
+fn the_voice_modules_do_not_allocate_while_rendering() {
+    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n steps = shift_random(clock: impulse(40hz), lock: 0.5, seed: 3)\n voice = complex_osc(110hz * (1 + steps.value * 0.5), index: 2, fold: 0.5, am: 0.3)\n gated = voice.low_pass_gate(ping: steps.gate, decay: 30ms)\n f = [gated.sound, voice.modulator].multimode_filter(cutoff: 300hz + gated.opening * 4khz, res: 0.9, drive: 0.5)\n [f.low[0] + f.band[1], f.high[1] + f.notch[0]]\n}";
+    let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
+    let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
+        panic!(
+            "{}",
+            errors
+                .iter()
+                .map(|e| e.render("blocks", &expanded.text))
+                .collect::<String>()
+        )
+    });
+    let mut voice = Voice::new(program.instruments[0].graph.clone(), 48_000.0);
+    let mut buses = Buses::new(&[]);
+    let mut output = vec![vec![0.0; block_size()]; 2];
+    ALLOCATIONS.with(|count| count.set(0));
+    NODE.with(|node| node.set(true));
+    for _ in 0..1024 {
+        voice.process_blocks(&mut output, block_size(), &mut buses);
+    }
+    NODE.with(|node| node.set(false));
+    assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+    assert!(output.iter().flatten().all(|value| value.is_finite()));
+    assert!(output.iter().flatten().any(|value| value.abs() > 1e-4));
+}
+
+#[test]
+fn the_processing_modules_do_not_allocate_while_rendering() {
+    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n src = harmonics([1, 0.4, 0.2], size: 512)\n cloud = texture(src, position: phasor(0.3hz), spread: 0.5, detune: 3)\n spoken = vocoder(osc(saw, 110hz), osc(saw, 180hz) * 0.5, bands: 12)\n mangled = cross_mod(spoken, osc(sine, quantize(60 + shift_random(clock: impulse(20hz)).value * 12) * 1hz), mode: fold, amount: 0.7).sound\n [cloud[0] + mangled, cloud[1] + mangled]\n}";
+    let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
+    let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
+        panic!(
+            "{}",
+            errors
+                .iter()
+                .map(|e| e.render("blocks", &expanded.text))
+                .collect::<String>()
+        )
+    });
+    let mut voice = Voice::new(program.instruments[0].graph.clone(), 48_000.0);
+    let mut buses = Buses::new(&[]);
+    let mut output = vec![vec![0.0; block_size()]; 2];
+    ALLOCATIONS.with(|count| count.set(0));
+    NODE.with(|node| node.set(true));
+    for _ in 0..1024 {
+        voice.process_blocks(&mut output, block_size(), &mut buses);
+    }
+    NODE.with(|node| node.set(false));
+    assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+    assert!(output.iter().flatten().all(|value| value.is_finite()));
+    assert!(output.iter().flatten().any(|value| value.abs() > 1e-4));
+}

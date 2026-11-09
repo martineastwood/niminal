@@ -184,11 +184,29 @@ pub fn expand_with_rules(
     };
     let mut text = walk.visit(source, dir, None)?;
     let root_len = text.len();
-    let mut modules = Vec::new();
-    for mut done in walk.done {
-        if let Some(select) = &done.select {
-            done.source = keep_only(&done.source, &done.name, select, done.used_at)?;
+    let mut done = walk.done;
+    for d in &mut done {
+        if let Some(select) = &d.select {
+            d.source = keep_only(&d.source, &d.name, select, d.used_at)?;
         }
+    }
+    // A module that comes in only through another one keeps what is referred to, so taking one preset from a
+    // shelf doesn't add every block that shelf builds on. Users come after what they use: prune them first.
+    for i in (0..done.len()).rev() {
+        if !done[i].nested || done[i].alias.is_some() {
+            continue;
+        }
+        // only the modules that use it can call it: the top file didn't take it
+        let users: Vec<&str> = done
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != i)
+            .map(|(_, d)| d.source.as_str())
+            .collect();
+        done[i].source = keep_referenced(&done[i].source, &users);
+    }
+    let mut modules = Vec::new();
+    for done in done {
         let body = rules.rename(&done.source, &done.name, done.alias.as_deref());
         text.push('\n');
         let start = text.len();
@@ -252,6 +270,8 @@ struct Done {
     select: Option<Vec<String>>,
     used_at: Span,
     source: String,
+    /// Only other modules use it, never the top file: it keeps just what they refer to.
+    nested: bool,
 }
 
 struct Walk<'a> {
@@ -323,6 +343,7 @@ impl Walk<'_> {
                     }
                     _ => None,
                 };
+                earlier.nested &= root_use.is_some();
                 if earlier.alias.as_deref() != alias {
                     return Err(Diagnostic::new(
                         format!("`{name}` is used twice with different names"),
@@ -351,6 +372,7 @@ impl Walk<'_> {
                 select,
                 used_at,
                 source: body,
+                nested: root_use.is_some(),
             });
         }
         self.rules.check_private(&out, root_use)?;
@@ -512,6 +534,85 @@ fn keep_only(source: &str, module: &str, keep: &[String], at: Span) -> Result<St
         }
     }
     Ok(out)
+}
+
+/// The names `tokens` refer to, as (any reference, a function's): every name except one being given a
+/// value (`name = ...`) or named as a parameter or argument (`name: ...`). A function is referred to by a
+/// call, `name(...)`, or passed as a value, `make: name`; a local or control of the same name, read as
+/// `name.max(0)`, is not one.
+fn referred_to(
+    tokens: &[crate::lexer::Token],
+) -> (std::collections::HashSet<&str>, std::collections::HashSet<&str>) {
+    let mut any = std::collections::HashSet::new();
+    let mut functions = std::collections::HashSet::new();
+    for (i, t) in tokens.iter().enumerate() {
+        let Tok::Ident(name) = &t.tok else {
+            continue;
+        };
+        let next = tokens.get(i + 1).map(|n| &n.tok);
+        if matches!(next, Some(Tok::Eq | Tok::Colon)) {
+            continue;
+        }
+        any.insert(name.as_str());
+        let previous = i.checked_sub(1).map(|p| &tokens[p].tok);
+        if matches!(next, Some(Tok::LParen))
+            || (matches!(previous, Some(Tok::Eq | Tok::Colon)) && !matches!(next, Some(Tok::Dot)))
+        {
+            functions.insert(name.as_str());
+        }
+    }
+    (any, functions)
+}
+
+/// `source` without the definitions that nothing in `users` refers to, directly or through another
+/// definition of `source` that is kept.
+fn keep_referenced(source: &str, users: &[&str]) -> String {
+    let (Ok(defs), Ok(tokens)) = (symbols(source), crate::lexer::lex(source)) else {
+        return source.to_string();
+    };
+    let user_tokens: Vec<_> = users
+        .iter()
+        .filter_map(|text| crate::lexer::lex(text).ok())
+        .collect();
+    let refers = |(any, functions): &(std::collections::HashSet<&str>, std::collections::HashSet<&str>),
+                  def: &crate::ide::Symbol| {
+        if def.kind == SymbolKind::Function {
+            functions.contains(def.name.as_str())
+        } else {
+            any.contains(def.name.as_str())
+        }
+    };
+    let named: Vec<_> = user_tokens.iter().map(|t| referred_to(t)).collect();
+    let mut wanted: std::collections::HashSet<&str> = defs
+        .iter()
+        .filter(|d| named.iter().any(|n| refers(n, d)))
+        .map(|d| d.name.as_str())
+        .collect();
+    let mut pending: Vec<_> = defs.iter().filter(|d| wanted.contains(d.name.as_str())).collect();
+    while let Some(def) = pending.pop() {
+        let inside: Vec<_> = tokens
+            .iter()
+            .filter(|t| t.span.start >= def.span.start && t.span.end <= def.span.end)
+            .cloned()
+            .collect();
+        let inner = referred_to(&inside);
+        for dependency in defs.iter().filter(|d| refers(&inner, d)) {
+            if wanted.insert(dependency.name.as_str()) {
+                pending.push(dependency);
+            }
+        }
+    }
+    let mut out = source.to_string();
+    for d in defs.iter().rev() {
+        if !wanted.contains(d.name.as_str()) {
+            let blank: String = out[d.span.start..d.span.end]
+                .chars()
+                .map(|c| if c == '\n' { c } else { ' ' })
+                .collect();
+            out.replace_range(d.span.start..d.span.end, &blank);
+        }
+    }
+    out
 }
 
 fn check_private(source: &str, at: Option<Span>) -> Result<(), Diagnostic> {

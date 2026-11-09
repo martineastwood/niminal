@@ -1,6 +1,8 @@
 //! Function signatures: what each parameter accepts, and how a call's arguments
 //! are matched to its parameters. Shared by instruments, functions and kernels.
 
+use std::collections::HashMap;
+
 use niminal_score::Tempo;
 
 use crate::ast::*;
@@ -173,6 +175,27 @@ pub(crate) fn kind_of(ty: &TypeSpec, tempo: Tempo) -> Res<Kind> {
         }
         TypeSpec::Array(inner, _) => Kind::Array(Box::new(kind_of(inner, tempo)?)),
     })
+}
+
+/// The option a choice argument names: one of `options` written out, or the name of a choice of the
+/// enclosing function (`chosen` maps each to the option it holds in this call) that holds one of them.
+pub(crate) fn pick_choice(
+    param: &str,
+    options: &[String],
+    e: &Expr,
+    chosen: &HashMap<String, String>,
+) -> Res<String> {
+    let listed = || format!("`{param}` is one of {}", options.join(", "));
+    match &e.kind {
+        ExprKind::Name(n) if options.contains(n) => Ok(n.clone()),
+        ExprKind::Name(n) => match chosen.get(n) {
+            Some(held) if options.contains(held) => Ok(held.clone()),
+            Some(held) => Err(Diagnostic::new(listed(), e.span)
+                .with_help(format!("`{n}` is `{held}` here, which `{param}` doesn't have"))),
+            None => Err(Diagnostic::new(listed(), e.span)),
+        },
+        _ => Err(Diagnostic::new(listed(), e.span)),
+    }
 }
 
 /// The parameters of a function or instrument, checked.

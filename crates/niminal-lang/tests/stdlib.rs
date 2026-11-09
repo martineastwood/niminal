@@ -402,7 +402,12 @@ fn the_instrument_library_compiles_and_every_instrument_sounds() {
             "fm_keys",
             "struck_string",
             "metal_bar",
-            "morph_pad"
+            "morph_pad",
+            "west_coast_pluck",
+            "harmonic_drone",
+            "rubber_bass",
+            "wandering_voice",
+            "ring_bell"
         ]
     );
     for instrument in &program.instruments {
@@ -1147,7 +1152,7 @@ fn the_preset_catalog_is_complete() {
             .iter()
             .filter(|p| p.kind == PresetKind::Instrument)
             .count(),
-        35
+        40
     );
     assert!(
         presets
@@ -1177,5 +1182,36 @@ fn the_preset_catalog_is_complete() {
     );
     assert!(find("echo").unwrap().helpers.is_empty());
     assert_eq!(find("echo").unwrap().name, "Echo");
-    assert_eq!(find("band_cut").unwrap().name, "Band cut");
+    assert_eq!(find("ladder_lowpass").unwrap().name, "Ladder lowpass");
+    // a preset wired from blocks carries them, and the blocks they use in turn, and no others
+    let filter = &find("filter").unwrap().helpers;
+    assert!(filter.contains("fn multimode_filter(") && filter.contains("fn scan_weights("));
+    assert!(!filter.contains("fn contour("));
+}
+
+/// A shelf that builds on `std/blocks` brings only the blocks its chosen presets use, so the other block
+/// names stay free for your own locals and controls; taking the blocks yourself as well still works.
+#[test]
+fn a_preset_brings_only_the_blocks_it_uses() {
+    let compiles = |source: &str| {
+        let text = at_120bpm(&expand(source, Path::new(".")).unwrap().text);
+        compile(&text).unwrap_or_else(|errors| {
+            panic!(
+                "{}",
+                errors
+                    .iter()
+                    .map(|e| e.render("piece", &text))
+                    .collect::<String>()
+            )
+        })
+    };
+    // `echo` uses no block: `contour` and `wobble` are yours.
+    compiles("use std/fx.{echo}\nctl wobble = 0.5\ninstr a(freq: hz) {\n contour = osc(sine, freq)\n contour * wobble\n}");
+    // `filter` uses `multimode_filter`, but not `contour`.
+    compiles("use std/fx.{filter}\ninstr a(freq: hz, contour: 0..1 = 0.5) { osc(saw, freq) * contour }");
+    // Taking the whole of std/blocks as well gives every block once.
+    compiles("use std/blocks\nuse std/instruments.{west_coast_pluck}\ninstr a(freq: hz) { complex_osc(freq).sound * contour(trigger: 1).value }");
+    let expanded = expand("use std/instruments.{west_coast_pluck}", Path::new(".")).unwrap();
+    assert!(expanded.text.contains("fn low_pass_gate("));
+    assert!(!expanded.text.contains("fn shift_random("));
 }

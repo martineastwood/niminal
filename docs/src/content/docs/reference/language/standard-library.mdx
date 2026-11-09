@@ -105,6 +105,14 @@ Building blocks to wire together, in the manner of modules in a rack. A block ta
 | `echo_loop(x, time: 3/16beat, feedback: 0.5, filter: 3khz, duck: 0, ping_pong: off, max: 2sec)` | The echoes of `x` and nothing else, to blend with the dry sound: `x.crossfade(x.echo_loop(...), mix)`. `time` follows the tempo; `filter` is a low-pass in the loop, so each repeat is darker; `duck` pulls the echoes down while `x` is loud; `ping_pong: on` bounces them between left and right, the first on the right. `max` must be at least twice `time` for a ping-pong. |
 | `stereo_echo(x, time: 3/16 * clock.beat_length, feedback: 0.5, colour: 0.5, skew: 0.25, diffusion: 0.2, motion: 0.1, duck: 0, max: 4sec)` | Wet-only stereo repeats. Skew offsets left/right times, colour sets feedback brightness, diffusion smears the returns, motion bends their pitch gently, and duck clears space for new audio. |
 | `space_reverb(x, size: 0.5, decay: 0.65, absorption: 0.4, diffusion: 0.7, motion: 0.2, rate: 0.07hz, predelay: 20ms, tilt: 0, duck: 0)` | Wet-only stereo space with a moving tank, absorption, diffusion, tone tilt and ducking. Size changes bend the existing tail. |
+| `multimode_filter(x, cutoff: 1khz, res: 0.2, drive: 0)` | A state-variable filter with outputs `low`, `band`, `high` and `notch` at once. Stable at any cutoff and resonance, even modulated at audio rate; stereo input is filtered channel by channel. It saturates as resonance passes 0.6, so it can ring at 1 without running away. `drive` thickens it at any resonance. |
+| `low_pass_gate(x, ping: 1, level: 0, decay: 400ms, res: 0.1, mode: both)` | A filter and amplifier opened together by one control, so a sound darkens as it fades. `ping` strikes it on each rising edge (the default strikes once as a note starts); `level` holds it open. `mode` is `both`, `filter` or `gate`. Outputs `sound` and `opening` (0..1). |
+| `complex_osc(freq, ratio: 2, index: 1, am: 0, fold: 0, symmetry: 0)` | A sine modulator at `ratio` times `freq` bends the main sine's phase (`index`, radians) and rings it (`am`); then a sine fold (`fold`, tipped by `symmetry`) that eases off above 2khz. Outputs `sound` (never past ±1.2) and `modulator`. |
+| `shift_random(clock: 0, lock: 0.75, length: 8, seed: 0)` | A looping random sequence: each rising edge of `clock` steps through `length` stored values, and `lock` is the chance of keeping each one (1 loops exactly, 0 is always new). Outputs `value` (-1..1) and `gate` (high with the clock on steps whose value is above 0). |
+| `texture(source, position: 0.5, size: 100ms, density: 20hz, pitch: 0, spread: 0.2, detune: 0, width: 0.5, gain: 1, seed: 0)` | A cloud of grains cut from a sample or table, held to safe ranges (grains 5ms to 500ms, 1 to 100 a second) and scaled down as they overlap, so a thick cloud is no louder than a thin one. `position` is where grains start, `spread` scatters them, `pitch` and `detune` are semitones. Scan the source by moving `position`. |
+| `quantize(note, scale: [0, 2, 4, 5, 7, 9, 11], root: 0, amount: 1)` | Snaps a note number (semitones) to the nearest note of `scale`, which lists one octave of notes. A note exactly between two goes to the lower one. Works on any value: quantize a random loop into a melody. |
+| `vocoder(carrier, modulator, bands: 16, low: 120hz, high: 8khz, width: 3, attack: 4ms, release: 40ms, hiss: 0.3)` | A channel vocoder: each band of `modulator`'s loudness shapes the same band of `carrier`. `hiss` lets consonants through as noise. Stereo inputs are mixed to mono. |
+| `cross_mod(a, b, mode: ring, amount: 0.5) -> (sound, aux)` | Two signals into one: `ring`, `fold` (b pushes a into a wavefolder) or `diode`. `amount` blends from `a` to the effect; `aux` is the plain product. Inputs are held to ±16 and `sound` to ±1.2. |
 
 ```nml
 use std/blocks
@@ -116,6 +124,19 @@ instr additive(freq: hz) {
     3: x.x. ...x x.
   }.over(1bar).width(55%)
   harmonic_osc(freq, gates: gates, brightness: 0.6).pan(angle: 0deg) * env[0 3ms 1 | 120ms 0]
+}
+```
+
+The last four are voice modules: each parameter takes a signal, so one module can drive another, and none can be set to anything that blows up. Their named outputs can share a name with your controls.
+
+```nml
+use std/blocks
+
+instr bongo(freq: hz) {
+  steps = shift_random(clock: clock_div(1/4), lock: 0.9, seed: 4)
+  voice = complex_osc(freq * (1 + steps.value.max(0)), ratio: 1.5, index: 2, fold: 0.3)
+  gated = voice.low_pass_gate(ping: steps.gate, decay: 180ms)
+  gated.sound.multimode_filter(cutoff: 300hz + gated.opening * 3khz, res: 0.7).band * env[1 | 50ms 0]
 }
 ```
 
@@ -254,7 +275,7 @@ For envelope transfer, `amount: 0` returns the carrier delayed by one frame, and
 
 ## std/instruments
 
-Fourteen melodic instruments, with controls chosen for each sound. `use std/instruments.{bass, electric_piano}`, then play by name (`electric_piano(freq: c4, gain: -6db) for 1beat`). The note's `gain` controls loudness and also shapes brightness or excitation: softer playing changes the sound, not just its level. Percussive sounds such as `pluck` and `bell` ring for their decay; sustained sounds follow note-off and their release.
+Nineteen melodic instruments, with controls chosen for each sound. `use std/instruments.{bass, electric_piano}`, then play by name (`electric_piano(freq: c4, gain: -6db) for 1beat`). The note's `gain` controls loudness and also shapes brightness or excitation: softer playing changes the sound, not just its level. Percussive sounds such as `pluck` and `bell` ring for their decay; sustained sounds follow note-off and their release.
 
 | Instrument | Sound and controls |
 | --- | --- |
@@ -272,8 +293,13 @@ Fourteen melodic instruments, with controls chosen for each sound. `use std/inst
 | `struck_string` | Noise-excited, pitch-compensated comb string; `ring`, `tone`, `release`. |
 | `metal_bar` | A struck bank of inharmonic bar modes; `tone`, `decay`. |
 | `morph_pad` | Morphing harmonic wavetables; `colour`, `motion`, `attack`, `release`. |
+| `west_coast_pluck` | `complex_osc` struck through `low_pass_gate`: darkens as it fades; `ratio`, `index`, `fold`, `decay`. |
+| `harmonic_drone` | `harmonic_osc` whose emphasis a `shift_random` loop moves; `beats`, `lock`, `focus`, `brightness`, `attack`, `release`. |
+| `rubber_bass` | `complex_osc` with its modulator an octave down through a driven `multimode_filter`; `growl`, `cutoff`, `sweep`, `res`, `drive`. |
+| `wandering_voice` | A melody that plays itself: a `shift_random` loop snapped to a `scale` by `quantize`, played by `complex_osc` through `low_pass_gate`; `scale` (0 pentatonic, 1 major, 2 minor), `range`, `beats`, `lock`. |
+| `ring_bell` | Two sines multiplied through `cross_mod`; `ratio`, `metal`, `mode` (0 ring, 0.5 wavefold, 1 diode), `decay`. |
 
-`std/instruments`, `std/drums` and `std/fx` are shelves: take presets by name, rather than importing the whole shelf. Each copied preset stands alone. `niminal presets` lists the catalog, `--kind instrument` or `--kind fx` narrows it, and `niminal presets electric_piano` prints editable source with its helpers. Editor completions offer both an import and a copy of the source.
+`std/instruments`, `std/drums` and `std/fx` are shelves: take presets by name, rather than importing the whole shelf. Each copied preset stands alone: one wired from `std/blocks` brings the blocks it uses, and only those, so the other block names stay free for your own. `niminal presets` lists the catalog, `--kind instrument` or `--kind fx` narrows it, and `niminal presets electric_piano` prints editable source with its helpers. Editor completions offer both an import and a copy of the source.
 
 ## std/drums
 
@@ -299,14 +325,15 @@ For a complete drum-machine voice, call `drum(...)` inside your own instrument. 
 
 ## std/fx
 
-Twenty-three effects, taken by name. Effects read `in`; most provide a dry/wet `mix`.
+Twenty-one effects, taken by name. Effects read `in`; most provide a dry/wet `mix`.
 
 | Family | Effects |
 | --- | --- |
-| Filters | `lowpass`, `ladder_lowpass`, `highpass`, `bandpass`, `band_cut`: cutoff, resonance and optional beat-synced sweep. `vowel_filter`: A/E/I/O/U formants, optional beat-synced movement. |
+| Filters | `filter`: `multimode_filter` with a `response` control that moves from low-pass through band-pass and high-pass to a notch, plus `resonance`, `drive` and an optional beat-synced sweep. `ladder_lowpass`: a transistor-style ladder with the same sweep. `vowel_filter`: A/E/I/O/U formants, optional beat-synced movement. |
 | Tone and dynamics | `equalizer`, `compressor` (knee and stereo linking), `overdrive` (4× oversampling), `lofi`, `soft_clip`. |
 | Space | `echo` (independent left/right times), `room_reverb`, `studio_reverb`. |
 | Modulation | `ensemble` (chorus), `swirl` (phaser), `tremolo`; movement follows the tempo. |
+| Ring modulation | `ring_mod`: the sound times a sine (`freq`); `character` sweeps ring, wavefold, diode. |
 | Focused performance effects | `stutter`, `frozen`, `slice_shuffle`, `trance_gate`. |
 | Performance rack | `glitch`: stutter, rewind, slow-down, scatter, freeze, crush and gate in a fixed chain. |
 
@@ -374,6 +401,11 @@ cargo run -p niminal-lang --example audition -- target/audition
 ```
 
 Open `target/audition/index.html` for each instrument's default, soft, short and long notes, plus melodic chords. Preview gain targets -20 dBFS RMS over the default note's first half-second, capped by a -6 dBFS peak and 18 dB of boost. That gain is fixed across each preset's variations, preserving velocity differences. `report.csv` contains the original levels and preview gains, and each patch is saved beside its audio. The preview is for comparison; it does not change the preset's output gain.
+
+## Migrating to language 0.4
+
+- Replace the `lowpass`, `highpass`, `bandpass` and `band_cut` effects with `filter`. Its `response` picks the shape: 0 for low-pass, 1/3 band-pass, 2/3 high-pass, 1 notch. `cutoff`, `sweep_beats`, `sweep_depth` and `mix` are unchanged, and `resonance` now runs to 1. Its filter is a state-variable one, so it sounds a little different from the old biquads; for the old sound, use `in.lpf(...)`, `in.hpf(...)`, `in.bpf(...)` or `in.notch(...)` in your own `fx`.
+- A function's named results may now share a name with a control. A control called `value` no longer stops `contour` working.
 
 ## Migrating to language 0.3
 

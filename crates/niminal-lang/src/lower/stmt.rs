@@ -343,7 +343,7 @@ impl Lower<'_> {
                 name.span,
             )),
             _ => {
-                self.names.check_local_in(name, self.in_fn)?;
+                self.check_bound(name)?;
                 let v = if reads_prev_of(value, &name.name) && self.in_send.is_none() {
                     self.feedback(name, value)?
                 } else {
@@ -497,7 +497,7 @@ impl Lower<'_> {
             ));
         }
         for (name, entry) in names.iter().zip(entries) {
-            self.names.check_local_in(name, self.in_fn)?;
+            self.check_bound(name)?;
             self.scope.insert(name.name.clone(), entry);
         }
         Ok(())

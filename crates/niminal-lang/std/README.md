@@ -81,3 +81,29 @@ one gives a maximum block RMS change of 0.162508 and a digest energy change of
 +3.062 dB. The final rendered tail grew by 16,157 samples compared with the
 original. The other examples and scripted live session remained within their
 tolerances. These numerical checks do not constitute listening approval.
+
+## Voice modules (language 0.4)
+
+`multimode_filter`, `low_pass_gate`, `complex_osc`, `shift_random`, `texture`, `quantize`, `vocoder` and `cross_mod`
+are written to one contract, which later modules should follow:
+
+- Every parameter takes a signal. Pitches and times are in their units, timbre controls run 0..1.
+- Every input is clamped inside the block, so any value, including NaN or infinity, gives a finite output.
+  Add each new block to `the_voice_modules_stay_finite_under_extreme_modulation` (or
+  `the_processing_modules_stay_finite_under_extreme_modulation`) in `tests/blocks.rs`, and to the no-allocation
+  tests in `tests/arrays_no_alloc.rs`.
+- Outputs sit near ±1 for a full-scale input, so blocks chain without gain staging. Say in the doc comment
+  where one can go higher (resonance, folding) and where it stops.
+- Several jacks are several named results (`-> (low, band, high, notch)`). Results may share a name with
+  a control; private locals still start with `_`.
+- Called with only its required inputs, a block makes a sound worth hearing.
+
+A shelf may `use std/blocks`. A preset taken from it brings only the blocks it calls (the expander
+prunes a module that only other modules use), and the catalog copies those blocks with the preset. A
+preset's own parameter cannot share a name with a block it calls: `rubber_bass` uses `perc` rather than
+`contour` because `fm_keys` has a `contour` control.
+
+The filter effects `lowpass`, `highpass`, `bandpass` and `band_cut` became one `filter` built on
+`multimode_filter`, with a `response` control. The new patches are `west_coast_pluck`,
+`harmonic_drone` and `rubber_bass` in `synths/modular`. Numerical tests pass for all of them; they
+have not been listened to.

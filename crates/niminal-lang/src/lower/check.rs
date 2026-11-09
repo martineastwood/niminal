@@ -163,11 +163,16 @@ pub(super) fn check_fn_with(
             }
             PKind::Any | PKind::Buffer | PKind::Function => None,
         };
+        // A choice is checked with its first option, so a call in the body can pass it on.
+        let written = match &kind {
+            PKind::Choice(options) => options[0].clone(),
+            _ => p.name.name.clone(),
+        };
         given.push(v.map(|v| {
             (
                 v,
                 Expr {
-                    kind: ExprKind::Name(p.name.name.clone()),
+                    kind: ExprKind::Name(written),
                     span: p.name.span,
                 },
             )

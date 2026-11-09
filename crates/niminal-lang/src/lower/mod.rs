@@ -323,6 +323,29 @@ impl Names {
     }
 }
 
+impl Lower<'_> {
+    /// An error if a local may not be called `name` here. A function's own results are exempt from
+    /// clashing with controls, buses and functions, as its parameters are.
+    pub(super) fn check_bound(&self, name: &Ident) -> Res<()> {
+        if self.in_fn && self.fn_results.contains(&name.name) {
+            return if crate::names::is_reserved_local(&name.name) {
+                Err(reserved(name))
+            } else {
+                Ok(())
+            };
+        }
+        self.names.check_local_in(name, self.in_fn)
+    }
+}
+
+/// The names of a function's named results, if it has them.
+pub(crate) fn result_names(def: &FnDef) -> Vec<String> {
+    match &def.result {
+        FnResult::Named(outputs) => outputs.iter().map(|o| o.name.clone()).collect(),
+        _ => Vec::new(),
+    }
+}
+
 pub(crate) fn reserved(name: &Ident) -> Diagnostic {
     Diagnostic::new(format!("`{}` is a reserved word", name.name), name.span)
 }
@@ -466,6 +489,11 @@ pub(crate) struct Lower<'a> {
     fn_stack: Vec<String>,
     /// Set while lowering a function's body, which can't send to a bus or read `note`.
     in_fn: bool,
+    /// The named results of the function being lowered: part of its signature, like its parameters, so
+    /// they may share a name with a control.
+    fn_results: Vec<String>,
+    /// The option each choice parameter of the function being lowered holds, so a call inside it can pass the choice on.
+    chosen: HashMap<String, String>,
     /// While inside an `if` that changes while playing: 1 where the branch is taken. Writes to shared
     /// buffers only happen then.
     write_gate: Option<Src>,
@@ -557,6 +585,8 @@ impl<'a> Lower<'a> {
             param_rates: Vec::new(),
             fn_stack: Vec::new(),
             in_fn: false,
+            fn_results: Vec::new(),
+            chosen: HashMap::new(),
             write_gate: None,
         }
     }

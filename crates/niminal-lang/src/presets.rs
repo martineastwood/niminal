@@ -17,6 +17,9 @@ const VOICES: [&str; 1] = ["drum"];
 /// The modules made of presets. A plain `use` of one is an error, because it would add every preset.
 pub const SHELVES: [&str; 3] = ["std/instruments", "std/drums", "std/fx"];
 
+/// The module of building blocks a shelf may `use`. A copy of a preset carries the blocks it calls.
+const BLOCKS: &str = "std/blocks";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresetKind {
     Instrument,
@@ -70,13 +73,56 @@ pub fn of_shelf(shelf: &str) -> impl Iterator<Item = &'static Preset> + '_ {
     all().iter().filter(move |p| p.shelf == shelf)
 }
 
-fn parse_shelf(shelf: &'static str) -> Vec<Preset> {
-    let text = embedded(shelf).expect("a shelf is a module that comes with niminal");
-    let blocks: Vec<&str> = text
-        .split("\n\n")
+/// Whether `text` calls `name`: `name(` not preceded by part of a longer name.
+fn calls(text: &str, name: &str) -> bool {
+    let call = format!("{name}(");
+    text.match_indices(&call).any(|(at, _)| {
+        !text[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+    })
+}
+
+/// The text of a module split into its blank-line separated blocks.
+fn blocks_of(text: &str) -> Vec<&str> {
+    text.split("\n\n")
         .map(str::trim)
         .filter(|b| !b.is_empty())
-        .collect();
+        .collect()
+}
+
+/// The functions `block` calls among `helpers`, and the ones those call, in the order `helpers` gives them.
+fn helpers_of<'a>(block: &str, helpers: &[(String, &'a str)]) -> Vec<&'a str> {
+    let mut wanted: Vec<bool> = helpers.iter().map(|(name, _)| calls(block, name)).collect();
+    loop {
+        let more: Vec<usize> = (0..helpers.len())
+            .filter(|&i| !wanted[i])
+            .filter(|&i| {
+                helpers
+                    .iter()
+                    .zip(&wanted)
+                    .any(|((_, body), w)| *w && calls(body, &helpers[i].0))
+            })
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        for i in more {
+            wanted[i] = true;
+        }
+    }
+    helpers
+        .iter()
+        .zip(wanted)
+        .filter(|(_, w)| *w)
+        .map(|((_, body), _)| *body)
+        .collect()
+}
+
+fn parse_shelf(shelf: &'static str) -> Vec<Preset> {
+    let text = embedded(shelf).expect("a shelf is a module that comes with niminal");
+    let blocks = blocks_of(text);
     let defines = |block: &str, keyword: &str| -> Option<String> {
         block.lines().find_map(|line| {
             let rest = line.strip_prefix(keyword)?.strip_prefix(' ')?;
@@ -87,8 +133,15 @@ fn parse_shelf(shelf: &'static str) -> Vec<Preset> {
             (!name.is_empty()).then_some(name)
         })
     };
+    let uses_blocks = blocks.iter().any(|b| b.lines().any(|l| l.trim() == format!("use {BLOCKS}")));
+    let library = if uses_blocks {
+        blocks_of(embedded(BLOCKS).expect("std/blocks comes with niminal"))
+    } else {
+        Vec::new()
+    };
     let helpers: Vec<(String, &str)> = blocks
         .iter()
+        .chain(&library)
         .filter_map(|b| defines(b, "fn").map(|name| (name, *b)))
         .collect();
     let mut folder = String::new();
@@ -111,10 +164,9 @@ fn parse_shelf(shelf: &'static str) -> Vec<Preset> {
             .collect::<Vec<_>>()
             .join(" ");
         let source = format!("{block}\n");
-        let helpers = helpers
-            .iter()
-            .filter(|(name, _)| block.contains(&format!("{name}(")))
-            .map(|(_, b)| format!("{b}\n"))
+        let helpers = helpers_of(block, &helpers)
+            .into_iter()
+            .map(|b| format!("{b}\n"))
             .chain(
                 VOICES
                     .iter()

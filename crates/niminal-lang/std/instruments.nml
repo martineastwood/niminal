@@ -1,6 +1,9 @@
 // Finished melodic instruments: `use std/instruments.{bass, electric_piano, organ}`.
 // For drums use std/drums. Each sound stands alone when copied into a project.
 // gain is the note's loudness and also shapes brightness or excitation.
+// The modular patches are wired from std/blocks; a copy carries the blocks it uses.
+
+use std/blocks
 
 // folder: synths/bass
 
@@ -260,4 +263,112 @@ instr morph_pad(
   position = (colour + osc(sine, 0.15hz) * motion * 0.3).max(0).min(1)
   voice = osc(tables, freq, position: position) + osc(tables, freq * 1.003, position: position) * 0.5
   voice.lpf(cutoff: 800hz + (1 * gain).max(0).min(1) * 5khz) * env[0 attack 1 | release 0] * 0.18 * gain
+}
+
+// folder: synths/modular
+
+/// A struck, rubbery tone: a complex oscillator (`ratio` and `index` set its FM, `fold` its brightness)
+/// struck through a low-pass gate, so each note darkens as it fades over `decay`. Harder notes fold and
+/// modulate further.
+instr west_coast_pluck(
+  freq: hz,
+  ratio: 0.5..8 = 2,
+  index: 0..8 = 1.5,
+  fold: 0..1 = 0.4,
+  decay: 50ms..4sec = 600ms,
+  gain: db = 0db
+) {
+  hit = (1 * gain).max(0).min(1)
+  voice = complex_osc(freq, ratio: ratio, index: index * (0.4 + hit * 0.6), fold: fold * (0.3 + hit * 0.7))
+  voice.low_pass_gate(decay: decay).sound * env[1 | 40ms 0] * 0.5 * gain
+}
+
+// folder: synths/modular
+
+/// A drone whose overtones wander: a harmonic oscillator whose emphasis is moved every `beats` beats by a
+/// looping random sequence, gliding between places. `lock` keeps the wandering to a repeating path (1) or
+/// lets it change (0); `focus` is how much the moving overtones stand out. Harder notes are brighter.
+instr harmonic_drone(
+  freq: hz,
+  beats: 0.25..16 = 2,
+  lock: 0..1 = 0.8,
+  focus: 0..1 = 0.7,
+  brightness: 0..1 = 0.5,
+  attack: 20ms..4sec = 600ms,
+  release: 50ms..8sec = 2sec,
+  gain: db = 0db
+) {
+  hit = (1 * gain).max(0).min(1)
+  path = shift_random(clock: clock_div(beats), lock: lock, seed: 7)
+  centre = (path.value * 0.5 + 0.5).lag(clock.beat_length * beats.max(0.25) * 0.5)
+  voice = harmonic_osc(freq, count: 16, brightness: brightness * (0.6 + hit * 0.4), centre: centre, width: 3, focus: focus)
+  voice * env[0 attack 1 | release 0] * 0.4 * gain
+}
+
+// folder: synths/modular
+
+/// A bass from one complex oscillator, its modulator an octave down for weight, through a driven,
+/// resonant filter that an envelope opens on each note. `growl` is the FM depth, `cutoff` where the filter
+/// settles, `sweep` how far (in octaves) the envelope opens it, and `drive` how hard it saturates.
+instr rubber_bass(
+  freq: hz,
+  growl: 0..4 = 1,
+  cutoff: 40hz..4khz = 300hz,
+  sweep: 0..5 = 2.5,
+  res: 0..1 = 0.5,
+  drive: 0..1 = 0.5,
+  gain: db = 0db
+) {
+  hit = (1 * gain).max(0).min(1)
+  voice = complex_osc(freq, ratio: 0.5, index: growl * (0.5 + hit * 0.5))
+  shape = pow(perc(attack: 2ms, decay: 250ms), 2)
+  moving = cutoff * exp(shape * sweep * (0.5 + hit * 0.5) * 0.693147)
+  voice.multimode_filter(cutoff: moving, res: res, drive: drive).low * env[1 | 60ms 0] * 0.34 * gain
+}
+
+// folder: synths/modular
+
+/// A melody that plays itself around the note: a looping random sequence (`beats` per step, `lock` 1 repeats it exactly,
+/// 0 changes every step) snapped to a `scale` (0 pentatonic, 1 major, 2 minor) and spread over `range` semitones, played by a complex oscillator through a
+/// low-pass gate, which also strikes as the note begins. Steps where the sequence falls low are rests, so the rhythm repeats with the tune.
+/// Change `seed` in a copy for a different tune. Hold a note for as long as it should wander.
+instr wandering_voice(
+  freq: hz,
+  scale: 0..2 = 0,
+  range: 1..24 = 12,
+  beats: 0.125..4 = 0.5,
+  lock: 0..1 = 0.8,
+  ratio: 0.5..8 = 2,
+  index: 0..6 = 1.5,
+  fold: 0..1 = 0.3,
+  decay: 50ms..2sec = 250ms,
+  gain: db = 0db
+) {
+  hit = (1 * gain).max(0).min(1)
+  path = shift_random(clock: clock_div(beats), lock: lock, seed: 3)
+  notes = [[0, 3, 5, 7, 10, 10, 10], [0, 2, 4, 5, 7, 9, 11], [0, 2, 3, 5, 7, 8, 10]][scale.max(0).min(2).floor]
+  semitones = quantize(path.value * range, scale: notes).lag(8ms)
+  voice = complex_osc(freq * pow(2, semitones / 12), ratio: ratio, index: index * (0.5 + hit * 0.5), fold: fold)
+  voice.low_pass_gate(ping: path.gate + perc(attack: 1ms, decay: 20ms), decay: decay).sound * env[1 | 80ms 0] * 0.5 * gain
+}
+
+// folder: synths/modular
+
+/// A struck metal tone: two sines, the second `ratio` times the pitch, multiplied together so that sum and
+/// difference tones ring out together. `metal` is how far they are mixed (harder notes sound more metallic), `mode` sweeps how (0 ring, 0.5 wavefold, 1 diode) and `decay` how
+/// long it rings.
+instr ring_bell(
+  freq: hz,
+  ratio: 1.2..4 = 2.76,
+  metal: 0..1 = 0.7,
+  mode: 0..1 = 0,
+  decay: 100ms..8sec = 2sec,
+  gain: db = 0db
+) {
+  hit = (1 * gain).max(0).min(1)
+  _a = osc(sine, freq)
+  _b = osc(sine, freq * ratio)
+  _amount = metal * (0.4 + hit * 0.6)
+  voice = scan_mix([cross_mod(_a, _b, mode: ring, amount: _amount).sound, cross_mod(_a, _b, mode: fold, amount: _amount).sound, cross_mod(_a, _b, mode: diode, amount: _amount).sound], centre: mode)
+  voice * pow(perc(attack: 1ms, decay: decay), 2) * env[1 | 30ms 0] * 0.5 * gain
 }

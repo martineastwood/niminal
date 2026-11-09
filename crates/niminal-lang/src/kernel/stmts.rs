@@ -153,6 +153,9 @@ impl Kb<'_> {
                 name.span,
             ));
         }
+        if self.frame.results.contains(&name.name) {
+            return Ok(());
+        }
         self.names.check_local_in(name, true)
     }
 

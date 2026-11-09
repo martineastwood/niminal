@@ -187,23 +187,16 @@ impl Lower<'_> {
                 given.push(None);
                 continue;
             };
+            let mut written = arg.value.clone();
             let v = if let PKind::Choice(options) = &p.kind {
-                match &arg.value.kind {
-                    ExprKind::Name(n) if options.contains(n) => {
-                        let i = options.iter().position(|o| o == n).expect("the guard checked n is an option");
-                        Datum::Sig(Sig::constant(Unit::Num, i as f64))
-                    }
-                    _ => {
-                        return Err(Diagnostic::new(
-                            format!("`{}` is one of {}", p.name.name, options.join(", ")),
-                            arg.value.span,
-                        ));
-                    }
-                }
+                let option = funcs::pick_choice(&p.name.name, options, &arg.value, &self.chosen)?;
+                let i = options.iter().position(|o| *o == option).expect("pick_choice returns an option");
+                written.kind = ExprKind::Name(option);
+                Datum::Sig(Sig::constant(Unit::Num, i as f64))
             } else {
                 self.value(&arg.value)?
             };
-            given.push(Some((v, arg.value.clone())));
+            given.push(Some((v, written)));
         }
         Ok(given)
     }
@@ -250,6 +243,21 @@ impl Lower<'_> {
         params: &[PParam],
         given: BoundFnArgs,
     ) -> Res<Datum> {
+        let results = std::mem::replace(&mut self.fn_results, super::result_names(def));
+        let chosen = std::mem::take(&mut self.chosen);
+        let body = self.fn_body_with_results(def, name, params, given);
+        self.fn_results = results;
+        self.chosen = chosen;
+        body
+    }
+
+    fn fn_body_with_results(
+        &mut self,
+        def: &FnDef,
+        name: &Ident,
+        params: &[PParam],
+        given: BoundFnArgs,
+    ) -> Res<Datum> {
         for (p, g) in params.iter().zip(given) {
             let (v, arg) = match g {
                 Some(g) => g,
@@ -276,6 +284,9 @@ impl Lower<'_> {
             };
             let v = self.check_param(&name.name, p, v, &arg)?;
             if let PKind::Choice(options) = &p.kind {
+                if let ExprKind::Name(held) = &arg.kind {
+                    self.chosen.insert(p.name.name.clone(), held.clone());
+                }
                 for (i, o) in options.iter().enumerate() {
                     self.scope
                         .insert(o.clone(), Datum::Sig(Sig::constant(Unit::Num, i as f64)));

@@ -10,7 +10,7 @@ use crate::diag::{Diagnostic, Span};
 
 /// The version of the language this build understands: `major.minor`, raised when a change would break a
 /// file written for the one before.
-pub const LANGUAGE_VERSION: (u32, u32) = (0, 3);
+pub const LANGUAGE_VERSION: (u32, u32) = (0, 4);
 
 /// `src` with its `niminal <requirement>` lines checked and blanked out.
 pub fn check(src: &str) -> Result<Cow<'_, str>, Diagnostic> {
@@ -113,17 +113,18 @@ mod tests {
         assert!(run("niminal 0.1\nx\n").is_ok());
         assert!(run("niminal 0.0\nx\n").is_ok());
         assert!(run("niminal 0.3\nx\n").is_ok());
-        assert!(run("niminal 0.4\nx\n").is_err());
+        assert!(run("niminal 0.4\nx\n").is_ok());
+        assert!(run("niminal 0.5\nx\n").is_err());
         assert!(run("niminal 1.0\nx\n").is_err());
     }
 
     #[test]
     fn ranges_narrow_it() {
-        assert!(run("niminal >=0.1, <0.4\n").is_ok());
-        assert!(run("niminal >0.3\n").is_err());
-        assert!(run("niminal <=0.3\n").is_ok());
+        assert!(run("niminal >=0.1, <0.5\n").is_ok());
+        assert!(run("niminal >0.4\n").is_err());
+        assert!(run("niminal <=0.4\n").is_ok());
         assert!(run("niminal <0.2\n").is_err());
-        assert!(run("niminal ==0.3\n").is_ok());
+        assert!(run("niminal ==0.4\n").is_ok());
         assert!(run("niminal >=0.0, <0.2\n").is_err());
     }
 

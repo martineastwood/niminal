@@ -317,11 +317,11 @@ fn the_shelf_effects_that_sweep_keep_to_the_beat_as_the_tempo_changes() {
         ),
         (
             shelf_insert(
-                "lowpass",
+                "ladder_lowpass",
                 &[
                     ("sweep_beats: 0.25..64 = 8", "sweep_beats: 0.25..64 = 1"),
                     ("sweep_depth: 0..4 = 0", "sweep_depth: 0..4 = 3"),
-                    ("2400hz", "300hz"),
+                    ("1200hz", "300hz"),
                 ],
             ),
             "osc(saw, 220hz)",

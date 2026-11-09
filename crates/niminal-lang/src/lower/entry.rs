@@ -196,6 +196,7 @@ pub(crate) fn compile_instr(
                         Datum::Sig(Sig::constant(Unit::Num, i as f64)),
                     );
                 }
+                lower.chosen.insert(p.name.name.clone(), n.clone());
                 Datum::Sig(Sig::constant(
                     Unit::Num,
                     options.iter().position(|o| o == n).expect("the branch checked n is an option") as f64,

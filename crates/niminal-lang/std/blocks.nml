@@ -220,3 +220,348 @@ fn space_reverb(
   _level = follow(_input.map(abs(it)).max, attack: 5ms, release: 200ms)
   _coloured * (1 - duck.max(0).min(1) * (_level * 3).min(1))
 }
+
+/// A state-variable filter with all four responses at once: low, band, high and notch come from the same
+/// two integrators, so they can be crossfaded, summed or sent to different places. Stable for any cutoff
+/// (held to 10hz..45% of the sample rate) and any resonance, including changes at audio rate; stereo input
+/// is filtered channel by channel. Resonance 1 rings long without running away: above 0.6 the filter
+/// saturates more as it rises, so low and band stay near ±1.5 for a full-scale input. Band has the
+/// same gain as low at the cutoff: 0.5 at resonance 0, rising with resonance. `drive` (0..1) pushes the input into a
+/// soft clip and saturates the filter at any resonance, for a thicker, rounder sound.
+fn multimode_filter(x, cutoff: hz = 1khz, res: 0..1 = 0.2, drive: 0..1 = 0) -> (low, band, high, notch) {
+  state _s1 = x * 0
+  state _s2 = x * 0
+  _drive = drive.max(0).min(1)
+  _res = res.max(0).min(1)
+  _push = 1 + _drive * 7
+  _in = x.crossfade((x * _push).tanh, _drive)
+  _g = tan(pi * cutoff.max(10hz).min(sample_rate * 0.45) / sample_rate)
+  _k = 2 - 1.95 * _res
+  _a1 = 1 / (1 + _g * (_g + _k))
+  _v1 = _a1 * _s1 + _g * _a1 * (_in - _s2)
+  _v2 = _s2 + _g * _v1
+  _next = 2 * _v1 - _s1
+  _s1 = _next.crossfade((_next / 1.5).tanh * 1.5, _drive.max((_res - 0.6) * 2.5).min(1))
+  _s2 = 2 * _v2 - _s2
+  low = _v2
+  band = _v1
+  high = _in - _k * _v1 - _v2
+  notch = _in - _k * _v1
+}
+
+/// A low-pass gate: one control opens a filter and an amplifier together, the way a light-dependent
+/// resistor does, so a sound darkens as it fades. `ping` strikes it on each positive edge; the default, 1,
+/// strikes once as a note starts. A strike opens it in a few milliseconds and lets it close over about
+/// `decay`, quickly at first and then lingering. `level` (0..1) holds it open on top of the strikes, for a
+/// gate driven by an envelope or a slow shape. `mode` opens the filter and amplifier together (`both`), the
+/// filter alone or the amplifier alone; `res` adds a little ring. Outputs: sound, and opening (0..1) to drive other things.
+fn low_pass_gate(
+  x,
+  ping: num = 1,
+  level: 0..1 = 0,
+  decay: 10ms..10sec = 400ms,
+  res: 0..1 = 0.1,
+  mode: (both | filter | gate) = both
+) -> (sound, opening) {
+  state _light = 0
+  state _rising = 0
+  state _previous = 0
+  _high = if ping > 0 { 1 } else { 0 }
+  if _high > 0 and _previous <= 0 {
+    _rising = 1
+  }
+  _previous = _high
+  if _rising > 0 {
+    _light = _light + (1 - _light) * 0.004
+    if _light > 0.98 {
+      _light = 1
+      _rising = 0
+    }
+  } else {
+    _fall = exp(-6.9 / (decay.num.max(0.01).min(10) * sample_rate.num))
+    _light = _light * pow(_fall, 0.35 + 0.65 * _light)
+  }
+  opening = _light.max(level.max(0).min(1).smooth(5ms))
+  _cutoff = 60hz * pow(250, opening)
+  _filtered = if mode == gate { x } else { x.multimode_filter(cutoff: _cutoff, res: res.max(0).min(1) * 0.6).low }
+  sound = if mode == filter { _filtered } else { _filtered * opening * opening }
+}
+
+/// Two sines wired together: a modulator at `ratio` times `freq` bends the main sine's phase (`index` is the
+/// depth in radians, through zero) and can ring it (`am`, 0 to 1). The result goes through a sine fold:
+/// `fold` (0..1) adds bright, folded harmonics and `symmetry` (-1..1) tips the fold for even ones. Folding
+/// eases off above 2khz to keep high notes from aliasing. Whole-number and simple ratios sound harmonic;
+/// others clang like bells. Within ±1 unfolded; folding (its offset removed) peaks a little higher,
+/// and the output never passes ±1.2. Outputs: sound, and the modulator on its own.
+fn complex_osc(
+  freq: hz,
+  ratio: 0.125..16 = 2,
+  index: 0..8 = 1,
+  am: 0..1 = 0,
+  fold: 0..1 = 0,
+  symmetry: -1..1 = 0
+) -> (sound, modulator) {
+  _freq = freq.max(0hz).min(sample_rate * 0.45)
+  modulator = osc(sine, _freq * ratio.max(0.125).min(16))
+  _main = osc(sine, _freq, phase_mod: modulator * index.max(0).min(8) / 6.283185)
+  _ringed = _main.crossfade(_main * modulator, am.max(0).min(1))
+  _fold = fold.max(0).min(1) * (2khz / _freq.max(2khz))
+  _folded = sin(1.570796 * (_ringed * (1 + 5 * _fold) + symmetry.max(-1).min(1) * _fold)).dc_block
+  sound = _ringed.crossfade(_folded, (_fold * 4).min(1)).clip(level: 1.2)
+}
+
+/// A looping random sequence in the manner of a shift register. On each positive edge of `clock` it steps to
+/// the next of `length` stored values, and `lock` is the chance of keeping that value: 1 repeats the loop
+/// exactly, 0 makes every step new, and in between the loop slowly changes. The same `seed` gives the same
+/// run. Outputs: value (-1..1, held between steps) and gate, high while the clock is high on steps whose
+/// value is above 0, so the loop's rhythm repeats with its pitches. Quantize value before using it as pitch.
+fn shift_random(clock: num = 0, lock: 0..1 = 0.75, length: const int = 8, seed: const num = 0) -> (value, gate) {
+  state _register = (0..<length).map(fract(sin((it + 1) * 12.9898 + seed * 78.233) * 43758.5453) * 2 - 1)
+  state _step = 0
+  state _previous = 0
+  _draw = noise(seed: seed)
+  _chance = noise(seed: seed + 1) * 0.5 + 0.5
+  _high = if clock > 0 { 1 } else { 0 }
+  if _high > 0 and _previous <= 0 {
+    _step = (_step + 1).mod(length)
+    if _chance > lock {
+      _register[_step] = _draw
+    }
+  }
+  _previous = _high
+  value = _register[_step]
+  gate = if _high > 0 and value > 0 { 1 } else { 0 }
+}
+
+/// A cloud of grains cut from a sample or table, with every control held to a range that cannot run away.
+/// `position` (0 to 1) is where in the source the grains start and `spread` (0 to 1) scatters them either side of it,
+/// up to 400ms of the source. Each grain is `size` long (5ms to 500ms) and `density` of them start every second
+/// (1hz to 100hz); a grain is a smooth bell shape, so the cloud has no clicks. `pitch` transposes in semitones, `detune`
+/// adds up to that many semitones either way to each grain at random, and `width` spreads grains across the stereo
+/// field. The level is scaled down as the grains overlap more, so a thick cloud is no louder than a thin one. The same
+/// `seed` gives the same cloud each time. Move `position` with a slow signal, like `phasor(0.1hz)`, to scan the source.
+fn texture(
+  source: [num],
+  position: 0..1 = 0.5,
+  size: 5ms..500ms = 100ms,
+  density: 1hz..100hz = 20hz,
+  pitch: -24..24 = 0,
+  spread: 0..1 = 0.2,
+  detune: 0..12 = 0,
+  width: 0..1 = 0.5,
+  gain: 0..2 = 1,
+  seed: const num = 0
+) {
+  _size = size.max(5ms).min(500ms)
+  _density = density.max(1hz).min(100hz)
+  _overlap = (_density.num * _size.num).max(1)
+  granular(source, density: _density, duration: _size, position: position.max(0).min(1),
+    pitch: pitch.max(-24).min(24), spray: spread.max(0).min(1) * 400ms,
+    pitch_scatter: detune.max(0).min(12), spread: width.max(0).min(1),
+    gain: gain.max(0).min(2) / sqrt(_overlap), seed: seed)
+}
+
+/// Snap a note number (semitones) to the nearest note of a scale. `scale` lists the scale's notes within one octave
+/// (the default is major; `[0, 3, 5, 7, 10]` is minor pentatonic, `[0, 2, 3, 5, 7, 8, 10]` natural minor, `[0, 7]` fifths),
+/// `root` moves the scale up or down and `amount` blends between the note as it came (0) and the snapped note (1).
+/// Notes are held to ±1000 semitones. A note exactly between two scale notes goes to the lower one. Works on any value, not only pitch: `shift_random(...)
+/// .value * 12` quantized is a melody, and a slow LFO quantized is a staircase.
+fn quantize(note: num, scale: [num] = [0, 2, 4, 5, 7, 9, 11], root: -12..12 = 0, amount: 0..1 = 1) {
+  _count = scale.len * 3
+  _note = note.max(-1000).min(1000)
+  _rel = _note - root.max(-12).min(12)
+  _octave = floor(_rel / 12)
+  _within = _rel - _octave * 12
+  _degrees = for i in 0.._count - 1 { scale[i.mod(scale.len)] + 12 * (floor(i / scale.len) - 1) }
+  _distance = _degrees.map(abs(_within - it) + it * 0.000001)
+  _nearest = _distance.min
+  _chosen = for i in 0.._count - 1 { if _distance[i] <= _nearest { _degrees[i] } else { 0 } }
+  _tied = for i in 0.._count - 1 { if _distance[i] <= _nearest { 1 } else { 0 } }
+  _note.crossfade(root.max(-12).min(12) + _octave * 12 + _chosen.sum / _tied.sum.max(1), amount.max(0).min(1))
+}
+
+/// A channel vocoder: the loudness of `modulator` in each of `bands` frequency bands (from `low` to `high`, spaced
+/// evenly in pitch) shapes the same bands of `carrier`, so a voice speaks through a synth. Use a rich carrier,
+/// such as a saw or a chord. `width` narrows the bands (more is sharper), `attack` and `release` set how fast
+/// each band follows the modulator, and `hiss` lets the modulator's consonants through as noise. Stereo
+/// inputs are mixed to mono.
+fn vocoder(
+  carrier,
+  modulator,
+  bands: const int = 16,
+  low: 40hz..2khz = 120hz,
+  high: 1khz..16khz = 8khz,
+  width: 0.5..8 = 3,
+  attack: 1ms..100ms = 4ms,
+  release: 5ms..500ms = 40ms,
+  hiss: 0..1 = 0.3
+) {
+  _low = low.max(40hz).min(2khz)
+  _high = high.max(_low * 2).min(sample_rate * 0.4)
+  _centres = (0..<bands).map(_low * pow(_high / _low, it / (bands - 1).max(1)))
+  _res = width.max(0.5).min(8) * 0.15
+  _speech = modulator.sum
+  _bands = _speech.bpf(_centres, res: _res).follow(attack: attack.max(1ms).min(100ms), release: release.max(5ms).min(500ms))
+  _voiced = (carrier.sum.bpf(_centres, res: _res) * _bands).sum
+  _hissy = noise() * _speech.hpf(_high * 0.7).follow(attack: 2ms, release: 20ms) * hiss.max(0).min(1)
+  (_voiced * 4 / sqrt(bands) + _hissy).clip(level: 1.5)
+}
+
+/// Two signals into one, the way a mixer of ring modulators and folders does. Inputs `a` and `b` are held to ±16.
+/// `ring` multiplies them, `fold` lets `b`'s size push `a` into a wavefolder, and `diode` multiplies `a` by `b` and by
+/// the positive half of `b`, so `a` also comes through while `b` is positive, with rougher overtones. Silence in `a` is
+/// silence out in every mode, and `ring` and `diode` are silent when `b` is too. `amount` (0 to 1) blends from `a` untouched to the full effect. `aux`
+/// is the plain product of the two, to use on its own. Outputs stay within ±1.2.
+fn cross_mod(
+  a,
+  b,
+  mode: (ring | fold | diode) = ring,
+  amount: 0..1 = 0.5
+) -> (sound, aux) {
+  _a = a.max(-16).min(16)
+  _b = b.max(-16).min(16)
+  _amount = amount.max(0).min(1)
+  _ring = _a * _b
+  _fold = sin(1.570796 * _a * (1 + 6 * _amount * abs(_b))).dc_block
+  _diode = _a * (_b * 0.5 + _b.max(0))
+  _wet = if mode == ring { _ring } else { if mode == fold { _fold } else { _diode } }
+  sound = _a.crossfade(_wet, _amount).clip(level: 1.2)
+  aux = _ring.clip(level: 1.2)
+}
+
+/// Follow a signal with separate `rise` and `fall` times, so it climbs quickly and falls slowly, or the other way round.
+/// It works on any signal: smooth a stepped random value, turn a gate into an envelope, add portamento to a pitch,
+/// or make a sound swell in and decay out. `smooth` takes the time to cover about two thirds of the distance, with fast
+/// moves starting quickly and slowing down; `linear` takes that time to travel a full 1.0 at a steady rate. A time of 0
+/// follows at once. Stereo signals are followed channel by channel.
+fn slew(x, rise: 0sec..60sec = 10ms, fall: 0sec..60sec = 100ms, shape: (smooth | linear) = smooth) {
+  state _y = x * 0
+  _x = x.max(-1000000).min(1000000)
+  _diff = _x - _y
+  _rising = (_diff * 1000000000).max(-1).min(1) * 0.5 + 0.5
+  _time = fall.num.max(0).min(60) + (rise.num.max(0).min(60) - fall.num.max(0).min(60)) * _rising
+  _samples = _time * sample_rate.num
+  if shape == smooth {
+    _y = _y + _diff * (1 - exp(0 - 1 / _samples.max(0.0001)))
+  } else {
+    _step = 1 / _samples.max(1)
+    _y = _y + _diff.max(0 - _step).min(_step)
+  }
+  _y
+}
+
+/// A band-limited oscillator that morphs through four shapes: `shape` 0 is a sine, 1/3 a triangle, 2/3 a saw and 1 a
+/// pulse, with the shapes in between blended. `width` is the pulse's duty cycle (5% to 95%). Outputs: sound
+/// (within ±1.3: band-limited shapes overshoot a little, most near the top of the range) and sub, a sine an octave below. Frequencies are held to 45% of the sample rate.
+fn morph_osc(freq: hz, shape: 0..1 = 0, width: 0.05..0.95 = 0.5) -> (sound, sub) {
+  _freq = freq.max(0hz).min(sample_rate * 0.45)
+  _width = width.max(0.05).min(0.95)
+  _pulse = (osc(pulse, _freq, width: _width) - (2 * _width - 1)) / (1 + abs(2 * _width - 1))
+  sound = scan_mix([osc(sine, _freq), osc(tri, _freq), osc(saw, _freq), _pulse], centre: shape.max(0).min(1))
+  sub = osc(sine, _freq * 0.5)
+}
+
+/// Fold a signal back on itself: a waveshaper that turns a plain tone into a rich one. `amount` is how hard it is
+/// pushed (0 leaves the signal alone, 1 folds it several times) and `symmetry` shifts the fold so even harmonics
+/// appear. Two folds in a row, the second gentler, give the Buchla and Serge character. Folding makes harmonics
+/// above the sample rate that alias; for a clean sound run it inside `oversample(4) { ... }`. Output stays within ±1.2.
+fn wavefolder(x, amount: 0..1 = 0.3, symmetry: -1..1 = 0) {
+  _x = x.max(-16).min(16)
+  _amount = amount.max(0).min(1)
+  _shift = symmetry.max(-1).min(1) * _amount
+  _first = sin(1.570796 * (_x * (1 + 4 * _amount) + _shift))
+  _second = sin(1.570796 * (_first * (1 + 2 * _amount) + _shift * 0.5))
+  _x.crossfade(_second.dc_block, (_amount * 4).min(1)).clip(level: 1.2)
+}
+
+/// A low-frequency oscillator with four outputs a fixed phase apart, for motion that moves around a stereo or
+/// surround space or drives several controls out of step. `rate` is in hz (for the tempo use
+/// `1hz * clock.bpm / 60 / beats`). `shape` is where the peak falls in each cycle (a ramp at 0 or 1, a triangle at 0.5),
+/// `smooth` rounds the corners towards a sine, and `shift` is the phase between neighbouring outputs in cycles:
+/// 0.25 gives four quarter-turns, 0 gives four copies. Outputs run from -1 to 1.
+fn multi_lfo(
+  rate: 0.01hz..200hz = 1hz,
+  shape: 0..1 = 0.5,
+  smooth: 0..1 = 0.5,
+  shift: 0..1 = 0.25
+) -> (a, b, c, d) {
+  _phase = phasor(rate.max(0.01hz).min(200hz))
+  _rise = shape.max(0.02).min(0.98)
+  _round = smooth.max(0).min(1)
+  _shift = shift.max(0).min(1)
+  _all = for i in 0..<4 {
+    _p = (_phase + i * _shift).mod(1)
+    _t = (_p / _rise).min((1 - _p) / (1 - _rise)).max(0).min(1)
+    _t.crossfade(0.5 + 0.5 * sin(3.141593 * (_t - 0.5)), _round) * 2 - 1
+  }
+  a = _all[0]
+  b = _all[1]
+  c = _all[2]
+  d = _all[3]
+}
+
+/// Three band-pass peaks that move together, the way the throat shapes a voice: put a sound through it and it
+/// takes on vowels. `freq` is the lowest peak, `span` spreads the other two above it (0 close together, 1 far apart),
+/// `res` narrows the peaks and `tilt` favours the low peak (-1) or the high one (1). Outputs: sound (the three mixed)
+/// and low, mid and high, each peak on its own to send elsewhere. Stable for any setting; sound stays within ±2.
+fn formant_filter(
+  x,
+  freq: 100hz..4khz = 600hz,
+  span: 0..1 = 0.5,
+  res: 0..1 = 0.6,
+  tilt: -1..1 = 0
+) -> (sound, low, mid, high) {
+  _f1 = freq.max(100hz).min(4khz)
+  _f2 = _f1 * (1.5 + span.max(0).min(1) * 2.5)
+  _f3 = _f2 * (1.2 + span.max(0).min(1) * 0.8)
+  _res = res.max(0).min(1)
+  _gain = 1 / (0.5 + _res)
+  low = x.multimode_filter(cutoff: _f1, res: _res).band * _gain
+  mid = x.multimode_filter(cutoff: _f2, res: _res).band * _gain
+  high = x.multimode_filter(cutoff: _f3, res: _res).band * _gain
+  _tilt = tilt.max(-1).min(1)
+  sound = (low * (1 - _tilt * 0.5) + mid * 0.7 + high * (0.5 + _tilt * 0.5)).clip(level: 2)
+}
+
+/// A random source for tunes and rhythms, in the manner of a stochastic sampler. Each rising edge of `clock` steps
+/// through `length` stored draws. `deja_vu` is the chance of keeping each draw: 1 repeats the loop exactly, 0 makes every
+/// step new, and in between it changes slowly. The draws are stored raw and shaped on the way out, so `spread` (how
+/// far the values range, 0 to 1) and `bias` (where they centre, -1 to 1) can be moved while a loop plays. `steps` is
+/// 1 for values held until the next step and lower for glides that take longer (0 slides across the whole step).
+/// `density` is the share of steps that give a gate. The same `seed` gives the same run. Outputs: value (-1..1)
+/// and gate, high while the clock is high on steps that have one. Quantize value before using it as pitch.
+fn random_source(
+  clock: num = 0,
+  spread: 0..1 = 0.5,
+  bias: -1..1 = 0,
+  steps: 0..1 = 1,
+  deja_vu: 0..1 = 0.5,
+  density: 0..1 = 1,
+  length: const int = 8,
+  seed: const num = 0
+) -> (value, gate) {
+  state _draws = (0..<length).map(fract(sin((it + 1) * 12.9898 + seed * 78.233) * 43758.5453) * 2 - 1)
+  state _chances = (0..<length).map(fract(sin((it + 1) * 78.233 + seed * 12.9898 + 5) * 43758.5453))
+  state _step = 0
+  state _previous = 0
+  _new = noise(seed: seed)
+  _new_chance = noise(seed: seed + 2) * 0.5 + 0.5
+  _keep = noise(seed: seed + 1) * 0.5 + 0.5
+  _high = if clock > 0 { 1 } else { 0 }
+  if _high > 0 and _previous <= 0 {
+    _step = (_step + 1).mod(length)
+    if _keep > deja_vu.max(0).min(1) {
+      _draws[_step] = _new
+      _chances[_step] = _new_chance
+    }
+  }
+  _previous = _high
+  _bias = bias.max(-1).min(1)
+  _held = (_bias + _draws[_step] * spread.max(0).min(1) * (1 - abs(_bias))).max(-1).min(1)
+  state _out = 0
+  _samples = (1 - steps.max(0).min(1)) * clock.beat_length.num * 0.9 * sample_rate.num
+  _out = _out + (_held - _out) * (1 - exp(0 - 1 / _samples.max(0.0001)))
+  value = _out
+  gate = if _high > 0 and _chances[_step] <= density.max(0).min(1) { 1 } else { 0 }
+}
+

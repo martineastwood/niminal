@@ -7,6 +7,7 @@ impl Kb<'_> {
 
     /// Run a function's body in the current frame, which holds its parameters, and give its result.
     pub(super) fn body(&mut self, def: &FnDef) -> Res<KVal> {
+        self.frame.results = crate::lower::result_names(def);
         let n = def.body.len();
         let mut tail = None;
         for (i, stmt) in def.body.iter().enumerate() {
@@ -286,7 +287,17 @@ impl Kb<'_> {
         let positional = funcs::positional(params.iter().map(Param::required));
         let bound = funcs::bind(&name.name, name.span, &names, positional, args)?;
         let mut values = Vec::with_capacity(params.len());
+        let mut picked: Vec<Option<String>> = Vec::with_capacity(params.len());
         for (param, arg) in params.iter().zip(&bound) {
+            picked.push(match (&param.kind, arg) {
+                (Kind::Choice(options), Some(arg)) => Some(funcs::pick_choice(
+                    &param.name.name,
+                    options,
+                    &arg.value,
+                    &self.frame.chosen,
+                )?),
+                _ => None,
+            });
             values.push(match arg {
                 Some(arg) => {
                     let value = self.arg_value(param, &arg.value)?;
@@ -299,7 +310,7 @@ impl Kb<'_> {
         self.frame.scope = captures;
         self.stack.push(def.name.name.clone());
         let result = (|| {
-            for (param, given) in params.iter().zip(values) {
+            for ((param, given), pick) in params.iter().zip(values).zip(picked) {
                 let (v, span) = match given {
                     Some(g) => g,
                     None => {
@@ -316,6 +327,13 @@ impl Kb<'_> {
                 let v = self.fit_rate(param, v, span)?;
                 if let Kind::Choice(options) = &param.kind {
                     self.bind_choices(options);
+                    let held = pick.or_else(|| match param.default.as_ref().map(|d| &d.kind) {
+                        Some(ExprKind::Name(n)) => Some(n.clone()),
+                        _ => None,
+                    });
+                    if let Some(held) = held {
+                        self.frame.chosen.insert(param.name.name.clone(), held);
+                    }
                 }
                 self.frame.scope.insert(param.name.name.clone(), v);
             }
@@ -329,16 +347,9 @@ impl Kb<'_> {
     /// A parameter's argument: a choice's name is its index.
     pub(super) fn arg_value(&mut self, param: &Param, e: &Expr) -> Res<KVal> {
         if let Kind::Choice(options) = &param.kind {
-            return match &e.kind {
-                ExprKind::Name(n) if options.contains(n) => {
-                    let i = options.iter().position(|o| o == n).expect("the guard checked n is an option");
-                    Ok(KVal::Num(self.constant(Unit::Num, i as f64)))
-                }
-                _ => Err(Diagnostic::new(
-                    format!("`{}` is one of {}", param.name.name, options.join(", ")),
-                    e.span,
-                )),
-            };
+            let option = funcs::pick_choice(&param.name.name, options, e, &self.frame.chosen)?;
+            let i = options.iter().position(|o| *o == option).expect("pick_choice returns an option");
+            return Ok(KVal::Num(self.constant(Unit::Num, i as f64)));
         }
         self.value(e)
     }

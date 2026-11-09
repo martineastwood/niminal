@@ -39,7 +39,7 @@ fn f(x, cutoff: hz, res: 0..1 = 0.5, freq: init hz, size: const int = 4096, mode
 | `x` | Anything: the unit comes from each call (`fn twice(x) { x * 2 }` works on hz, db or plain numbers) |
 | `cutoff: hz` | A value in hz. The types are `num`, `int`, `hz`, `db`, `sec`, `st` and `deg` |
 | `res: 0..1`, `cut: 20hz..20khz` | A value between the ends, clamped to them |
-| `mode: (low \| band \| high)` | One of the names, known while compiling. Inside the body, `mode == low` picks a branch then |
+| `mode: (low \| band \| high)` | One of the names, known while compiling. Inside the body, `mode == low` picks a branch then. A function can pass its own choice on, `inner(x, mode: mode)`, as long as the other function has the option it holds (names are matched, not positions). A choice is fixed where the function is called or defined: a note or a control can't change it while playing, so for something to move live use a number such as `0..1` |
 | `length: division = 1/4beat` | A length of a 32nd note to four beats. Inside the body it is snapped to the nearest musical division at the current tempo: straight (1/32, 1/16, 1/8, 1/4, 1/2, 1/1), triplet (1/16t, 1/8t, 1/4t …) or dotted (1/16d, 1/8d, 1/4d …). Set it in seconds, or move it with an envelope or a ramp, and it steps through the divisions as the tempo moves. Give it a default in beats, and an effect's length follows the tempo |
 | `make: fn` | A user function name or `fn(x) { … }`, known while compiling; anonymous functions capture values from where they are written |
 | `taps: [num]` | A fixed-length array whose elements are checked as plain numbers. Signals supply their channels, including a mono signal as one element |

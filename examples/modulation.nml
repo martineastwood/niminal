@@ -1,0 +1,81 @@
+// A tour of the modulation sources and effects in std/blocks, each driving something you can hear.
+// Sources:  clock_div (gates)  shift_random + quantize (a tune)  contour (envelopes)  function_gen (a slow swell)
+//           wobble (stepped and smooth random)
+// Voices:   complex_osc -> multimode_filter, a struck low_pass_gate bell (cross_mod), and a texture cloud
+// Effects:  echo_loop (ping-pong, ducking)  multimode_filter  cross_mod  space_reverb  vocoder
+// Render: niminal render examples/modulation.nml --bars 8 --out modulation.wav
+// For stereo_echo, harmonic_bank and scan_mix see examples/rig.nml.
+niminal 0.4
+config { channels: stereo }
+tempo 112bpm
+
+use std/blocks
+
+bus voice_bus: stereo
+
+const body = harmonics([1, 0.5, 0.3, 0.2, 0.1], size: 512)
+
+// Everything here is a signal, so any source can drive any control. One line per idea.
+instr lead(freq: hz) {
+  // Gates that follow the transport: eighths, and a dotted quarter that drifts against the bar.
+  step = clock_div(1/2, width: 0.4)
+  slow = clock_div(3/2, width: 0.25)
+
+  // A looping random tune. `lock` is how much repeats; quantize snaps it to a scale, so it is always in key.
+  tune = shift_random(clock: step, lock: 0.85, seed: 9)
+  tuned = freq * pow(2, quantize(tune.value * 7, scale: [0, 2, 3, 5, 7, 8, 10]) / 12)
+
+  // Envelopes: one struck by every step, a slower one by the dotted quarter.
+  pluck = contour(trigger: step, rise: 2ms, fall: 220ms, curve: 2)
+  bloom = contour(trigger: slow, rise: 150ms, fall: 600ms)
+
+  // A swell that opens the filter once every 16 beats, and two kinds of random: stepped jitter, smooth drift.
+  swell = function_gen(cycle: 16, rise: 0.7)
+  jitter = wobble(beats: 1/4, shape: stepped, seed: 3)
+  drift = wobble(beats: 2, shape: smooth, seed: 5)
+
+  // The voice: FM and folding deepen with the bloom, the filter opens with the swell and each pluck.
+  raw = complex_osc(tuned, ratio: 1.5, index: 0.8 + bloom.value * 2, fold: bloom.value * 0.5 + jitter * 0.05)
+  filtered = raw.multimode_filter(cutoff: 250hz * pow(10, swell * 0.8 + pluck.value * 0.5), res: 0.35 + drift * 0.15, drive: 0.2).low
+  voice = filtered * (0.15 + pluck.value * 0.85) * env[0 5ms 1 | 200ms 0] * 0.5
+  voice_bus += voice.pan(angle: drift * 30deg)
+}
+
+// A bell struck by the dotted quarter: a ring-modulated pair of sines through a low-pass gate, which darkens as it fades.
+instr bell(freq: hz) {
+  slow = clock_div(3/2, width: 0.25)
+  pair = cross_mod(osc(sine, freq), osc(sine, freq * 2.76), mode: ring, amount: 0.8).sound
+  struck = pair.low_pass_gate(ping: slow, decay: 900ms).sound
+  voice_bus += (struck * env[0 5ms 1 | 300ms 0] * 0.4).pan(angle: 0deg)
+}
+
+// A grain cloud whose position rides the same swell: where in the source the grains come from follows the filter opening.
+instr haze() {
+  swell = function_gen(cycle: 16, rise: 0.7)
+  cloud = texture(body, position: swell, size: 160ms, density: 24hz, pitch: -12, spread: 0.3, detune: 2, width: 0.8)
+  voice_bus += cloud * env[0 1sec 1 | 1sec 0] * 0.35
+}
+
+// Effects on the whole mix: dotted-eighth ping-pong echoes that duck under the playing, darkened and ring-coloured,
+// then a room that opens and closes with the swell.
+fx space {
+  swell = function_gen(cycle: 16, rise: 0.7)
+  drift = wobble(beats: 4, shape: smooth, seed: 8)
+  echoes = voice_bus.echo_loop(time: 3/16beat, feedback: 0.55, filter: 2.5khz, duck: 0.5, ping_pong: on)
+  dark = echoes.multimode_filter(cutoff: 900hz * pow(6, swell), res: 0.2).low
+  colour = cross_mod(dark, osc(sine, 220hz), mode: diode, amount: 0.15 + drift.abs * 0.1).sound
+  room = voice_bus + dark * 0.5 + colour * 0.15
+  ambience = room.space_reverb(size: 0.4 + swell * 0.3, decay: 0.7, absorption: 0.5, motion: 0.3, tilt: drift * 0.3, duck: 0.4)
+  out = room + ambience * 0.25
+}
+
+// A second effect: the mix speaks through a saw drone, band by band.
+fx talk {
+  drone = osc(saw, 55hz) + osc(saw, 82.4hz) + osc(saw, 110.3hz)
+  out = vocoder(drone * 0.3, voice_bus, bands: 14, hiss: 0.1) * 0.3
+}
+
+// Times are relative to where the file is evaluated, so evaluate it on a bar line.
+at +0bars lead(freq: c3) for 8bars
+at +0bars haze() for 8bars
+at +2bars bell(freq: c5) for 6bars

@@ -1,0 +1,42 @@
+// The building blocks and patches built from them, in one four-bar piece: a self-playing melody over a rubbery bass,
+// plucks and bells, a grain cloud, and a synth that speaks. Every block takes signals, so any control can be driven.
+// Render: niminal render examples/modular.nml --bars 4 --out modular.wav
+config { channels: stereo }
+tempo 120bpm
+
+use std/blocks
+use std/instruments.{wandering_voice, rubber_bass, west_coast_pluck, ring_bell}
+
+// A grain cloud cut from a table: `position` scans it, `spread` scatters the grains, and the level stays steady
+// however thick the cloud gets.
+const body = harmonics([1, 0.5, 0.3, 0.2, 0.1], size: 512)
+instr cloud() {
+  voice = texture(body, position: phasor(0.25hz), size: 140ms, density: 30hz, pitch: -12, spread: 0.4, detune: 2, width: 0.8)
+  voice * env[0 1sec 1 | 1sec 0] * 0.4
+}
+
+// A synth that speaks: bursts of noise (the modulator) shape a chord of saws (the carrier) band by band.
+instr robot(freq: hz) {
+  carrier = osc(saw, freq) + osc(saw, freq * 1.5) + osc(saw, freq * 2.01)
+  modulator = noise() * clock_div(1/2, width: 0.3).smooth(8ms)
+  voice = vocoder(carrier * 0.3, modulator, bands: 16, hiss: 0.2)
+  voice * env[1 | 100ms 0] * 0.5
+}
+
+// Quantize is for any value: here a slow random walk is snapped to a scale and plays a bell on every step.
+instr stepping_bells(freq: hz) {
+  walk = shift_random(clock: clock_div(1/2), lock: 0.7, seed: 11)
+  step = quantize(walk.value * 10, scale: [0, 2, 3, 5, 7, 8, 10])
+  tone = osc(sine, freq * pow(2, step / 12))
+  cross_mod(tone, osc(sine, freq * 2.76), mode: diode, amount: 0.6).sound * perc(decay: 600ms) * 0.3
+}
+
+// Times are relative to where the file is evaluated, so the piece builds the same way live: evaluate it on a bar line.
+at +0bars wandering_voice(freq: c4, scale: 2, lock: 0.9, gain: -6db) for 4bars   // the self-playing melody, all the way through
+at +0bars rubber_bass(freq: c2, growl: 1.2, gain: -3db) for 1bar                 // the bass opens ...
+at +2bars rubber_bass(freq: g1, growl: 1.2, gain: -3db) for 1bar                 // ... and answers a fifth down
+at +0bars west_coast_pluck(freq: g3, fold: 0.5) for 1bar
+at +1bars stepping_bells(freq: c4) for 3bars                                     // snapped random walk on bells
+at +1bars cloud() for 3bars                                                      // a grain cloud swells underneath
+at +2bars robot(freq: c3) for 2bars                                              // the synth starts to speak
+at +2bars ring_bell(freq: c5, mode: 0.5, decay: 3sec, gain: -8db) for 2bars
