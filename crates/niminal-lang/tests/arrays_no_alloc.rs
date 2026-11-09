@@ -466,3 +466,32 @@ fn the_clock_and_logic_blocks_do_not_allocate_while_rendering() {
     assert_eq!(ALLOCATIONS.with(Cell::get), 0);
     assert!(loudest > 1e-3, "{loudest}");
 }
+
+#[test]
+fn the_row_sequencer_does_not_allocate_while_rendering() {
+    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n seq = row_sequencer(impulse(8hz), reset: osc(square, 0.3hz), values: [0, 3, 7, 12], extras: [0.2, 0.5], durations: [2, 1, 1], repeats: [1, 2], modes: [1, 2, 3], gate_length: 0.4)\n tone = osc(saw, 110hz * pow(2, seq.value / 12)) * 0.3\n voiced = tone * seq.gate.smooth(5ms) * (0.5 + seq.extra)\n [voiced, voiced]\n}";
+    let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
+    let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
+        panic!(
+            "{}",
+            errors
+                .iter()
+                .map(|e| e.render("blocks", &expanded.text))
+                .collect::<String>()
+        )
+    });
+    let mut voice = Voice::new(program.instruments[0].graph.clone(), 48_000.0);
+    let mut buses = Buses::new(&[]);
+    let mut output = vec![vec![0.0; block_size()]; 2];
+    ALLOCATIONS.with(|count| count.set(0));
+    NODE.with(|node| node.set(true));
+    let mut loudest = 0.0f32;
+    for _ in 0..1024 {
+        voice.process_blocks(&mut output, block_size(), &mut buses);
+        assert!(output.iter().flatten().all(|value| value.is_finite()));
+        loudest = output.iter().flatten().fold(loudest, |m, v| m.max(v.abs()));
+    }
+    NODE.with(|node| node.set(false));
+    assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+    assert!(loudest > 1e-3, "{loudest}");
+}

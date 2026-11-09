@@ -1,0 +1,30 @@
+// A row sequencer: every row has a pitch, a length in ticks, a repeat count and a gate type, like a hardware row
+// sequencer. Row 1 is a long gate, row 2 a short gate played three times, row 3 a trigger, row 4 a held note that ties
+// into the loop. The second value of each row opens the filter.
+// row_sequencer -> osc(saw) -> low-pass   (the loop is rows 0 to 3; change start and length to play a part of it)
+// Render: niminal render examples/rows.nml --bars 8 --out rows.wav
+config { channels: stereo }
+tempo 100bpm
+
+use std/blocks
+
+// A tick every sixteenth note.
+fn tick() { impulse((4 / (1beat).num).hz) }
+
+instr lead() {
+  seq = row_sequencer(
+    tick(),
+    values: [0, 7, 12, 5],
+    extras: [0.25, 0.6, 1, 0.4],
+    durations: [4, 1, 2, 4],
+    repeats: [1, 3, 1, 1],
+    modes: [1, 1, 2, 3],
+    gate_length: 0.6
+  )
+  tone = osc(saw, 130.8hz * pow(2, seq.value / 12))
+  open = seq.gate.smooth(8ms)
+  (tone.lpf(cutoff: 300hz + seq.extra.smooth(20ms) * 3khz) * open * 0.6).pan(angle: 0deg)
+}
+
+// Times are relative to where the file is evaluated, so evaluate it on a bar line.
+at +0bars lead() for 8bars

@@ -35,6 +35,7 @@ preset_keys.nml: 2x424812
 presets.nml: 2x739186
 rig.nml: 2x552308
 room.nml: 1x222063
+rows.nml: 2x921840
 saw_lead.nml: 1x158399
 score_prog.nml: 1x384240
 section_sweep.nml: 2x407061

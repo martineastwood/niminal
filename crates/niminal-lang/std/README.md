@@ -85,7 +85,7 @@ tolerances. These numerical checks do not constitute listening approval.
 ## Voice modules (language 0.4)
 
 `multimode_filter`, `low_pass_gate`, `complex_osc`, `shift_random`, `texture`, `quantize`, `vocoder`, `cross_mod`, `slew`,
-`morph_osc`, `wavefolder`, `multi_lfo`, `formant_filter`, `random_source`, `multi_voice`, `track_hold`, `comparator`, `chaos`, `rungler`, `resonant_body`, `shimmer_echo`, `freq_shifter`, `vca_mix`, `clock_mult`, `bernoulli`, `burst`, `gate_length`, `gate_delay`, `gate_logic`, `flip_flop`, `window_comparator`, `mux`, `stepper` and `sync_osc` are written to one contract, which later modules should follow:
+`morph_osc`, `wavefolder`, `multi_lfo`, `formant_filter`, `random_source`, `multi_voice`, `track_hold`, `comparator`, `chaos`, `rungler`, `resonant_body`, `shimmer_echo`, `freq_shifter`, `vca_mix`, `clock_mult`, `bernoulli`, `burst`, `gate_length`, `gate_delay`, `gate_logic`, `flip_flop`, `window_comparator`, `mux`, `stepper`, `row_sequencer` and `sync_osc` are written to one contract, which later modules should follow:
 
 - Every parameter takes a signal. Pitches and times are in their units, timbre controls run 0..1.
 - Every input is clamped inside the block, so any value, including NaN or infinity, gives a finite output.

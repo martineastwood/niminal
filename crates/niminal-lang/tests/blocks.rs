@@ -1588,3 +1588,75 @@ fn the_clock_and_logic_blocks_stay_finite_under_extreme_modulation() {
         }
     }
 }
+
+#[test]
+fn a_row_sequencer_plays_rows_with_durations_repeats_and_gate_modes() {
+    // 8 hz is a tick every 6000 samples. Rows: A lasts 2 ticks, B lasts 1 and plays twice, C lasts 1.
+    let seq = "row_sequencer(impulse(8hz), values: [1, 2, 3], durations: [2, 1, 1], repeats: [1, 2, 1])";
+    let value = gate_render(&format!("{seq}.value"), 2500);
+    // ticks 0..: A A B B C A A B B C
+    let at = |n: usize| value[n * 6000 + 3000];
+    assert_eq!((0..10).map(at).collect::<Vec<_>>(), [1.0, 1.0, 2.0, 2.0, 3.0, 1.0, 1.0, 2.0, 2.0, 3.0]);
+    let row = gate_render(&format!("{seq}.row"), 2500);
+    assert_eq!([row[3000], row[7 * 6000 + 3000], row[4 * 6000 + 3000]], [0.0, 1.0, 2.0]);
+    // wrap pulses once per loop of five ticks
+    let wrap = rising(&gate_render(&format!("{seq}.wrap"), 2500));
+    assert!(wrap.len() >= 2 && wrap.windows(2).all(|w| w[1] - w[0] == 5 * 6000), "{wrap:?}");
+}
+
+#[test]
+fn a_row_sequencer_gates_by_mode_and_loops_a_range() {
+    let gate = |modes: &str| gate_render(&format!("row_sequencer(impulse(8hz), values: [1, 2], durations: [2], modes: [{modes}]).gate"), 1500);
+    // gate: open for half of a two-tick row = 6000 samples, then closed for 6000
+    let g = gate("1");
+    assert!(g[3000] > 0.5 && g[7000] < 0.5 && g[11_000] < 0.5 && g[13_000] > 0.5, "gate");
+    // trigger: one sample at the start of every repeat
+    let t = rising(&gate("2"));
+    assert!(t.iter().all(|&i| i % 12_000 <= 1), "{t:?}");
+    assert!(gate("0").iter().all(|&v| v == 0.0), "rest");
+    // hold: high for the whole row, with no gap between rows
+    let h = gate("3");
+    assert!(h[100..40_000].iter().all(|&v| v > 0.5), "hold");
+    // looping only row 1 plays it forever
+    let v = gate_render("row_sequencer(impulse(8hz), values: [1, 2], start: 1, length: 1).value", 800);
+    assert_eq!(v[3000], 2.0);
+    assert_eq!(v[6000 * 4 + 3000], 2.0);
+    // a high reset holds the sequence at the start
+    let r = gate_render("row_sequencer(impulse(8hz), reset: 1, values: [1, 2]).gate", 600);
+    assert_eq!(peak(&r), 0.0);
+    // a short list repeats its last entry
+    let e = gate_render("row_sequencer(impulse(8hz), values: [1, 2, 3], extras: [0.5]).extra", 800);
+    assert_eq!(e[3000], 0.5);
+}
+
+#[test]
+fn the_row_sequencer_stays_finite_under_extreme_inputs() {
+    let extremes = [-1e30, -1.0, 0.0, 0.5, 1.0, 3.0, 1e30, f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
+    for (body, limit) in [
+        ("row_sequencer(osc(square, 5hz) * x, reset: z, values: [x, y, z], durations: [y], repeats: [z], modes: [x]).value", 1000.5),
+        ("row_sequencer(osc(square, 5hz) * x, values: [1, y, 3], extras: [z, x], start: y, length: z, gate_length: x).gate", 1.0),
+        ("row_sequencer(osc(square, 9hz), values: [x, y], start: x, length: y).row", 70.0),
+    ] {
+        let p = program(&format!("use std/blocks\ninstr a(x: num, y: num, z: num) {{ {body} }}"));
+        let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
+        for &x in &extremes {
+            for &y in &extremes {
+                let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
+                voice.start_note();
+                let mut out = vec![0.0; block_size()];
+                for z in extremes {
+                    voice.set_param_by_name("x", x);
+                    voice.set_param_by_name("y", y);
+                    voice.set_param_by_name("z", z);
+                    for _ in 0..20 {
+                        voice.process(&mut out);
+                        assert!(
+                            !voice.is_poisoned() && out.iter().all(|v| v.is_finite() && v.abs() <= limit),
+                            "{body}: {x}, {y}, {z}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
