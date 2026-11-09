@@ -113,6 +113,13 @@ Building blocks to wire together, in the manner of modules in a rack. A block ta
 | `quantize(note, scale: [0, 2, 4, 5, 7, 9, 11], root: 0, amount: 1)` | Snaps a note number (semitones) to the nearest note of `scale`, which lists one octave of notes. A note exactly between two goes to the lower one. Works on any value: quantize a random loop into a melody. |
 | `vocoder(carrier, modulator, bands: 16, low: 120hz, high: 8khz, width: 3, attack: 4ms, release: 40ms, hiss: 0.3)` | A channel vocoder: each band of `modulator`'s loudness shapes the same band of `carrier`. `hiss` lets consonants through as noise. Stereo inputs are mixed to mono. |
 | `cross_mod(a, b, mode: ring, amount: 0.5) -> (sound, aux)` | Two signals into one: `ring`, `fold` (b pushes a into a wavefolder) or `diode`. `amount` blends from `a` to the effect; `aux` is the plain product. Inputs are held to ±16 and `sound` to ±1.2. |
+| `slew(x, rise: 10ms, fall: 100ms, shape: smooth)` | Follows any signal with separate rise and fall times: portamento, a gate turned into an envelope, stepped random smoothed. `linear` takes the time to travel 1.0 at a steady rate. A time of 0 follows at once. |
+| `morph_osc(freq, shape: 0, width: 0.5) -> (sound, sub)` | A band-limited oscillator that morphs sine, triangle, saw, pulse (0 to 1); `width` is the pulse duty cycle. `sub` is a sine an octave down. Within ±1.3. |
+| `wavefolder(x, amount: 0.3, symmetry: 0)` | Two folds in a row, the second gentler: a plain tone gains overtones. `symmetry` adds even harmonics. Aliases when pushed; wrap it in `oversample(4) { ... }` for a cleaner sound. Within ±1.2. |
+| `multi_lfo(rate: 1hz, shape: 0.5, smooth: 0.5, shift: 0.25) -> (a, b, c, d)` | One low-frequency oscillator with four outputs `shift` cycles apart, from -1 to 1. `shape` is where the peak falls, `smooth` rounds it towards a sine. |
+| `formant_filter(x, freq: 600hz, span: 0.5, res: 0.6, tilt: 0) -> (sound, low, mid, high)` | Three band-pass peaks that move together, so a sound takes on vowels. `span` spreads the upper two, `tilt` favours low or high. Each peak is also an output. |
+| `random_source(clock: 0, spread: 0.5, bias: 0, steps: 1, deja_vu: 0.5, density: 1, length: 8, seed: 0) -> (value, gate)` | A random source for tunes and rhythms: a loop of `length` draws, `deja_vu` the chance of keeping each (1 repeats the loop). `spread` and `bias` shape the values live; `steps` 1 holds each value and lower glides; `density` thins the gates. |
+| `multi_voice(freq, model: 0, timbre: 0.5, harmonics: 0.5, morph: 0.5)` | One voice, five models (analog, FM, additive, vowel, folded) blended by `model`, with three controls that do the most useful thing for each. Every model runs, so it costs about five voices. Within ±1.5. |
 
 ```nml
 use std/blocks
@@ -275,7 +282,7 @@ For envelope transfer, `amount: 0` returns the carrier delayed by one frame, and
 
 ## std/instruments
 
-Nineteen melodic instruments, with controls chosen for each sound. `use std/instruments.{bass, electric_piano}`, then play by name (`electric_piano(freq: c4, gain: -6db) for 1beat`). The note's `gain` controls loudness and also shapes brightness or excitation: softer playing changes the sound, not just its level. Percussive sounds such as `pluck` and `bell` ring for their decay; sustained sounds follow note-off and their release.
+Twenty melodic instruments, with controls chosen for each sound. `use std/instruments.{bass, electric_piano}`, then play by name (`electric_piano(freq: c4, gain: -6db) for 1beat`). The note's `gain` controls loudness and also shapes brightness or excitation: softer playing changes the sound, not just its level. Percussive sounds such as `pluck` and `bell` ring for their decay; sustained sounds follow note-off and their release.
 
 | Instrument | Sound and controls |
 | --- | --- |
@@ -298,6 +305,7 @@ Nineteen melodic instruments, with controls chosen for each sound. `use std/inst
 | `rubber_bass` | `complex_osc` with its modulator an octave down through a driven `multimode_filter`; `growl`, `cutoff`, `sweep`, `res`, `drive`. |
 | `wandering_voice` | A melody that plays itself: a `shift_random` loop snapped to a `scale` by `quantize`, played by `complex_osc` through `low_pass_gate`; `scale` (0 pentatonic, 1 major, 2 minor), `range`, `beats`, `lock`. |
 | `ring_bell` | Two sines multiplied through `cross_mod`; `ratio`, `metal`, `mode` (0 ring, 0.5 wavefold, 1 diode), `decay`. |
+| `macro_voice` | `multi_voice`: `model` moves through analog, FM, additive, vowel and folded; `timbre`, `harmonics`, `morph`, `attack`, `release`. |
 
 `std/instruments`, `std/drums` and `std/fx` are shelves: take presets by name, rather than importing the whole shelf. Each copied preset stands alone: one wired from `std/blocks` brings the blocks it uses, and only those, so the other block names stay free for your own. `niminal presets` lists the catalog, `--kind instrument` or `--kind fx` narrows it, and `niminal presets electric_piano` prints editable source with its helpers. Editor completions offer both an import and a copy of the source.
 

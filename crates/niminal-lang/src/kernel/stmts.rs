@@ -237,9 +237,26 @@ impl Kb<'_> {
                 name.span,
             ));
         }
-        let saved = self.force.replace(Section::Init);
-        let start = self.value(init);
-        self.force = saved;
+        // `state s = x * 0` is zeros shaped like x. Only the shape of x is needed, so x may be a signal
+        // computed in the body, which a value read at note start could not be.
+        let zeros_like = match &init.kind {
+            ExprKind::Binary { op: BinOp::Mul, lhs, rhs } => match (&lhs.kind, &rhs.kind) {
+                (_, ExprKind::Num { value, unit: None }) if *value == 0.0 => Some(lhs),
+                (ExprKind::Num { value, unit: None }, _) if *value == 0.0 => Some(rhs),
+                _ => None,
+            },
+            _ => None,
+        };
+        let start = if let Some(shape) = zeros_like {
+            self.value(shape).and_then(|shape| {
+                self.map_value(shape, init.span, |this, v| Ok(this.constant(v.unit, 0.0)))
+            })
+        } else {
+            let saved = self.force.replace(Section::Init);
+            let start = self.value(init);
+            self.force = saved;
+            start
+        };
         match start? {
             KVal::Num(v) => {
                 let slot = self.state_init.len();

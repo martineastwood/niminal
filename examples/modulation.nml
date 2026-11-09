@@ -1,8 +1,10 @@
 // A tour of the modulation sources and effects in std/blocks, each driving something you can hear.
-// Sources:  clock_div (gates)  shift_random + quantize (a tune)  contour (envelopes)  function_gen (a slow swell)
-//           wobble (stepped and smooth random)
-// Voices:   complex_osc -> multimode_filter, a struck low_pass_gate bell (cross_mod), and a texture cloud
-// Effects:  echo_loop (ping-pong, ducking)  multimode_filter  cross_mod  space_reverb  vocoder
+// Sources:  clock_div (gates)  shift_random + quantize (a tune)  random_source (a looping, thinned random)
+//           contour (envelopes)  function_gen (a slow swell)  multi_lfo (four phases)  wobble (stepped and smooth random)
+//           slew (smooth anything)
+// Voices:   complex_osc -> wavefolder -> multimode_filter, morph_osc, a struck low_pass_gate bell (cross_mod),
+//           a texture cloud and a multi_voice (five models in one)
+// Effects:  echo_loop (ping-pong, ducking)  multimode_filter  formant_filter  cross_mod  space_reverb  vocoder
 // Render: niminal render examples/modulation.nml --bars 8 --out modulation.wav
 // For stereo_echo, harmonic_bank and scan_mix see examples/rig.nml.
 niminal 0.4
@@ -31,22 +33,35 @@ instr lead(freq: hz) {
 
   // A swell that opens the filter once every 16 beats, and two kinds of random: stepped jitter, smooth drift.
   swell = function_gen(cycle: 16, rise: 0.7)
-  jitter = wobble(beats: 1/4, shape: stepped, seed: 3)
+  jitter = slew(wobble(beats: 1/4, shape: stepped, seed: 3), rise: 15ms, fall: 60ms)   // stepped random, rounded off
   drift = wobble(beats: 2, shape: smooth, seed: 5)
+  around = multi_lfo(rate: 0.25hz, shift: 0.25)                                         // four slow phases for spreading things out
 
   // The voice: FM and folding deepen with the bloom, the filter opens with the swell and each pluck.
   raw = complex_osc(tuned, ratio: 1.5, index: 0.8 + bloom.value * 2, fold: bloom.value * 0.5 + jitter * 0.05)
-  filtered = raw.multimode_filter(cutoff: 250hz * pow(10, swell * 0.8 + pluck.value * 0.5), res: 0.35 + drift * 0.15, drive: 0.2).low
-  voice = filtered * (0.15 + pluck.value * 0.85) * env[0 5ms 1 | 200ms 0] * 0.5
-  voice_bus += voice.pan(angle: drift * 30deg)
+  folded = raw.wavefolder(amount: bloom.value * 0.4)
+  filtered = folded.multimode_filter(cutoff: 250hz * pow(10, swell * 0.8 + pluck.value * 0.5), res: 0.35 + drift * 0.15, drive: 0.2).low
+  // A morphing oscillator an octave down: sine at the start of the swell, pulse at its peak.
+  under = morph_osc(tuned * 0.5, shape: swell, width: 0.3 + around.b * 0.2).sound * 0.25
+  voice = (filtered + under) * (0.15 + pluck.value * 0.85) * env[0 5ms 1 | 200ms 0] * 0.5
+  voice_bus += voice.pan(angle: (drift * 0.6 + around.a * 0.4) * 30deg)
 }
 
 // A bell struck by the dotted quarter: a ring-modulated pair of sines through a low-pass gate, which darkens as it fades.
 instr bell(freq: hz) {
-  slow = clock_div(3/2, width: 0.25)
+  // A looping random source thins the dotted quarters: it repeats a pattern of hits and rests (`deja_vu` 0.9).
+  slow = random_source(clock: clock_div(3/4, width: 0.25), deja_vu: 0.9, density: 0.6, seed: 2).gate
   pair = cross_mod(osc(sine, freq), osc(sine, freq * 2.76), mode: ring, amount: 0.8).sound
   struck = pair.low_pass_gate(ping: slow, decay: 900ms).sound
   voice_bus += (struck * env[0 5ms 1 | 300ms 0] * 0.4).pan(angle: 0deg)
+}
+
+// Five voices in one: `model` moves through analog, FM, additive, vowel and folded, with a slow multi_lfo moving the
+// model and the other three controls out of step, so the voice keeps changing character.
+instr morphing(freq: hz) {
+  around = multi_lfo(rate: 0.15hz, shape: 0.5, smooth: 1, shift: 0.3)
+  tone = multi_voice(freq, model: around.a * 0.5 + 0.5, timbre: around.b * 0.4 + 0.5, harmonics: around.c * 0.5 + 0.5, morph: around.d * 0.5 + 0.5)
+  voice_bus += (tone * env[0 500ms 1 | 500ms 0] * 0.25).pan(angle: 0deg)
 }
 
 // A grain cloud whose position rides the same swell: where in the source the grains come from follows the filter opening.
@@ -64,7 +79,8 @@ fx space {
   echoes = voice_bus.echo_loop(time: 3/16beat, feedback: 0.55, filter: 2.5khz, duck: 0.5, ping_pong: on)
   dark = echoes.multimode_filter(cutoff: 900hz * pow(6, swell), res: 0.2).low
   colour = cross_mod(dark, osc(sine, 220hz), mode: diode, amount: 0.15 + drift.abs * 0.1).sound
-  room = voice_bus + dark * 0.5 + colour * 0.15
+  vowels = voice_bus.formant_filter(freq: 350hz + swell * 700hz, span: 0.6, res: 0.7).sound
+  room = voice_bus + dark * 0.5 + colour * 0.15 + vowels * 0.15
   ambience = room.space_reverb(size: 0.4 + swell * 0.3, decay: 0.7, absorption: 0.5, motion: 0.3, tilt: drift * 0.3, duck: 0.4)
   out = room + ambience * 0.25
 }
@@ -78,4 +94,5 @@ fx talk {
 // Times are relative to where the file is evaluated, so evaluate it on a bar line.
 at +0bars lead(freq: c3) for 8bars
 at +0bars haze() for 8bars
+at +4bars morphing(freq: c2) for 4bars
 at +2bars bell(freq: c5) for 6bars

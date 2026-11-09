@@ -84,8 +84,8 @@ tolerances. These numerical checks do not constitute listening approval.
 
 ## Voice modules (language 0.4)
 
-`multimode_filter`, `low_pass_gate`, `complex_osc`, `shift_random`, `texture`, `quantize`, `vocoder` and `cross_mod`
-are written to one contract, which later modules should follow:
+`multimode_filter`, `low_pass_gate`, `complex_osc`, `shift_random`, `texture`, `quantize`, `vocoder`, `cross_mod`, `slew`,
+`morph_osc`, `wavefolder`, `multi_lfo`, `formant_filter`, `random_source` and `multi_voice` are written to one contract, which later modules should follow:
 
 - Every parameter takes a signal. Pitches and times are in their units, timbre controls run 0..1.
 - Every input is clamped inside the block, so any value, including NaN or infinity, gives a finite output.
@@ -107,3 +107,7 @@ The filter effects `lowpass`, `highpass`, `bandpass` and `band_cut` became one `
 `multimode_filter`, with a `response` control. The new patches are `west_coast_pluck`,
 `harmonic_drone` and `rubber_bass` in `synths/modular`. Numerical tests pass for all of them; they
 have not been listened to.
+
+A stateful block that keeps per-channel state writes `state _s = x * 0`: zeros shaped like its input, so it filters
+stereo channel by channel. That works however `x` was made, including as a signal computed inside the calling
+function or another block.

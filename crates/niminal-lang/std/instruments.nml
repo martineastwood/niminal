@@ -372,3 +372,24 @@ instr ring_bell(
   voice = scan_mix([cross_mod(_a, _b, mode: ring, amount: _amount).sound, cross_mod(_a, _b, mode: fold, amount: _amount).sound, cross_mod(_a, _b, mode: diode, amount: _amount).sound], centre: mode)
   voice * pow(perc(attack: 1ms, decay: decay), 2) * env[1 | 30ms 0] * 0.5 * gain
 }
+
+// folder: synths/modular
+
+/// One voice with five models, played from one set of controls: `model` moves through analog (0), FM (0.25),
+/// additive (0.5), a vowel (0.75) and folded (1), blending in between; `timbre`, `harmonics` and `morph` do the
+/// most useful thing for whichever model is sounding. Harder notes are brighter. Every model runs, so it costs about
+/// five voices.
+instr macro_voice(
+  freq: hz,
+  model: 0..1 = 0,
+  timbre: 0..1 = 0.5,
+  harmonics: 0..1 = 0.5,
+  morph: 0..1 = 0.5,
+  attack: 1ms..4sec = 8ms,
+  release: 20ms..8sec = 400ms,
+  gain: db = 0db
+) {
+  hit = (1 * gain).max(0).min(1)
+  multi_voice(freq, model: model, timbre: timbre * (0.5 + hit * 0.5), harmonics: harmonics, morph: morph) * env[0 attack 1 | release 0] * 0.4 * gain
+}
+

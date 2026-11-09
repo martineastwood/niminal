@@ -565,3 +565,28 @@ fn random_source(
   gate = if _high > 0 and _chances[_step] <= density.max(0).min(1) { 1 } else { 0 }
 }
 
+/// One voice with five models, from a single set of controls, in the manner of a macro oscillator. `model` moves
+/// through them: 0 analog (two detuned `morph_osc`), 0.25 FM (`complex_osc`), 0.5 additive (`harmonic_osc`), 0.75 a
+/// vowel (a pulse through `formant_filter`) and 1 folded (`wavefolder` on a sine). Between two models it blends them.
+/// `timbre`, `harmonics` and `morph` each do the most useful thing for the model: brightness, the number or spacing
+/// of overtones, and the shape or position. Every model runs all the time, so it costs about five voices; use the
+/// block you want directly when one sound is enough. Output stays within ±1.5.
+fn multi_voice(
+  freq: hz,
+  model: 0..1 = 0,
+  timbre: 0..1 = 0.5,
+  harmonics: 0..1 = 0.5,
+  morph: 0..1 = 0.5
+) {
+  _freq = freq.max(0hz).min(sample_rate * 0.45)
+  _timbre = timbre.max(0).min(1)
+  _harmonics = harmonics.max(0).min(1)
+  _morph = morph.max(0).min(1)
+  _analog = (morph_osc(_freq, shape: _morph).sound + morph_osc(_freq * (1.003 + _harmonics * 0.02), shape: _morph).sound) * 0.5
+  _analog_open = _analog.multimode_filter(cutoff: _freq * (1.5 + _timbre * 30), res: 0.2).low
+  _fm = complex_osc(_freq, ratio: 0.5 + _harmonics * 3.5, index: _timbre * 4, fold: _morph * 0.5).sound
+  _additive = harmonic_osc(_freq, count: 12, brightness: _timbre, odd_even: _harmonics * 2 - 1, centre: _morph, width: 3, focus: 0.5)
+  _vowel = morph_osc(_freq, shape: 1, width: 0.3).sound.formant_filter(freq: 250hz + _morph * 750hz, span: _harmonics, res: _timbre * 0.8).sound * 0.5
+  _folded = wavefolder(osc(sine, _freq), amount: _timbre, symmetry: _morph * 2 - 1) * (1 - _harmonics * 0.5) + osc(sine, _freq * 2) * _harmonics * 0.3
+  scan_mix([_analog_open, _fm, _additive, _vowel, _folded], centre: model.max(0).min(1)).clip(level: 1.5)
+}

@@ -383,3 +383,30 @@ fn the_processing_modules_do_not_allocate_while_rendering() {
     assert!(output.iter().flatten().all(|value| value.is_finite()));
     assert!(output.iter().flatten().any(|value| value.abs() > 1e-4));
 }
+
+#[test]
+fn the_oscillator_and_modulation_blocks_do_not_allocate_while_rendering() {
+    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n lfos = multi_lfo(rate: 0.7hz, shift: 0.2)\n random = random_source(clock: impulse(30hz), steps: 0.4, deja_vu: 0.6, seed: 4)\n tone = multi_voice(110hz + random.value * 20hz, model: lfos.a * 0.5 + 0.5, timbre: lfos.b * 0.5 + 0.5, morph: lfos.c * 0.5 + 0.5)\n shaped = wavefolder(slew(tone, rise: 5ms, fall: 80ms), amount: lfos.d * 0.5 + 0.5)\n voiced = shaped.formant_filter(freq: 500hz + lfos.a * 100hz).sound\n [voiced * random.gate, morph_osc(220hz, shape: lfos.b * 0.5 + 0.5).sound]\n}";
+    let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
+    let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
+        panic!(
+            "{}",
+            errors
+                .iter()
+                .map(|e| e.render("blocks", &expanded.text))
+                .collect::<String>()
+        )
+    });
+    let mut voice = Voice::new(program.instruments[0].graph.clone(), 48_000.0);
+    let mut buses = Buses::new(&[]);
+    let mut output = vec![vec![0.0; block_size()]; 2];
+    ALLOCATIONS.with(|count| count.set(0));
+    NODE.with(|node| node.set(true));
+    for _ in 0..1024 {
+        voice.process_blocks(&mut output, block_size(), &mut buses);
+    }
+    NODE.with(|node| node.set(false));
+    assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+    assert!(output.iter().flatten().all(|value| value.is_finite()));
+    assert!(output.iter().flatten().any(|value| value.abs() > 1e-4));
+}

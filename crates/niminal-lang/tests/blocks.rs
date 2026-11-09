@@ -1049,3 +1049,109 @@ fn the_oscillator_and_modulation_blocks_stay_finite_under_extreme_modulation() {
         }
     }
 }
+
+#[test]
+fn a_stateful_helper_can_be_called_on_a_signal_made_inside_a_function() {
+    // `state s = x * 0` is zeros shaped like x: x may be computed in the calling function, not only passed to it.
+    let out = render(
+        "use std/blocks\nfn damp(x) { state s = x * 0\n s = s + (x - s) * 0.1\n s }\nfn voice(freq: hz) { osc(saw, freq).damp.multimode_filter(cutoff: freq * 3).low }\ninstr a() { voice(220hz) * 0.3 }",
+        40,
+    );
+    assert!(out.iter().all(|v| v.is_finite()) && peak(&out[out.len() / 2..]) > 0.01);
+}
+
+fn random_run(args: &str, blocks: usize) -> (Vec<f32>, Vec<f32>) {
+    let source = |field: &str| {
+        format!("use std/blocks\ninstr a() {{ random_source(clock: impulse(48hz), {args}).{field} }}")
+    };
+    (render(&source("value"), blocks), render(&source("gate"), blocks))
+}
+
+#[test]
+fn a_random_source_loops_shapes_and_thins_its_draws() {
+    let steps = |args: &str| {
+        let (values, _) = random_run(args, 1000);
+        assert!(values.iter().all(|v| (-1.0..=1.0).contains(v)));
+        (0..32).map(|i| values[i * 1000 + 500]).collect::<Vec<_>>()
+    };
+    let locked = steps("deja_vu: 1, seed: 1");
+    assert_eq!(locked[..8], locked[8..16]);
+    assert!(locked[..8].iter().any(|v| *v != locked[0]));
+    assert_ne!(steps("deja_vu: 0, seed: 1")[..8], steps("deja_vu: 0, seed: 1")[8..16]);
+    assert_eq!(steps("deja_vu: 0.3, seed: 5"), steps("deja_vu: 0.3, seed: 5"));
+    assert_ne!(steps("deja_vu: 1, seed: 5"), steps("deja_vu: 1, seed: 6"));
+    // spread 0 sits on the bias, and a bias at the top leaves no room to range
+    assert!(steps("spread: 0, bias: 0.5").iter().all(|v| (v - 0.5).abs() < 1e-5));
+    assert!(steps("spread: 1, bias: 1").iter().all(|v| (v - 1.0).abs() < 1e-5));
+    let wide = steps("spread: 1, deja_vu: 0");
+    let narrow = steps("spread: 0.2, deja_vu: 0");
+    let range = |v: &[f32]| v.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    assert!(range(&wide) > range(&narrow) && range(&narrow) <= 0.2 + 1e-5);
+    // steps 1 jumps between values, steps 0 glides
+    let largest_move = |args: &str| {
+        let (values, _) = random_run(args, 1000);
+        values.windows(2).fold(0.0f32, |m, w| m.max((w[1] - w[0]).abs()))
+    };
+    assert!(largest_move("steps: 1, deja_vu: 0") > 0.05);
+    assert!(largest_move("steps: 0, deja_vu: 0") < 0.001);
+    // density thins the gates: none at 0, every step at 1, some in between
+    let gates = |args: &str| random_run(args, 1000).1.iter().filter(|g| **g > 0.5).count();
+    assert_eq!(gates("density: 0"), 0);
+    let all = gates("density: 1");
+    let half = gates("deja_vu: 0, density: 0.5");
+    assert!(all > 40 && half > all / 5 && half < all * 4 / 5, "{all} {half}");
+}
+
+#[test]
+fn a_multi_voice_has_five_models_that_sound_different() {
+    let model = |m: f32| {
+        let out = render(&format!("use std/blocks\ninstr a() {{ multi_voice(220hz, model: {m}) }}"), 200);
+        assert!(out.iter().all(|v| v.is_finite()), "model {m}");
+        out[out.len() / 2..].to_vec()
+    };
+    let all: Vec<Vec<f32>> = [0.0, 0.25, 0.5, 0.75, 1.0].map(model).into();
+    for (i, v) in all.iter().enumerate() {
+        let p = peak(v);
+        assert!(p > 0.05 && p <= 1.5, "model {i}: {p}");
+    }
+    for i in 0..5 {
+        for j in i + 1..5 {
+            let difference: f32 = all[i].iter().zip(&all[j]).map(|(a, b)| (a - b).abs()).sum::<f32>() / all[i].len() as f32;
+            assert!(difference > 0.02, "models {i} and {j} are alike: {difference}");
+        }
+    }
+}
+
+#[test]
+fn the_random_and_voice_blocks_stay_finite_under_extreme_modulation() {
+    let extremes = [-1e30, -1.0, 0.0, 0.5, 1.0, 1e30, f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
+    for (body, limit) in [
+        ("random_source(clock: x, spread: y, bias: z, steps: x, deja_vu: y, density: z, seed: 2).value", 1.0001),
+        ("random_source(clock: x, spread: y, bias: z, steps: x, deja_vu: y, density: z, seed: 2).gate", 1.0),
+        ("multi_voice(x * 1hz, model: y, timbre: z, harmonics: x, morph: y)", 1.5),
+        ("multi_voice(220hz, model: x, timbre: y, harmonics: z, morph: x)", 1.5),
+    ] {
+        let p = program(&format!("use std/blocks\ninstr a(x: num, y: num, z: num) {{ {body} }}"));
+        let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
+        for &x in &extremes {
+            for &y in &extremes {
+                let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
+                voice.start_note();
+                let mut out = vec![0.0; block_size()];
+                for z in extremes {
+                    voice.set_param_by_name("x", x);
+                    voice.set_param_by_name("y", y);
+                    voice.set_param_by_name("z", z);
+                    for _ in 0..10 {
+                        voice.process(&mut out);
+                        assert!(
+                            !voice.is_poisoned() && out.iter().all(|v| v.is_finite() && v.abs() <= limit),
+                            "{body}: {x}, {y}, {z}: {}",
+                            peak(&out)
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

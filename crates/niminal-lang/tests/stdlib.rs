@@ -407,7 +407,8 @@ fn the_instrument_library_compiles_and_every_instrument_sounds() {
             "harmonic_drone",
             "rubber_bass",
             "wandering_voice",
-            "ring_bell"
+            "ring_bell",
+            "macro_voice"
         ]
     );
     for instrument in &program.instruments {
@@ -1152,7 +1153,7 @@ fn the_preset_catalog_is_complete() {
             .iter()
             .filter(|p| p.kind == PresetKind::Instrument)
             .count(),
-        40
+        41
     );
     assert!(
         presets
