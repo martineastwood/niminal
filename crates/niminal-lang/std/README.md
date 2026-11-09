@@ -57,3 +57,27 @@ examples remained within their audio tolerances. preset_keys.nml is a new exampl
 The language version is now 0.3 for the preset signatures, removed introductory
 drum names, native one-poles and renamed spectral/delay helpers; the user-facing
 migration notes are in the standard-library reference.
+
+## Harmonic scanning and stereo echo blocks
+
+`scan_weights` and `scan_mix` provide a normalized moving window over signals.
+`harmonic_bank` exposes mixed and individual partial outputs, with centre, width
+and focus controls; `harmonic_osc` returns its mix. `stereo_echo` combines two
+independent feedback delays with colour, timing skew, output diffusion, motion
+and ducking. These are NML compositions of existing DSP primitives.
+
+The revised `examples/rig.nml` demonstrates harmonic scanning, a separately panned
+partial highlight, moving stereo echoes, and a breathing reverb. `contour` supplies
+triggered or cycling rise/fall shapes and sample pulses for chaining; `space_reverb`
+provides tank motion, absorption, diffusion, return tone and stereo-aware ducking.
+Echo ducking also follows the louder input channel, avoiding cancellation with
+opposite-polarity stereo input.
+
+Before refreshing the first scanning reference, the baseline measured a maximum
+aligned 1024-sample RMS block change of 0.058004 and a digest energy change of
++1.274 dB. The subsequent contour/reverb revision measured 0.225505 and +1.788 dB
+against that scanning reference. Comparing the final reference to the original
+one gives a maximum block RMS change of 0.162508 and a digest energy change of
++3.062 dB. The final rendered tail grew by 16,157 samples compared with the
+original. The other examples and scripted live session remained within their
+tolerances. These numerical checks do not constitute listening approval.

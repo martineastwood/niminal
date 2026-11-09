@@ -1,13 +1,13 @@
 // A systems piece: a few motifs, an additive voice, and a set of knobs that steer how the music develops.
 // You do not play notes. You move a window around a long sequence, shift one sequence against another,
 // open and close the partials of the voice, and let random and slow signals move the timbre.
-// The knobs are on a MIDI controller (CC 1 to 9); a macro, `bloom`, moves several at once.
+// The knobs are on a MIDI controller (CC 1 to 13); a macro, `bloom`, moves several at once.
 // Render the opening: niminal render examples/rig.nml --bars 16 --out rig.wav
 niminal 0.3
 config { channels: stereo }
 tempo 112bpm
 
-// building blocks you wire together (harmonic_osc, function_gen, wobble, clock_div)
+// building blocks you wire together (harmonic_bank, scan_mix, function_gen, contour, wobble, clock_div, stereo_echo, space_reverb)
 use std/blocks
 
 // ---------------------------------------------------------------------------------------------
@@ -33,8 +33,14 @@ ctl bright   = midi.cc(5).range(0..1).starts_at(0.5).smooth(30ms)
 ctl spread   = midi.cc(6).range(0..1).starts_at(0.5).smooth(30ms)  // 0 even partials only, 0.5 all, 1 odd only
 ctl wander   = midi.cc(7).range(0..1).starts_at(0.3).smooth(100ms) // how much random moves the brightness
 
+// Spectral window: centre selects a harmonic region; focus reveals it within the full spectrum.
+ctl centre = midi.cc(10).range(0..1).starts_at(0.35).smooth(50ms)
+ctl focus  = midi.cc(11).range(0..1).starts_at(0.5).smooth(50ms)
+
 // Space.
 ctl echo_mix = midi.cc(8).range(0..0.6).starts_at(0.25).smooth(30ms)
+ctl space_size = midi.cc(12).range(0..1).starts_at(0.45).smooth(100ms)
+ctl space_mix = midi.cc(13).range(0..0.6).starts_at(0.2).smooth(50ms)
 
 // ---------------------------------------------------------------------------------------------
 // The voice: sixteen sine partials, each opened and closed by its own row of steps.
@@ -62,16 +68,23 @@ instr additive(freq: hz) {
 
   // Sixteen harmonics. The shape of the spectrum follows bright; the swell opens the top.
   // Eight rows gate the first eight partials; the rest stay open.
-  tone = harmonic_osc(
+  tone = harmonic_bank(
     freq,
     gates: gates,
     count: 16,
     brightness: bright + swell * 0.3 + drift * wander * 0.2,
     odd_even: spread * 2 - 1,                                     // spread: from all even, through all, to all odd
-    gate_smooth: 4ms
+    gate_smooth: 4ms,
+    centre: centre,
+    width: 3,
+    focus: focus
   )
 
-  voice_bus += (tone * env[0 3ms 1 | 120ms 0]).pan(angle: 0deg)
+  // The mixed voice and a separately scanned highlight share the same oscillator phases.
+  // Move centre to bring different related pitches forward on the right.
+  highlight = scan_mix(tone.partials, centre: centre, width: 2)
+  level = env[0 3ms 1 | 120ms 0]
+  voice_bus += ((tone.mixed.pan(angle: -15deg) + (highlight * 2).pan(angle: 15deg)) * level * 0.6)
 }
 
 instr sub(freq: hz) {
@@ -83,14 +96,31 @@ instr sub(freq: hz) {
 // ---------------------------------------------------------------------------------------------
 
 fx space {
-  tail = voice_bus.echo_loop(                                     // the echoes only, blended below
+  // One contour breathes over four bars. Its peak triggers a second, shorter gesture.
+  // Times follow the current tempo; these are shapes with state, not fixed transport phases.
+  breath = contour(cycle: 1, rise: 12 * clock.beat_length, fall: 4 * clock.beat_length, curve: 2)
+  opening = contour(trigger: breath.eor, rise: clock.beat_length, fall: 3 * clock.beat_length)
+  tail = voice_bus.stereo_echo(
     time: 3/16beat,
     feedback: 0.55,
-    filter: 3khz,
-    duck: 0.5,
-    ping_pong: on
+    colour: 0.55,
+    skew: 0.3,
+    diffusion: 0.35 + breath.value * 0.3,
+    motion: 0.2,
+    duck: 0.5
   )
-  out = voice_bus.crossfade(tail, echo_mix).crossfade(voice_bus.reverb(room: 0.7, damp: 0.5), 0.25)
+  // Add wet-only echoes, then place the whole result in the same room.
+  room = voice_bus + tail * echo_mix
+  ambience = room.space_reverb(
+    size: space_size + breath.value * 0.08,
+    decay: 0.7,
+    absorption: 0.5,
+    diffusion: 0.75,
+    motion: 0.3,
+    tilt: -0.2 + opening.value * 0.4,
+    duck: 0.4
+  )
+  out = room + ambience * space_mix
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -120,8 +150,12 @@ macro bloom {
   quantize: 1beat
   bright:   0.2..0.9
   spread:   (0..1).curve(2)
+  focus:    0..0.8
+  centre:   0.1..0.7
   density:  0.4..1
   echo_mix: 0..0.4
+  space_size: 0.3..0.8
+  space_mix: 0.1..0.35
 }
 
 melody.start

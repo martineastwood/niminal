@@ -303,3 +303,29 @@ fn sustained_waveguides_and_resets_allocate_before_audio_only() {
         assert!(output[0].iter().all(|x| x.is_finite()));
     }
 }
+
+#[test]
+fn modular_blocks_do_not_allocate_while_rendering_or_completing_contours() {
+    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n shape = contour(cycle: 1, rise: 5ms, fall: 10ms)\n accent = contour(trigger: shape.eoc, rise: 1ms, fall: 20ms)\n bank = harmonic_bank(110hz, centre: shape.value, focus: 0.8)\n voice = scan_mix(bank.partials, centre: accent.value)\n voice.stereo_echo(time: 20ms).space_reverb(size: 0.3 + shape.value * 0.4)\n}";
+    let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
+    let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
+        panic!(
+            "{}",
+            errors
+                .iter()
+                .map(|e| e.render("blocks", &expanded.text))
+                .collect::<String>()
+        )
+    });
+    let mut voice = Voice::new(program.instruments[0].graph.clone(), 48_000.0);
+    let mut buses = Buses::new(&[]);
+    let mut output = vec![vec![0.0; block_size()]; 2];
+    ALLOCATIONS.with(|count| count.set(0));
+    NODE.with(|node| node.set(true));
+    for _ in 0..1024 {
+        voice.process_blocks(&mut output, block_size(), &mut buses);
+    }
+    NODE.with(|node| node.set(false));
+    assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+    assert!(output.iter().flatten().all(|value| value.is_finite()));
+}

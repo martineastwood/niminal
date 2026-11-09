@@ -94,11 +94,17 @@ Building blocks to wire together, in the manner of modules in a rack. A block ta
 
 | Function | What it is |
 | --- | --- |
-| `harmonic_osc(freq, gates, count: 16, brightness: 0.5, odd_even: 0, gate_smooth: 4ms)` | A bank of sine partials at whole-number multiples of `freq`. `brightness` sets how fast the levels fall away up the series; `odd_even` takes it to its odd partials (up to 1) or its even ones (down to -1). `gates` opens and closes the first partials, one signal each; partials without a gate stay open. |
+| `scan_weights(count, centre: 0.5, width: 1)` | Normalized triangular weights for a spectral window or mixer. `centre` runs from first member (0) to last (1); `width` is in members. Width 1 crossfades neighbours. Empty arrays have no weights. |
+| `scan_mix(signals, centre: 0.5, width: 1)` | Scan across an array of signals: oscillators, partials or effect returns. Weights sum to one, so scanning identical inputs preserves their level. Empty inputs return silence. |
+| `harmonic_bank(freq, gates, count: 16, brightness: 0.5, odd_even: 0, gate_smooth: 4ms, centre: 0.5, width: 2, focus: 0)` | A harmonic oscillator with named outputs `mixed` and `partials`. Brightness tilts the series; odd/even balance selects its families. `focus` moves from the whole series to a window whose position and breadth are set by `centre` and `width`. |
+| `harmonic_osc(...)` | The mixed output of `harmonic_bank`, with the same parameters. Gates open individual partials; missing gates stay open. |
 | `function_gen(cycle: 8, rise: 0.5, curve: 1)` | A shape from 0 up to 1 and back, `cycle` beats long, rising for the first `rise` of it (a share) and falling for the rest. `curve` bends both sides: above 1 holds back at the bottom, below 1 hurries away from it. It follows the transport, so it always peaks on the same beat. |
+| `contour(trigger: 0, rise: 10ms, fall: 300ms, curve: 1, cycle: 0)` | A triggered rise/fall shape with named outputs `value`, `eor` and `eoc`. Retriggers rise from the present level; cycling finishes its current shape when switched off. |
 | `wobble(beats: 0.5, shape: stepped, seed: 0)` | Random values from -1 to 1, a new one every `beats` beats. `stepped` holds each until the next; `smooth` slides to it. The same `seed` is the same run every time. |
 | `clock_div(beats: 1, width: 0.5)` | A gate that follows the transport: high for the first `width` of every `beats` beats. `clock_div(3/2)` drifts against the bar and meets it again. |
 | `echo_loop(x, time: 3/16beat, feedback: 0.5, filter: 3khz, duck: 0, ping_pong: off, max: 2sec)` | The echoes of `x` and nothing else, to blend with the dry sound: `x.crossfade(x.echo_loop(...), mix)`. `time` follows the tempo; `filter` is a low-pass in the loop, so each repeat is darker; `duck` pulls the echoes down while `x` is loud; `ping_pong: on` bounces them between left and right, the first on the right. `max` must be at least twice `time` for a ping-pong. |
+| `stereo_echo(x, time: 3/16 * clock.beat_length, feedback: 0.5, colour: 0.5, skew: 0.25, diffusion: 0.2, motion: 0.1, duck: 0, max: 4sec)` | Wet-only stereo repeats. Skew offsets left/right times, colour sets feedback brightness, diffusion smears the returns, motion bends their pitch gently, and duck clears space for new audio. |
+| `space_reverb(x, size: 0.5, decay: 0.65, absorption: 0.4, diffusion: 0.7, motion: 0.2, rate: 0.07hz, predelay: 20ms, tilt: 0, duck: 0)` | Wet-only stereo space with a moving tank, absorption, diffusion, tone tilt and ducking. Size changes bend the existing tail. |
 
 ```nml
 use std/blocks
@@ -116,6 +122,107 @@ instr additive(freq: hz) {
 `function_gen`, `wobble` and `clock_div` read the transport (`clock.beat`, `clock.bpm`), so they follow the tempo as it changes. Their outputs are plain signals: scale one with `.range(...)`, multiply it into a gain or add it to a control.
 
 Partials above 45% of the sample rate are left out, and the sum is scaled by the loudest the series could be, so it never exceeds 1 however the controls are set.
+
+### Playing the spectrum
+
+`centre` runs from the fundamental to the highest configured partial; `width` is measured in partials.
+Raise `focus` to reveal this window within the complete spectrum. At full focus and width 1,
+scanning crossfades between individual harmonics. Brightness and odd/even balance still shape the window;
+a window over excluded harmonics is silent. Gate values clamp to 0…1 before smoothing.
+
+The bank's partials share the mixed output's normalization, so their sum reproduces `mixed`.
+They are ready for separate filtering, articulation or panning. Scanning those partials again produces
+a weighted average, so a highlighted layer may need additional gain.
+
+```nml
+use std/blocks.{harmonic_bank, scan_mix, function_gen}
+
+instr spectrum(freq: hz) {
+  position = function_gen(cycle: 16, rise: 0.75)
+  voice = harmonic_bank(freq, centre: position, width: 3, focus: 0.7)
+  highlight = scan_mix(voice.partials, centre: position, width: 1)
+  (voice.mixed * 0.2 + highlight * 0.3) * env[0 5ms 1 | 300ms 0]
+}
+```
+
+### Triggered and cycling shapes
+
+`contour` responds to positive edges. An initially positive trigger starts it immediately; holding that
+trigger high produces one rise and fall. A new edge reverses a fall into a rise from its current level,
+without jumping back to zero. Rise and fall are full-scale travel times: retriggering halfway up takes
+half the rise time to reach the peak. Each time clamps to 0…60sec; zero takes one sample.
+
+`curve` bends the output, leaving the timing unchanged. At 1 it is linear, above 1 it spends more time
+near zero, and below 1 it opens quickly. With `cycle` above zero, an idle contour starts immediately
+and repeats. Turning cycling off lets the current contour finish. These cycles follow their own state;
+use `function_gen` when a shape must instead follow a fixed position in the transport.
+
+`eor` and `eoc` are one-sample pulses when the rise and fall finish. Pass them directly to another
+contour's trigger at audio rate; sampling them at control rate can miss pulses.
+
+```nml
+use std/blocks.{contour, harmonic_osc}
+
+instr breathing(freq: hz) {
+  breath = contour(cycle: 1, rise: 2sec, fall: 1sec)
+  accent = contour(trigger: breath.eor, rise: 10ms, fall: 400ms, curve: 2)
+  harmonic_osc(freq, brightness: 0.2 + breath.value * 0.6,
+    centre: accent.value, focus: 0.7) * env[0 10ms 1 | 300ms 0] * 0.2
+}
+```
+
+### Stereo echoes
+
+`stereo_echo` returns only the processed sound. Add it as a send return, or crossfade it with the dry signal:
+
+```nml
+use std/blocks.{stereo_echo}
+
+fx space {
+  echoes = in.stereo_echo(time: 3/16beat, skew: 0.3, colour: 0.55, diffusion: 0.4, motion: 0.2)
+  out = in + echoes * 0.25
+}
+```
+
+`skew` ranges from −1 to 1 and offsets the left and right times by up to half of `time` in opposite
+directions. Mono feeds both sides; stereo keeps its channels. Wider inputs use their first and last channels.
+The two feedback lines are independent. `colour` runs from dark (400hz) to bright (16khz), filtering inside
+each feedback loop. The first echo retains the source's colour; subsequent repeats become darker.
+`diffusion` crossfades the wet signal through two fixed allpass stages **after** the feedback loops.
+`motion` adds two slow read-head modulations, each up to 3ms. It is movement of delay time, not a chorus added afterwards.
+Time changes use the engine's smoothed, speed-limited read heads and bend pitch. Times clamp to 1ms…`max`;
+leave room for skew and motion when choosing `max`. Feedback clamps to 0…0.95. Ducking follows the louder input channel, so opposite-polarity stereo audio still ducks.
+
+### Moving space
+
+`space_reverb` returns a processed stereo signal to add to a dry bus. `size` changes the tank geometry
+without clearing its contents; moving it bends the tail's pitch. `motion` adds a sinusoidal movement of
+up to 0.02 in size, at `rate` (0.01…4hz). Near the size limits, that motion clips to the available range.
+`decay` sets feedback, `absorption` removes high frequencies from the circulating tail, and `diffusion`
+changes scattering in the tank. Decay is a normalized feedback control, not seconds or an infinite hold.
+
+Predelay delays the whole input to the space, including its early reflections, by 0…200ms. Zero uses
+the delay primitive's minimum of one sample. `tilt` shapes the return with low and high shelves at 300hz
+and 3khz: positive values lift treble and reduce bass, by up to roughly 6db each. `duck` follows the louder
+input channel and attenuates the return while the source is loud. Both echo and space ducking use a
+5ms attack and 200ms release.
+
+```nml
+use std/blocks.{space_reverb, contour}
+
+fx breathing_space {
+  shape = contour(cycle: 1, rise: 8sec, fall: 4sec)
+  wet = in.space_reverb(size: 0.4 + shape.value * 0.2, decay: 0.7,
+    absorption: 0.5, motion: 0.3, tilt: -0.2, duck: 0.4)
+  out = in + wet * 0.2
+}
+```
+
+The rig example combines spectral scanning, a separately panned harmonic highlight, moving stereo
+echoes and a breathing space. Its source is `examples/rig.nml`. CC 10 moves the spectral centre,
+CC 11 sets focus, CC 12 changes space size, and CC 13 sets reverb return level. The `bloom` macro
+moves these alongside brightness, density and echo level. A cycling contour moves echo diffusion
+and space size; its end-of-rise pulse triggers a second contour that changes the return's tone.
 
 ## std/spectral
 
