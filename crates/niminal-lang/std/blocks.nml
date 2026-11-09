@@ -954,3 +954,36 @@ fn row_sequencer(
   row = _row
   wrap = _wrapped
 }
+
+/// A multi-tap delay with a pitch for every tap, in the way of a rhythmic pitch-shifting delay. `taps` repeats (1 to 16)
+/// come after the input, the first `time` later. `curve` sets how they are spaced: 1 is evenly, below 1 they bunch up
+/// towards the end (a ball bouncing to rest), above 1 they spread out. Tap `n` is `shifts[n]` semitones from the original
+/// (a short list repeats its last entry) plus `step` for every tap so far, so `shifts: [0]` with `step: 7` climbs in
+/// fifths; each tap is held to ±24 semitones. Every tap is `decay` as loud as the one before. `spread` sends the first tap left, the second
+/// right, and so on (0 keeps every tap in the middle, 1 sends each all the way to its side). Nothing feeds back, so it can't run away. A tap
+/// can't land later than `max`. Returns left and right, held to ±4; the input is held to ±16. `window` sets the
+/// pitch-shifter's grain, as for `pitch_shift`.
+fn tap_delay(
+  x,
+  time: sec = 1/8 * clock.beat_length,
+  taps: const int = 8,
+  shifts: [num] = [0],
+  step: -12..12 = 0,
+  decay: 0..1 = 0.8,
+  curve: 0.5..2 = 1,
+  spread: 0..1 = 1,
+  window: 10ms..100ms = 40ms,
+  max: const sec = 4sec
+) {
+  _mono = (x.sum / x.channels.len).max(-16).min(16)
+  _t = time.max(1ms).min(max)
+  _c = curve.max(0.5).min(2)
+  _times = (0..<taps).map((_t * pow(it + 1, _c)).min(max))
+  _semis = (0..<taps).map((shifts[it.min(shifts.len - 1)] + (it + 1) * step.max(-12).min(12)).max(-24).min(24))
+  _heard = _mono.delay(_times, max: max).pitch_shift(shift: _semis, window: window.max(10ms).min(100ms)) * (0..<taps).map(pow(decay.max(0).min(1), it + 1))
+  _side = (0..<taps).map(it - floor(it / 2) * 2)
+  _s = spread.max(0).min(1)
+  _left = (_heard * _side.map(1 - it * _s)).sum
+  _right = (_heard * _side.map(1 - (1 - it) * _s)).sum
+  [(_left * 0.25).tanh * 4, (_right * 0.25).tanh * 4]
+}

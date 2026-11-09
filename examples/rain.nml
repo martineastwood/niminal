@@ -1,0 +1,20 @@
+// A pluck played through a pitch-shifting multi-tap delay: sixteen repeats, each a little quieter and a fifth higher
+// than the one before, bunched up towards the end like a ball bouncing to rest, and thrown left and right.
+// pluck -> tap_delay (shifts, step, curve, decay, spread)
+// Render: niminal render examples/rain.nml --bars 8 --out rain.wav
+config { channels: stereo }
+tempo 90bpm
+
+use std/blocks
+
+fn plucks() { impulse((1 / (2beat).num).hz) }
+
+instr rain() {
+  open = gate_length(plucks(), length: 90ms).smooth(3ms)
+  hit = osc(saw, 196hz).lpf(cutoff: 1.5khz) * open * 0.5
+  echoes = tap_delay(hit, time: 3/16 * clock.beat_length, taps: 16, shifts: [0, 0, 7, 12], step: 0, decay: 0.8, curve: 0.8, spread: 0.8)
+  [hit * 0.4 + echoes[0], hit * 0.4 + echoes[1]] * 0.5
+}
+
+// Times are relative to where the file is evaluated, so evaluate it on a bar line.
+at +0bars rain() for 8bars

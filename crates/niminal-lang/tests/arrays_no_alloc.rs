@@ -495,3 +495,32 @@ fn the_row_sequencer_does_not_allocate_while_rendering() {
     assert_eq!(ALLOCATIONS.with(Cell::get), 0);
     assert!(loudest > 1e-3, "{loudest}");
 }
+
+#[test]
+fn the_tap_delay_does_not_allocate_while_rendering() {
+    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n hit = osc(saw, 220hz) * env[1 | 30ms 0] * impulse(3hz).smooth(2ms)\n tap_delay(hit + noise() * 0.01, time: 90ms, taps: 16, shifts: [0, 7, 12, -5], step: 2, decay: 0.85, curve: 0.8, spread: 0.7)\n}";
+    let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
+    let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
+        panic!(
+            "{}",
+            errors
+                .iter()
+                .map(|e| e.render("blocks", &expanded.text))
+                .collect::<String>()
+        )
+    });
+    let mut voice = Voice::new(program.instruments[0].graph.clone(), 48_000.0);
+    let mut buses = Buses::new(&[]);
+    let mut output = vec![vec![0.0; block_size()]; 2];
+    ALLOCATIONS.with(|count| count.set(0));
+    NODE.with(|node| node.set(true));
+    let mut loudest = 0.0f32;
+    for _ in 0..1024 {
+        voice.process_blocks(&mut output, block_size(), &mut buses);
+        assert!(output.iter().flatten().all(|value| value.is_finite()));
+        loudest = output.iter().flatten().fold(loudest, |m, v| m.max(v.abs()));
+    }
+    NODE.with(|node| node.set(false));
+    assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+    assert!(loudest > 1e-3, "{loudest}");
+}
