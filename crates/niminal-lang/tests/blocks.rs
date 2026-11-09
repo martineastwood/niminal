@@ -1671,7 +1671,7 @@ fn stereo_side(out: &[f32], channel: usize) -> Vec<f32> {
 #[test]
 fn a_tap_delay_places_each_tap_by_time_level_and_side() {
     let click = "x = osc(sine, 440hz) * env[1 20ms 0]\n";
-    let out = stereo_render(&format!("{click} tap_delay(x, time: 100ms, taps: 4, decay: 0.5, spread: 1)"), 400);
+    let out = stereo_render(&format!("{click} t = tap_delay(x, time: 100ms, taps: 4, decay: 0.5, spread: 1)\n [t.left, t.right]"), 400);
     let (left, right) = (stereo_side(&out, 0), stereo_side(&out, 1));
     let tap = |x: &[f32], k: usize| peak(&x[k * 100 * 48 + 200..k * 100 * 48 + 100 * 48 - 2000]);
     // taps 1 and 3 are on the left, 2 and 4 on the right, and each is half as loud as the one before
@@ -1682,11 +1682,11 @@ fn a_tap_delay_places_each_tap_by_time_level_and_side() {
     }
     assert!(peak(&left[5 * 100 * 48..]) < 0.005, "only four taps");
     // a spread of 0 puts every tap in both channels equally
-    let mid = stereo_render(&format!("{click} tap_delay(x, time: 100ms, taps: 2, spread: 0)"), 100);
+    let mid = stereo_render(&format!("{click} t = tap_delay(x, time: 100ms, taps: 2, spread: 0)\n [t.left, t.right]"), 100);
     let (ml, mr) = (stereo_side(&mid, 0), stereo_side(&mid, 1));
     assert!((peak(&ml[100 * 48..130 * 48]) - peak(&mr[100 * 48..130 * 48])).abs() < 1e-4);
     // sixteen taps, then silence
-    let many = stereo_render(&format!("{click} tap_delay(x, time: 50ms, taps: 16, decay: 0.9, spread: 0.5)"), 800);
+    let many = stereo_render(&format!("{click} t = tap_delay(x, time: 50ms, taps: 16, decay: 0.9, spread: 0.5)\n [t.left, t.right]"), 800);
     let (a, b) = (stereo_side(&many, 0), stereo_side(&many, 1));
     for k in 1..=16 {
         let w = k * 50 * 48..k * 50 * 48 + 30 * 48;
@@ -1699,13 +1699,13 @@ fn a_tap_delay_places_each_tap_by_time_level_and_side() {
 fn a_tap_delay_curve_moves_the_taps_and_step_climbs_the_pitch() {
     let click = "x = osc(sine, 440hz) * env[1 20ms 0]\n";
     let at_141 = |curve: &str| {
-        let out = stereo_render(&format!("{click} tap_delay(x, time: 100ms, taps: 2, curve: {curve}, spread: 0)"), 200);
+        let out = stereo_render(&format!("{click} t = tap_delay(x, time: 100ms, taps: 2, curve: {curve}, spread: 0)\n [t.left, t.right]"), 200);
         peak(&stereo_side(&out, 0)[142 * 48..158 * 48])
     };
     // with a curve of 0.5 the second tap is at 100 ms times the square root of 2; evenly it is at 200 ms
     assert!(at_141("0.5") > 0.1 && at_141("1") < 0.02, "{} {}", at_141("0.5"), at_141("1"));
     // a step of 12 makes the first repeat an octave up and the second two octaves up
-    let out = stereo_render(&format!("{click} tap_delay(x, time: 250ms, taps: 2, step: 12, decay: 0.8)"), 600);
+    let out = stereo_render(&format!("{click} t = tap_delay(x, time: 250ms, taps: 2, step: 12, decay: 0.8)\n [t.left, t.right]"), 600);
     let (left, right) = (stereo_side(&out, 0), stereo_side(&out, 1));
     let window = |x: &[f32], ms: usize| x[ms * 48..(ms + 120) * 48].to_vec();
     let first = window(&left, 250 + 40);
@@ -1713,7 +1713,7 @@ fn a_tap_delay_curve_moves_the_taps_and_step_climbs_the_pitch() {
     let second = window(&right, 500 + 40);
     assert!(near(&second, 1700.0, 1780.0) > 4.0 * near(&second, 860.0, 900.0), "second is two octaves up");
     // a list of shifts gives each tap its own, and a short list repeats its last
-    let own = stereo_render(&format!("{click} tap_delay(x, time: 250ms, taps: 2, shifts: [12], spread: 0)"), 600);
+    let own = stereo_render(&format!("{click} t = tap_delay(x, time: 250ms, taps: 2, shifts: [12], spread: 0)\n [t.left, t.right]"), 600);
     let (l, r) = (stereo_side(&own, 0), stereo_side(&own, 1));
     assert!(near(&window(&l, 250 + 40), 860.0, 900.0) > 4.0 * sine_content(&window(&l, 250 + 40), 440.0));
     assert!(near(&window(&r, 500 + 40), 860.0, 900.0) > 4.0 * sine_content(&window(&r, 500 + 40), 440.0));
@@ -1722,7 +1722,7 @@ fn a_tap_delay_curve_moves_the_taps_and_step_climbs_the_pitch() {
 #[test]
 fn a_tap_delay_stays_finite_and_bounded_under_extreme_controls() {
     let p = program(
-        "use std/blocks\nconfig { channels: stereo }\ninstr a(x: num, y: num, z: num) { tap_delay(osc(saw, 220hz) * x, time: y * 1ms, taps: 16, shifts: [z, x, y], step: z, decay: y, curve: z, spread: x, window: x * 1ms) }",
+        "use std/blocks\nconfig { channels: stereo }\ninstr a(x: num, y: num, z: num) { t = tap_delay(osc(saw, 220hz) * x, time: y * 1ms, taps: 16, shifts: [z, x, y], step: z, decay: y, curve: z, spread: x, window: x * 1ms)\n [t.left, t.right] }",
     );
     let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
     let extremes = [-1e30f32, -1.0, 0.0, 0.5, 1.0, 1e30, f32::NAN, f32::INFINITY];
@@ -1746,4 +1746,187 @@ fn a_tap_delay_stays_finite_and_bounded_under_extreme_controls() {
             }
         }
     }
+}
+
+/// Renders instrument `name` for `blocks` blocks, calling `set` before each block with the block number.
+fn render_with(source: &str, name: &str, blocks: usize, mut set: impl FnMut(usize, &mut Voice)) -> Vec<f32> {
+    let p = program(source);
+    let instrument = p.instruments.iter().find(|i| i.name == name).unwrap();
+    let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
+    voice.start_note();
+    let mut out = vec![0.0; blocks * block_size()];
+    for (n, chunk) in out.chunks_mut(block_size()).enumerate() {
+        set(n, &mut voice);
+        voice.process(chunk);
+    }
+    out
+}
+
+const TAPE_SOURCE: &str = "use std/blocks\nfn src() { osc(saw, 220hz * (1 + phasor(2hz))) * 0.5 }\ninstr dry() { src() }\ninstr a(r: num, f: num) { freeze_reverse(src(), length: 100ms, reverse: r, freeze: f) }";
+
+#[test]
+fn freeze_reverse_passes_the_input_and_plays_each_window_backwards() {
+    let dry = render_with(TAPE_SOURCE, "dry", 1200, |_, _| {});
+    let same = render_with(TAPE_SOURCE, "a", 1200, |_, _| {});
+    assert!(dry.iter().zip(&same).all(|(a, b)| (a - b).abs() < 1e-6), "passes the input through");
+    // with reverse on from the start, windows of 4801 samples each play the sound before them backwards
+    let rev = render_with(TAPE_SOURCE, "a", 1200, |n, v| {
+        if n == 0 {
+            v.set_param_by_name("r", 1.0);
+        }
+    });
+    let start = 4 * 4801;
+    let error = |offset: isize| -> f32 {
+        (1000..4000).map(|p| (rev[start + p] - dry[(start as isize + offset - p as isize) as usize]).abs()).sum::<f32>() / 3000.0
+    };
+    assert!(error(-1) < 0.02 && error(-1) * 3.0 < error(0) && error(-1) * 3.0 < error(-2), "{} {} {}", error(-2), error(-1), error(0));
+    assert!(rev.iter().all(|v| v.is_finite() && v.abs() <= 16.0));
+}
+
+#[test]
+fn freeze_reverse_loops_the_last_window_while_frozen_and_lets_go_after() {
+    let frozen_from = 800;
+    let held = render_with(TAPE_SOURCE, "a", 1600, |n, v| {
+        v.set_param_by_name("f", if (frozen_from..1200).contains(&n) { 1.0 } else { 0.0 });
+    });
+    let dry = render_with(TAPE_SOURCE, "dry", 1600, |_, _| {});
+    // while frozen the output repeats every 100 ms (4800 samples) and no longer follows the input
+    let from = frozen_from * block_size() + 3000;
+    let repeat: f32 = (from..from + 20_000).map(|n| (held[n] - held[n - 4800]).abs()).sum::<f32>() / 20_000.0;
+    let follows: f32 = (from..from + 20_000).map(|n| (held[n] - dry[n]).abs()).sum::<f32>() / 20_000.0;
+    assert!(repeat < 0.03 && follows > 0.1, "{repeat} {follows}");
+    // after the freeze ends it is the input again
+    let after = 1300 * block_size();
+    assert!(held[after..after + 5000].iter().zip(&dry[after..after + 5000]).all(|(a, b)| (a - b).abs() < 1e-6));
+}
+
+#[test]
+fn freeze_reverse_stays_finite_under_extreme_controls() {
+    let extremes = [-1e30f32, -1.0, 0.0, 0.5, 1.0, 1e30, f32::NAN, f32::INFINITY];
+    let p = program("use std/blocks\ninstr a(x: num, y: num, z: num) { freeze_reverse(osc(saw, 220hz) * x, length: y * 1sec, reverse: z, freeze: x) }");
+    let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
+    for &x in &extremes {
+        for &y in &extremes {
+            let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
+            voice.start_note();
+            let mut out = vec![0.0; block_size()];
+            for z in extremes {
+                voice.set_param_by_name("x", x);
+                voice.set_param_by_name("y", y);
+                voice.set_param_by_name("z", z);
+                for _ in 0..20 {
+                    voice.process(&mut out);
+                    assert!(!voice.is_poisoned() && out.iter().all(|v| v.is_finite() && v.abs() <= 16.001), "{x} {y} {z}");
+                }
+            }
+        }
+    }
+}
+
+fn tap_render(body: &str, blocks: usize) -> (Vec<f32>, Vec<f32>) {
+    tap_render_of("osc(sine, 440hz) * env[1 20ms 0]", body, blocks)
+}
+
+fn tap_render_of(input: &str, body: &str, blocks: usize) -> (Vec<f32>, Vec<f32>) {
+    let out = stereo_render(&format!("x = {input}\n t = {body}\n [t.left, t.right]"), blocks);
+    (stereo_side(&out, 0), stereo_side(&out, 1))
+}
+
+#[test]
+fn a_tap_delay_groove_levels_and_filters_shape_each_tap() {
+    let at = |x: &[f32], from: usize, to: usize| peak(&x[from * 48..to * 48]);
+    // swing pushes the second tap 100/3 ms late: nothing at 238 to 250 ms when straight, a tap there when swung
+    let (straight, _) = tap_render("tap_delay(x, time: 100ms, taps: 2, spread: 0)", 400);
+    let (swung, _) = tap_render("tap_delay(x, time: 100ms, taps: 2, spread: 0, groove: swing)", 400);
+    assert!(at(&straight, 238, 250) < 0.02 && at(&swung, 238, 250) > 0.1, "{} {}", at(&straight, 238, 250), at(&swung, 238, 250));
+    // a level of 0 mutes a tap, and the others carry on
+    let (muted, _) = tap_render("tap_delay(x, time: 100ms, taps: 3, spread: 0, decay: 1, levels: [1, 0, 1])", 400);
+    assert!(at(&muted, 100, 115) > 0.1 && at(&muted, 200, 215) < 0.01 && at(&muted, 300, 315) > 0.1);
+    // filters: a 440 hz tone passes a high or band-pass near it, and not a low-pass far below it
+    let level = |f: &str| at(&tap_render_of("osc(sine, 440hz) * env[1 | 300ms 0]", &format!("tap_delay(x, time: 100ms, taps: 1, spread: 0, decay: 1, {f})"), 400).0, 200, 290);
+    let open = level("filter: off");
+    assert!(level("filter: lowpass, cutoffs: [60hz]") < 0.1 * open, "lowpass");
+    assert!(level("filter: highpass, cutoffs: [60hz]") > 0.7 * open, "highpass");
+    assert!(level("filter: bandpass, cutoffs: [440hz]") > 0.5 * open, "bandpass");
+    assert!(level("filter: highpass, cutoffs: [8khz]") < 0.1 * open, "highpass far above");
+}
+
+#[test]
+fn a_tap_delay_feeds_a_tap_back_with_its_own_pitch_and_can_freeze() {
+    let at = |x: &[f32], from: usize, to: usize| peak(&x[from * 48..to * 48]);
+    // no feedback: one echo. With feedback it goes round again, and again
+    let (plain, _) = tap_render("tap_delay(x, time: 100ms, taps: 1, spread: 0, decay: 1)", 400);
+    let (fed, _) = tap_render("tap_delay(x, time: 100ms, taps: 1, spread: 0, decay: 1, feedback: 0.5)", 400);
+    assert!(at(&plain, 200, 250) < 0.005 && at(&fed, 200, 250) > 0.1 && at(&fed, 300, 350) > 0.03);
+    // the feedback pitch shift climbs an octave on each trip round
+    let (shifted, _) = tap_render("tap_delay(x, time: 150ms, taps: 1, spread: 0, decay: 1, feedback: 0.8, feedback_shift: 12)", 600);
+    // (the feedback shifter holds its sound back by one 40 ms grain, so the second echo lands 40 ms late)
+    let first = shifted[150 * 48..(150 + 24) * 48].to_vec();
+    let second = shifted[(150 + 150 + 40) * 48 + 48 * 5..(150 + 150 + 40 + 24) * 48].to_vec();
+    assert!(sine_content(&first, 440.0) > 4.0 * near(&first, 860.0, 900.0), "first echo is the original pitch");
+    assert!(near(&second, 860.0, 900.0) > 4.0 * sine_content(&second, 440.0), "second echo is an octave up");
+    // freeze keeps looping the last 100 ms (the tap's time) after the input has gone
+    let freeze = |on: bool| {
+        let source = "use std/blocks\nconfig { channels: stereo }\ninstr a(f: num) { x = osc(sine, 440hz) * env[1 50ms 0]\n t = tap_delay(x, time: 100ms, taps: 1, spread: 0, decay: 1, freeze: f)\n [t.left, t.right] }";
+        let p = program(source);
+        let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
+        let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
+        voice.start_note();
+        let mut buses = niminal_engine::Buses::new(&[]);
+        let mut block = vec![vec![0.0; block_size()]; 2];
+        let mut out = Vec::new();
+        for n in 0..1500 {
+            voice.set_param_by_name("f", if on && n > 52 { 1.0 } else { 0.0 });
+            voice.process_blocks(&mut block, block_size(), &mut buses);
+            out.extend_from_slice(&block[0]);
+        }
+        out
+    };
+    let (held, free) = (freeze(true), freeze(false));
+    let late = 1200 * block_size()..1500 * block_size();
+    assert!(peak(&held[late.clone()]) > 0.05 && peak(&free[late]) < 0.02, "{} {}", peak(&held[1200 * 64..]), peak(&free[1200 * 64..]));
+    assert!(held.iter().all(|v| v.is_finite() && v.abs() <= 4.001));
+}
+
+#[test]
+fn a_tap_delay_wobble_moves_the_taps_and_everything_stays_bounded_under_extreme_controls() {
+    let (still, _) = tap_render("tap_delay(osc(saw, 220hz), time: 100ms, taps: 4, spread: 0)", 300);
+    let (moving, _) = tap_render("tap_delay(osc(saw, 220hz), time: 100ms, taps: 4, spread: 0, wobble: 1, wobble_rate: 3hz)", 300);
+    let difference: f32 = still.iter().zip(&moving).map(|(a, b)| (a - b).abs()).sum();
+    assert!(difference > 100.0 && moving.iter().all(|v| v.is_finite()), "{difference}");
+    let p = program(
+        "use std/blocks\nconfig { channels: stereo }\ninstr a(x: num, y: num, z: num) { t = tap_delay(osc(saw, 220hz) * x, time: y * 1ms, taps: 16, shifts: [z, x], step: z, levels: [x, y], decay: y, curve: z, groove: random, groove_amount: z, wobble: y, wobble_rate: z * 1hz, spread: x, filter: bandpass, cutoffs: [y * 1hz, z * 1hz], resonance: x, feedback: y, feedback_tap: z, feedback_shift: z, feedback_tone: x, reverse: z, freeze: x, window: x * 1ms)\n [t.left, t.right] }",
+    );
+    let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
+    let extremes = [-1e30f32, -1.0, 0.0, 0.5, 1.0, 1e30, f32::NAN, f32::INFINITY];
+    for &x in &extremes {
+        for &y in &extremes {
+            let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
+            voice.start_note();
+            let mut buses = niminal_engine::Buses::new(&[]);
+            let mut block = vec![vec![0.0; block_size()]; 2];
+            for z in [-1e30f32, 0.5, 1.0, f32::NAN] {
+                voice.set_param_by_name("x", x);
+                voice.set_param_by_name("y", y);
+                voice.set_param_by_name("z", z);
+                for _ in 0..30 {
+                    voice.process_blocks(&mut block, block_size(), &mut buses);
+                    assert!(
+                        !voice.is_poisoned() && block.iter().flatten().all(|v| v.is_finite() && v.abs() <= 4.001),
+                        "tap_delay {x} {y} {z}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_function_with_state_can_default_a_parameter_to_the_tempo() {
+    // the default reads `clock.beat_length`, which the function itself can't see: it is passed in with the call
+    let out = render(
+        "fn counted(x, time: sec = 1/4 * clock.beat_length) {\n  state total = 0\n  total = total + x\n  total * time.num\n}\ninstr a() { counted(1) }",
+        1,
+    );
+    assert!((out[0] - 0.125).abs() < 1e-6 && (out[1] - 0.25).abs() < 1e-6, "{} {}", out[0], out[1]);
 }

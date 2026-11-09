@@ -498,7 +498,7 @@ fn the_row_sequencer_does_not_allocate_while_rendering() {
 
 #[test]
 fn the_tap_delay_does_not_allocate_while_rendering() {
-    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n hit = osc(saw, 220hz) * env[1 | 30ms 0] * impulse(3hz).smooth(2ms)\n tap_delay(hit + noise() * 0.01, time: 90ms, taps: 16, shifts: [0, 7, 12, -5], step: 2, decay: 0.85, curve: 0.8, spread: 0.7)\n}";
+    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n hit = osc(saw, 220hz) * env[1 | 30ms 0] * impulse(3hz).smooth(2ms)\n t = tap_delay(hit + noise() * 0.01, time: 90ms, taps: 16, shifts: [0, 7, 12, -5], step: 2, decay: 0.85, curve: 0.8, spread: 0.7, groove: swing, wobble: 0.5, filter: bandpass, cutoffs: [800hz, 2khz], feedback: 0.6, feedback_shift: 7, feedback_tone: 0.3, reverse: osc(square, 0.7hz), freeze: osc(square, 0.3hz))\n [t.left, t.right]\n}";
     let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
     let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
         panic!(

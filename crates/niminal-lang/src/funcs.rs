@@ -521,6 +521,22 @@ pub(crate) fn reads(def: &FnDef, name: &str) -> bool {
             .any(|e| visit(e, name))
 }
 
+/// Whether a parameter's default reads `name`, such as `time: sec = 1/8 * clock.beat_length` reading the tempo control.
+pub(crate) fn defaults_read(def: &FnDef, name: &str) -> bool {
+    fn visit(e: &Expr, name: &str) -> bool {
+        let mut found = matches!(&e.kind, ExprKind::Name(n) if n == name)
+            || matches!(&e.kind, ExprKind::Call { name: n, .. } if n.name == name);
+        e.for_each_child(&mut |c| found |= visit(c, name));
+        found
+    }
+    !def.params.iter().any(|p| p.name.name == name)
+        && def
+            .params
+            .iter()
+            .filter_map(|p| p.default.as_ref())
+            .any(|e| visit(e, name))
+}
+
 pub(crate) fn reset_args(args: &[Arg], span: Span) -> Res<(&Expr, &[Stmt])> {
     if let [trigger, body] = args
         && trigger.name.is_none()

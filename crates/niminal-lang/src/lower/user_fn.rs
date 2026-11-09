@@ -398,36 +398,50 @@ impl Lower<'_> {
         let mut def = def.clone();
         let mut params = params.to_vec();
         let mut given = given;
+        let mut injected = 0;
         for control in self.names.controls.clone() {
             let shadowed = def.params.iter().any(|p| p.name.name == control.name)
                 || self.scope.contains_key(&control.name);
-            if shadowed || !funcs::reads(&def, &control.name) {
+            if shadowed
+                || !(funcs::reads(&def, &control.name) || funcs::defaults_read(&def, &control.name))
+            {
                 continue;
             }
             let id = Ident {
                 name: control.name.clone(),
                 span,
             };
-            def.params.push(ParamDef {
-                name: id.clone(),
-                rate: None,
-                ty: None,
-                default: None,
-            });
-            params.push(PParam {
-                name: id.clone(),
-                rate: None,
-                kind: PKind::Any,
-                default: None,
-            });
-            let value = Datum::Sig(self.name(&control.name, span)?);
-            given.push(Some((
-                value,
-                Expr {
-                    kind: ExprKind::Name(control.name.clone()),
-                    span,
+            // first, so a parameter default that reads the control can see it
+            def.params.insert(
+                injected,
+                ParamDef {
+                    name: id.clone(),
+                    rate: None,
+                    ty: None,
+                    default: None,
                 },
-            )));
+            );
+            params.insert(
+                injected,
+                PParam {
+                    name: id.clone(),
+                    rate: None,
+                    kind: PKind::Any,
+                    default: None,
+                },
+            );
+            let value = Datum::Sig(self.name(&control.name, span)?);
+            given.insert(
+                injected,
+                Some((
+                    value,
+                    Expr {
+                        kind: ExprKind::Name(control.name.clone()),
+                        span,
+                    },
+                )),
+            );
+            injected += 1;
         }
         let (def, params) = (&def, &params[..]);
         let mut kargs = Vec::with_capacity(params.len());
