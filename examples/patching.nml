@@ -1,0 +1,47 @@
+// Patching with the newer blocks: a chaotic source and a shift register drive a held, quantized melody; a struck-body
+// resonator rings from the clock; a frequency shifter and a pitch-climbing echo colour the result; a mixer balances them.
+// chaos -> comparator -> track_hold   rungler -> quantize   resonant_body   freq_shifter   shimmer_echo   vca_mix
+// Render: niminal render examples/patching.nml --bars 8 --out patching.wav
+config { channels: stereo }
+tempo 96bpm
+
+use std/blocks
+
+bus mix_bus: stereo
+
+// A melody that wanders by itself: the rungler's steps, held whenever the chaos source is on its positive lobe,
+// snapped to a scale and played by a sine pair.
+instr wanderer() {
+  wild = chaos(rate: 0.7hz, chaos: 0.9)
+  steps = rungler(osc(saw, 2.3hz), osc(saw, 5.1hz))
+  open = comparator(wild.x, threshold: 0, hysteresis: 0.2).gate
+  held = track_hold(steps.value * 12, open)
+  note_number = quantize(held, scale: [0, 2, 3, 5, 7, 8, 10])
+  freq = 220hz * pow(2, note_number / 12)
+  tone = osc(sine, freq) + osc(tri, freq * 2.003) * 0.3
+  voice = tone * (0.35 + 0.15 * wild.z) * env[0 400ms 1 | 800ms 0]
+  mix_bus += voice.pan(angle: wild.y * 25deg)
+}
+
+// A struck object that rings on every step of the shift register: `structure` slides from string to bell as the
+// chaos moves, so the same hits turn from plucked to metallic.
+instr struck() {
+  wild = chaos(rate: 0.2hz)
+  steps = rungler(osc(saw, 3.3hz), osc(saw, 6.7hz))
+  hit = noise() * steps.gate.smooth(3ms) * 0.8
+  ring = resonant_body(hit, freq: 165hz, structure: wild.x * 0.5 + 0.5, decay: 1500ms, damping: 0.4, brightness: 0.6, spread: 0.3)
+  mix_bus += ring.pan(angle: -15deg) * 0.5
+}
+
+// The mix, shifted a little off its harmonics for a glassy edge, with echoes that climb an octave each repeat,
+// balanced with `vca_mix`.
+fx finish {
+  slow = function_gen(cycle: 16, rise: 0.5)
+  glassy = freq_shifter(mix_bus, shift: 35hz + slow * 90hz)
+  climbing = shimmer_echo(mix_bus, time: 3/8beat, shift: 7, feedback: 0.55)
+  out = vca_mix([mix_bus, glassy.up, climbing], [0.8, 0.25 + slow * 0.2, 0.35], curve: exponential)
+}
+
+// Times are relative to where the file is evaluated, so evaluate it on a bar line.
+at +0bars wanderer() for 8bars
+at +0bars struck() for 8bars

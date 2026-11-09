@@ -1156,3 +1156,239 @@ fn the_random_and_voice_blocks_stay_finite_under_extreme_modulation() {
         }
     }
 }
+
+#[test]
+fn a_track_hold_follows_while_open_and_holds_when_closed() {
+    // x goes 0.3, 0.8 with the gate open (it follows), then 0.1 with the gate closed (it holds 0.8)
+    let p = program("use std/blocks\ninstr a(x: num, g: num) { track_hold(x, g) }");
+    let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
+    let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
+    voice.start_note();
+    let mut out = vec![0.0; block_size()];
+    let mut last = Vec::new();
+    for (x, g) in [(0.3, 1.0), (0.8, 1.0), (0.1, 0.0), (0.5, 0.0), (0.6, 1.0), (9e30, 0.0), (f32::NAN, 1.0)] {
+        voice.set_param_by_name("x", x);
+        voice.set_param_by_name("g", g);
+        voice.process(&mut out);
+        last.push(out[out.len() - 1]);
+    }
+    assert_eq!(&last[..6], &[0.3, 0.8, 0.8, 0.8, 0.6, 0.6], "{last:?}");
+    assert!(last[6].is_finite(), "{last:?}");
+}
+
+#[test]
+fn a_comparator_has_a_margin_and_an_inverted_output() {
+    let both = |x: &[f32]| {
+        let p = program(
+            "use std/blocks\ninstr a(x: num) { c = comparator(x, threshold: 0.5, hysteresis: 0.2)\n c.gate + c.inverted * 10 }",
+        );
+        let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
+        let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
+        voice.start_note();
+        let mut out = vec![0.0; block_size()];
+        x.iter()
+            .map(|&x| {
+                voice.set_param_by_name("x", x);
+                voice.process(&mut out);
+                out[out.len() - 1]
+            })
+            .collect::<Vec<_>>()
+    };
+    // rises past 0.6 -> on (1); drifts down to 0.45, inside the margin -> stays on; falls under 0.4 -> off (10)
+    assert_eq!(both(&[0.0, 0.55, 0.7, 0.45, 0.3, 0.55]), vec![10.0, 10.0, 1.0, 1.0, 10.0, 10.0]);
+}
+
+#[test]
+fn chaos_swings_between_lobes_and_stays_in_range() {
+    for (rate, chaos_amount) in [(2.0, 1.0), (20.0, 0.8), (200.0, 1.0), (0.01, 0.0)] {
+        let out = render(
+            &format!("use std/blocks\ninstr a() {{ c = chaos(rate: {rate}hz, chaos: {chaos_amount})\n c.x + c.y * 10 + c.z * 100 }}"),
+            1500,
+        );
+        assert!(out.iter().all(|v| v.is_finite()), "{rate}");
+        let x = render(
+            &format!("use std/blocks\ninstr a() {{ chaos(rate: {rate}hz, chaos: {chaos_amount}).x }}"),
+            1500,
+        );
+        assert!(peak(&x) <= 1.0, "{rate}: {}", peak(&x));
+        if rate >= 2.0 {
+            let positive = x.iter().any(|v| *v > 0.3);
+            let negative = x.iter().any(|v| *v < -0.3);
+            assert!(positive && negative, "{rate} never changed lobe");
+        }
+    }
+}
+
+#[test]
+fn a_rungler_steps_through_eight_levels_on_the_clock_edges() {
+    let out = render(
+        "use std/blocks\ninstr a() { r = rungler(osc(saw, 3.1hz), osc(saw, 7.3hz))\n r.value }",
+        2000,
+    );
+    let mut levels: Vec<i32> = out.iter().map(|v| (v * 7.0).round() as i32).collect();
+    levels.dedup();
+    assert!(levels.len() > 10, "{}", levels.len());
+    assert!(out.iter().all(|v| (0.0..=1.0).contains(v)));
+    let mut distinct: Vec<i32> = levels.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert!(distinct.len() >= 4, "{distinct:?}");
+    // the value only moves where the clock edge is: constant clocks and data give a constant register
+    let flat = render(
+        "use std/blocks\ninstr a() { rungler(0.5, 0.5).value }",
+        200,
+    );
+    assert!(peak(&flat) <= 1.0 && flat.iter().all(|v| v.is_finite()));
+}
+
+#[test]
+fn a_resonant_body_rings_at_its_pitch_and_the_structure_moves_the_overtones() {
+    let ring = |structure: f32| {
+        render(
+            &format!("use std/blocks\ninstr a() {{ resonant_body(noise() * env[1 5ms 0], freq: 220hz, structure: {structure}, decay: 1sec) }}"),
+            120,
+        )
+    };
+    let string = ring(0.0);
+    let bell = ring(1.0);
+    assert!(peak(&string) > 0.02 && peak(&string) < 1.0);
+    // a string has a second overtone at twice the pitch; a bell has none there but one at 2.32 times
+    assert!(sine_content(&string, 440.0) > 3.0 * sine_content(&bell, 440.0).max(1e-6));
+    assert!(sine_content(&bell, 510.4) > 3.0 * sine_content(&string, 510.4).max(1e-6));
+    // damping makes the highs die sooner
+    let tail = |damping: f32| {
+        let out = render(
+            &format!("use std/blocks\ninstr a() {{ resonant_body(impulse(1hz) * 4, freq: 1khz, decay: 1sec, damping: {damping}).hpf(2.5khz) }}"),
+            300,
+        );
+        peak(&out[out.len() / 2..])
+    };
+    assert!(tail(0.0) > tail(1.0), "{} {}", tail(0.0), tail(1.0));
+    // mix 0 is the dry sound
+    let dry = render("use std/blocks\ninstr a() { resonant_body(osc(sine, 100hz), mix: 0) }", 20);
+    assert!((peak(&dry) - 1.0).abs() < 0.01);
+}
+
+/// The strongest sine content anywhere from `low` to `high` hz.
+fn near(x: &[f32], low: f64, high: f64) -> f64 {
+    let mut f = low;
+    let mut best: f64 = 0.0;
+    while f <= high {
+        best = best.max(sine_content(x, f));
+        f += 5.0;
+    }
+    best
+}
+
+#[test]
+fn a_shimmer_echo_repeats_climb_in_pitch_and_alternate_sides() {
+    let out = stereo_render(
+        "x = osc(sine, 440hz) * env[1 20ms 0]\n shimmer_echo(x, time: 250ms, shift: 12, feedback: 0.8)",
+        600,
+    );
+    assert!(out.iter().all(|v| v.is_finite()));
+    let side = |channel: usize| -> Vec<f32> {
+        out.chunks(2 * block_size())
+            .flat_map(|c| c[channel * block_size()..(channel + 1) * block_size()].to_vec())
+            .collect()
+    };
+    let (left, right) = (side(0), side(1));
+    let window = |x: &[f32], start_ms: usize| x[start_ms * 48..(start_ms + 120) * 48].to_vec();
+    // first repeat on the left, an octave up; second on the right, two octaves up; nothing on the other side
+    let first = window(&left, 250 + 40);
+    assert!(near(&first, 860.0, 900.0) > 4.0 * sine_content(&first, 440.0), "first repeat is an octave up");
+    let second = window(&right, 500 + 40);
+    assert!(near(&second, 1700.0, 1780.0) > 4.0 * near(&second, 860.0, 900.0), "second is two octaves up");
+    assert!(peak(&window(&right, 250 + 40)) < 0.02, "the first repeat is only on the left");
+    assert!(peak(&window(&left, 40)) < 0.02, "nothing before the first repeat");
+}
+
+#[test]
+fn a_frequency_shifter_moves_every_frequency_by_the_same_amount() {
+    let shift = |input: f32, amount: f32| {
+        let out = render(
+            &format!("use std/blocks\ninstr a() {{ freq_shifter(osc(sine, {input}hz), shift: {amount}hz).up }}"),
+            200,
+        );
+        out[out.len() / 2..].to_vec()
+    };
+    let up = shift(440.0, 100.0);
+    assert!(sine_content(&up, 540.0) > 20.0 * sine_content(&up, 340.0), "up");
+    let down = shift(440.0, -100.0);
+    assert!(sine_content(&down, 340.0) > 20.0 * sine_content(&down, 540.0), "down");
+    // a zero shift passes the tone as it was
+    let same = shift(440.0, 0.0);
+    assert!(sine_content(&same, 440.0) > 20.0 * sine_content(&same, 540.0));
+}
+
+#[test]
+fn a_vca_mix_scales_each_input_by_its_own_level() {
+    assert!((settled_value("vca_mix([1, 2], [0.5, 0.25])") - 1.0).abs() < 1e-6);
+    assert!((settled_value("vca_mix([1, 2], [0.5, 0.25], curve: exponential)") - 0.375).abs() < 1e-6);
+    assert!((settled_value("vca_mix([1, 2], [0.5, 0.25], master: 0.5)") - 0.5).abs() < 1e-6);
+    // levels outside 0 to 1 are held to it
+    assert!((settled_value("vca_mix([1, 2], [5, -3])") - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn the_new_modulation_and_effect_blocks_stay_finite_under_extreme_modulation() {
+    let extremes = [
+        -1e30,
+        -1.0,
+        0.0,
+        0.5,
+        1.0,
+        1e30,
+        f32::NAN,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+    ];
+    for (body, limit) in [
+        ("track_hold(osc(saw, 110hz) * x, y)", 1000.5),
+        ("comparator(osc(saw, 110hz) * x, threshold: y, hysteresis: z).gate", 1.0),
+        ("chaos(rate: x * 1hz, chaos: y).x + chaos(rate: z * 1hz, chaos: x).z", 2.0),
+        ("rungler(osc(saw, 110hz) * x, osc(saw, 77hz) * y).value + rungler(x, y).gate", 2.0),
+        ("resonant_body(osc(saw, 110hz) * x, freq: y * 1hz, structure: z, decay: x * 1ms, damping: y, brightness: z, spread: x, mix: y)", 16.5),
+        ("freq_shifter(osc(saw, 110hz) * x, shift: y * 1hz).up + freq_shifter(osc(saw, 110hz), shift: z * 1hz).down", 3.1),
+        ("vca_mix([osc(saw, 110hz) * x, osc(saw, 70hz)], [y, z], master: x)", 2100.0),
+    ] {
+        let p = program(&format!("use std/blocks\ninstr a(x: num, y: num, z: num) {{ {body} }}"));
+        let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
+        for &x in &extremes {
+            for &y in &extremes {
+                let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
+                voice.start_note();
+                let mut out = vec![0.0; block_size()];
+                for z in extremes {
+                    voice.set_param_by_name("x", x);
+                    voice.set_param_by_name("y", y);
+                    voice.set_param_by_name("z", z);
+                    for _ in 0..20 {
+                        voice.process(&mut out);
+                        assert!(
+                            !voice.is_poisoned() && out.iter().all(|v| v.is_finite() && v.abs() <= limit),
+                            "{body}: {x}, {y}, {z}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    // the shimmer echo takes a stereo-capable path of its own
+    for (x, y) in [(1e30f32, -1e30f32), (f32::NAN, 0.5), (0.5, f32::INFINITY), (-1.0, 1.0)] {
+        let p = program(
+            "use std/blocks\nconfig { channels: stereo }\ninstr a(x: num, y: num) { shimmer_echo(osc(saw, 220hz) * x, time: y * 1ms, shift: x, feedback: y, window: x * 1ms) }",
+        );
+        let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
+        let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
+        voice.start_note();
+        let mut buses = niminal_engine::Buses::new(&[]);
+        let mut block = vec![vec![0.0; block_size()]; 2];
+        voice.set_param_by_name("x", x);
+        voice.set_param_by_name("y", y);
+        for _ in 0..60 {
+            voice.process_blocks(&mut block, block_size(), &mut buses);
+            assert!(!voice.is_poisoned() && block.iter().flatten().all(|v| v.is_finite() && v.abs() < 50.0), "shimmer {x} {y}");
+        }
+    }
+}

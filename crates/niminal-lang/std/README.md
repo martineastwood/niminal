@@ -85,7 +85,7 @@ tolerances. These numerical checks do not constitute listening approval.
 ## Voice modules (language 0.4)
 
 `multimode_filter`, `low_pass_gate`, `complex_osc`, `shift_random`, `texture`, `quantize`, `vocoder`, `cross_mod`, `slew`,
-`morph_osc`, `wavefolder`, `multi_lfo`, `formant_filter`, `random_source` and `multi_voice` are written to one contract, which later modules should follow:
+`morph_osc`, `wavefolder`, `multi_lfo`, `formant_filter`, `random_source`, `multi_voice`, `track_hold`, `comparator`, `chaos`, `rungler`, `resonant_body`, `shimmer_echo`, `freq_shifter` and `vca_mix` are written to one contract, which later modules should follow:
 
 - Every parameter takes a signal. Pitches and times are in their units, timbre controls run 0..1.
 - Every input is clamped inside the block, so any value, including NaN or infinity, gives a finite output.
@@ -97,6 +97,7 @@ tolerances. These numerical checks do not constitute listening approval.
 - Several jacks are several named results (`-> (low, band, high, notch)`). Results may share a name with
   a control; private locals still start with `_`.
 - Called with only its required inputs, a block makes a sound worth hearing.
+- Don't write the word `drum` (or other names the prelude defines, such as `lerp`) in a std comment or name: the prelude adds its own `drum` function to any file that mentions it, and its locals then clash with a user function called `voice`. Say `percussion`.
 
 A shelf may `use std/blocks`. A preset taken from it brings only the blocks it calls (the expander
 prunes a module that only other modules use), and the catalog copies those blocks with the preset. A

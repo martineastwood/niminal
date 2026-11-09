@@ -28,6 +28,7 @@ modulation.nml: 2x1004077
 multitap.nml: 2x460688
 oscillator_controls.nml: 2x374423
 partial_morph.nml: 2x481248
+patching.nml: 2x1046947
 physical_models.nml: 1x488452
 preset_keys.nml: 2x424812
 presets.nml: 2x739186

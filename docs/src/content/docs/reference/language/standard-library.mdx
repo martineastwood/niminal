@@ -120,6 +120,14 @@ Building blocks to wire together, in the manner of modules in a rack. A block ta
 | `formant_filter(x, freq: 600hz, span: 0.5, res: 0.6, tilt: 0) -> (sound, low, mid, high)` | Three band-pass peaks that move together, so a sound takes on vowels. `span` spreads the upper two, `tilt` favours low or high. Each peak is also an output. |
 | `random_source(clock: 0, spread: 0.5, bias: 0, steps: 1, deja_vu: 0.5, density: 1, length: 8, seed: 0) -> (value, gate)` | A random source for tunes and rhythms: a loop of `length` draws, `deja_vu` the chance of keeping each (1 repeats the loop). `spread` and `bias` shape the values live; `steps` 1 holds each value and lower glides; `density` thins the gates. |
 | `multi_voice(freq, model: 0, timbre: 0.5, harmonics: 0.5, morph: 0.5)` | One voice, five models (analog, FM, additive, vowel, folded) blended by `model`, with three controls that do the most useful thing for each. Every model runs, so it costs about five voices. Within ±1.5. |
+| `track_hold(x, gate)` | Follows `x` while `gate` is high and freezes its last value when `gate` goes low. Where `sample_hold` takes one value per trigger, this follows a signal through the open part of a gate. Held to ±1000. |
+| `comparator(x, threshold: 0, hysteresis: 0.05) -> (gate, inverted)` | Turns any signal into a gate. It switches on above `threshold` plus half the hysteresis and off below `threshold` minus half of it, so a noisy signal doesn't chatter. |
+| `chaos(rate: 1hz, chaos: 0.8) -> (x, y, z)` | A lumpy, never-repeating modulation source from the Lorenz system. `rate` is roughly the swings a second, `chaos` goes from a settled loop to the full tangle. Each output within ±1. |
+| `rungler(data, clock) -> (value, gate)` | An eight-step shift register clocked by one signal and fed by another. `value` (0 to 1) is the last three bits as a number, `gate` pulses on each clock edge. Feed it two oscillators at unrelated speeds. |
+| `resonant_body(x, freq: 220hz, structure: 0.5, decay: 1sec, damping: 0.5, brightness: 0.5, spread: 0, mix: 1)` | Rings a sound like a struck object with eight tuned modes: `structure` goes string, bar, bell; `damping` makes the highs die faster. Softly limited below ±1. |
+| `shimmer_echo(x, time, shift: 12, feedback: 0.6, window: 40ms)` | Wet-only echoes that climb (or fall) in pitch with each of four repeats, alternating left and right. Nothing feeds back, so it can't run away. |
+| `freq_shifter(x, shift: 100hz) -> (up, down)` | Moves every frequency by the same number of hertz (not a pitch shift): metallic, bell-like, underwater. About 50 db of the unwanted side removed. |
+| `vca_mix(inputs, levels, curve: linear, master: 1)` | Mixes inputs by their own levels, each of which can be a control. `exponential` squares the level for a finer bottom end. |
 
 ```nml
 use std/blocks

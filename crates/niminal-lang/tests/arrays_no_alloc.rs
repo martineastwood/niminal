@@ -410,3 +410,30 @@ fn the_oscillator_and_modulation_blocks_do_not_allocate_while_rendering() {
     assert!(output.iter().flatten().all(|value| value.is_finite()));
     assert!(output.iter().flatten().any(|value| value.abs() > 1e-4));
 }
+
+#[test]
+fn the_hold_chaos_resonator_and_shifter_blocks_do_not_allocate_while_rendering() {
+    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n wild = chaos(rate: 3hz)\n steps = rungler(osc(saw, 3.1hz), osc(saw, 7.3hz))\n gate = comparator(wild.x, threshold: 0.1).gate\n held = track_hold(steps.value, gate)\n tone = osc(saw, 110hz * pow(2, held))\n rung = resonant_body(tone * steps.gate, freq: 220hz + wild.y * 50hz, structure: wild.z * 0.5 + 0.5)\n shifted = freq_shifter(rung, shift: 60hz)\n echoes = shimmer_echo(shifted.up, time: 120ms, shift: 7)\n mixed = vca_mix([shifted.up, shifted.down], [wild.x * 0.5 + 0.5, 0.4], curve: exponential)\n [mixed + echoes[0] * 0.3, mixed + echoes[1] * 0.3]\n}";
+    let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
+    let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
+        panic!(
+            "{}",
+            errors
+                .iter()
+                .map(|e| e.render("blocks", &expanded.text))
+                .collect::<String>()
+        )
+    });
+    let mut voice = Voice::new(program.instruments[0].graph.clone(), 48_000.0);
+    let mut buses = Buses::new(&[]);
+    let mut output = vec![vec![0.0; block_size()]; 2];
+    ALLOCATIONS.with(|count| count.set(0));
+    NODE.with(|node| node.set(true));
+    for _ in 0..1024 {
+        voice.process_blocks(&mut output, block_size(), &mut buses);
+    }
+    NODE.with(|node| node.set(false));
+    assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+    assert!(output.iter().flatten().all(|value| value.is_finite()));
+    assert!(output.iter().flatten().any(|value| value.abs() > 1e-4));
+}
