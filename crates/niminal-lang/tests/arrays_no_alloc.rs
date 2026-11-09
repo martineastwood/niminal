@@ -437,3 +437,32 @@ fn the_hold_chaos_resonator_and_shifter_blocks_do_not_allocate_while_rendering()
     assert!(output.iter().flatten().all(|value| value.is_finite()));
     assert!(output.iter().flatten().any(|value| value.abs() > 1e-4));
 }
+
+#[test]
+fn the_clock_and_logic_blocks_do_not_allocate_while_rendering() {
+    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n ticks = impulse(6hz)\n fast = clock_mult(ticks, factor: 4, swing: 0.2)\n coin = bernoulli(fast, probability: 0.6, seed: 2)\n ratchet = burst(coin.a, count: 3, rate: 90hz, accelerate: 0.1)\n held = gate_length(ratchet, length: 30ms)\n late = gate_delay(coin.b, time: 40ms)\n either = gate_logic(held, late, mode: xor)\n half = flip_flop(either)\n inside = window_comparator(osc(sine, 0.7hz), low: -0.3, high: 0.4)\n pitch_step = stepper([0, 3, 7, 12], half.q, reset: inside.outside)\n tone = sync_osc(110hz * pow(2, pitch_step.value / 12), ratio: mux([1.5, 2.5, 3.5], pitch_step.step), shape: 0.3)\n voiced = tone * (held + late * 0.5).smooth(5ms)\n [voiced, voiced * half.not_q]\n}";
+    let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
+    let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
+        panic!(
+            "{}",
+            errors
+                .iter()
+                .map(|e| e.render("blocks", &expanded.text))
+                .collect::<String>()
+        )
+    });
+    let mut voice = Voice::new(program.instruments[0].graph.clone(), 48_000.0);
+    let mut buses = Buses::new(&[]);
+    let mut output = vec![vec![0.0; block_size()]; 2];
+    ALLOCATIONS.with(|count| count.set(0));
+    NODE.with(|node| node.set(true));
+    let mut loudest = 0.0f32;
+    for _ in 0..1024 {
+        voice.process_blocks(&mut output, block_size(), &mut buses);
+        assert!(output.iter().flatten().all(|value| value.is_finite()));
+        loudest = output.iter().flatten().fold(loudest, |m, v| m.max(v.abs()));
+    }
+    NODE.with(|node| node.set(false));
+    assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+    assert!(loudest > 1e-3, "{loudest}");
+}

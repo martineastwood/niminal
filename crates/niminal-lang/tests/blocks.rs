@@ -1392,3 +1392,199 @@ fn the_new_modulation_and_effect_blocks_stay_finite_under_extreme_modulation() {
         }
     }
 }
+
+/// Where a gate or pulse signal goes from low to high (above 0.5), as sample numbers.
+fn rising(x: &[f32]) -> Vec<usize> {
+    (1..x.len()).filter(|&i| x[i] > 0.5 && x[i - 1] <= 0.5).collect()
+}
+
+fn gate_render(body: &str, blocks: usize) -> Vec<f32> {
+    render(&format!("use std/blocks\ninstr a() {{ {body} }}"), blocks)
+}
+
+#[test]
+fn a_clock_multiplier_adds_evenly_spaced_pulses_and_swings_the_odd_ones() {
+    // 4 hz is 12000 samples a period; times 3 is a pulse every 4000 once the period is known
+    let even = rising(&gate_render("clock_mult(impulse(4hz), factor: 3)", 1500));
+    let late: Vec<usize> = even.iter().copied().filter(|&i| i > 24_000).collect();
+    let gaps: Vec<usize> = late.windows(2).map(|w| w[1] - w[0]).collect();
+    assert!(gaps.len() > 8 && gaps.iter().all(|g| (3999..=4001).contains(g)), "{gaps:?}");
+    // a swing of 0.25 holds the middle pulse back by a quarter step (1000 samples)
+    let swung = rising(&gate_render("clock_mult(impulse(4hz), factor: 3, swing: 0.25)", 1500));
+    let gaps: Vec<usize> = swung.iter().copied().filter(|&i| i > 24_000).collect::<Vec<_>>().windows(2).map(|w| w[1] - w[0]).collect();
+    assert!(gaps.iter().any(|g| (4999..=5001).contains(g)) && gaps.iter().any(|g| (2999..=3001).contains(g)), "{gaps:?}");
+    // a factor of 1 passes the clock unchanged, and nothing comes out of silence
+    let one = rising(&gate_render("clock_mult(impulse(4hz), factor: 1)", 1500));
+    assert!(one.len() >= 7, "{one:?}");
+    assert!(peak(&gate_render("clock_mult(0, factor: 4)", 100)) == 0.0);
+}
+
+#[test]
+fn a_bernoulli_gate_splits_every_gate_between_its_two_outputs() {
+    let both = |p: &str, seed: u32| {
+        let a = gate_render(&format!("bernoulli(osc(square, 8hz), probability: {p}, seed: {seed}).a"), 1500);
+        let b = gate_render(&format!("bernoulli(osc(square, 8hz), probability: {p}, seed: {seed}).b"), 1500);
+        (a, b)
+    };
+    let (a, b) = both("0.5", 3);
+    let high = |x: &[f32]| x.iter().filter(|v| **v > 0.5).count();
+    assert!(high(&a) > 5000 && high(&b) > 5000, "{} {}", high(&a), high(&b));
+    // together they are exactly the input gate
+    let input = gate_render("if osc(square, 8hz) > 0.5 { 1 } else { 0 }", 1500);
+    assert!(a.iter().zip(&b).zip(&input).all(|((a, b), i)| (a + b - i).abs() < 1e-6));
+    // a gate goes to one output from start to end
+    let edges = rising(&a).len() + rising(&b).len();
+    assert_eq!(edges, rising(&input).len());
+    assert_eq!(high(&both("1", 3).1), 0);
+    assert_eq!(high(&both("0", 3).0), 0);
+    assert_eq!(both("0.5", 3).0, a, "the same seed gives the same choices");
+    assert_ne!(both("0.5", 9).0, a, "another seed gives other choices");
+}
+
+#[test]
+fn a_burst_fires_its_count_of_pulses_a_rate_apart() {
+    let pulses = rising(&gate_render("burst(impulse(2hz), count: 4, rate: 40hz)", 1500));
+    // 2 hz triggers every 24000 samples; 40 hz is a pulse every 1200
+    // the first pulse of a burst lands with its trigger: the list starts with the second burst's four
+    let gaps: Vec<usize> = pulses[3..7].windows(2).map(|w| w[1] - w[0]).collect();
+    assert!(gaps.iter().all(|g| (1199..=1201).contains(g)), "{pulses:?}");
+    assert!(pulses[7] - pulses[3] > 20_000, "the next burst starts with the next trigger: {pulses:?}");
+}
+
+#[test]
+fn a_burst_accelerates_and_a_count_of_one_is_a_single_pulse() {
+    let fast = rising(&gate_render("burst(impulse(1hz), count: 5, rate: 40hz, accelerate: 0.3)", 1500));
+    let gaps: Vec<usize> = fast[..4].windows(2).map(|w| w[1] - w[0]).collect();
+    assert!(gaps.windows(2).all(|g| g[1] < g[0]), "{gaps:?}");
+    let one = rising(&gate_render("burst(impulse(2hz), count: 1)", 1500));
+    assert!(one.len() >= 2 && one[1] - one[0] == 24_000, "{one:?}");
+}
+
+#[test]
+fn a_gate_length_and_a_gate_delay_set_when_a_gate_is_high() {
+    let held = gate_render("gate_length(impulse(2hz), length: 100ms)", 800);
+    let high: Vec<usize> = (0..held.len()).filter(|&i| held[i] > 0.5).collect();
+    // the first gate is exactly 4800 samples long
+    assert!((4800..=4801).contains(&high.iter().take_while(|&&i| i < 24_000).count()));
+    let moved = rising(&gate_render("gate_delay(osc(square, 3hz), time: 100ms)", 800));
+    let plain = rising(&gate_render("osc(square, 3hz)", 800));
+    assert!(moved.iter().zip(&plain).all(|(m, p)| (*m as i64 - *p as i64 - 4800).abs() <= 1), "{moved:?} {plain:?}");
+}
+
+#[test]
+fn gate_logic_follows_its_truth_tables() {
+    // (mode, [00, 01, 10, 11])
+    for (mode, table) in [
+        ("and", [0.0, 0.0, 0.0, 1.0]),
+        ("or", [0.0, 1.0, 1.0, 1.0]),
+        ("xor", [0.0, 1.0, 1.0, 0.0]),
+        ("nand", [1.0, 1.0, 1.0, 0.0]),
+        ("nor", [1.0, 0.0, 0.0, 0.0]),
+        ("xnor", [1.0, 0.0, 0.0, 1.0]),
+    ] {
+        for (i, expected) in table.iter().enumerate() {
+            let (a, b) = ((i >> 1) as f32, (i & 1) as f32);
+            let got = last_of(&format!("use std/blocks\ninstr a() {{ gate_logic({a}, {b}, mode: {mode}) }}"));
+            assert_eq!(got, *expected, "{mode} {a} {b}");
+        }
+    }
+}
+
+#[test]
+fn a_flip_flop_halves_a_clock_and_resets() {
+    let q = gate_render("flip_flop(impulse(4hz)).q", 1000);
+    let up = rising(&q);
+    assert!(up.windows(2).all(|w| w[1] - w[0] == 24_000), "{up:?}");
+    let high: usize = q.iter().filter(|v| **v > 0.5).count();
+    assert!((high as i64 - (q.len() as i64) / 2).abs() < 12_500, "{high}");
+    let reset = gate_render("flip_flop(impulse(4hz), reset: 1).q", 400);
+    assert_eq!(peak(&reset), 0.0);
+    let opposite = gate_render("flip_flop(impulse(4hz)).not_q", 400);
+    assert!(q.iter().zip(&opposite).take(opposite.len()).all(|(q, n)| (q + n - 1.0).abs() < 1e-6));
+}
+
+#[test]
+fn a_window_comparator_and_a_mux_choose_by_value() {
+    assert_eq!(settled_value("window_comparator(0.2, low: -0.5, high: 0.5).inside"), 1.0);
+    assert_eq!(settled_value("window_comparator(0.7, low: -0.5, high: 0.5).inside"), 0.0);
+    assert_eq!(settled_value("window_comparator(0.7, low: 0.5, high: -0.5).outside"), 1.0, "limits in either order");
+    assert_eq!(settled_value("mux([0.1, 0.2, 0.3], 1.7)"), 0.2);
+    assert_eq!(settled_value("mux([0.1, 0.2, 0.3], -5)"), 0.1);
+    assert_eq!(settled_value("mux([0.1, 0.2, 0.3], 99)"), 0.3);
+}
+
+#[test]
+fn a_stepper_walks_through_its_inputs_and_wraps() {
+    let out = gate_render("stepper([1, 2, 3], impulse(8hz)).value", 1500);
+    // 8 hz is a step every 6000 samples; the trigger at the very start already counts as a step
+    let at = |n: usize| out[n * 6000 + 3000];
+    assert_eq!([at(0), at(1), at(2), at(3), at(4)], [2.0, 3.0, 1.0, 2.0, 3.0]);
+    let step = gate_render("stepper([1, 2, 3], impulse(8hz)).step", 1500);
+    assert_eq!(step[2 * 6000 + 3000], 0.0);
+    let reset = gate_render("stepper([1, 2, 3], impulse(8hz), reset: 1).step", 600);
+    assert_eq!(peak(&reset), 0.0);
+}
+
+#[test]
+fn a_sync_oscillator_repeats_at_the_master_pitch_whatever_the_ratio() {
+    for ratio in [1.0, 2.5, 3.7, 8.0] {
+        let out = gate_render(&format!("sync_osc(110hz, ratio: {ratio}) * env[1 | 0ms 1]"), 400);
+        let tail = &out[out.len() / 2..];
+        assert!(tail.iter().all(|v| v.is_finite()) && peak(tail) <= 1.3, "{ratio}: {}", peak(tail));
+        // one master period is 48000 / 110 samples; the waveform comes round again
+        let period = 48_000.0 / 110.0;
+        let (mut same, mut count) = (0.0f32, 0);
+        for i in 2000..8000 {
+            let j = i as f32 + period;
+            let (a, b) = (tail[i], tail[j as usize]);
+            same += (a - b).abs();
+            count += 1;
+        }
+        assert!((same / count as f32) < 0.12, "{ratio}: {}", same / count as f32);
+    }
+    // the ratio changes the colour, not the pitch
+    let plain = gate_render("sync_osc(110hz, ratio: 1)", 400);
+    let swept = gate_render("sync_osc(110hz, ratio: 3.7)", 400);
+    let difference: f32 = plain.iter().zip(&swept).map(|(a, b)| (a - b).abs()).sum();
+    assert!(difference > 100.0, "{difference}");
+}
+
+#[test]
+fn the_clock_and_logic_blocks_stay_finite_under_extreme_modulation() {
+    let extremes = [-1e30, -1.0, 0.0, 0.5, 1.0, 1e30, f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
+    for (body, limit) in [
+        ("clock_mult(osc(square, 5hz) * x, factor: y, swing: z)", 1.0),
+        ("bernoulli(osc(square, 5hz) * x, probability: y, seed: 2).a + bernoulli(x, probability: z).b", 2.0),
+        ("burst(osc(square, 5hz) * x, count: y, rate: z * 1hz, accelerate: x)", 1.0),
+        ("gate_length(osc(square, 5hz) * x, length: y * 1sec)", 1.0),
+        ("gate_delay(osc(square, 5hz) * x, time: y * 1sec)", 1000.5),
+        ("gate_logic(x, y, mode: xor) + gate_logic(y, z, mode: nand)", 2.0),
+        ("flip_flop(osc(square, 5hz) * x, reset: y).q + flip_flop(z).not_q", 2.0),
+        ("window_comparator(x, low: y, high: z).inside", 1.0),
+        ("mux([x, y, z], x * 1.0)", 1000.5),
+        ("stepper([x, y, z], osc(square, 5hz) * x, reset: z).value", 1000.5),
+        ("sync_osc(110hz * x, ratio: y, shape: z, width: x)", 1.3),
+    ] {
+        let p = program(&format!("use std/blocks\ninstr a(x: num, y: num, z: num) {{ {body} }}"));
+        let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
+        for &x in &extremes {
+            for &y in &extremes {
+                let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
+                voice.start_note();
+                let mut out = vec![0.0; block_size()];
+                for z in extremes {
+                    voice.set_param_by_name("x", x);
+                    voice.set_param_by_name("y", y);
+                    voice.set_param_by_name("z", z);
+                    for _ in 0..20 {
+                        voice.process(&mut out);
+                        assert!(
+                            !voice.is_poisoned() && out.iter().all(|v| v.is_finite() && v.abs() <= limit),
+                            "{body}: {x}, {y}, {z}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

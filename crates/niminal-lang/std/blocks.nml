@@ -744,3 +744,146 @@ fn vca_mix(inputs: [num], levels: [num], curve: (linear | exponential) = linear,
   _shaped = if curve == exponential { _l * _l } else { _l }
   (inputs.map(it.max(-1000).min(1000)) * _shaped).sum * master.max(0).min(1)
 }
+
+/// Multiplies a clock: every rising edge of `clock` passes, and `factor` evenly spaced edges are added inside each
+/// period, so a clock at 2 hz with a factor of 4 gives 8 pulses a second. `swing` (0 to 0.5) pushes every second pulse
+/// late by that share of a step. The period is measured from the clock itself, so nothing comes out until two edges
+/// have arrived, and it follows a clock that speeds up or slows down a period late. Pulses last one sample.
+/// `factor` is held to 1 to 16 and rounded down.
+fn clock_mult(clock, factor: 1..16 = 2, swing: 0..0.5 = 0) {
+  state _since = 0
+  state _period = 0
+  state _previous = 0
+  state _next = 1
+  _high = if clock.sum > 0.5 { 1 } else { 0 }
+  _edge = if _high > 0 and _previous <= 0 { 1 } else { 0 }
+  _previous = _high
+  _count = factor.max(1).min(16).floor
+  _step = _period / _count
+  _odd = _next - floor(_next / 2) * 2
+  _due = _next * _step + _odd * swing.max(0).min(0.5) * _step
+  _fire = if _edge > 0 { 1 } else { if _period > 0 and _next < _count and _since >= _due { 1 } else { 0 } }
+  _measured = _since + 1
+  _period = if _edge > 0 and _since > 0 { _measured } else { _period }
+  _since = if _edge > 0 { 0 } else { (_since + 1).min(10000000) }
+  _next = if _edge > 0 { 1 } else { if _fire > 0 { _next + 1 } else { _next } }
+  _fire
+}
+
+/// Sends each trigger to one of two outputs by a coin flip: `a` with chance `probability`, otherwise `b`. A gate keeps
+/// going to the output it was sent to for as long as it stays high, so it works on gates as well as triggers. Using only
+/// `a` gives a probability gate. The same `seed` gives the same run of choices.
+fn bernoulli(trigger, probability: 0..1 = 0.5, seed: const num = 0) -> (a, b) {
+  state _previous = 0
+  state _route = 0
+  _high = if trigger.sum > 0.5 { 1 } else { 0 }
+  _edge = if _high > 0 and _previous <= 0 { 1 } else { 0 }
+  _previous = _high
+  _draw = noise(seed: seed) * 0.5 + 0.5
+  _route = if _edge > 0 { if _draw < probability.max(0).min(1) { 1 } else { 0 } } else { _route }
+  a = _high * _route
+  b = _high * (1 - _route)
+}
+
+/// A burst of pulses from each trigger, like a ratchet: `count` pulses (the first lands with the trigger), `rate` a
+/// second, one sample long. `count` is held to 1 to 16, `rate` to 1 hz to 2 khz, and a new trigger starts the burst
+/// again. `accelerate` (-0.5 to 0.5) makes each gap that much shorter (positive) or longer (negative) than the one before.
+fn burst(trigger, count: 1..16 = 4, rate: 1hz..2khz = 20hz, accelerate: -0.5..0.5 = 0) {
+  state _previous = 0
+  state _left = 0
+  state _wait = 0
+  state _gap = 0
+  _high = if trigger.sum > 0.5 { 1 } else { 0 }
+  _edge = if _high > 0 and _previous <= 0 { 1 } else { 0 }
+  _previous = _high
+  _first = (sample_rate.num / rate.num.max(1).min(2000)).max(2)
+  _due = if _edge <= 0 and _left > 0 and _wait <= 1 { 1 } else { 0 }
+  _gap = if _edge > 0 { _first } else { if _due > 0 { (_gap * (1 - accelerate.max(-0.5).min(0.5))).max(2).min(sample_rate.num) } else { _gap } }
+  _left = if _edge > 0 { count.max(1).min(16).floor - 1 } else { if _due > 0 { _left - 1 } else { _left } }
+  _wait = if _edge > 0 or _due > 0 { _gap } else { _wait - 1 }
+  if _edge > 0 or _due > 0 { 1 } else { 0 }
+}
+
+/// Stretches a trigger into a gate of `length`, so a one-sample pulse can open an envelope or a gate for a set time. A
+/// new trigger while it is open starts the length again. `length` is held to 0 to 10 seconds.
+fn gate_length(trigger, length: 0sec..10sec = 100ms) {
+  state _previous = 0
+  state _left = 0
+  _high = if trigger.sum > 0.5 { 1 } else { 0 }
+  _edge = if _high > 0 and _previous <= 0 { 1 } else { 0 }
+  _previous = _high
+  _left = if _edge > 0 { length.max(0sec).min(10sec).num * sample_rate.num } else { (_left - 1).max(0) }
+  if _left > 0 { 1 } else { 0 }
+}
+
+/// A gate or trigger arriving `time` later. `time` is held to 0 to `max`, and the gate to ±1000.
+fn gate_delay(gate, time: sec = 50ms, max: const sec = 2sec) {
+  gate.sum.max(-1000).min(1000).delay(time.max(0sec).min(max), max: max)
+}
+
+/// Combines two gates: `and` (both high), `or` (either), `xor` (exactly one), and the inverted `nand`, `nor` and `xnor`. A
+/// signal counts as high above 0.5. The result is 1 or 0.
+fn gate_logic(a, b, mode: (and | or | xor | nand | nor | xnor) = and) {
+  _a = if a.sum > 0.5 { 1 } else { 0 }
+  _b = if b.sum > 0.5 { 1 } else { 0 }
+  _and = _a * _b
+  _or = (_a + _b).min(1)
+  _xor = abs(_a - _b)
+  if mode == and { _and } else { if mode == or { _or } else { if mode == xor { _xor } else { if mode == nand { 1 - _and } else { if mode == nor { 1 - _or } else { 1 - _xor } } } } }
+}
+
+/// Changes state on every rising edge of `trigger`: `q` goes 1, 0, 1, 0, so a clock becomes a clock at half the speed,
+/// and `not_q` is the opposite. A high `reset` holds `q` at 0.
+fn flip_flop(trigger, reset = 0) -> (q, not_q) {
+  state _previous = 0
+  state _state = 0
+  _high = if trigger.sum > 0.5 { 1 } else { 0 }
+  _edge = if _high > 0 and _previous <= 0 { 1 } else { 0 }
+  _previous = _high
+  _state = if reset.sum > 0.5 { 0 } else { if _edge > 0 { 1 - _state } else { _state } }
+  q = _state
+  not_q = 1 - _state
+}
+
+/// Whether `x` is between `low` and `high` (`inside`) or not (`outside`), as 1 or 0. The two limits can be given in
+/// either order.
+fn window_comparator(x, low = -0.5, high = 0.5) -> (inside, outside) {
+  _x = x.max(-1000).min(1000)
+  _lo = low.max(-1000).min(1000)
+  _hi = high.max(-1000).min(1000)
+  inside = if _x >= _lo.min(_hi) and _x <= _lo.max(_hi) { 1 } else { 0 }
+  outside = 1 - inside
+}
+
+/// Picks one of `inputs` by `index`, rounded down and held to the first and last. An input that is not chosen is not
+/// heard. The result is held to ±1000. For a smooth crossfade use `scan_mix`.
+fn mux(inputs: [num], index) {
+  inputs[index.max(0).min(inputs.len - 1).floor].max(-1000).min(1000)
+}
+
+/// A sequential switch: each rising edge of `clock` moves to the next of `inputs`, and after the last it goes back to
+/// the first. A high `reset` returns to the first. `value` is the chosen input (held to ±1000) and `step` the step number from 0.
+fn stepper(inputs: [num], clock, reset = 0) -> (value, step) {
+  state _previous = 0
+  state _step = 0
+  _high = if clock.sum > 0.5 { 1 } else { 0 }
+  _edge = if _high > 0 and _previous <= 0 { 1 } else { 0 }
+  _previous = _high
+  _count = inputs.len
+  _step = if reset.sum > 0.5 { 0 } else { if _edge > 0 { (_step + 1) - floor((_step + 1) / _count) * _count } else { _step } }
+  value = inputs[_step].max(-1000).min(1000)
+  step = _step
+}
+
+/// An oscillator that restarts its own waveform each time a master oscillator at `freq` completes a cycle. `ratio` is the
+/// speed of the restarting oscillator compared with the master: a whole number gives a plain tone, and sweeping it gives
+/// the sharp, tearing sound of hard sync. `shape` moves from a saw (0) to a pulse of `width` (1). The master's pitch is
+/// what you hear; `ratio` changes the colour. Within ±1.3.
+fn sync_osc(freq: hz, ratio: 0.5..16 = 2, shape: 0..1 = 0, width: 0.05..0.95 = 0.5) {
+  _freq = freq.max(0hz).min(sample_rate * 0.45)
+  _reset = impulse(_freq)
+  _speed = _freq * ratio.max(0.5).min(16)
+  _saw = reset_on(_reset) { osc(saw, _speed.min(sample_rate * 0.45)) }
+  _pulse = reset_on(_reset) { osc(pulse, _speed.min(sample_rate * 0.45), width: width.max(0.05).min(0.95)) }
+  _saw.crossfade(_pulse, shape.max(0).min(1)).dc_block.clip(level: 1.3)
+}

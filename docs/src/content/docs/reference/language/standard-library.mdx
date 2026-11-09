@@ -128,6 +128,17 @@ Building blocks to wire together, in the manner of modules in a rack. A block ta
 | `shimmer_echo(x, time, shift: 12, feedback: 0.6, window: 40ms)` | Wet-only echoes that climb (or fall) in pitch with each of four repeats, alternating left and right. Nothing feeds back, so it can't run away. |
 | `freq_shifter(x, shift: 100hz) -> (up, down)` | Moves every frequency by the same number of hertz (not a pitch shift): metallic, bell-like, underwater. About 50 db of the unwanted side removed. |
 | `vca_mix(inputs, levels, curve: linear, master: 1)` | Mixes inputs by their own levels, each of which can be a control. `exponential` squares the level for a finer bottom end. |
+| `clock_mult(clock, factor: 2, swing: 0) -> gate` | Adds `factor` evenly spaced pulses inside each period of a clock. `swing` (0 to 0.5) pushes every second one late. The period is measured from the clock, so output starts after its second edge. One-sample pulses. |
+| `bernoulli(trigger, probability: 0.5, seed: 0) -> (a, b)` | Sends each trigger or gate to `a` or `b` by a coin flip. A gate stays with the output it was sent to. Using only `a` is a probability gate. |
+| `burst(trigger, count: 4, rate: 20hz, accelerate: 0) -> gate` | A ratchet: `count` pulses a `rate` apart for each trigger, each gap shorter or longer by `accelerate`. |
+| `gate_length(trigger, length: 100ms) -> gate` | Stretches a trigger into a gate of a set length. |
+| `gate_delay(gate, time: 50ms, max: 2sec)` | A gate or trigger arriving later. |
+| `gate_logic(a, b, mode: and) -> gate` | `and`, `or`, `xor`, `nand`, `nor` or `xnor` of two gates. High is above 0.5. |
+| `flip_flop(trigger, reset: 0) -> (q, not_q)` | Toggles on every rising edge, so a clock becomes a clock at half the speed. A high `reset` holds it at 0. |
+| `window_comparator(x, low: -0.5, high: 0.5) -> (inside, outside)` | Whether `x` is between two limits, as 1 or 0. |
+| `mux(inputs, index)` | The input picked by `index`, rounded down and held to the first and last. |
+| `stepper(inputs, clock, reset: 0) -> (value, step)` | A sequential switch: each clock edge moves to the next input and wraps after the last. |
+| `sync_osc(freq, ratio: 2, shape: 0, width: 0.5)` | Hard sync: an oscillator restarted by a master at `freq`. `ratio` sets the colour, and sweeping it gives the tearing sync sound. Within ±1.3. |
 
 ```nml
 use std/blocks

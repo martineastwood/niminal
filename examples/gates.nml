@@ -1,0 +1,44 @@
+// A rhythm built from gates: a clock is multiplied and swung, a coin flip sends hits to two voices, a ratchet fires
+// bursts, a flip-flop halves the clock, and a stepper picks the pitch of a hard-sync lead.
+// clock_mult -> bernoulli -> burst -> gate_length   flip_flop -> stepper -> sync_osc   gate_logic
+// Render: niminal render examples/gates.nml --bars 8 --out gates.wav
+config { channels: stereo }
+tempo 110bpm
+
+use std/blocks
+
+// The beat as a clock: one pulse a beat.
+fn beat_clock() { impulse((1 / (1beat).num).hz) }
+
+// Two pulses to the beat, the second one pushed late for swing. Some of them go to the kick, chosen by a coin flip that
+// stays the same for the same seed.
+instr kicks() {
+  pulses = clock_mult(beat_clock(), factor: 2, swing: 0.25)
+  coin = bernoulli(pulses, probability: 0.55, seed: 4)
+  hit = gate_length(coin.a, length: 120ms)
+  osc(sine, 50hz + env[1 | 120ms 0] * 80hz) * (hit.smooth(2ms)) * 0.7
+}
+
+instr hats() {
+  pulses = clock_mult(beat_clock(), factor: 4, swing: 0.15)
+  coin = bernoulli(pulses, probability: 0.45, seed: 9)
+  ratchet = burst(coin.a, count: 3, rate: 35hz, accelerate: 0.2)
+  opened = gate_length(ratchet, length: 25ms)
+  noise() * opened.smooth(1ms) * 0.18
+}
+
+// A lead that walks four pitches, one for every second beat (a flip-flop halves the beat), and whose sync ratio
+// opens and closes with the bar. The gate is the `or` of the flip-flop's two sides, which is always on: it only shows how `gate_logic` is wired.
+instr lead() {
+  halves = flip_flop(beat_clock())
+  note_step = stepper([0, 7, 3, 10], halves.q)
+  sweep = function_gen(cycle: 8, rise: 0.5)
+  tone = sync_osc(130.8hz * pow(2, note_step.value / 12), ratio: 1.5 + sweep * 3, shape: 0.2, width: 0.4)
+  open = gate_logic(halves.q, halves.not_q, mode: or)
+  (tone * open.smooth(10ms) * 0.2).pan(angle: 0deg)
+}
+
+// Times are relative to where the file is evaluated, so evaluate it on a bar line.
+at +0bars kicks() for 8bars
+at +2bars hats() for 6bars
+at +4bars lead() for 4bars

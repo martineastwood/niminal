@@ -10,6 +10,7 @@ drums.nml: 2x488426
 envelope_transfer.nml: 2x440457
 functions.nml: 2x293633
 fx.nml: 2x583652
+gates.nml: 2x843578
 generated_drums.nml: 2x391561
 gestures.nml: 2x353001
 glitch.nml: 2x353001
