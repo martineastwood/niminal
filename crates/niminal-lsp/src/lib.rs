@@ -1227,6 +1227,63 @@ mod tests {
     }
 
     #[test]
+    fn semantic_tokens_colour_the_values_of_choice_parameters() {
+        let text = "instr a() {\n  x = tap_delay(osc(saw, 110hz), filter: bandpass, groove: swing)\n  y = wobble(beats: 4, shape: smooth)\n}\n";
+        let mut server = Server::new();
+        open(&mut server, text);
+        let reply = request(
+            &mut server,
+            1,
+            "textDocument/semanticTokens/full",
+            json!({ "textDocument": { "uri": URI } }),
+        );
+        let data: Vec<u32> = reply["data"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u32).collect();
+        let (mut line, mut column) = (0, 0);
+        let mut found = Vec::new();
+        for token in data.chunks(5) {
+            line += token[0];
+            column = if token[0] == 0 { column + token[1] } else { token[1] };
+            let word = &text.lines().nth(line as usize).unwrap()[column as usize..(column + token[2]) as usize];
+            found.push((word.to_string(), features::TOKEN_TYPES[token[3] as usize]));
+        }
+        for word in ["bandpass", "swing", "smooth"] {
+            assert!(found.contains(&(word.to_string(), "enumMember")), "{word}: {found:?}");
+        }
+        // the parameter names stay parameters
+        assert!(found.contains(&("filter".to_string(), "parameter")), "{found:?}");
+    }
+
+    #[test]
+    fn every_choice_value_of_the_std_library_is_known_to_the_semantic_tokens() {
+        let std = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../niminal-lang/std");
+        let mut seen = 0;
+        for entry in std::fs::read_dir(std).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "nml") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for line in text.lines() {
+                // a parameter such as `filter: (off | lowpass | bandpass) = off`
+                let mut rest = line;
+                while let Some(open) = rest.find(": (") {
+                    let after = &rest[open + 3..];
+                    let Some(close) = after.find(')') else { break };
+                    let inside = &after[..close];
+                    if inside.contains('|') && after[close + 1..].trim_start().starts_with('=') {
+                        for value in inside.split('|').map(str::trim) {
+                            seen += 1;
+                            assert!(features::CHOICE_VALUES.contains(&value), "`{value}` in {path:?} is missing from CHOICE_VALUES");
+                        }
+                    }
+                    rest = &after[close..];
+                }
+            }
+        }
+        assert!(seen > 20, "{seen}");
+    }
+
+    #[test]
     fn semantic_tokens_colour_parameters_and_locals_inside_their_definition() {
         let text = "instr tone(size, freq: hz = 440hz) {\n  voice = osc(saw, freq: freq)\n  out = voice\n}\nfn other(x) {\n  voice = x\n}\n";
         let mut server = Server::new();

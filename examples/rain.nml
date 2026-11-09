@@ -16,8 +16,8 @@ instr rain() {
   phase = clock.bar.mod(4)
   frozen = if phase > 3 { 1 } else { 0 }
   backwards = if phase > 2 and phase <= 3 { 1 } else { 0 }
-  echoes = tap_delay(hit, time: 3/16 * clock.beat_length, taps: 16, shifts: [0, 0, 7, 12], step: 0, decay: 0.82, curve: 0.8, spread: 0.8, filter: bandpass, cutoffs: [600hz, 1.2khz, 2.4khz, 4khz], resonance: 0.35, feedback: 0.35, feedback_shift: 12, feedback_tone: 0.2, wobble: 0.3, wobble_rate: 0.4hz, reverse: backwards, freeze: frozen)
-  [hit * 0.4 + echoes.left, hit * 0.4 + echoes.right] * 1.2
+  repeats = tap_delay(hit, time: 3/16 * clock.beat_length, taps: 16, shifts: [0, 0, 7, 12], step: 0, decay: 0.82, curve: 0.8, spread: 0.8, filter: bandpass, cutoffs: [600hz, 1.2khz, 2.4khz, 4khz], resonance: 0.35, feedback: 0.35, feedback_shift: 12, feedback_tone: 0.2, wobble: 0.3, wobble_rate: 0.4hz, reverse: backwards, freeze: frozen)
+  [hit * 0.4 + repeats.left, hit * 0.4 + repeats.right] * 1.2
 }
 
 // Times are relative to where the file is evaluated, so evaluate it on a bar line.

@@ -24,6 +24,8 @@ const fnDefiners = new Set('instr mono fn def fx'.split(' '));
 /** Words the compiler binds for you inside a body. */
 const specials = new Set('it note clock'.split(' '));
 export const constants = new Set('sine saw square pulse tri stereo quad true false pi sample_rate'.split(' '));
+/** The values a choice parameter takes, such as `filter: bandpass`: coloured like the other constants unless called or assigned. */
+const options = new Set('lowpass bandpass highpass linear exponential smooth stepped straight swing hard_swing reverse_swing random off diode fold ring nand nor xor xnor'.split(' '));
 
 // Lexical colouring remains available while a definition is incomplete. Semantic
 // information, documentation and validation come from the compiler through LSP.
@@ -83,6 +85,7 @@ export const niminal = StreamLanguage.define({
       if (keywords.has(word)) return 'keyword';
       if (types.has(word)) return 'typeName';
       if (constants.has(word)) return 'atom';
+      if (options.has(word) && !stream.match(/^\s*(?:\(|=(?!=))/, false)) return 'atom';
       if (stream.match(/^\s*\(/, false)) return 'variableName.function';
       if (stream.match(/^\s*:(?!:)/, false)) return 'propertyName';
       if (stream.match(/^\s*(?:\+=|=(?!=))/, false)) return 'variableName.definition';

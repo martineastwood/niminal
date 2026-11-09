@@ -26,6 +26,14 @@ const CLASS: u32 = 1;
 const VARIABLE: u32 = 2;
 const PARAMETER: u32 = 3;
 const ENUM_MEMBER: u32 = 4;
+
+/// The values a choice parameter takes in the std library (`filter: bandpass`, `shape: smooth`). A test keeps this in step
+/// with the `(a | b | c)` parameters of `crates/niminal-lang/std`.
+pub(crate) const CHOICE_VALUES: &[&str] = &[
+    "and", "bandpass", "both", "diode", "exponential", "filter", "fold", "gate", "hard_swing", "highpass", "linear",
+    "lowpass", "nand", "nor", "off", "on", "or", "random", "reverse_swing", "ring", "smooth", "stepped", "straight",
+    "swing", "xnor", "xor",
+];
 const NAMESPACE: u32 = 5;
 const ENUM: u32 = 6;
 
@@ -774,6 +782,13 @@ pub fn semantic_tokens(doc: &Document) -> Vec<u32> {
             && builtins.contains(name)
         {
             Some(FUNCTION)
+        } else if before == Some(&Tok::Colon)
+            && !matches!(after, Some(Tok::Colon | Tok::LParen))
+            && locals[i].is_none()
+            && CHOICE_VALUES.contains(&name.as_str())
+        {
+            // the value of a choice parameter: `filter: bandpass`
+            Some(ENUM_MEMBER)
         } else if matches!(before, Some(Tok::LParen | Tok::Comma | Tok::Colon))
             && matches!(after, Some(Tok::Comma | Tok::RParen))
             && locals[i].is_none()

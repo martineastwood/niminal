@@ -47,8 +47,8 @@ instr pluck(freq: init hz, decay: 0..1 = 0.997) {
 instr drift(freq: init hz, decay: 0..1 = 0.997) {
   tail = 4sec
   plucked = (noise() * env[1 3ms 0]).string(freq, decay: decay).gain(-6db)
-  wobble = osc(sine, 0.4hz) * 6ms
-  out = plucked + plucked.delay(250ms + wobble, max: 300ms) * 0.4 + plucked.delay(500ms).lpf(cutoff: 1.5khz) * 0.35
+  sway = osc(sine, 0.4hz) * 6ms
+  out = plucked + plucked.delay(250ms + sway, max: 300ms) * 0.4 + plucked.delay(500ms).lpf(cutoff: 1.5khz) * 0.35
   space += out.gain(-12db)
 }
 

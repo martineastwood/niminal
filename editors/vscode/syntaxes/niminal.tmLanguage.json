@@ -217,6 +217,10 @@
       "match": "\\b(sine|saw|square|pulse|tri|stereo|mono|quad|true|false|pi|sample_rate)\\b"
     },
     {
+      "name": "constant.language.option.niminal",
+      "match": "(?<![.\\w])(lowpass|bandpass|highpass|linear|exponential|smooth|stepped|straight|swing|hard_swing|reverse_swing|random|off|diode|fold|ring|nand|nor|xor|xnor)\\b(?!\\s*(\\(|=(?!=)))"
+    },
+    {
       "name": "keyword.operator.niminal",
       "match": "\\+=|\\.\\.<?|->|==|!=|<=|>=|=|[-+*/<>]|~"
     },
