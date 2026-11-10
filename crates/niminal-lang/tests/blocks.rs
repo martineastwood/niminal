@@ -2204,3 +2204,24 @@ fn splice_reel_has_no_dip_at_the_loop_point_at_fractional_speeds() {
         assert!(peak(&out[150 * 64..]) > 0.3);
     }
 }
+
+#[test]
+fn splice_reel_retriggers_and_clocked_grain_steps_do_not_click() {
+    // stepping grains with the clock, or restarting with play, used to cut every sounding grain off at once
+    let source = "use std/blocks\ninstr a(r: num, ck: num, pl: num = 1, gs: num, mo: num = 0.33) { splice_reel(0.3 + osc(sine, 110hz) * 0.5, record: r, clock: ck, play: pl, grain_size: gs, morph: mo).left }";
+    let step = |x: &[f32]| x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    let stepped = render_with(source, "a", 900, |n, v| {
+        v.set_param_by_name("r", if n < 150 { 1.0 } else { 0.0 });
+        v.set_param_by_name("gs", 0.5);
+        v.set_param_by_name("mo", 0.3);
+        v.set_param_by_name("ck", if (n / 10) % 2 == 0 { 1.0 } else { 0.0 });
+    });
+    assert!(step(&stepped[200 * 64..]) < 0.03, "clocked grain steps click: {}", step(&stepped[200 * 64..]));
+    assert!(peak(&stepped[200 * 64..]) > 0.3);
+    let restarted = render_with(source, "a", 900, |n, v| {
+        v.set_param_by_name("r", if n < 150 { 1.0 } else { 0.0 });
+        v.set_param_by_name("pl", if n % 23 == 0 { 0.0 } else { 1.0 });
+    });
+    assert!(step(&restarted[200 * 64..]) < 0.03, "play retriggers click: {}", step(&restarted[200 * 64..]));
+    assert!(peak(&restarted[200 * 64..]) > 0.3);
+}

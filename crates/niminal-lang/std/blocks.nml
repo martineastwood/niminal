@@ -1129,7 +1129,8 @@ fn tap_delay(
 /// marker at the playback position, `unmark` joins the splice with the next, and `clear` empties the reel. Each is a gate:
 /// it acts on the rising edge.
 /// Playback: `speed` (-4 to 4, times normal speed) sets speed and direction, 0 stops it, and `play` (high is on; a rising edge
-/// starts again from the start) lets the splice loop while high and stop at its end when low. `grain_size` (0 to 1) shrinks the
+/// starts again from the start, with what was playing fading out over 3 ms) lets the splice loop while high and stop at its end
+/// when low. `grain_size` (0 to 1) shrinks the
 /// window from the whole splice down to 2 ms, and `slide` (0 to 1) moves where in the splice it starts, wrapping round.
 /// `morph` (0 to 1) shapes the grains: below 0.33 there are gaps between them, 0.33 loops them seamlessly, and above it they
 /// overlap, up to four at once; from 0.45 the overlapping grains start at evenly spaced points in the window (with a little
@@ -1200,6 +1201,8 @@ fn splice_reel(
   state _g_fd = zeros(6)
   state _g_law = zeros(6)
   state _g_pre = zeros(6)
+  state _g_rel = zeros(6)
+  state _g_rg = zeros(6)
   state _eos = 0
   state _level = 0
   _sr = sample_rate.num
@@ -1275,7 +1278,7 @@ fn splice_reel(
   _alive = 0
   _slot = 99
   for _i in 0..<6 {
-    _g_on[_i] = if _retrig > 0 { 0 } else { _g_on[_i] }
+    _g_rel[_i] = if _retrig > 0 and _g_on[_i] > 0 { 1 } else { _g_rel[_i] }
     _alive = _alive + _g_on[_i]
     _slot = if _g_on[_i] <= 0 and _slot > 5 { _i } else { _slot }
   }
@@ -1308,13 +1311,17 @@ fn splice_reel(
     _g_len[_i] = if _here > 0 { _len + _fade } else { _g_len[_i] }
     _g_fd[_i] = if _here > 0 { _fade } else { _g_fd[_i] }
     _g_law[_i] = if _here > 0 { _whole } else { _g_law[_i] }
+    _g_rel[_i] = if _here > 0 { 0 } else { _g_rel[_i] }
+    _g_rg[_i] = if _here > 0 { 1 } else { _g_rg[_i] }
     _g_pre[_i] = if _here > 0 { (if _fresh_at[_sel] > 0.5 or _a < 0.01 * _sr { 0 } else { 1 }) } else { _g_pre[_i] }
     _g_pitch[_i] = if _here > 0 { _pitch } else { _g_pitch[_i] }
     _g_pan[_i] = if _here > 0 { _pan } else { _g_pan[_i] }
     _on = _g_on[_i]
     _step = _move * _g_pitch[_i] * _on
     _t = _g_trav[_i] + _step
-    _done = if _on > 0 and _t >= _g_len[_i] { 1 } else { 0 }
+    _rg_now = if _g_rel[_i] > 0.5 { (_g_rg[_i] - 1 / (0.003 * _sr)).max(0) } else { _g_rg[_i] }
+    _g_rg[_i] = _rg_now
+    _done = if _on > 0 and (_t >= _g_len[_i] or (_g_rel[_i] > 0.5 and _rg_now <= 0)) { 1 } else { 0 }
     _g_off[_i] = _g_off[_i] + (if _sp < 0 { 0 - _step } else { _step })
     _g_trav[_i] = if _done > 0 { 0 } else { _t }
     _g_on[_i] = if _done > 0 { 0 } else { _on }
@@ -1350,7 +1357,7 @@ fn splice_reel(
     _read = _y1 + 0.5 * _fr * (_y2 - _y0 + _fr * (2 * _y0 - 5 * _y1 + 4 * _y2 - _y3 + _fr * (3 * (_y1 - _y2) + _y3 - _y0)))
     _xw = (_t.min(_g_len[_i] - _t) / _g_fd[_i].max(1)).max(0).min(1)
     _win = if _g_law[_i] > 0.5 { 0.5 - 0.5 * cos(pi * _xw) } else { sin(0.5 * pi * _xw) }
-    _gain = _win * _on * (1 - _done)
+    _gain = _win * _rg_now * _on * (1 - _done)
     _power = _power + _gain * _gain
     _sum_gain = _sum_gain + _gain
     _s = _read * _gain
