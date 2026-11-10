@@ -1968,12 +1968,12 @@ fn splice_reel_records_a_splice_and_loops_it_seamlessly() {
     let count = render_with(&source, "n", 400, record_first);
     assert_eq!(count[count.len() - 1], 1.0, "one splice");
     // recording ends at sample 4800; the splice then plays back as recorded, and loops with period 4800
-    // (the first grain fades in over 12 ms, so compare after that)
-    let from = 4800 + 700;
+    // (the first grain fades in over 25 ms, and the loop's last 10 ms fade into what is before the splice)
+    let from = 4800 + 1300;
     let lag = best_lag(&out, &dry, from, 4800);
-    assert!((from..from + 3800).all(|n| (out[n] - dry[(n as isize - 4800 - lag) as usize]).abs() < 1e-4), "plays back as recorded, {lag} samples late");
-    let second = 2 * 4800 + 700;
-    let repeat: f32 = (second..second + 3800).map(|n| (out[n] - out[n - 4800]).abs()).sum::<f32>() / 3800.0;
+    assert!((from..from + 2900).all(|n| (out[n] - dry[(n as isize - 4800 - lag) as usize]).abs() < 1e-4), "plays back as recorded, {lag} samples late");
+    let second = 3 * 4800 + 1300;
+    let repeat: f32 = (second..second + 2900).map(|n| (out[n] - out[n - 4800]).abs()).sum::<f32>() / 2900.0;
     assert!(repeat < 1e-3, "loops every 4800 samples: {repeat}");
     assert!(out.iter().all(|v| v.is_finite() && v.abs() <= 16.0));
 }
@@ -2022,8 +2022,8 @@ fn splice_reel_grain_size_and_slide_pick_the_window() {
         rec(n, v);
         v.set_param_by_name("sl", 0.5);
     });
-    let lag = best_lag(&slid, &dry[2400..], 6000, 4800);
-    assert!((6000..9000).all(|n| (slid[n] - dry[((2400 + (n - 4800)) as isize - lag) as usize]).abs() < 1e-3), "starts halfway: lag {lag}");
+    let lag = best_lag(&slid, &dry[2400..], 6100, 4800);
+    assert!((6100..6700).all(|n| (slid[n] - dry[((2400 + (n - 4800)) as isize - lag) as usize]).abs() < 1e-3), "starts halfway: lag {lag}");
     // a grain size of 0.5 is sqrt(4800 * 96) = 679 samples: a grain ends that often
     let ends = render_with(&source, "e", 800, |n, v| {
         rec(n, v);
@@ -2032,7 +2032,7 @@ fn splice_reel_grain_size_and_slide_pick_the_window() {
     let at = rising(&ends);
     let gaps: Vec<usize> = at.windows(2).map(|w| w[1] - w[0]).filter(|g| *g > 10).collect();
     assert!(gaps.len() > 20 && gaps.iter().all(|g| (676..=683).contains(g)), "{:?}", &gaps[..gaps.len().min(8)]);
-    // and the whole splice (grain size 0) ends a grain every 4800 samples
+    // and the whole splice (grain size 0) ends a grain every 4800 samples, once round the loop
     let whole = rising(&render_with(&source, "e", 800, rec));
     assert!(whole.windows(2).all(|w| w[1] - w[0] == 4800), "{whole:?}");
 }
@@ -2082,8 +2082,9 @@ fn splice_reel_marks_joins_and_clears_splices() {
 
 #[test]
 fn splice_reel_sos_layers_new_sound_over_the_old_and_overdub_loops_round() {
-    let source = morph_source();
-    // record 4800 samples (11 whole periods of the saw), then overdub the same splice for two and a half loops
+    // a 100 hz saw, so that the loop (4800 samples) is a whole number of periods (10) and layers in phase
+    let source = morph_source().replace("110hz", "100hz");
+    // record 4800 samples, then overdub the same splice for two and a half loops
     let overdub = |sos: f32, input: f32| {
         render_with(&source, "a", 900, |n, v| {
             v.set_param_by_name("r", if n < 75 || (250..400).contains(&n) { 1.0 } else { 0.0 });
