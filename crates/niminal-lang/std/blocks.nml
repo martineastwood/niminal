@@ -1115,3 +1115,227 @@ fn tap_delay(
   left = (_state_left * 0.25).tanh * 4
   right = (_state_right * 0.25).tanh * 4
 }
+
+/// A sampler that records into a reel, divides the recording into splices, and plays one splice back as grains (small
+/// windows of it). Returns `left` and `right` (the playback),
+/// `grain_end` (a 1 ms gate at the end of each grain), `level` (0 to 1, how loud the playback is), `splice` (the splice now
+/// playing, from 0) and `count` (how many splices the reel has).
+/// Recording: while `record` is high (above 0.5) the input `x` is recorded (stereo is summed to mono). If the reel is empty,
+/// or `new_splice` is high when recording starts, it goes into a new splice at the end of the reel; otherwise it
+/// records over the splice now playing, round and round for as long as `record` stays high. What is written is `x`
+/// with `1 - sos` and the playback with `sos`, so `sos` 0 records only the input, and above 0 layers on top of what is there.
+/// Recording and playback are independent, so what you hear while recording (speed, direction, grains) is what is recorded.
+/// Splices: `choose` (0 to 1) picks one evenly across the reel, a high `shift` moves to the next, `mark` drops a splice
+/// marker at the playback position, `unmark` joins the splice with the next, and `clear` empties the reel. Each is a gate:
+/// it acts on the rising edge.
+/// Playback: `speed` (-4 to 4, times normal speed) sets speed and direction, 0 stops it, and `play` (high is on; a rising edge
+/// starts again from the start) lets the splice loop while high and stop at its end when low. `grain_size` (0 to 1) shrinks the
+/// window from the whole splice down to 2 ms, and `slide` (0 to 1) moves where in the splice it starts, wrapping round.
+/// `morph` (0 to 1) shapes the grains: below 0.33 there are gaps between them, 0.33 loops them seamlessly, and above it they
+/// overlap, up to four at once, with random panning from 0.5 and random pitch-up above 0.8.
+/// `clock` (a gate) steps the window through the splice one grain at each tick when `morph` is 0.45 or below, and above that
+/// it time-stretches: the splice is played through once per tick whatever `speed` is, which changes only the pitch.
+/// `size` is the reel in samples (20 seconds at 48 khz by default), and `splices` how many it can hold.
+fn splice_reel(
+  x,
+  record: 0..1 = 0,
+  new_splice: 0..1 = 0,
+  sos: 0..1 = 0,
+  choose: 0..1 = 0,
+  shift: 0..1 = 0,
+  mark: 0..1 = 0,
+  unmark: 0..1 = 0,
+  clear: 0..1 = 0,
+  play: 0..1 = 1,
+  speed: -4..4 = 1,
+  grain_size: 0..1 = 0,
+  slide: 0..1 = 0,
+  morph: 0..1 = 0.33,
+  clock: 0..1 = 0,
+  size: const int = 960000,
+  splices: const int = 32
+) -> (left, right, grain_end, level, splice, count) {
+  state _buf = zeros(size)
+  state _edges = zeros(splices + 1)
+  state _n = 0
+  state _end = 0
+  state _sel = 0
+  state _shift_off = 0
+  state _w = 0
+  state _rec = 0
+  state _oa = 0
+  state _ob = 0
+  state _rec_prev = 0
+  state _org_prev = 0
+  state _shift_prev = 0
+  state _mark_prev = 0
+  state _unmark_prev = 0
+  state _clear_prev = 0
+  state _play_prev = 0
+  state _clk_prev = 0
+  state _clk_since = 0
+  state _clk_period = 0
+  state _cursor = 0
+  state _shift_i = 0
+  state _since = 0
+  state _speed_now = 1
+  state _fresh = 1
+  state _drawn = 0
+  state _last_pos = 0
+  state _g_on = zeros(6)
+  state _g_start = zeros(6)
+  state _g_a = zeros(6)
+  state _g_sl = zeros(6)
+  state _g_off = zeros(6)
+  state _g_trav = zeros(6)
+  state _g_len = zeros(6)
+  state _g_pitch = zeros(6)
+  state _g_pan = zeros(6)
+  state _eos = 0
+  state _level = 0
+  _sr = sample_rate.num
+  _in = x.sum.max(-16).min(16)
+  _rec_gate = if record > 0.5 { 1 } else { 0 }
+  _rec_edge = if _rec_gate > 0 and _rec_prev <= 0 { 1 } else { 0 }
+  _rec_fall = if _rec_gate <= 0 and _rec_prev > 0 { 1 } else { 0 }
+  _rec_prev = _rec_gate
+  _shift_gate = if shift > 0.5 { 1 } else { 0 }
+  _shift_edge = if _shift_gate > 0 and _shift_prev <= 0 { 1 } else { 0 }
+  _shift_prev = _shift_gate
+  _mark_gate = if mark > 0.5 { 1 } else { 0 }
+  _mark_edge = if _mark_gate > 0 and _mark_prev <= 0 { 1 } else { 0 }
+  _mark_prev = _mark_gate
+  _unmark_gate = if unmark > 0.5 { 1 } else { 0 }
+  _unmark_edge = if _unmark_gate > 0 and _unmark_prev <= 0 { 1 } else { 0 }
+  _unmark_prev = _unmark_gate
+  _clear_gate = if clear > 0.5 { 1 } else { 0 }
+  _clear_edge = if _clear_gate > 0 and _clear_prev <= 0 { 1 } else { 0 }
+  _clear_prev = _clear_gate
+  _play_gate = if play > 0.5 { 1 } else { 0 }
+  _play_edge = if _play_gate > 0 and _play_prev <= 0 { 1 } else { 0 }
+  _play_prev = _play_gate
+  _n = if _clear_edge > 0 { 0 } else { _n }
+  _end = if _clear_edge > 0 { 0 } else { _end }
+  _rec = if _clear_edge > 0 { 0 } else { _rec }
+  _fin = if _rec == 1 and (_rec_gate <= 0 or _w >= size - 1) { 1 } else { 0 }
+  _edges[_n + 1] = if _fin > 0 { _end } else { _edges[_n + 1] }
+  _n = _n + _fin
+  _org = choose.max(0).min(0.9999)
+  _changed = if abs(_org - _org_prev) > 0.0001 { 1 } else { 0 }
+  _org_prev = _org
+  _shift_off = if _fin > 0 { _n - 1 - floor(_org * _n) } else { if _changed > 0 { 0 } else { if _shift_edge > 0 { _shift_off + 1 } else { _shift_off } } }
+  _nn = _n.max(1)
+  _pick = floor(_org * _n) + _shift_off
+  _sel = if _n > 0 { _pick - _nn * floor(_pick / _nn) } else { 0 }
+  _a = _edges[_sel]
+  _b = _edges[_sel + 1]
+  _slen = (_b - _a).max(2)
+  _start_new = if _rec_edge > 0 and (_n == 0 or new_splice > 0.5) and _n < splices and _end < size - 64 { 1 } else { 0 }
+  _start_over = if _rec_edge > 0 and _start_new <= 0 and _n > 0 { 1 } else { 0 }
+  _rec = if _rec_gate <= 0 { 0 } else { if _start_new > 0 { 1 } else { if _start_over > 0 { 2 } else { if _fin > 0 { 0 } else { _rec } } } }
+  _behind = _last_pos - 2 - _a
+  _w = if _start_new > 0 { _end } else { if _start_over > 0 { _a + _behind - _slen * floor(_behind / _slen) } else { _w } }
+  _oa = if _start_over > 0 { _a } else { _oa }
+  _ob = if _start_over > 0 { _b } else { _ob }
+  _gs = grain_size.max(0).min(1)
+  _len = exp(log(_slen) * (1 - _gs) + log(96) * _gs).min(_slen).max(2)
+  _m = morph.max(0).min(1)
+  _fade = (_len * 0.5).min(0.012 * _sr).max(1)
+  _over = 1 + 3 * ((_m - 0.33) / 0.57).max(0).min(1)
+  _spacing = (if _m < 0.33 { _len + (0.33 - _m) / 0.33 * _len } else { _len / _over }).max(1)
+  _speed_now = _speed_now + (speed.max(-4).min(4) - _speed_now) * (1 - exp(-1 / (0.02 * _sr)))
+  _sp = _speed_now
+  _move = abs(_sp)
+  _clk_gate = if clock > 0.5 { 1 } else { 0 }
+  _clk_edge = if _clk_gate > 0 and _clk_prev <= 0 { 1 } else { 0 }
+  _clk_prev = _clk_gate
+  _clk_period = if _clk_edge > 0 and _clk_since > 0 { _clk_since + 1 } else { _clk_period }
+  _clk_since = if _clk_edge > 0 { 0 } else { (_clk_since + 1).min(10000000) }
+  _clocked = if _clk_period > 0 and _clk_since < 5 * _sr { 1 } else { 0 }
+  _stretch = if _clocked > 0 and _m > 0.45 { 1 } else { 0 }
+  _gshift = if _clocked > 0 and _m <= 0.45 { 1 } else { 0 }
+  _cursor = if _clk_edge > 0 { 0 } else { (_cursor + _slen / _clk_period.max(1)).min(_slen * 4) }
+  _shift_i = if _clk_edge > 0 and _gshift > 0 { _shift_i + 1 } else { _shift_i }
+  _base = slide.max(0).min(1) * _slen
+  _origin = if _stretch > 0 { _base + _cursor } else { if _gshift > 0 { _base + _shift_i * _len } else { _base } }
+  _retrig = if _play_edge > 0 or (_clk_edge > 0 and _gshift > 0) { 1 } else { 0 }
+  _alive = 0
+  _slot = 99
+  for _i in 0..<6 {
+    _g_on[_i] = if _retrig > 0 { 0 } else { _g_on[_i] }
+    _alive = _alive + _g_on[_i]
+    _slot = if _g_on[_i] <= 0 and _slot > 5 { _i } else { _slot }
+  }
+  _since = (_since + _move).min(1000000000)
+  _fresh = if _retrig > 0 or _n <= 0 { 1 } else { _fresh }
+  _spawn = if _n > 0 and _b - _a > 8 and _play_gate > 0 and _slot < 6 and (_since >= _spacing or _fresh > 0) { 1 } else { 0 }
+  _since = if _spawn > 0 { (if _fresh > 0 { 0 } else { (_since - _spacing).max(0) }) } else { _since }
+  _fresh = if _spawn > 0 { 0 } else { _fresh }
+  _r1 = fract(sin((_drawn + 1) * 12.9898) * 43758.5453)
+  _r2 = fract(sin((_drawn + 1) * 78.233 + 1.7) * 24634.6345)
+  _drawn = _drawn + _spawn
+  _pan = (_r1 * 2 - 1) * ((_m - 0.5) / 0.2).max(0).min(1)
+  _pitch = pow(2, floor(_r2 * 13 * ((_m - 0.8) / 0.2).max(0).min(1)) / 12)
+  _l = 0
+  _r = 0
+  _ended = 0
+  for _i in 0..<6 {
+    _here = if _spawn > 0 and _i == _slot { 1 } else { 0 }
+    _g_on[_i] = if _here > 0 { 1 } else { _g_on[_i] }
+    _g_a[_i] = if _here > 0 { _a } else { _g_a[_i] }
+    _g_sl[_i] = if _here > 0 { _slen } else { _g_sl[_i] }
+    _g_start[_i] = if _here > 0 { _origin + (if _sp < 0 { _len + _fade } else { 0 }) } else { _g_start[_i] }
+    _g_off[_i] = if _here > 0 { 0 } else { _g_off[_i] }
+    _g_trav[_i] = if _here > 0 { 0 } else { _g_trav[_i] }
+    _g_len[_i] = if _here > 0 { _len + _fade } else { _g_len[_i] }
+    _g_pitch[_i] = if _here > 0 { _pitch } else { _g_pitch[_i] }
+    _g_pan[_i] = if _here > 0 { _pan } else { _g_pan[_i] }
+    _on = _g_on[_i]
+    _step = _move * _g_pitch[_i] * _on
+    _t = _g_trav[_i] + _step
+    _done = if _on > 0 and _t >= _g_len[_i] { 1 } else { 0 }
+    _g_off[_i] = _g_off[_i] + (if _sp < 0 { 0 - _step } else { _step })
+    _g_trav[_i] = if _done > 0 { 0 } else { _t }
+    _g_on[_i] = if _done > 0 { 0 } else { _on }
+    _ended = _ended + _done
+    _p = _g_start[_i] + _g_off[_i]
+    _gl = _g_sl[_i].max(2)
+    _idx = _g_a[_i] + _p - _gl * floor(_p / _gl)
+    _win = 0.5 - 0.5 * cos(pi * (_t.min(_g_len[_i] - _t) / _fade).max(0).min(1))
+    _s = _buf.at(_idx, interp: cubic) * _win * _on * (1 - _done)
+    _last_pos = if _on > 0 and _done <= 0 { _idx } else { _last_pos }
+    _l = _l + _s * (1 - _g_pan[_i].max(0))
+    _r = _r + _s * (1 + _g_pan[_i].min(0))
+  }
+  _norm = (if _m >= 0.33 { 1 / _over } else { 1 }) * (_move * 8).min(1)
+  _out_l = (_l * _norm).max(-16).min(16)
+  _out_r = (_r * _norm).max(-16).min(16)
+  _played = (_out_l + _out_r) * 0.5
+  _mix = sos.max(0).min(1)
+  _value = (_in * (1 - _mix) + _played * _mix).max(-16).min(16)
+  _writing = if _rec > 0 { 1 } else { 0 }
+  _buf[_w] = if _writing > 0 { _value } else { _buf[_w] }
+  _w_next = _w + _writing
+  _w = if _rec == 2 and _w_next >= _ob { _oa } else { _w_next }
+  _end = if _rec == 1 { _w } else { _end }
+  _can_mark = if _mark_edge > 0 and _n > 0 and _n < splices and _last_pos - _a > 480 and _b - _last_pos > 480 { 1 } else { 0 }
+  for _k in 0..<splices {
+    _top = splices - _k
+    _edges[_top] = if _can_mark > 0 and _top > _sel + 1 and _top <= _n + 1 { _edges[_top - 1] } else { _edges[_top] }
+  }
+  _edges[_sel + 1] = if _can_mark > 0 { _last_pos } else { _edges[_sel + 1] }
+  _n = _n + _can_mark
+  _can_join = if _unmark_edge > 0 and _n > 1 and _sel < _n - 1 { 1 } else { 0 }
+  for _k in 0..<splices {
+    _edges[_k] = if _can_join > 0 and _k > _sel and _k < _n { _edges[_k + 1] } else { _edges[_k] }
+  }
+  _n = _n - _can_join
+  _eos = if _ended > 0 { 0.001 * _sr } else { (_eos - 1).max(0) }
+  _level = _played.abs.max(_level * (1 - 1 / (0.02 * _sr)))
+  left = _out_l
+  right = _out_r
+  grain_end = if _eos > 0 { 1 } else { 0 }
+  level = _level.min(1)
+  splice = _sel
+  count = _n
+}

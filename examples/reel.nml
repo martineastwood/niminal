@@ -1,0 +1,28 @@
+// A reel: one bar of a plucked line is recorded, then played back as grains. A slow sweep of grain size and morph turns the
+// loop into stretches of the whole phrase, stuttering fragments, and overlapping panned clouds; the speed flips to reverse
+// after four bars, and a splice marker dropped in the third bar means there are two pieces to move between.
+// stepper -> pluck -> splice_reel (record, grain_size, slide, morph, speed, choose)
+// Render: niminal render examples/reel.nml --bars 12 --out reel.wav
+config { channels: stereo }
+tempo 100bpm
+
+use std/blocks
+
+// A tick every sixteenth note.
+fn tick() { impulse((4 / (1beat).num).hz) }
+
+instr reel() {
+  step = stepper([0, 7, 3, 10, 12, 7, 5, 3], tick())
+  open = gate_length(tick(), length: 90ms).smooth(2ms)
+  line = osc(saw, 130.8hz * pow(2, step.value / 12)).lpf(cutoff: 2.2khz) * open * 0.5
+  // everything is timed from the start of the note (an envelope), not from the session clock, so it works wherever it is evaluated
+  recording = env[1 1bar 1 1ms 0]
+  sweep = osc(sine, 0.08hz) * 0.5 + 0.5
+  marked = env[0 2bars 0 20ms 1 20ms 0]
+  reversed = env[1 4bars 1 1ms -1]
+  m = splice_reel(line, record: recording, mark: marked, choose: osc(sine, 0.03hz) * 0.4 + 0.5, speed: reversed, grain_size: sweep * 0.55, slide: osc(sine, 0.11hz) * 0.5 + 0.5, morph: 0.35 + sweep * 0.4)
+  [line * recording * 0.4 + m.left, line * recording * 0.4 + m.right] * 0.6
+}
+
+// Times are relative to where the file is evaluated, so evaluate it on a bar line.
+at +0bars reel() for 12bars

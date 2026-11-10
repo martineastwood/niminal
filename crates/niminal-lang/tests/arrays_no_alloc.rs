@@ -524,3 +524,32 @@ fn the_tap_delay_does_not_allocate_while_rendering() {
     assert_eq!(ALLOCATIONS.with(Cell::get), 0);
     assert!(loudest > 1e-3, "{loudest}");
 }
+
+#[test]
+fn the_splice_reel_does_not_allocate_while_rendering() {
+    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n x = osc(saw, 110hz * (1 + osc(sine, 0.3hz) * 0.2)) * 0.5\n m = splice_reel(x, record: osc(square, 2.9hz), new_splice: osc(square, 1.7hz), sos: 0.3 + osc(sine, 0.1hz) * 0.2, choose: osc(sine, 0.13hz) * 0.5 + 0.5, shift: osc(square, 1.3hz), mark: osc(square, 0.9hz), unmark: osc(square, 0.45hz), clear: osc(square, 0.07hz), play: osc(square, 2.1hz) * 0.5 + 0.6, speed: 1 + osc(sine, 0.21hz), grain_size: osc(sine, 0.4hz) * 0.5 + 0.5, slide: osc(sine, 0.11hz) * 0.5 + 0.5, morph: osc(sine, 0.05hz) * 0.5 + 0.5, clock: osc(square, 3.1hz), size: 96000)\n [m.left + m.grain_end * 0.01, m.right + m.level * 0.01]\n}";
+    let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
+    let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
+        panic!(
+            "{}",
+            errors
+                .iter()
+                .map(|e| e.render("blocks", &expanded.text))
+                .collect::<String>()
+        )
+    });
+    let mut voice = Voice::new(program.instruments[0].graph.clone(), 48_000.0);
+    let mut buses = Buses::new(&[]);
+    let mut output = vec![vec![0.0; block_size()]; 2];
+    ALLOCATIONS.with(|count| count.set(0));
+    NODE.with(|node| node.set(true));
+    let mut loudest = 0.0f32;
+    for _ in 0..1024 {
+        voice.process_blocks(&mut output, block_size(), &mut buses);
+        assert!(output.iter().flatten().all(|value| value.is_finite()));
+        loudest = output.iter().flatten().fold(loudest, |m, v| m.max(v.abs()));
+    }
+    NODE.with(|node| node.set(false));
+    assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+    assert!(loudest > 1e-3, "{loudest}");
+}

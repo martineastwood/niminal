@@ -1941,3 +1941,249 @@ fn a_function_own_names_never_clash_with_the_files_controls_or_functions() {
     );
     assert!((out[0] - 0.021).abs() < 1e-6 && (out[99] - 0.12).abs() < 1e-5, "{} {}", out[0], out[99]);
 }
+
+/// How many samples later than `dry[n - base]` the playback `out[n]` is (negative: earlier): the `lag` from -4 to 4 with the
+/// least error.
+fn best_lag(out: &[f32], dry: &[f32], from: usize, base: usize) -> isize {
+    let error = |lag: isize| (from..from + 1000).map(|n| (out[n] - dry[(n as isize - base as isize - lag) as usize]).abs()).sum::<f32>();
+    (-4..=4).min_by(|a, b| error(*a).total_cmp(&error(*b))).unwrap_or(0)
+}
+
+fn morph_source() -> String {
+    let params = "r: num, g: num = 0.5, nw: num, org: num, sp: num = 1, gs: num, sl: num, mk: num, um: num, cl: num, mo: num = 0.33, ck: num, sos: num, pl: num = 1";
+    let call = "splice_reel(src(g), record: r, new_splice: nw, choose: org, speed: sp, grain_size: gs, slide: sl, mark: mk, unmark: um, clear: cl, morph: mo, clock: ck, sos: sos, play: pl)";
+    format!(
+        "use std/blocks\nfn src(g) {{ osc(saw, 110hz) * g }}\ninstr dry(g: num = 0.5) {{ src(g) }}\ninstr a({params}) {{ {call}.left }}\ninstr n({params}) {{ {call}.count }}\ninstr e({params}) {{ {call}.grain_end }}\ninstr s({params}) {{ {call}.splice }}"
+    )
+}
+
+#[test]
+fn splice_reel_records_a_splice_and_loops_it_seamlessly() {
+    let source = morph_source();
+    let record_first = |n: usize, v: &mut Voice| {
+        v.set_param_by_name("r", if n < 75 { 1.0 } else { 0.0 });
+    };
+    let out = render_with(&source, "a", 400, record_first);
+    let dry = render_with(&source, "dry", 400, |_, _| {});
+    let count = render_with(&source, "n", 400, record_first);
+    assert_eq!(count[count.len() - 1], 1.0, "one splice");
+    // recording ends at sample 4800; the splice then plays back as recorded, and loops with period 4800
+    // (the first grain fades in over 12 ms, so compare after that)
+    let from = 4800 + 700;
+    let lag = best_lag(&out, &dry, from, 4800);
+    assert!((from..from + 3800).all(|n| (out[n] - dry[(n as isize - 4800 - lag) as usize]).abs() < 1e-4), "plays back as recorded, {lag} samples late");
+    let second = 2 * 4800 + 700;
+    let repeat: f32 = (second..second + 3800).map(|n| (out[n] - out[n - 4800]).abs()).sum::<f32>() / 3800.0;
+    assert!(repeat < 1e-3, "loops every 4800 samples: {repeat}");
+    assert!(out.iter().all(|v| v.is_finite() && v.abs() <= 16.0));
+}
+
+#[test]
+fn splice_reel_plays_at_any_speed_and_direction_and_stops_at_zero() {
+    let source = morph_source();
+    let go = |speed: f32| {
+        render_with(&source, "a", 500, |n, v| {
+            v.set_param_by_name("r", if n < 75 { 1.0 } else { 0.0 });
+            v.set_param_by_name("sp", speed);
+        })
+    };
+    let slope = |x: &[f32]| -> (usize, usize) {
+        let (mut up, mut down) = (0, 0);
+        for w in x.windows(2) {
+            if w[1] > w[0] + 1e-6 {
+                up += 1;
+            } else if w[1] < w[0] - 1e-6 {
+                down += 1;
+            }
+        }
+        (up, down)
+    };
+    let region = 4800 * 2..4800 * 4;
+    let (up, down) = slope(&go(1.0)[region.clone()]);
+    assert!(up > 10 * down, "forward rises: {up} {down}");
+    let (up, down) = slope(&go(-1.0)[region.clone()]);
+    assert!(down > 10 * up, "reverse falls: {up} {down}");
+    // half speed: the loop takes twice as long, so the pitch falls an octave (the saw crosses zero half as often)
+    let crossings = |x: &[f32]| x.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f32;
+    let (normal, half, twice) = (crossings(&go(1.0)[region.clone()]), crossings(&go(0.5)[region.clone()]), crossings(&go(2.0)[region.clone()]));
+    assert!((half / normal - 0.5).abs() < 0.1 && (twice / normal - 2.0).abs() < 0.2, "{normal} {half} {twice}");
+    assert!(peak(&go(0.0)[region]) < 1e-3, "stopped is silent");
+}
+
+#[test]
+fn splice_reel_grain_size_and_slide_pick_the_window() {
+    let source = morph_source();
+    let rec = |n: usize, v: &mut Voice| {
+        v.set_param_by_name("r", if n < 75 { 1.0 } else { 0.0 });
+    };
+    let dry = render_with(&source, "dry", 500, |_, _| {});
+    // a slide of 0.5 starts the loop halfway into the splice
+    let slid = render_with(&source, "a", 500, |n, v| {
+        rec(n, v);
+        v.set_param_by_name("sl", 0.5);
+    });
+    let lag = best_lag(&slid, &dry[2400..], 6000, 4800);
+    assert!((6000..9000).all(|n| (slid[n] - dry[((2400 + (n - 4800)) as isize - lag) as usize]).abs() < 1e-3), "starts halfway: lag {lag}");
+    // a grain size of 0.5 is sqrt(4800 * 96) = 679 samples: a grain ends that often
+    let ends = render_with(&source, "e", 800, |n, v| {
+        rec(n, v);
+        v.set_param_by_name("gs", 0.5);
+    });
+    let at = rising(&ends);
+    let gaps: Vec<usize> = at.windows(2).map(|w| w[1] - w[0]).filter(|g| *g > 10).collect();
+    assert!(gaps.len() > 20 && gaps.iter().all(|g| (676..=683).contains(g)), "{:?}", &gaps[..gaps.len().min(8)]);
+    // and the whole splice (grain size 0) ends a grain every 4800 samples
+    let whole = rising(&render_with(&source, "e", 800, rec));
+    assert!(whole.windows(2).all(|w| w[1] - w[0] == 4800), "{whole:?}");
+}
+
+#[test]
+fn splice_reel_keeps_several_splices_and_choose_picks_between_them() {
+    let source = morph_source();
+    let blocks = 900;
+    let two = |n: usize, v: &mut Voice| {
+        // the first splice quiet, the second loud, each 4800 samples, the second into a new splice
+        v.set_param_by_name("g", if n < 200 { 0.2 } else { 0.6 });
+        v.set_param_by_name("r", if n < 75 || (200..275).contains(&n) { 1.0 } else { 0.0 });
+        v.set_param_by_name("nw", if n >= 150 { 1.0 } else { 0.0 });
+    };
+    let count = render_with(&source, "n", blocks, two);
+    assert_eq!(count[count.len() - 1], 2.0);
+    let heard = |choose: f32| {
+        let out = render_with(&source, "a", blocks, |n, v| {
+            two(n, v);
+            // (a new recording takes the selection until choose is moved, so move it after recording)
+            v.set_param_by_name("org", if n < 300 { 0.5 } else { choose });
+        });
+        peak(&out[blocks * 64 - 9600..])
+    };
+    // (the input is off after block 275, so only the reel is heard)
+    let (first, second) = (heard(0.1), heard(0.9));
+    assert!((first - 0.2308).abs() < 0.01 && (second - 0.6923).abs() < 0.01, "{first} {second}");
+}
+
+#[test]
+fn splice_reel_marks_joins_and_clears_splices() {
+    let source = morph_source();
+    let go = |mark_at: usize, join_at: usize, clear_at: usize| {
+        render_with(&source, "n", 700, |n, v| {
+            v.set_param_by_name("r", if n < 75 { 1.0 } else { 0.0 });
+            v.set_param_by_name("mk", if (mark_at..mark_at + 2).contains(&n) { 1.0 } else { 0.0 });
+            v.set_param_by_name("um", if (join_at..join_at + 2).contains(&n) { 1.0 } else { 0.0 });
+            v.set_param_by_name("cl", if (clear_at..clear_at + 2).contains(&n) { 1.0 } else { 0.0 });
+        })
+    };
+    let end = |x: &[f32]| x[x.len() - 1];
+    assert_eq!(end(&go(10_000, 10_000, 10_000)), 1.0, "nothing happens: one splice");
+    assert_eq!(end(&go(100, 10_000, 10_000)), 2.0, "a marker splits the splice in two");
+    assert_eq!(end(&go(100, 300, 10_000)), 1.0, "and unmark joins them again");
+    assert_eq!(end(&go(100, 300, 500)), 0.0, "clear empties the reel");
+}
+
+#[test]
+fn splice_reel_sos_layers_new_sound_over_the_old_and_overdub_loops_round() {
+    let source = morph_source();
+    // record 4800 samples (11 whole periods of the saw), then overdub the same splice for two and a half loops
+    let overdub = |sos: f32, input: f32| {
+        render_with(&source, "a", 900, |n, v| {
+            v.set_param_by_name("r", if n < 75 || (250..400).contains(&n) { 1.0 } else { 0.0 });
+            v.set_param_by_name("sos", if n < 75 { 0.0 } else { sos });
+            v.set_param_by_name("g", if n < 75 { 0.5 } else { input });
+        })
+    };
+    let late = 900 * 64 - 6000..900 * 64;
+    // the same saw laid over itself at half strength stays the same size: the previous pass is what is layered
+    let (layered, kept, replaced) = (overdub(0.5, 0.5), overdub(1.0, 0.0), overdub(0.0, 0.0));
+    let was = peak(&overdub(0.0, 0.5)[late.clone()]);
+    assert!(was > 0.5, "{was}");
+    assert!((peak(&layered[late.clone()]) - was).abs() < 0.08, "{}", peak(&layered[late.clone()]));
+    // sos 1 records only the old loop, so the loop is kept whatever the input does; sos 0 with silence erases it
+    assert!(peak(&kept[late.clone()]) > 0.9 * was, "{}", peak(&kept[late.clone()]));
+    assert!(peak(&replaced[late]) < 0.01);
+    // overdubbing does not add a splice
+    let count = render_with(&source, "n", 900, |n, v| {
+        v.set_param_by_name("r", if n < 75 || (250..400).contains(&n) { 1.0 } else { 0.0 });
+    });
+    assert_eq!(count[count.len() - 1], 1.0);
+}
+
+#[test]
+fn splice_reel_morph_makes_gaps_and_overlaps_and_the_clock_steps_or_stretches() {
+    let source = morph_source();
+    let rec = |n: usize, v: &mut Voice| {
+        v.set_param_by_name("r", if n < 75 { 1.0 } else { 0.0 });
+    };
+    let level = |morph: f32, grain: f32| {
+        let out = render_with(&source, "a", 800, |n, v| {
+            rec(n, v);
+            v.set_param_by_name("mo", morph);
+            v.set_param_by_name("gs", grain);
+        });
+        out[4800 * 3..4800 * 6].iter().map(|v| v * v).sum::<f32>() / (4800.0 * 3.0)
+    };
+    // gaps between grains make it quieter than seamless, and overlaps (before the random panning starts) stay near the seamless level
+    let (gaps, seamless, overlapped) = (level(0.0, 0.5), level(0.33, 0.5), level(0.45, 0.5));
+    assert!(gaps < 0.8 * seamless && overlapped > 0.5 * seamless && overlapped < 1.5 * seamless, "{gaps} {seamless} {overlapped}");
+    // the clock: grain shift (morph low) and time stretch (morph high) both keep sounding and stay finite
+    for morph in [0.2f32, 0.7] {
+        let out = render_with(&source, "a", 800, |n, v| {
+            rec(n, v);
+            v.set_param_by_name("mo", morph);
+            v.set_param_by_name("gs", 0.4);
+            v.set_param_by_name("ck", if (n / 40) % 2 == 0 { 1.0 } else { 0.0 });
+        });
+        assert!(out.iter().all(|v| v.is_finite() && v.abs() <= 16.0) && peak(&out[4800 * 3..]) > 0.05, "morph {morph}");
+    }
+}
+
+#[test]
+fn splice_reel_stays_finite_and_bounded_under_extreme_controls() {
+    let p = program("use std/blocks\ninstr a(x: num, y: num, z: num) { m = splice_reel(osc(saw, 220hz) * x, record: y, new_splice: z, sos: x, choose: z, shift: y, mark: y, unmark: z, clear: x, play: y, speed: z, grain_size: y, slide: x, morph: z, clock: y)\n m.left + m.right + m.level + m.grain_end + m.splice + m.count }");
+    let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
+    let extremes = [-1e30f32, -1.0, 0.0, 0.5, 1.0, 3.0, 1e30, f32::NAN, f32::INFINITY];
+    for &x in &extremes {
+        for &y in &extremes {
+            let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
+            voice.start_note();
+            let mut out = vec![0.0; block_size()];
+            for z in extremes {
+                voice.set_param_by_name("x", x);
+                voice.set_param_by_name("y", y);
+                voice.set_param_by_name("z", z);
+                for _ in 0..30 {
+                    voice.process(&mut out);
+                    assert!(!voice.is_poisoned() && out.iter().all(|v| v.is_finite() && v.abs() <= 100.0), "{x} {y} {z}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn splice_reel_switches_splices_and_flips_direction_without_clicks() {
+    // a smooth sine, so any click stands out: its biggest step is 0.6 * 2 pi * 110 / 48000 = 0.0086
+    let source = "use std/blocks\ninstr a(r: num, g: num, nw: num, org: num, sp: num = 1) { splice_reel(osc(sine, 110hz) * g, record: r, new_splice: nw, choose: org, speed: sp).left }";
+    let record = |n: usize, v: &mut Voice| {
+        v.set_param_by_name("g", if n < 200 { 0.2 } else { 0.6 });
+        v.set_param_by_name("r", if n < 75 || (200..275).contains(&n) { 1.0 } else { 0.0 });
+        v.set_param_by_name("nw", if n >= 150 { 1.0 } else { 0.0 });
+    };
+    let biggest_step = |x: &[f32]| x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    // choose jumps between the two splices (loud and quiet) every 20 blocks while it plays
+    let switched = render_with(source, "a", 900, |n, v| {
+        record(n, v);
+        v.set_param_by_name("org", if n < 300 { 0.5 } else if (n / 20) % 2 == 0 { 0.1 } else { 0.9 });
+    });
+    let step = biggest_step(&switched[320 * 64..]);
+    assert!(step < 0.03, "switching splices clicks: {step}");
+    assert!(peak(&switched[320 * 64..]) > 0.2, "and it is sounding");
+    // flipping the speed between forward and reverse
+    let flipped = render_with(source, "a", 900, |n, v| {
+        record(n, v);
+        v.set_param_by_name("org", if n < 300 { 0.5 } else { 0.9 });
+        v.set_param_by_name("sp", if n < 400 { 1.0 } else if (n / 25) % 2 == 0 { -1.0 } else { 1.0 });
+    });
+    let step = biggest_step(&flipped[320 * 64..]);
+    assert!(step < 0.03, "flipping direction clicks: {step}");
+    assert!(peak(&flipped[320 * 64..]) > 0.2);
+}
