@@ -3,6 +3,7 @@
 mod allpass;
 mod biquad;
 mod bitcrush;
+mod blocks;
 mod buffer;
 mod chorus;
 mod comb;
@@ -55,6 +56,7 @@ mod tap;
 pub use allpass::Allpass;
 pub use biquad::{Biquad, BiquadMode};
 pub use bitcrush::Bitcrush;
+pub use blocks::{Contour, FreezeReverse, FreqShifter, MultimodeFilter, Slew, TapDelay};
 pub use buffer::{BufferRead, BufferReadBank, BufferRecord, BufferWrite};
 pub use chorus::Chorus;
 pub use comb::Comb;
@@ -126,6 +128,7 @@ pub use control_rate::{ControlRate, Ramp};
 mod latency;
 pub use latency::SampleDelay;
 mod kernel_latency;
+mod kernel_opt;
 
 mod report;
 pub use report::{Report, ReportOut};

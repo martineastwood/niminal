@@ -1,27 +1,29 @@
-// A reel: one bar of a plucked line is recorded, then played back as grains. A slow sweep of grain size and morph turns the
-// loop into stretches of the whole phrase, stuttering fragments, and overlapping panned clouds; the speed flips to reverse
-// after four bars, and a splice marker dropped in the third bar means there are two pieces to move between.
-// stepper -> pluck -> splice_reel (record, grain_size, slide, morph, speed, choose)
+// A reel: one bar of a soft chord line is recorded, then played back as grains. A slow sweep of grain size and morph turns
+// the loop into long stretches of the phrase, shorter repeating fragments and overlapping, panned clouds; the speed turns to
+// reverse after four bars, and a splice marker dropped in the third bar means there are two pieces to drift between.
+// stepper -> chord -> splice_reel (record, grain_size, slide, morph, speed, choose)
 // Render: niminal render examples/reel.nml --bars 12 --out reel.wav
 config { channels: stereo }
-tempo 100bpm
+tempo 90bpm
 
 use std/blocks
 
-// A tick every sixteenth note.
-fn tick() { impulse((4 / (1beat).num).hz) }
+// A tick every eighth note.
+fn tick() { impulse((2 / (1beat).num).hz) }
 
 instr reel() {
-  step = stepper([0, 7, 3, 10, 12, 7, 5, 3], tick())
-  open = gate_length(tick(), length: 90ms).smooth(2ms)
-  line = osc(saw, 130.8hz * pow(2, step.value / 12)).lpf(cutoff: 2.2khz) * open * 0.5
+  step = stepper([0, 3, 7, 10, 12, 10, 7, 5], tick())
+  root = 110hz * pow(2, step.value / 12)
+  // soft-edged notes: each opens over 30 ms and closes over 80 ms, so the grains have no hard attacks to chop up
+  open = gate_length(tick(), length: 280ms).smooth(60ms)
+  chord = (osc(saw, root) + osc(saw, root * 1.003) * 0.7 + osc(tri, root * 2) * 0.5).lpf(cutoff: 1.6khz) * open * 0.25
   // everything is timed from the start of the note (an envelope), not from the session clock, so it works wherever it is evaluated
   recording = env[1 1bar 1 1ms 0]
-  sweep = osc(sine, 0.08hz) * 0.5 + 0.5
+  sweep = osc(sine, 0.05hz) * 0.5 + 0.5
   marked = env[0 2bars 0 20ms 1 20ms 0]
   reversed = env[1 4bars 1 1ms -1]
-  m = splice_reel(line, record: recording, mark: marked, choose: osc(sine, 0.03hz) * 0.4 + 0.5, speed: reversed, grain_size: sweep * 0.55, slide: osc(sine, 0.11hz) * 0.5 + 0.5, morph: 0.35 + sweep * 0.4)
-  [line * recording * 0.4 + m.left, line * recording * 0.4 + m.right] * 0.6
+  m = splice_reel(chord, record: recording, mark: marked, choose: osc(sine, 0.02hz) * 0.4 + 0.5, speed: reversed, grain_size: sweep * 0.5, slide: osc(sine, 0.04hz) * 0.3 + 0.4, morph: 0.33 + sweep * 0.35)
+  [chord * recording * 0.6 + m.left, chord * recording * 0.6 + m.right] * 0.8
 }
 
 // Times are relative to where the file is evaluated, so evaluate it on a bar line.

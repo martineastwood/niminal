@@ -201,11 +201,20 @@ pub enum Cmp {
     Ne,
 }
 
-/// One step of a kernel. Every instruction that has a `dst` writes a fresh
-/// register, and registers are only read after they are written, so a kernel
-/// is straight-line single-assignment code.
+/// One step of a kernel. Scalar destinations use distinct registers. Forward skips leave
+/// untaken results unread by branch merges; reset scopes may rerun initialization code.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Instr {
+    /// Compiler markers, resolved after latency compensation by `Kernel::optimize_branches`.
+    BeginBranch {
+        cond: usize,
+    },
+    EndBranch,
+    /// Skip the next `count` instructions when `cond` is zero.
+    SkipIfZero {
+        cond: usize,
+        count: usize,
+    },
     Reset {
         scope: usize,
         trigger: usize,
@@ -697,7 +706,8 @@ impl Custom {
         input: &impl Fn(usize, usize) -> f32,
         i: usize,
     ) {
-        for instr in code {
+        let mut instructions = code.iter();
+        while let Some(instr) = instructions.next() {
             if let Instr::Frame {
                 scope,
                 input: x,
@@ -751,6 +761,14 @@ impl Custom {
             );
             match *instr {
                 Instr::Reset { .. } | Instr::Frame { .. } => unreachable!("handled above"),
+                Instr::BeginBranch { .. } | Instr::EndBranch => {
+                    unreachable!("branch markers are resolved before rendering")
+                }
+                Instr::SkipIfZero { cond, count } => {
+                    if regs[cond] == 0.0 && count > 0 {
+                        instructions.nth(count - 1);
+                    }
+                }
                 Instr::Const { dst, value } => regs[dst] = value,
                 Instr::Input { dst, port } => regs[dst] = f64::from(input(port, i)),
                 Instr::SampleRate { dst } => regs[dst] = self.sample_rate,

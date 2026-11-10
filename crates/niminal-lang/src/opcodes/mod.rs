@@ -19,6 +19,7 @@ use niminal_engine::ops::{
 
 use crate::unit::Unit;
 
+mod blocks;
 mod granular;
 mod physical;
 
@@ -28,6 +29,8 @@ pub enum Kind {
     Wave,
     /// A signal or value of exactly this unit.
     Signal(Unit),
+    /// A fixed-width array of live inputs consumed by one opcode, rather than channel expansion.
+    Array(Unit),
     /// A gain: decibels, or a plain linear factor.
     Gain,
     /// A channel layout such as `stereo`.
@@ -36,6 +39,7 @@ pub enum Kind {
     Table,
 }
 
+#[derive(Clone)]
 pub struct ParamSpec {
     pub name: String,
     pub kind: Kind,
@@ -240,6 +244,7 @@ fn glitch_max(a: &BuildArgs) -> Result<f32, String> {
     Ok(max.max(0.0) as f32)
 }
 
+#[derive(Clone, Copy)]
 pub enum Build {
     Builtin(BuildFn),
     /// `pan`: one output per speaker of the master layout.
@@ -248,6 +253,7 @@ pub enum Build {
     ToLayout,
 }
 
+#[derive(Clone)]
 pub struct OpSpec {
     pub name: String,
     /// What the opcode does, for hover and completion.
@@ -257,6 +263,7 @@ pub struct OpSpec {
     /// required ones. The receiver of a method call counts as the first.
     pub positional: usize,
     pub build: Build,
+    pub(crate) packed_arrays: Vec<(String, usize)>,
 }
 
 impl OpSpec {
@@ -267,13 +274,28 @@ impl OpSpec {
             positional: crate::funcs::positional(params.iter().map(|p| p.required)),
             params,
             build,
+            packed_arrays: Vec::new(),
         }
     }
 
     /// `Ok(None)` for an opcode that isn't a node of its own (`pan`, `to_layout`).
     pub fn instantiate(&self, args: &BuildArgs) -> Result<Option<Box<dyn Opcode>>, String> {
         match &self.build {
-            Build::Builtin(f) => f(args).map(Some),
+            Build::Builtin(f) => {
+                let opcode = f(args)?;
+                for (name, count) in &self.packed_arrays {
+                    let prefix = format!("{name}_");
+                    let expected = opcode
+                        .ports()
+                        .iter()
+                        .filter(|p| p.name.starts_with(&prefix))
+                        .count();
+                    if *count != expected {
+                        return Err(format!("`{name}` needs {expected} entries, got {count}"));
+                    }
+                }
+                Ok(Some(opcode))
+            }
             Build::Pan | Build::ToLayout => Ok(None),
         }
     }
@@ -1092,6 +1114,7 @@ impl Registry {
         ];
         let mut ops = ops;
         ops.extend(physical::specs());
+        ops.extend(blocks::specs());
         for (name, doc, kind, controls) in [
             (
                 "spectral_thin",

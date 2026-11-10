@@ -42,7 +42,7 @@ impl Kb<'_> {
                         name.span,
                     ));
                 }
-                opcodes::Kind::Signal(_) | opcodes::Kind::Gain => {
+                opcodes::Kind::Signal(_) | opcodes::Kind::Array(_) | opcodes::Kind::Gain => {
                     let value = self.value(&arg.value)?;
                     self.arg_val(value, arg.value.span)?
                 }
@@ -143,6 +143,11 @@ impl Kb<'_> {
         spec: &opcodes::OpSpec,
         vals: &[Option<ArgVal<Value>>],
     ) -> Res<KVal> {
+        if let Some((packed, vals)) =
+            call::packed(spec, vals).map_err(|m| Diagnostic::new(m, name.span))?
+        {
+            return self.native_call(name, &packed, &vals);
+        }
         let stereo_vals;
         let vals = if spec.name == "mverb" {
             stereo_vals = call::mverb_args(vals).map_err(|m| Diagnostic::new(m, name.span))?;
@@ -256,7 +261,10 @@ impl Kb<'_> {
             return Ok(KVal::Record(result));
         }
         Ok(if outputs == 1 {
-            values.into_iter().next().expect("one output means one value")
+            values
+                .into_iter()
+                .next()
+                .expect("one output means one value")
         } else {
             KVal::Array(values.into())
         })

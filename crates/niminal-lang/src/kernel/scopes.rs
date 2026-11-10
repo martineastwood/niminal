@@ -330,6 +330,7 @@ impl Kb<'_> {
     }
 
     pub(super) fn reset_scope(&mut self, args: &[Arg], span: Span) -> Res<KVal> {
+        self.expressions.clear();
         let (trigger, body) = funcs::reset_args(args, span)?;
         let trigger = self.num(trigger)?;
         if trigger.unit != Unit::Num {
@@ -371,6 +372,7 @@ impl Kb<'_> {
                 guard: self.guard,
             },
         );
+        self.expressions.clear();
         Ok(result)
     }
 }

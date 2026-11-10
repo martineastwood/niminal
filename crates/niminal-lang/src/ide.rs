@@ -294,6 +294,7 @@ fn kind_ty(kind: Kind) -> &'static str {
     match kind {
         Kind::Wave => "wave",
         Kind::Table => "table",
+        Kind::Array(_) => "array",
         Kind::Gain => "gain",
         Kind::Layout => "layout",
         Kind::Signal(Unit::Num) => "number",

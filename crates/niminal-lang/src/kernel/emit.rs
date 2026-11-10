@@ -142,13 +142,43 @@ impl Kb<'_> {
 
     pub(super) fn emit(&mut self, rate: Rate, make: impl FnOnce(usize) -> Instr) -> usize {
         let dst = self.registers;
+        let instr = make(dst);
+        // Reuse only scalar sample expressions. Registers are immutable, but reset initializers
+        // and frame bodies run on different schedules and must not share this cache.
+        let key = if self.section(rate) == Section::Sample && !self.in_frame {
+            match instr {
+                Instr::Bin { op, a, b, .. } => Some([0, op as usize, a, b]),
+                Instr::Cmp { op, a, b, .. } => Some([1, op as usize, a, b]),
+                Instr::Select { cond, a, b, .. } => Some([2, cond, a, b]),
+                Instr::Call { f, a, .. } => Some([3, f as usize, a, 0]),
+                Instr::Neg { a, .. } => Some([4, a, 0, 0]),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(key) = key {
+            if let Some(&reg) = self.expressions.get(&(self.guard, key)) {
+                return reg;
+            }
+            self.expressions.insert((self.guard, key), dst);
+        }
         self.registers += 1;
-        self.push(rate, make(dst));
+        self.push(rate, instr);
         dst
     }
 
     pub(super) fn constant(&mut self, unit: Unit, value: f64) -> Value {
-        let reg = self.emit(Rate::Const, |dst| Instr::Const { dst, value });
+        let shared = self.force.is_none() && !self.in_frame;
+        let reg = if let Some(&reg) = self.constants.get(&value.to_bits()).filter(|_| shared) {
+            reg
+        } else {
+            let reg = self.emit(Rate::Const, |dst| Instr::Const { dst, value });
+            if shared {
+                self.constants.insert(value.to_bits(), reg);
+            }
+            reg
+        };
         self.consts.insert(reg, value);
         Value {
             reg,
@@ -354,5 +384,17 @@ impl Kb<'_> {
             )
             .with_help("apply `.control` where the function is called")),
         }
+    }
+}
+
+impl Kb<'_> {
+    /// Mark just the sample work. Lower-rate calculations retain their existing schedule.
+    pub(super) fn begin_branch(&mut self, cond: usize) {
+        self.expressions.clear();
+        self.code.push(Instr::BeginBranch { cond });
+    }
+    pub(super) fn end_branch(&mut self) {
+        self.code.push(Instr::EndBranch);
+        self.expressions.clear();
     }
 }
