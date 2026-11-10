@@ -86,11 +86,13 @@ macro_rules! block_opcode {
 mod control;
 mod filter;
 mod frequency;
+mod reel;
 mod tape;
 mod taps;
 pub use control::{Contour, Slew};
 pub use filter::MultimodeFilter;
 pub use frequency::FreqShifter;
+pub use reel::SpliceReel;
 pub use tape::FreezeReverse;
 pub use taps::TapDelay;
 
@@ -141,6 +143,7 @@ mod tests {
             Box::new(FreqShifter::default()),
             Box::new(FreezeReverse::new(16384)),
             Box::new(TapDelay::new(16384, 16)),
+            Box::new(SpliceReel::new(16384, 8)),
         ];
         for rate in [44100.0, 48000.0, 96000.0] {
             let ctx = ProcessCtx::new(rate, true);
@@ -221,5 +224,6 @@ mod tests {
         carries_and_resets(FreqShifter::default());
         carries_and_resets(FreezeReverse::new(16384));
         carries_and_resets(TapDelay::new(16384, 16));
+        carries_and_resets(SpliceReel::new(16384, 8));
     }
 }

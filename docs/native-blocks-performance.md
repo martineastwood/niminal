@@ -4,7 +4,10 @@
 `tap_delay` keep their `std/blocks` interfaces. Thin shelf functions supply
 musical defaults, enums, channel handling, and named outputs; their DSP state
 and sample processing now live in `crates/niminal-engine/src/ops/blocks/`.
-`splice_reel` is unchanged.
+`splice_reel` is native too (`splice_reel_dsp`, `crates/niminal-engine/src/ops/blocks/reel.rs`): its worst case
+(six overlapping, pitched, tiny grains) takes about 2% of real time, where the `.nml` kernel took 25 to 85%.
+`tests/blocks_native.rs` checks it against that kernel (frozen in `tests/fixtures/splice_reel_reference.nml`) and
+fails if its worst case passes a tenth of real time.
 
 The native implementations cache stable coefficients and own their integrators,
 read heads, rings, and mode transitions. Tap delay consumes live per-tap control

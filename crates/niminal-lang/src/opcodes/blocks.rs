@@ -1,6 +1,6 @@
 //! Native DSP implementations of the modular shelf; wrappers retain its enums and named outputs.
 use super::*;
-use niminal_engine::ops::{Contour, FreezeReverse, FreqShifter, MultimodeFilter, Slew, TapDelay};
+use niminal_engine::ops::{Contour, FreezeReverse, FreqShifter, MultimodeFilter, Slew, SpliceReel, TapDelay};
 
 fn size(a: &BuildArgs, default: usize) -> Result<usize, String> {
     let n = a.consts.get("size").copied().unwrap_or(default as f64);
@@ -10,7 +10,7 @@ fn size(a: &BuildArgs, default: usize) -> Result<usize, String> {
     Ok(n as usize)
 }
 
-pub(super) fn specs() -> [OpSpec; 6] {
+pub(super) fn specs() -> [OpSpec; 7] {
     let time = Kind::Signal(Unit::Time);
     let hz = Kind::Signal(Unit::Hz);
     [
@@ -101,6 +101,36 @@ pub(super) fn specs() -> [OpSpec; 6] {
                     return Err("taps must be a whole number from 1 to 16".into());
                 }
                 Ok(Box::new(TapDelay::new(size(a, 192000)?, taps as usize)))
+            }),
+        ),
+        OpSpec::new(
+            "splice_reel_dsp",
+            "Reel sampler DSP for std/blocks.splice_reel. Outputs [left, right, grain_end, level, splice, count]. Gates act above 0.5 on their rising edge; speed is -4..4; grain_size, slide, morph and choose run 0..1. Size (samples) and splices are fixed.",
+            vec![
+                req("x", SIGNAL),
+                opt("record", SIGNAL),
+                opt("new_splice", SIGNAL),
+                opt("sos", SIGNAL),
+                opt("choose", SIGNAL),
+                opt("shift", SIGNAL),
+                opt("mark", SIGNAL),
+                opt("unmark", SIGNAL),
+                opt("clear", SIGNAL),
+                opt("play", SIGNAL),
+                opt("speed", SIGNAL),
+                opt("grain_size", SIGNAL),
+                opt("slide", SIGNAL),
+                opt("morph", SIGNAL),
+                opt("clock", SIGNAL),
+                setting("size", SIGNAL),
+                setting("splices", SIGNAL),
+            ],
+            Build::Builtin(|a| {
+                let splices = a.consts.get("splices").copied().unwrap_or(32.0);
+                if !splices.is_finite() || splices.fract() != 0.0 || !(1.0..=300.0).contains(&splices) {
+                    return Err("splices must be a whole number from 1 to 300".into());
+                }
+                Ok(Box::new(SpliceReel::new(size(a, 960000)?, splices as usize)))
             }),
         ),
     ]

@@ -56,7 +56,7 @@ mod tap;
 pub use allpass::Allpass;
 pub use biquad::{Biquad, BiquadMode};
 pub use bitcrush::Bitcrush;
-pub use blocks::{Contour, FreezeReverse, FreqShifter, MultimodeFilter, Slew, TapDelay};
+pub use blocks::{Contour, FreezeReverse, FreqShifter, MultimodeFilter, Slew, SpliceReel, TapDelay};
 pub use buffer::{BufferRead, BufferReadBank, BufferRecord, BufferWrite};
 pub use chorus::Chorus;
 pub use comb::Comb;

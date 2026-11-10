@@ -308,6 +308,7 @@ op_enum! {
         MultimodeFilter(ops::MultimodeFilter),
         Slew(ops::Slew),
         TapDelay(ops::TapDelay),
+        SpliceReel(ops::SpliceReel),
         Delay(ops::Delay),
         Reverb(ops::Reverb),
         Mverb(ops::Mverb),

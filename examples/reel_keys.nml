@@ -1,0 +1,53 @@
+// A four-bar electric piano progression (Am7, Fmaj7, C, G) recorded into a reel, then reworked in time:
+// bars 1-4 record; 5-8 loop as recorded (markers cut one chord a bar); 9-12 each chord reversed inside its bar;
+// 13-16 each chord at half speed (an octave down), still starting on the bar; 17-20 glitched: short grains stepped on
+// eighth notes; 21-24 time-stretched to the bar an octave down; 25-28 the chords shuffled a beat at a time.
+// Everything stays in time: each chord is its own splice, restarted on the bar (or the beat) with `play`.
+// electric_piano -> splice_reel (record, mark, choose, play, speed, grain_size, morph, clock)
+// Render: niminal render examples/reel_keys.nml --bars 28 --out reel_keys.wav
+config { channels: stereo }
+tempo 100bpm
+use std/instruments.{electric_piano}
+use std/blocks
+
+fn every_bar() { impulse((1 / (4beat).num).hz) }
+fn every_beat() { impulse((1 / (1beat).num).hz) }
+fn eighths() { impulse((2 / (1beat).num).hz) }
+
+instr keys() {
+  b = every_bar()
+  // the four notes of each chord, in semitones above a3
+  n1 = stepper([0, -4, -2, -2], b).value
+  n2 = stepper([3, 0, 3, 2], b).value
+  n3 = stepper([7, 3, 7, 5], b).value
+  n4 = stepper([10, 7, 10, 10], b).value
+  // one strike a bar, each released before the next, so only four piano voices play at once (light enough to play live)
+  chords = spawn(b, dur: 2sec, max: 2) {
+    (electric_piano(freq: 220hz * pow(2, n1 / 12)) + electric_piano(freq: 220hz * pow(2, n2 / 12))
+      + electric_piano(freq: 220hz * pow(2, n3 / 12)) + electric_piano(freq: 220hz * pow(2, n4 / 12))) * 0.35
+  }
+  bar = (note.time / 1bar).floor
+  section = (bar / 4).floor
+  chord = bar - (bar / 4).floor * 4
+  recording = if note.time < 4bar { 1 } else { 0 }
+  // markers in the first loop cut the four bars into one chord each
+  marks = if (note.time > 5bar and note.time < 5bar + 10ms) or (note.time > 6bar and note.time < 6bar + 10ms) or (note.time > 7bar and note.time < 7bar + 10ms) { 1 } else { 0 }
+  in_order = (chord + 0.5) / 4
+  shuffled = stepper([0.1, 0.6, 0.35, 0.85, 0.6, 0.1, 0.85, 0.35], every_beat()).value
+  // retrigger on every bar (every beat when shuffling) once the chords are cut; the gate drops for the last 2% before it
+  bar_phase = note.time / 1bar - bar
+  beat_phase = note.time / 1beat - (note.time / 1beat).floor
+  retrigger = if section >= 2 and section < 6 and bar_phase > 0.98 { 0 } else { if section >= 6 and beat_phase > 0.96 { 0 } else { 1 } }
+  m = splice_reel(chords, record: recording, mark: marks,
+    choose: if section >= 6 { shuffled } else { in_order },
+    play: retrigger,
+    speed: if section == 2 { 0 - 1 } else { if section == 3 or section == 5 { 0.5 } else { 1 } },
+    grain_size: if section == 4 { 0.55 } else { if section == 5 { 0.3 } else { 0 } },
+    morph: if section == 4 { 0.3 } else { if section == 5 { 0.6 } else { 0.33 } },
+    clock: if section == 4 { eighths() } else { if section == 5 { b } else { 0 } })
+  // the reel keeps playing after the note ends, so fade it out with the note
+  done = env[1 | 300ms 0]
+  [(chords * recording + m.left) * done, (chords * recording + m.right) * done]
+}
+
+at +0bars keys() for 28bars
