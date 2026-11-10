@@ -1300,9 +1300,20 @@ fn splice_reel(
     _ended = _ended + _done
     _p = _g_start[_i] + _g_off[_i]
     _gl = _g_sl[_i].max(2)
+    _pi = floor(_p)
+    _fr = _p - _pi
+    _q0 = _pi - 1
+    _q1 = _pi
+    _q2 = _pi + 1
+    _q3 = _pi + 2
+    _y0 = _buf[_g_a[_i] + _q0 - _gl * floor(_q0 / _gl)]
+    _y1 = _buf[_g_a[_i] + _q1 - _gl * floor(_q1 / _gl)]
+    _y2 = _buf[_g_a[_i] + _q2 - _gl * floor(_q2 / _gl)]
+    _y3 = _buf[_g_a[_i] + _q3 - _gl * floor(_q3 / _gl)]
     _idx = _g_a[_i] + _p - _gl * floor(_p / _gl)
+    _read = _y1 + 0.5 * _fr * (_y2 - _y0 + _fr * (2 * _y0 - 5 * _y1 + 4 * _y2 - _y3 + _fr * (3 * (_y1 - _y2) + _y3 - _y0)))
     _win = 0.5 - 0.5 * cos(pi * (_t.min(_g_len[_i] - _t) / _fade).max(0).min(1))
-    _s = _buf.at(_idx, interp: cubic) * _win * _on * (1 - _done)
+    _s = _read * _win * _on * (1 - _done)
     _last_pos = if _on > 0 and _done <= 0 { _idx } else { _last_pos }
     _l = _l + _s * (1 - _g_pan[_i].max(0))
     _r = _r + _s * (1 + _g_pan[_i].min(0))

@@ -2187,3 +2187,19 @@ fn splice_reel_switches_splices_and_flips_direction_without_clicks() {
     assert!(step < 0.03, "flipping direction clicks: {step}");
     assert!(peak(&flipped[320 * 64..]) > 0.2);
 }
+
+#[test]
+fn splice_reel_has_no_dip_at_the_loop_point_at_fractional_speeds() {
+    // reading between samples at the end of a splice used the sample after it (outside the splice), which dipped to zero there
+    let source = "use std/blocks\ninstr a(r: num, sp: num = 1) { splice_reel(0.3 + osc(sine, 110hz) * 0.5, record: r, speed: sp).left }";
+    for speed in [0.7f32, 1.37, -0.7, -1.37, 2.9] {
+        let out = render_with(source, "a", 700, |n, v| {
+            v.set_param_by_name("r", if n < 75 { 1.0 } else { 0.0 });
+            v.set_param_by_name("sp", speed);
+        });
+        let step = out[150 * 64..].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        // a sine of 110 hz at 0.5 moves 0.0072 a sample; at 2.9 times speed, 0.021, and the offset of 0.3 makes a dip to zero at the splice end 0.3
+        assert!(step < 0.03 * speed.abs().max(1.0), "speed {speed}: {step}");
+        assert!(peak(&out[150 * 64..]) > 0.3);
+    }
+}
