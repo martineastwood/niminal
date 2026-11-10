@@ -537,12 +537,16 @@ fn a_definition_taken_out_does_not_come_back_in_the_engine() {
         let _ = s.eval(step, Some("now"));
         run(&mut s, BAR);
     }
+    // `clip i1` took the name of `instr i1`, so that and what played it went, and nothing else did
+    let project = s.project_source();
     assert!(
-        !s.project_source().contains("fx fb"),
-        "{}",
-        s.project_source()
+        !project.contains("instr i1(") && !project.contains("clip c1 ") && !project.contains("scene s1 "),
+        "{project}"
     );
-    s.eval("const sb = 1", Some("now")).unwrap();
+    assert!(project.contains("fx fb") && project.contains("fx tf2"), "what did not depend on it stays: {project}");
+    // (`fx fb` is still there and now reads a constant, so the constant is silence: only a definition that was taken out
+    // and is still in the engine could be heard)
+    s.eval("const sb = 0", Some("now")).unwrap();
     run(&mut s, BAR);
     assert!(
         rms(&run(&mut s, BAR)) < 0.01,
