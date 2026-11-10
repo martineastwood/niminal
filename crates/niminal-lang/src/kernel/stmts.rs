@@ -240,7 +240,11 @@ impl Kb<'_> {
         // `state s = x * 0` is zeros shaped like x. Only the shape of x is needed, so x may be a signal
         // computed in the body, which a value read at note start could not be.
         let zeros_like = match &init.kind {
-            ExprKind::Binary { op: BinOp::Mul, lhs, rhs } => match (&lhs.kind, &rhs.kind) {
+            ExprKind::Binary {
+                op: BinOp::Mul,
+                lhs,
+                rhs,
+            } => match (&lhs.kind, &rhs.kind) {
                 (_, ExprKind::Num { value, unit: None }) if *value == 0.0 => Some(lhs),
                 (ExprKind::Num { value, unit: None }, _) if *value == 0.0 => Some(rhs),
                 _ => None,
@@ -405,7 +409,9 @@ impl Kb<'_> {
 
         let g = self.guard_with(c);
         self.guard = Some(g.reg);
+        self.begin_branch(g.reg);
         self.block(then, false, e.span)?;
+        self.end_branch();
         let then_scope = std::mem::replace(&mut self.frame.scope, saved_scope.clone());
         let then_out = std::mem::replace(&mut self.frame.out, saved_out);
 
@@ -416,20 +422,35 @@ impl Kb<'_> {
         self.guard = saved_guard;
         let g = self.guard_with(not_c);
         self.guard = Some(g.reg);
+        self.begin_branch(g.reg);
         if let Some(stmts) = otherwise {
             self.block(stmts, false, e.span)?;
         }
+        self.end_branch();
         let else_scope = std::mem::replace(&mut self.frame.scope, saved_scope);
         let else_out = std::mem::replace(&mut self.frame.out, saved_out);
         self.guard = saved_guard;
 
+        self.merge_branch_bindings(c, then_scope, else_scope, then_out, else_out, e.span)
+    }
+
+    /// A value-producing `if` must merge assignments just as a statement `if` does.
+    pub(super) fn merge_branch_bindings(
+        &mut self,
+        c: Value,
+        then_scope: HashMap<String, KVal>,
+        else_scope: HashMap<String, KVal>,
+        then_out: Option<Value>,
+        else_out: Option<Value>,
+        span: Span,
+    ) -> Res<()> {
         let names: Vec<String> = self.frame.scope.keys().cloned().collect();
         for name in names {
             let (a, b) = (&then_scope[&name], &else_scope[&name]);
             let merged = if same(a, b) {
                 a.clone()
             } else {
-                self.select_value(c, a.clone(), b.clone(), e.span)?
+                self.select_value(c, a.clone(), b.clone(), span)?
             };
             self.frame.scope.insert(name, merged);
         }

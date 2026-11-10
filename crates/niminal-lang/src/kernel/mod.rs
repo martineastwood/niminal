@@ -1,5 +1,5 @@
-//! Compiles a function with state to an engine [`Kernel`]: straight-line
-//! register code run once per sample. A kernel is compiled for each call, so a
+//! Compiles a function with state to an engine [`Kernel`]: register code with
+//! conditional skips, run once per sample. A kernel is compiled for each call, so a
 //! function's untyped parameters take whatever units the call gives them.
 //!
 //! Every value has a rate, and the code that makes it runs at that rate: once
@@ -192,6 +192,8 @@ struct Kb<'a> {
     block: Vec<Instr>,
     code: Vec<Instr>,
     registers: usize,
+    expressions: HashMap<(Option<usize>, [usize; 4]), usize>,
+    constants: HashMap<u64, usize>,
     state_init: Vec<f64>,
     buffers: Vec<Array<f64>>,
     tables: Vec<Arc<Table>>,
@@ -284,6 +286,8 @@ fn compile_scope_depth(
         block: Vec::new(),
         code: Vec::new(),
         registers: 0,
+        expressions: HashMap::new(),
+        constants: HashMap::new(),
         state_init: Vec::new(),
         buffers: Vec::new(),
         tables: Vec::new(),
@@ -361,7 +365,11 @@ fn compile_scope_depth(
         outputs,
         natives: kb.natives,
     };
+    kernel.eliminate_dead_expressions();
     kernel.compensate_latency();
+    kernel.optimize_branches();
+    // Discard guards belonging to cheap branches which stayed branchless. This also remaps skips.
+    kernel.eliminate_dead_expressions();
     Ok((kernel, result))
 }
 
@@ -482,6 +490,71 @@ mod tests {
         assert!(
             k.init.iter().any(|i| matches!(i, Instr::Input { .. })),
             "from the input's first sample"
+        );
+    }
+}
+
+#[cfg(test)]
+mod optimizer_tests {
+    use super::*;
+
+    fn compile(source: &str) -> Kernel {
+        let items = crate::parser::parse(source).unwrap();
+        let Item::Fn(def) = &items[0] else { panic!() };
+        compile_kernel(
+            def,
+            &[KArg::Port {
+                unit: Unit::Num,
+                rate: Rate::Audio,
+            }],
+            &Registry::builtin(),
+            &Names::default(),
+            Tempo::new(120.0),
+        )
+        .unwrap()
+        .0
+    }
+
+    #[test]
+    fn repeated_scalar_expressions_share_work_and_unused_math_is_removed() {
+        let k = compile(
+            "fn f(x) { state unused = 0\n a = sin(x.max(0).min(1))\n b = sin(x.max(0).min(1))\n discarded = exp(x)\n a + b }",
+        );
+        assert_eq!(
+            k.code
+                .iter()
+                .filter(|i| matches!(i, Instr::Call { f: Fn1::Sin, .. }))
+                .count(),
+            1
+        );
+        assert!(
+            !k.code
+                .iter()
+                .any(|i| matches!(i, Instr::Call { f: Fn1::Exp, .. }))
+        );
+        assert_eq!(
+            k.init
+                .iter()
+                .filter(|i| matches!(i, Instr::Const { value: 0.0, .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn dynamic_branches_skip_sample_math_without_leaking_markers() {
+        let k = compile("fn f(x) { state unused = 0\n if x > 0 { sin(x) } else { cos(x) } }");
+        assert_eq!(
+            k.code
+                .iter()
+                .filter(|i| matches!(i, Instr::SkipIfZero { .. }))
+                .count(),
+            2
+        );
+        assert!(
+            !k.code
+                .iter()
+                .any(|i| matches!(i, Instr::BeginBranch { .. } | Instr::EndBranch))
         );
     }
 }

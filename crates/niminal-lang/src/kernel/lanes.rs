@@ -280,6 +280,7 @@ impl Kb<'_> {
             lane
         });
         // the body's code is kept apart, to run when a frame is ready
+        self.expressions.clear();
         let outer = std::mem::take(&mut self.code);
         self.in_frame = true;
         let called = self.call_captured(&def, name, &given, captures);

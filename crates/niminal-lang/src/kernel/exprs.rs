@@ -78,9 +78,15 @@ impl Kb<'_> {
                     return Ok(self.block(taken, true, e.span)?.expect("a value"));
                 }
                 let saved = self.guard;
+                let saved_scope = self.frame.scope.clone();
+                let saved_out = self.frame.out;
                 let g = self.guard_with(c);
                 self.guard = Some(g.reg);
+                self.begin_branch(g.reg);
                 let a = self.block(then, true, e.span)?.expect("a value");
+                self.end_branch();
+                let then_scope = std::mem::replace(&mut self.frame.scope, saved_scope.clone());
+                let then_out = std::mem::replace(&mut self.frame.out, saved_out);
                 let not_c = {
                     let zero = self.constant(c.unit, 0.0);
                     self.cmp(Cmp::Eq, c, zero)
@@ -88,8 +94,13 @@ impl Kb<'_> {
                 self.guard = saved;
                 let g = self.guard_with(not_c);
                 self.guard = Some(g.reg);
+                self.begin_branch(g.reg);
                 let b = self.block(otherwise, true, e.span)?.expect("a value");
+                self.end_branch();
+                let else_scope = std::mem::replace(&mut self.frame.scope, saved_scope);
+                let else_out = std::mem::replace(&mut self.frame.out, saved_out);
                 self.guard = saved;
+                self.merge_branch_bindings(c, then_scope, else_scope, then_out, else_out, e.span)?;
                 self.select_value(c, a, b, e.span)
             }
             ExprKind::For { var, iter, body } => {

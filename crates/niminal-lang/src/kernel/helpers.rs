@@ -7,7 +7,34 @@ pub(super) fn same(a: &KVal, b: &KVal) -> bool {
     match (a, b) {
         (KVal::Num(x), KVal::Num(y)) => x.reg == y.reg,
         (KVal::Table { id: a, .. }, KVal::Table { id: b, .. })
-        | (KVal::State { id: a, .. }, KVal::State { id: b, .. }) => a == b,
+        | (KVal::State { id: a, .. }, KVal::State { id: b, .. })
+        | (KVal::Lane { id: a, .. }, KVal::Lane { id: b, .. }) => a == b,
+        (
+            KVal::Function {
+                def: a,
+                captures: ac,
+            },
+            KVal::Function {
+                def: b,
+                captures: bc,
+            },
+        ) => {
+            a == b
+                && ac.len() == bc.len()
+                && ac
+                    .iter()
+                    .all(|(name, a)| bc.get(name).is_some_and(|b| same(a, b)))
+        }
+        (
+            KVal::Buffer {
+                selector: a,
+                choices: ac,
+            },
+            KVal::Buffer {
+                selector: b,
+                choices: bc,
+            },
+        ) => a.reg == b.reg && Arc::ptr_eq(ac, bc),
         (KVal::Array(a), KVal::Array(b)) => {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same(x, y))
         }

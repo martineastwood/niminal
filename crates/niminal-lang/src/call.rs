@@ -26,7 +26,7 @@ pub(crate) enum ArgVal<S> {
 /// factor; every other signal parameter takes exactly its unit.
 pub(crate) fn unit_expected(kind: Kind, found: Unit) -> Option<Unit> {
     match kind {
-        Kind::Signal(expected) if found != expected => Some(expected),
+        Kind::Signal(expected) | Kind::Array(expected) if found != expected => Some(expected),
         Kind::Gain if !matches!(found, Unit::Db | Unit::Num) => Some(Unit::Db),
         _ => None,
     }
@@ -129,4 +129,42 @@ pub(crate) fn mverb_args<S: Clone>(
         return Err("`mverb` controls must be scalar");
     }
     Ok(vals)
+}
+
+/// Flatten an opcode's consumed arrays into named scalar ports before ordinary channel expansion.
+/// Both compilers use this path, including unit checks on every generated scalar parameter.
+pub(crate) fn packed<S: Clone>(
+    spec: &OpSpec,
+    vals: &[Option<ArgVal<S>>],
+) -> Result<Option<(OpSpec, CallRow<S>)>, &'static str> {
+    if !spec.params.iter().any(|p| matches!(p.kind, Kind::Array(_))) {
+        return Ok(None);
+    }
+    let mut packed = spec.clone();
+    packed.params.clear();
+    let mut values = Vec::new();
+    for (param, val) in spec.params.iter().zip(vals) {
+        if let Kind::Array(unit) = param.kind {
+            let items = match val {
+                Some(ArgVal::Array(items)) => items.clone(),
+                Some(ArgVal::Sig(s)) => vec![ArgVal::Sig(s.clone())],
+                _ => return Err("expected a nonempty one-dimensional signal array"),
+            };
+            if items.is_empty() || !items.iter().all(|v| matches!(v, ArgVal::Sig(_))) {
+                return Err("expected a nonempty one-dimensional signal array");
+            }
+            packed.packed_arrays.push((param.name.clone(), items.len()));
+            for (i, item) in items.into_iter().enumerate() {
+                let mut scalar = param.clone();
+                scalar.name = format!("{}_{}", param.name, i);
+                scalar.kind = Kind::Signal(unit);
+                packed.params.push(scalar);
+                values.push(Some(item));
+            }
+        } else {
+            packed.params.push(param.clone());
+            values.push(val.clone());
+        }
+    }
+    Ok(Some((packed, values)))
 }

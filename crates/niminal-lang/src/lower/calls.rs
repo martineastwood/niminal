@@ -600,7 +600,7 @@ impl Lower<'_> {
                 Kind::Wave => Val::Wave(self.wave_arg(&arg.value)?),
                 Kind::Layout => Val::Layout(layout_from_expr(&arg.value)?),
                 Kind::Table => Val::Tables(self.table_arg(&arg.value, true)?),
-                Kind::Signal(_) | Kind::Gain => {
+                Kind::Signal(_) | Kind::Array(_) | Kind::Gain => {
                     let value = self.value(&arg.value)?;
                     self.builtin_value(value, param, &arg.value)?
                 }
@@ -704,6 +704,27 @@ impl Lower<'_> {
         vals: &[Option<Val>],
         span: Span,
     ) -> Res<Datum> {
+        if spec.params.iter().any(|p| matches!(p.kind, Kind::Array(_))) {
+            let vals: Vec<_> = spec
+                .params
+                .iter()
+                .zip(vals)
+                .map(|(p, v)| match v {
+                    Some(Val::Sig(sig)) if matches!(p.kind, Kind::Array(_)) && sig.count() > 1 => {
+                        Some(Val::Array(
+                            (0..sig.count())
+                                .map(|i| Val::Sig(Self::element(sig, i)))
+                                .collect(),
+                        ))
+                    }
+                    other => other.clone(),
+                })
+                .collect();
+            let (packed, vals) = call::packed(spec, &vals)
+                .map_err(|m| Diagnostic::new(m, span))?
+                .expect("array parameters are packed");
+            return self.dispatch_arrays(&packed, &vals, span);
+        }
         if spec.name == "mverb" {
             let vals: Vec<_> = vals
                 .iter()
