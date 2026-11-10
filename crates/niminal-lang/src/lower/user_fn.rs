@@ -403,6 +403,7 @@ impl Lower<'_> {
             let shadowed = def.params.iter().any(|p| p.name.name == control.name)
                 || self.scope.contains_key(&control.name);
             if shadowed
+                || funcs::declares(&def, &control.name)
                 || !(funcs::reads(&def, &control.name) || funcs::defaults_read(&def, &control.name))
             {
                 continue;

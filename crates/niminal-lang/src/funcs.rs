@@ -521,6 +521,36 @@ pub(crate) fn reads(def: &FnDef, name: &str) -> bool {
             .any(|e| visit(e, name))
 }
 
+/// Whether the body declares a local (`x = ...`, `state x = ...` or `[x, y] = ...`) called `name`, anywhere in it. Such a
+/// name is the function's own, so it is not the file's control of that name.
+pub(crate) fn declares(def: &FnDef, name: &str) -> bool {
+    fn stmts(list: &[Stmt], name: &str) -> bool {
+        list.iter().any(|s| {
+            matches!(s, Stmt::Bind { name: n, .. } | Stmt::State { name: n, .. } if n.name == name)
+                || matches!(s, Stmt::Destructure { names, .. } if names.iter().any(|n| n.name == name))
+                || s.exprs().into_iter().any(|e| expr(e, name))
+        })
+    }
+    fn expr(e: &Expr, name: &str) -> bool {
+        let blocks: Vec<&[Stmt]> = match &e.kind {
+            ExprKind::If {
+                then, otherwise, ..
+            } => std::iter::once(then.as_slice())
+                .chain(otherwise.as_deref())
+                .collect(),
+            ExprKind::For { body, .. } | ExprKind::Lambda { body, .. } => vec![body],
+            _ => Vec::new(),
+        };
+        if blocks.into_iter().any(|b| stmts(b, name)) {
+            return true;
+        }
+        let mut found = false;
+        e.for_each_child(&mut |c| found |= expr(c, name));
+        found
+    }
+    stmts(&def.body, name)
+}
+
 /// Whether a parameter's default reads `name`, such as `time: sec = 1/8 * clock.beat_length` reading the tempo control.
 pub(crate) fn defaults_read(def: &FnDef, name: &str) -> bool {
     fn visit(e: &Expr, name: &str) -> bool {

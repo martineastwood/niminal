@@ -559,6 +559,10 @@ fn locals_cannot_shadow_top_level_names() {
     ok(&with("instr a(other: hz) { osc(saw, other) }"));
     ok(&with("instr a(f: hz) { other = osc(saw, f)\nother * 0.5 }"));
     ok(&with("instr a(f: hz) { other = other(f: f)\nother * 0.5 }"));
+    // and so is a function, which is also only reached by calling it
+    ok(&with("fn double(x) { x * 2 }\ninstr a(f: hz) { double = osc(saw, f)\ndouble * 0.5 }"));
+    ok(&with("fn double(x) { x * 2 }\ninstr a(f: hz) { double = double(osc(saw, f))\ndouble * 0.5 }"));
+    ok(&with("fn double(x) { x * 2 }\nfn g(x) { double = x\ndouble }\ninstr a(f: hz) { g(osc(saw, f)) }"));
     assert_eq!(
         msg(&with("instr a(f: hz) { space = 1 }")),
         "`space` is already the name of a bus, so it can't be used for a local"
@@ -1097,4 +1101,16 @@ fn named_kit_selection_survives_the_wire_and_keeps_voice_rules() {
             .to_string()
             .contains("out of range")
     );
+}
+
+#[test]
+fn rate_hints_and_errors_point_at_what_was_written_after_a_clock_read() {
+    // `clock.bar` and `clock.beat_length` are made longer while compiling; positions after them must not move
+    let source = "instr a() {\n  p = clock.bar.mod(4)\n  q = clock.beat_length * 2\n  v = osc(sine, 220hz)\n  v + p * 0 + q.num * 0\n}";
+    let program = compile(source).unwrap_or_else(|e| panic!("{e:?}"));
+    let hinted: Vec<&str> = program.instruments[0].rate_hints.iter().map(|h| &source[h.span.start..h.span.end]).collect();
+    assert_eq!(hinted, ["p", "q", "v"]);
+    let broken = "instr a() {\n  p = clock.bar.mod(4)\n  q = clock.beat_length * 2\n  nope(p)\n}";
+    let Err(errors) = compile(broken) else { panic!("`nope` is not defined") };
+    assert_eq!(&broken[errors[0].span.start..errors[0].span.end], "nope", "{}", errors[0].message);
 }

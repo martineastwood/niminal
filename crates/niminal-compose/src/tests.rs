@@ -772,6 +772,9 @@ fn locals_cannot_shadow_top_level_names() {
     // an instrument is only reached by calling it, so a parameter or local of its name is its own
     ok(&with("instr a(other: hz) { osc(saw, other) }"));
     ok(&with("instr a(f: hz) { other = osc(saw, f)\nother * 0.5 }"));
+    // a function is only reached by calling it, so a local, clip or scene can share its name
+    ok(&with("fn double(x) { x * 2 }\ninstr a(f: hz) { double = osc(saw, f)\ndouble * 0.5 }"));
+    ok(&with("fn double(x) { x * 2 }\nclip lead { instrument: other }\nscene double { lead }"));
     assert_eq!(
         msg(&with("instr a(f: hz) { space = 1 }")),
         "`space` is already the name of a bus, so it can't be used for a local"

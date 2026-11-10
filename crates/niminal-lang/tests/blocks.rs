@@ -1930,3 +1930,14 @@ fn a_function_with_state_can_default_a_parameter_to_the_tempo() {
     );
     assert!((out[0] - 0.125).abs() < 1e-6 && (out[1] - 0.25).abs() < 1e-6, "{} {}", out[0], out[1]);
 }
+
+#[test]
+fn a_function_own_names_never_clash_with_the_files_controls_or_functions() {
+    // the function declares `phase` and `held` (one with state) while the file has controls of those names and a
+    // function called `double`: the function's are its own, and the control's value never leaks in
+    let out = render(
+        "ctl phase = 0.5\nctl held = 0.25\nfn double(x) { x * 2 }\nfn plain(x) {\n  phase = x * 2\n  phase\n}\nfn counted(x) {\n  state held = 0\n  held = held + x\n  held\n}\ninstr a() {\n  double = plain(0.1) * 0.1 + counted(0.001)\n  double\n}",
+        2,
+    );
+    assert!((out[0] - 0.021).abs() < 1e-6 && (out[99] - 0.12).abs() < 1e-5, "{} {}", out[0], out[99]);
+}

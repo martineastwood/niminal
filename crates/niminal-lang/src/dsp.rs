@@ -78,6 +78,22 @@ pub struct ClockEdit {
     pub new_len: usize,
 }
 
+/// Where `pos` of the source is in the text [`lower_clock_edits`] made from it: the other way round from
+/// [`unlowered_span`]. A position inside what was replaced is where the replacement starts.
+pub fn lowered_position(edits: &[ClockEdit], pos: usize) -> usize {
+    let mut shift: isize = 0;
+    for e in edits {
+        if pos < e.start {
+            break;
+        }
+        if pos < e.start + e.old_len {
+            return (e.start as isize + shift) as usize;
+        }
+        shift += e.new_len as isize - e.old_len as isize;
+    }
+    (pos as isize + shift).max(0) as usize
+}
+
 /// Where `span` of the text [`lower_clock_edits`] made is in the source it was made from, so that a
 /// problem found in the lowered text can be pointed at what was written.
 pub fn unlowered_span(edits: &[ClockEdit], span: Span, source_len: usize) -> Span {

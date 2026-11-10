@@ -338,8 +338,40 @@ impl<'a> Defined<'a> {
 }
 
 pub fn compile_with(source: &str, options: &CompileOptions) -> Result<Program, Vec<Diagnostic>> {
-    // a server has done this for its client already, with that client's tempo
-    let source = &crate::lower_clock(source, crate::ClockState::default()).map_err(|d| vec![d])?;
+    // `clock.bar` and the like become reads of the tempo controls, which makes the text longer; what the caller gave
+    // (`options`) and what it gets back (errors, rate hints) are positions in what was written, so they are moved
+    // across. A server has done this already for its client, with that client's tempo, and then nothing moves.
+    let (lowered, edits) = crate::lower_clock_edits(source, crate::ClockState::default()).map_err(|d| vec![d])?;
+    if edits.is_empty() {
+        return compile_lowered(&lowered, options);
+    }
+    let mut options = options.clone();
+    for (start, end, _) in &mut options.namespaces {
+        (*start, *end) = (crate::lowered_position(&edits, *start), crate::lowered_position(&edits, *end));
+    }
+    if let Some(origins) = &mut options.origins {
+        for (start, end, ..) in origins {
+            (*start, *end) = (crate::lowered_position(&edits, *start), crate::lowered_position(&edits, *end));
+        }
+    }
+    let back = |d: &mut Diagnostic| d.span = crate::unlowered_span(&edits, d.span, source.len());
+    match compile_lowered(&lowered, &options) {
+        Ok(mut program) => {
+            for instrument in &mut program.instruments {
+                for hint in &mut instrument.rate_hints {
+                    hint.span = crate::unlowered_span(&edits, hint.span, source.len());
+                }
+            }
+            Ok(program)
+        }
+        Err(mut errors) => {
+            errors.iter_mut().for_each(back);
+            Err(errors)
+        }
+    }
+}
+
+fn compile_lowered(source: &str, options: &CompileOptions) -> Result<Program, Vec<Diagnostic>> {
     crate::validate_dsp(source).map_err(|d| vec![d])?;
     let mut parsed = parser::parse(source).map_err(|d| vec![d])?;
     snap_divisions(&mut parsed);

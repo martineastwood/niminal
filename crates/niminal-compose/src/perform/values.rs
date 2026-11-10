@@ -14,7 +14,10 @@ impl Perform<'_> {
                             .instrument
                             .is_some_and(|i| self.cx.instruments[i].name == name.name)
                 });
-            !own_instrument && !(*k == "score function" && matches!(value, PerfValue::Def(_)))
+            // a function (such as one of the library's) is only reached by calling it, so a clip or scene can share its name
+            !own_instrument
+                && *k != "function"
+                && !(*k == "score function" && matches!(value, PerfValue::Def(_)))
         }) {
             return Err(Diagnostic::new(
                 format!("`{}` is already the name of a {kind}", name.name),

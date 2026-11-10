@@ -293,15 +293,17 @@ impl Names {
         self.check_local_in(name, false)
     }
 
-    /// Like [`Names::check_local`]. Inside a function only the names its body could read are taken:
-    /// buses, controls and functions. Instruments, nodes, effects and constants are never taken: a local
-    /// of those names is its own, and hides a constant of the same name.
+    /// Like [`Names::check_local`]. Inside a function no name is taken: its parameters and locals are its own, so a
+    /// library function's `phase` never clashes with your control of that name. Elsewhere functions, instruments, nodes,
+    /// effects and constants are never taken: a local
+    /// of those names is its own, and hides a constant of the same name. (A function is only reached by calling it,
+    /// so a local called `echoes` doesn't get in the way of the library's `echoes(...)`.)
     pub(crate) fn check_local_in(&self, name: &Ident, in_fn: bool) -> Res<()> {
         // an instrument, node or effect is only ever reached by calling it, so a local of that name is its own
         // and clashes with nothing; the other names can be read as plain names, so a local may not hide them
         if let Some(kind) = self.kind_of(&name.name)
-            && !matches!(kind, "instrument" | "node" | "fx" | "constant")
-            && (!in_fn || matches!(kind, "bus" | "control" | "function"))
+            && !matches!(kind, "instrument" | "node" | "fx" | "constant" | "function")
+            && !in_fn
         {
             let article = if kind.starts_with(['a', 'e', 'i', 'o', 'u']) {
                 "an"
