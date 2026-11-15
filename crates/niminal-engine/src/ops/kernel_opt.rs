@@ -1,5 +1,6 @@
 //! Conservative scalar liveness and conditional sample-work elimination.
-use super::{Instr, Kernel, LaneSrc, NativeInput};
+use super::custom::MemoMath;
+use super::{BinOp, Fn1, Instr, Kernel, LaneSrc, NativeInput};
 
 /// Only scalar operations without effects or mutable-array reads can be discarded.
 fn pure(instruction: &Instr) -> Option<(usize, [usize; 3], usize)> {
@@ -7,10 +8,15 @@ fn pure(instruction: &Instr) -> Option<(usize, [usize; 3], usize)> {
         Instr::Const { dst, .. } | Instr::SampleRate { dst } | Instr::Input { dst, .. } => {
             Some((dst, [0; 3], 0))
         }
+        Instr::MulAdd { dst, a, b, c, .. } => Some((dst, [a, b, c], 3)),
         Instr::Bin { dst, a, b, .. } | Instr::Cmp { dst, a, b, .. } => Some((dst, [a, b, 0], 2)),
         Instr::Neg { dst, a } | Instr::Call { dst, a, .. } | Instr::Copy { dst, src: a } => {
             Some((dst, [a, 0, 0], 1))
         }
+        Instr::Memo { dst, math, a, .. } => match math {
+            MemoMath::Unary(_) => Some((dst, [a, 0, 0], 1)),
+            MemoMath::Binary(_, b) => Some((dst, [a, b, 0], 2)),
+        },
         Instr::Select { dst, cond, a, b } => Some((dst, [cond, a, b], 3)),
         _ => None,
     }
@@ -27,6 +33,7 @@ fn lane(src: LaneSrc, used: &mut Vec<usize>) {
 fn roots(instruction: &Instr, used: &mut Vec<usize>) {
     match *instruction {
         Instr::BeginBranch { cond } | Instr::SkipIfZero { cond, .. } => used.push(cond),
+        Instr::CmpSkip { a, b, .. } => used.extend([a, b]),
         Instr::EndBranch | Instr::LoadState { .. } => {}
         Instr::Reset { trigger, guard, .. } => {
             used.push(trigger);
@@ -74,15 +81,73 @@ fn roots(instruction: &Instr, used: &mut Vec<usize>) {
         | Instr::SampleRate { .. }
         | Instr::Input { .. }
         | Instr::Bin { .. }
+        | Instr::MulAdd { .. }
         | Instr::Cmp { .. }
         | Instr::Neg { .. }
         | Instr::Call { .. }
         | Instr::Copy { .. }
+        | Instr::Memo { .. }
         | Instr::Select { .. } => unreachable!("pure instructions have explicit dependencies"),
     }
 }
 
 impl Kernel {
+    /// Cache expensive sample-rate math per voice. The math's complete input is the key,
+    /// so a branch, reset, or block boundary cannot invalidate a hit.
+    pub fn memoize_expensive_math(&mut self) {
+        for instruction in &mut self.code {
+            let (dst, math, a) = match *instruction {
+                Instr::Call {
+                    dst,
+                    f: f @ (Fn1::Sin | Fn1::Cos | Fn1::Tan | Fn1::Tanh | Fn1::Exp | Fn1::Log),
+                    a,
+                } => (dst, MemoMath::Unary(f), a),
+                Instr::Bin {
+                    dst,
+                    op: op @ (BinOp::Pow | BinOp::Atan2),
+                    a,
+                    b,
+                } => (dst, MemoMath::Binary(op, b), a),
+                _ => continue,
+            };
+            *instruction = Instr::Memo {
+                dst,
+                slot: self.memo_slots,
+                math,
+                a,
+            };
+            self.memo_slots += 1;
+        }
+    }
+
+    /// Combine a comparison with the immediately following branch that consumes it.
+    pub fn fuse_compare_skips(&mut self) {
+        let mut targets = vec![false; self.code.len() + 1];
+        for (pc, instruction) in self.code.iter().enumerate() {
+            if let Instr::SkipIfZero { count, .. } | Instr::CmpSkip { count, .. } = instruction {
+                targets[pc + count + 1] = true;
+            }
+        }
+        let mut remove = vec![false; self.code.len()];
+        for pc in 1..self.code.len() {
+            if !targets[pc]
+                && let Instr::SkipIfZero { cond, count } = self.code[pc]
+                && let Instr::Cmp { dst, op, a, b } = self.code[pc - 1]
+                && dst == cond
+            {
+                self.code[pc] = Instr::CmpSkip {
+                    dst,
+                    op,
+                    a,
+                    b,
+                    count,
+                };
+                remove[pc - 1] = true;
+            }
+        }
+        prune_where(&mut self.code, |pc, _| !remove[pc]);
+    }
+
     /// Remove unused scalar work without removing, reordering, or combining stateful operations.
     pub fn eliminate_dead_expressions(&mut self) {
         let mut dependencies = vec![None; self.registers];
@@ -154,13 +219,18 @@ impl Kernel {
 
 /// Retain instruction boundaries so existing forward skips survive scalar dead-code removal.
 fn prune(code: &mut Vec<Instr>, retain: impl Fn(&Instr) -> bool) {
+    prune_where(code, |_, instruction| retain(instruction));
+}
+
+/// [`prune`], with the position of each instruction to decide by.
+pub(super) fn prune_where(code: &mut Vec<Instr>, retain: impl Fn(usize, &Instr) -> bool) {
     let mut positions = vec![0; code.len() + 1];
     let mut result = Vec::with_capacity(code.len());
     let mut skips = Vec::new();
     for (i, &instruction) in code.iter().enumerate() {
         positions[i] = result.len();
-        if retain(&instruction) {
-            if let Instr::SkipIfZero { count, .. } = instruction {
+        if retain(i, &instruction) {
+            if let Instr::SkipIfZero { count, .. } | Instr::CmpSkip { count, .. } = instruction {
                 skips.push((result.len(), i + count + 1));
             }
             result.push(instruction);
@@ -168,7 +238,8 @@ fn prune(code: &mut Vec<Instr>, retain: impl Fn(&Instr) -> bool) {
     }
     positions[code.len()] = result.len();
     for (start, target) in skips {
-        let Instr::SkipIfZero { count, .. } = &mut result[start] else {
+        let (Instr::SkipIfZero { count, .. } | Instr::CmpSkip { count, .. }) = &mut result[start]
+        else {
             unreachable!()
         };
         *count = positions[target] - start - 1;
@@ -259,6 +330,80 @@ fn branches(code: &[Instr], natives: &[super::Native], allow_skips: bool) -> Vec
 mod tests {
     use super::*;
     use crate::ops::{BinOp, Fn1, Native, SampleDelay};
+
+    #[test]
+    fn memoized_math_matches_original_for_repeats_and_signed_zero() {
+        use crate::{Opcode, Port, ProcessCtx};
+        let mut kernel = Kernel {
+            registers: 4,
+            ports: vec![Port::required("x"), Port::required("y")],
+            code: vec![
+                Instr::Input { dst: 0, port: 0 },
+                Instr::Input { dst: 1, port: 1 },
+                Instr::Call {
+                    dst: 2,
+                    f: Fn1::Sin,
+                    a: 0,
+                },
+                Instr::Bin {
+                    dst: 3,
+                    op: BinOp::Atan2,
+                    a: 2,
+                    b: 1,
+                },
+            ],
+            outputs: vec![("out".into(), 3)],
+            ..Kernel::default()
+        };
+        let original = kernel.clone();
+        kernel.memoize_expensive_math();
+        assert_eq!(kernel.memo_slots, 2);
+        let x = [0.0, 0.0, -0.0, -0.0, 0.5, 0.5, 0.5, f32::NAN, f32::NAN];
+        let y = [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, -2.0, 1.0, 1.0];
+        let render = |kernel| {
+            let mut op = crate::ops::Custom::new(std::sync::Arc::new(kernel));
+            op.prepare(48_000.0);
+            let mut out = [0.0; 9];
+            op.process(&ProcessCtx::new(48_000.0, true), &[&x, &y], &mut out);
+            out.map(f32::to_bits)
+        };
+        assert_eq!(render(kernel), render(original));
+    }
+
+    #[test]
+    fn compare_skip_fusion_remaps_the_destination_and_keeps_the_boolean() {
+        let mut kernel = Kernel {
+            code: vec![
+                Instr::SkipIfZero { cond: 0, count: 2 },
+                Instr::Cmp {
+                    dst: 3,
+                    op: crate::ops::Cmp::Lt,
+                    a: 1,
+                    b: 2,
+                },
+                Instr::SkipIfZero { cond: 3, count: 1 },
+                Instr::Copy { dst: 4, src: 1 },
+                Instr::Copy { dst: 5, src: 3 },
+            ],
+            ..Kernel::default()
+        };
+        kernel.fuse_compare_skips();
+        assert_eq!(
+            kernel.code,
+            vec![
+                Instr::SkipIfZero { cond: 0, count: 1 },
+                Instr::CmpSkip {
+                    dst: 3,
+                    op: crate::ops::Cmp::Lt,
+                    a: 1,
+                    b: 2,
+                    count: 1
+                },
+                Instr::Copy { dst: 4, src: 1 },
+                Instr::Copy { dst: 5, src: 3 },
+            ]
+        );
+    }
 
     #[test]
     fn dead_pure_chains_are_removed_but_state_updates_still_run() {

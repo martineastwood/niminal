@@ -56,13 +56,18 @@ mod tap;
 pub use allpass::Allpass;
 pub use biquad::{Biquad, BiquadMode};
 pub use bitcrush::Bitcrush;
-pub use blocks::{Contour, FreezeReverse, FreqShifter, MultimodeFilter, Slew, SpliceReel, TapDelay};
+pub use blocks::{
+    Contour, FreezeReverse, FreqShifter, MultimodeFilter, Slew, SpliceReel, TapDelay,
+};
 pub use buffer::{BufferRead, BufferReadBank, BufferRecord, BufferWrite};
 pub use chorus::Chorus;
 pub use comb::Comb;
 pub use compress::Compressor;
 pub use control::Control;
 pub use convolve::{Convolve, IrSpectrum};
+pub use custom::MemoMath;
+#[cfg(feature = "kernel-profile")]
+pub use custom::profile as kernel_profile;
 pub use custom::{
     ArraySource, BinOp, Cmp, Custom, Fn1, FrameScope, Func, Instr, Interp, Kernel, LaneSrc, Native,
     NativeInput, Reduce, ResetScope, pow, read_array, read_at, rem,
@@ -127,6 +132,8 @@ pub use control_rate::{ControlRate, Ramp};
 
 mod latency;
 pub use latency::SampleDelay;
+mod kernel_cse;
+mod kernel_fusion;
 mod kernel_latency;
 mod kernel_opt;
 

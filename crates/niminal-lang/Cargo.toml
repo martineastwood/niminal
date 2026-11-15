@@ -8,6 +8,9 @@ description = "The niminal DSP language: parser, unit checker, and compiler to e
 [lints]
 workspace = true
 
+[features]
+kernel-profile = ["niminal-engine/kernel-profile"]
+
 [dependencies]
 niminal-engine = { path = "../niminal-engine" }
 niminal-score = { path = "../niminal-score" }

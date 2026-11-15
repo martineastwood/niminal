@@ -20,6 +20,8 @@ pub(crate) use helpers::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+#[cfg(test)]
+use niminal_engine::ops::MemoMath;
 use niminal_engine::ops::{
     ArraySource, BinOp as Op, Cmp, Fn1, Instr, Interp, Kernel, LaneSrc, Native, NativeInput, Reduce,
 };
@@ -350,6 +352,7 @@ fn compile_scope_depth(
         block: kb.block,
         code: kb.code,
         registers: kb.registers,
+        memo_slots: 0,
         state_init: kb.state_init,
         buffers: kb.buffers,
         tables_f64: kb
@@ -368,8 +371,13 @@ fn compile_scope_depth(
     kernel.eliminate_dead_expressions();
     kernel.compensate_latency();
     kernel.optimize_branches();
+    kernel.eliminate_redundant_expressions();
+    kernel.fuse_conditional_writes();
     // Discard guards belonging to cheap branches which stayed branchless. This also remaps skips.
     kernel.eliminate_dead_expressions();
+    kernel.fuse_compare_skips();
+    kernel.memoize_expensive_math();
+    kernel.fuse_scalar_chains();
     Ok((kernel, result))
 }
 
@@ -401,8 +409,16 @@ mod tests {
     const ONE_POLE: &str = "fn one_pole(x, cutoff: hz) {\n  state y = 0\n  a = exp(-2 * pi * cutoff / sample_rate)\n  y = x * (1 - a) + y * a\n  y\n}";
 
     fn has_exp(code: &[Instr]) -> bool {
-        code.iter()
-            .any(|i| matches!(i, Instr::Call { f: Fn1::Exp, .. }))
+        code.iter().any(|i| {
+            matches!(
+                i,
+                Instr::Call { f: Fn1::Exp, .. }
+                    | Instr::Memo {
+                        math: MemoMath::Unary(Fn1::Exp),
+                        ..
+                    }
+            )
+        })
     }
 
     #[test]
@@ -523,15 +539,25 @@ mod optimizer_tests {
         assert_eq!(
             k.code
                 .iter()
-                .filter(|i| matches!(i, Instr::Call { f: Fn1::Sin, .. }))
+                .filter(|i| matches!(
+                    i,
+                    Instr::Call { f: Fn1::Sin, .. }
+                        | Instr::Memo {
+                            math: MemoMath::Unary(Fn1::Sin),
+                            ..
+                        }
+                ))
                 .count(),
             1
         );
-        assert!(
-            !k.code
-                .iter()
-                .any(|i| matches!(i, Instr::Call { f: Fn1::Exp, .. }))
-        );
+        assert!(!k.code.iter().any(|i| matches!(
+            i,
+            Instr::Call { f: Fn1::Exp, .. }
+                | Instr::Memo {
+                    math: MemoMath::Unary(Fn1::Exp),
+                    ..
+                }
+        )));
         assert_eq!(
             k.init
                 .iter()
@@ -547,7 +573,7 @@ mod optimizer_tests {
         assert_eq!(
             k.code
                 .iter()
-                .filter(|i| matches!(i, Instr::SkipIfZero { .. }))
+                .filter(|i| matches!(i, Instr::SkipIfZero { .. } | Instr::CmpSkip { .. }))
                 .count(),
             2
         );

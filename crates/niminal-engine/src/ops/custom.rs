@@ -3,6 +3,9 @@
 //! carries from one sample to the next exactly as in a hand-written filter.
 //! Work that only depends on note-start or per-block values runs at those rates.
 
+#[cfg(feature = "kernel-profile")]
+pub mod profile;
+
 use std::sync::Arc;
 
 use crate::opcode::{MAX_INPUTS, Opcode, Port, ProcessCtx, blocks};
@@ -13,7 +16,7 @@ use super::lanes as lane_ops;
 use crate::{Array, wrapped_index};
 
 /// Scalar math functions, usable inside kernels and as the [`Func`] opcode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Fn1 {
     Sin,
     Cos,
@@ -118,7 +121,7 @@ impl Opcode for Func {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinOp {
     Add,
     Sub,
@@ -191,7 +194,7 @@ impl Cmp {
 }
 
 /// A comparison, which gives 1 when it holds and 0 when it doesn't.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Cmp {
     Lt,
     Gt,
@@ -199,6 +202,13 @@ pub enum Cmp {
     Ge,
     Eq,
     Ne,
+}
+
+/// Pure scalar math that can reuse its last result.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MemoMath {
+    Unary(Fn1),
+    Binary(BinOp, usize),
 }
 
 /// One step of a kernel. Scalar destinations use distinct registers. Forward skips leave
@@ -213,6 +223,14 @@ pub enum Instr {
     /// Skip the next `count` instructions when `cond` is zero.
     SkipIfZero {
         cond: usize,
+        count: usize,
+    },
+    /// Compare, save the boolean result, and skip when the comparison is false.
+    CmpSkip {
+        dst: usize,
+        op: Cmp,
+        a: usize,
+        b: usize,
         count: usize,
     },
     Reset {
@@ -247,6 +265,12 @@ pub enum Instr {
         a: usize,
         b: usize,
     },
+    Memo {
+        dst: usize,
+        slot: usize,
+        math: MemoMath,
+        a: usize,
+    },
     Neg {
         dst: usize,
         a: usize,
@@ -254,6 +278,13 @@ pub enum Instr {
     Copy {
         dst: usize,
         src: usize,
+    },
+    /// A multiply followed by an add, with the intermediate rounded as f64 (not FMA).
+    MulAdd {
+        dst: usize,
+        a: usize,
+        b: usize,
+        c: usize,
     },
     Cmp {
         dst: usize,
@@ -497,6 +528,7 @@ pub struct Kernel {
     /// Run every sample.
     pub code: Vec<Instr>,
     pub registers: usize,
+    pub memo_slots: usize,
     /// Initial value of each state slot, before `init` runs.
     pub state_init: Vec<f64>,
     /// Starting contents of each state list.
@@ -595,6 +627,12 @@ impl FftPlan {
     }
 }
 
+#[derive(Clone, Copy)]
+struct MemoEntry {
+    key: [u64; 2],
+    value: f64,
+}
+
 /// A running copy of a [`Kernel`], with its own state.
 pub struct Custom {
     kernel: Arc<Kernel>,
@@ -605,6 +643,7 @@ pub struct Custom {
     frame_runs: Vec<FrameRun>,
     fft_plans: Vec<FftPlan>,
     regs: Vec<f64>,
+    memo: Vec<Option<MemoEntry>>,
     sample_rate: f64,
     /// Whether the note-start section has run.
     started: bool,
@@ -649,6 +688,7 @@ impl Custom {
             frame_runs: kernel.frames.iter().map(FrameRun::new).collect(),
             fft_plans: kernel.ffts.iter().map(|&n| FftPlan::new(n)).collect(),
             regs: vec![0.0; kernel.registers],
+            memo: vec![None; kernel.memo_slots],
             natives: kernel.natives.iter().map(|n| n.op.box_clone()).collect(),
             one_sample: kernel
                 .natives
@@ -707,29 +747,214 @@ impl Custom {
         i: usize,
     ) {
         let mut instructions = code.iter();
+        #[cfg(feature = "kernel-profile")]
+        let mut previous = None;
         while let Some(instr) = instructions.next() {
-            if let Instr::Frame {
-                scope,
-                input: x,
-                input2,
-                dst,
-            } = *instr
-            {
-                self.run_frame(scope, (x, input2), dst, ctx, input, i);
-                continue;
+            #[cfg(feature = "kernel-profile")]
+            if section == Section::Sample {
+                profile::record(
+                    instr,
+                    code.len() - instructions.as_slice().len() - 1,
+                    &mut previous,
+                );
             }
-            if RESETS
-                && let Instr::Reset {
+            let (regs, state, buffers) = (&mut self.regs, &mut self.state, &mut self.buffers);
+            match *instr {
+                Instr::Frame {
                     scope,
-                    trigger,
-                    previous,
-                    guard,
-                } = *instr
-            {
-                if guard.is_none_or(|g| self.regs[g] != 0.0) {
-                    let positive = self.regs[trigger] > 0.0;
-                    let edge = positive && self.state[previous] <= 0.0;
-                    self.state[previous] = if positive { 1.0 } else { 0.0 };
+                    input: x,
+                    input2,
+                    dst,
+                } => {
+                    self.run_frame(scope, (x, input2), dst, ctx, input, i);
+                }
+                Instr::Reset { .. } => {
+                    if RESETS {
+                        self.exec_cold(instr, section, ctx, input, i);
+                    }
+                }
+                Instr::BeginBranch { .. } | Instr::EndBranch => {
+                    unreachable!("branch markers are resolved before rendering")
+                }
+                Instr::SkipIfZero { cond, count } => {
+                    if regs[cond] == 0.0 && count > 0 {
+                        instructions.nth(count - 1);
+                    }
+                }
+                Instr::CmpSkip {
+                    dst,
+                    op,
+                    a,
+                    b,
+                    count,
+                } => {
+                    let holds = op.holds(regs[a], regs[b]);
+                    regs[dst] = f64::from(holds);
+                    if !holds && count > 0 {
+                        instructions.nth(count - 1);
+                    }
+                }
+                Instr::Const { dst, value } => regs[dst] = value,
+                Instr::Input { dst, port } => regs[dst] = f64::from(input(port, i)),
+                Instr::SampleRate { dst } => regs[dst] = self.sample_rate,
+                Instr::LoadState { dst, slot } => regs[dst] = state[slot],
+                Instr::StoreState { slot, src } => {
+                    if !(section == Section::Init && self.carried) {
+                        state[slot] = regs[src];
+                    }
+                }
+                Instr::Bin {
+                    dst,
+                    op: BinOp::Add,
+                    a,
+                    b,
+                } => regs[dst] = regs[a] + regs[b],
+                Instr::Bin {
+                    dst,
+                    op: BinOp::Sub,
+                    a,
+                    b,
+                } => regs[dst] = regs[a] - regs[b],
+                Instr::Bin {
+                    dst,
+                    op: BinOp::Mul,
+                    a,
+                    b,
+                } => {
+                    regs[dst] = regs[a] * regs[b];
+                }
+                Instr::Bin {
+                    dst,
+                    op: BinOp::Div,
+                    a,
+                    b,
+                } => {
+                    regs[dst] = if regs[b] == 0.0 {
+                        0.0
+                    } else {
+                        regs[a] / regs[b]
+                    };
+                }
+                Instr::Bin {
+                    dst,
+                    op: BinOp::Min,
+                    a,
+                    b,
+                } => regs[dst] = regs[a].min(regs[b]),
+                Instr::Bin {
+                    dst,
+                    op: BinOp::Max,
+                    a,
+                    b,
+                } => regs[dst] = regs[a].max(regs[b]),
+                Instr::Bin { dst, op, a, b } => regs[dst] = op.apply(regs[a], regs[b]),
+                Instr::MulAdd { dst, a, b, c } => {
+                    let product = regs[a] * regs[b];
+                    regs[dst] = product + regs[c];
+                }
+                Instr::Cmp { dst, op, a, b } => {
+                    regs[dst] = if op.holds(regs[a], regs[b]) { 1.0 } else { 0.0 };
+                }
+                Instr::Select { dst, cond, a, b } => {
+                    regs[dst] = if regs[cond] != 0.0 { regs[a] } else { regs[b] };
+                }
+                Instr::Memo { dst, slot, math, a } => {
+                    let x = regs[a];
+                    let y = match math {
+                        MemoMath::Unary(_) => 0.0,
+                        MemoMath::Binary(_, b) => regs[b],
+                    };
+                    let key = [x.to_bits(), y.to_bits()];
+                    let entry = &mut self.memo[slot];
+                    let value = match *entry {
+                        Some(hit) if hit.key == key => hit.value,
+                        _ => {
+                            let value = match math {
+                                MemoMath::Unary(f) => f.apply(x),
+                                MemoMath::Binary(op, _) => op.apply(x, y),
+                            };
+                            *entry = Some(MemoEntry { key, value });
+                            value
+                        }
+                    };
+                    regs[dst] = value;
+                }
+                Instr::Neg { dst, a } => regs[dst] = -regs[a],
+                Instr::Copy { dst, src } => regs[dst] = regs[src],
+                Instr::Call { dst, f, a } => regs[dst] = f.apply(regs[a]),
+                Instr::Native { .. }
+                | Instr::Read {
+                    list: ArraySource::Table(_) | ArraySource::Values(_) | ArraySource::Lane(_),
+                    ..
+                }
+                | Instr::ReadAt { .. }
+                | Instr::LaneBin { .. }
+                | Instr::LaneCall { .. }
+                | Instr::LaneFromRegs { .. }
+                | Instr::LaneStore { .. }
+                | Instr::Reduce { .. }
+                | Instr::Dot { .. }
+                | Instr::Fir { .. }
+                | Instr::Taps { .. }
+                | Instr::Fft { .. }
+                | Instr::Ifft { .. }
+                | Instr::MatVec { .. } => self.exec_cold(instr, section, ctx, input, i),
+                Instr::Read {
+                    dst,
+                    list: ArraySource::State(s),
+                    idx,
+                } => {
+                    // the usual case: a whole-number position in a state list
+                    let data = &buffers[s];
+                    regs[dst] = data[wrapped_index(regs[idx], data.len())];
+                }
+                Instr::Write {
+                    list,
+                    idx,
+                    src,
+                    cond,
+                } => {
+                    if !(section == Section::Init && self.carried)
+                        && cond.is_none_or(|c| regs[c] != 0.0)
+                    {
+                        let data = &mut buffers[list];
+                        let n = data.len();
+                        data[wrapped_index(regs[idx], n)] = regs[src];
+                    }
+                }
+            }
+        }
+    }
+
+    /// The instructions that are rare or heavy, kept out of the hot loop so that it stays small.
+    #[inline(never)]
+    fn exec_cold(
+        &mut self,
+        instr: &Instr,
+        section: Section,
+        ctx: &ProcessCtx,
+        input: &impl Fn(usize, usize) -> f32,
+        i: usize,
+    ) {
+        let k = &*self.kernel;
+        let (regs, state, buffers, lanes, plans) = (
+            &mut self.regs,
+            &mut self.state,
+            &mut self.buffers,
+            &mut self.lanes,
+            &mut self.fft_plans,
+        );
+        match *instr {
+            Instr::Reset {
+                scope,
+                trigger,
+                previous,
+                guard,
+            } => {
+                if guard.is_none_or(|g| regs[g] != 0.0) {
+                    let positive = regs[trigger] > 0.0;
+                    let edge = positive && state[previous] <= 0.0;
+                    state[previous] = if positive { 1.0 } else { 0.0 };
                     if edge {
                         let kernel = self.kernel.clone();
                         let k = &*kernel;
@@ -749,291 +974,239 @@ impl Custom {
                         self.carried = carried;
                     }
                 }
-                continue;
             }
-            let k = &*self.kernel;
-            let (regs, state, buffers, lanes, plans) = (
-                &mut self.regs,
-                &mut self.state,
-                &mut self.buffers,
-                &mut self.lanes,
-                &mut self.fft_plans,
-            );
-            match *instr {
-                Instr::Reset { .. } | Instr::Frame { .. } => unreachable!("handled above"),
-                Instr::BeginBranch { .. } | Instr::EndBranch => {
-                    unreachable!("branch markers are resolved before rendering")
+            Instr::Native { dst, index, guard } => {
+                if guard.is_some_and(|g| regs[g] == 0.0) {
+                    return;
                 }
-                Instr::SkipIfZero { cond, count } => {
-                    if regs[cond] == 0.0 && count > 0 {
-                        instructions.nth(count - 1);
-                    }
-                }
-                Instr::Const { dst, value } => regs[dst] = value,
-                Instr::Input { dst, port } => regs[dst] = f64::from(input(port, i)),
-                Instr::SampleRate { dst } => regs[dst] = self.sample_rate,
-                Instr::LoadState { dst, slot } => regs[dst] = state[slot],
-                Instr::StoreState { slot, src } => {
-                    if !(section == Section::Init && self.carried) {
-                        state[slot] = regs[src];
-                    }
-                }
-                Instr::Bin { dst, op, a, b } => regs[dst] = op.apply(regs[a], regs[b]),
-                Instr::Cmp { dst, op, a, b } => {
-                    regs[dst] = if op.holds(regs[a], regs[b]) { 1.0 } else { 0.0 };
-                }
-                Instr::Select { dst, cond, a, b } => {
-                    regs[dst] = if regs[cond] != 0.0 { regs[a] } else { regs[b] };
-                }
-                Instr::Neg { dst, a } => regs[dst] = -regs[a],
-                Instr::Copy { dst, src } => regs[dst] = regs[src],
-                Instr::Call { dst, f, a } => regs[dst] = f.apply(regs[a]),
-                Instr::Native { dst, index, guard } => {
-                    if guard.is_some_and(|g| regs[g] == 0.0) {
-                        continue;
-                    }
-                    let call = &k.natives[index];
-                    // a native run once per block (a control scope) sees its inputs held through it
-                    if section != Section::Block {
-                        let op = &mut self.natives[index];
-                        if self.one_sample[index] {
-                            let mut x = [0.0f32; MAX_INPUTS];
-                            for (value, input) in x.iter_mut().zip(&call.inputs) {
-                                *value = match *input {
-                                    NativeInput::Reg(r) => regs[r] as f32,
-                                    NativeInput::Const(c) => c as f32,
-                                };
-                            }
-                            regs[dst] = f64::from(op.process_one(ctx, &x[..call.inputs.len()]));
-                            continue;
-                        }
-                        for (value, input) in self.native_inputs.iter_mut().zip(&call.inputs) {
-                            value[0] = match *input {
+                let call = &k.natives[index];
+                // a native run once per block (a control scope) sees its inputs held through it
+                if section != Section::Block {
+                    let op = &mut self.natives[index];
+                    if self.one_sample[index] {
+                        let mut x = [0.0f32; MAX_INPUTS];
+                        for (value, input) in x.iter_mut().zip(&call.inputs) {
+                            *value = match *input {
                                 NativeInput::Reg(r) => regs[r] as f32,
                                 NativeInput::Const(c) => c as f32,
                             };
                         }
-                        let outputs = self.native_outputs_n[index];
-                        op.process_slots(
-                            ctx,
-                            &self.native_inputs,
-                            &self.native_indices[..call.inputs.len()],
-                            &mut self.native_outputs[..outputs],
-                            1,
-                        );
-                        for (k, output) in self.native_outputs.iter().take(outputs).enumerate() {
-                            regs[dst + k] = f64::from(output[0]);
-                        }
-                        continue;
+                        regs[dst] = f64::from(op.process_one(ctx, &x[..call.inputs.len()]));
+                        return;
                     }
-                    let held = self.block_frames;
                     for (value, input) in self.native_inputs.iter_mut().zip(&call.inputs) {
-                        let x = match *input {
+                        value[0] = match *input {
                             NativeInput::Reg(r) => regs[r] as f32,
                             NativeInput::Const(c) => c as f32,
                         };
-                        value[..held].fill(x);
                     }
-                    let op = &mut self.natives[index];
+                    let outputs = self.native_outputs_n[index];
                     op.process_slots(
                         ctx,
                         &self.native_inputs,
                         &self.native_indices[..call.inputs.len()],
-                        &mut self.native_outputs[..op.outputs()],
-                        held,
+                        &mut self.native_outputs[..outputs],
+                        1,
                     );
-                    for (k, output) in self.native_outputs.iter().take(op.outputs()).enumerate() {
+                    for (k, output) in self.native_outputs.iter().take(outputs).enumerate() {
                         regs[dst + k] = f64::from(output[0]);
                     }
+                    return;
                 }
-                Instr::Read { dst, list, idx }
-                | Instr::ReadAt {
-                    dst,
-                    list,
-                    pos: idx,
-                    ..
-                } => {
-                    let interp = match *instr {
-                        Instr::ReadAt { interp, .. } => interp,
-                        _ => Interp::None,
+                let held = self.block_frames;
+                for (value, input) in self.native_inputs.iter_mut().zip(&call.inputs) {
+                    let x = match *input {
+                        NativeInput::Reg(r) => regs[r] as f32,
+                        NativeInput::Const(c) => c as f32,
                     };
-                    let value = match list {
-                        ArraySource::Table(t) => k.tables[t].read_at(regs[idx], interp),
-                        ArraySource::State(s) => read_at(&buffers[s], regs[idx], interp),
-                        ArraySource::Lane(l) => read_at(&lanes[l], regs[idx], interp),
-                        ArraySource::Values(a) => {
-                            read_array(k.values[a].len(), regs[idx], interp, |i| {
-                                regs[k.values[a][i]]
-                            })
-                        }
-                    };
-                    regs[dst] = value;
+                    value[..held].fill(x);
                 }
-                Instr::Write {
-                    list,
-                    idx,
-                    src,
-                    cond,
-                } => {
-                    if !(section == Section::Init && self.carried)
-                        && cond.is_none_or(|c| regs[c] != 0.0)
-                    {
-                        let data = &mut buffers[list];
-                        let n = data.len();
-                        data[wrapped_index(regs[idx], n)] = regs[src];
-                    }
-                }
-                Instr::LaneBin { dst, op, a, b } => {
-                    let mut d = std::mem::take(&mut lanes[dst]);
-                    let (a, b) = (
-                        operand(a, regs, lanes, buffers, &k.tables_f64),
-                        operand(b, regs, lanes, buffers, &k.tables_f64),
-                    );
-                    lane_ops::zip(op, &mut d, a, b);
-                    lanes[dst] = d;
-                }
-                Instr::LaneCall { dst, f, a } => {
-                    let mut d = std::mem::take(&mut lanes[dst]);
-                    let a = operand(a, regs, lanes, buffers, &k.tables_f64);
-                    lane_ops::map(f, &mut d, a);
-                    lanes[dst] = d;
-                }
-                Instr::LaneFromRegs { dst, values } => {
-                    for (d, &r) in lanes[dst].iter_mut().zip(k.values[values].iter()) {
-                        *d = regs[r];
-                    }
-                }
-                Instr::LaneStore { list, src, cond } => {
-                    if !(section == Section::Init && self.carried)
-                        && cond.is_none_or(|c| regs[c] != 0.0)
-                    {
-                        match src {
-                            LaneSrc::Reg(r) => buffers[list].fill(regs[r]),
-                            LaneSrc::Lane(l) => buffers[list].copy_from_slice(&lanes[l]),
-                            LaneSrc::Table(t) => buffers[list].copy_from_slice(&k.tables_f64[t]),
-                            LaneSrc::State(from) if from == list => {}
-                            LaneSrc::State(from) => {
-                                let (to, from) = two_mut(buffers, list, from);
-                                to.copy_from_slice(from);
-                            }
-                        }
-                    }
-                }
-                Instr::Reduce { dst, kind, a } => {
-                    regs[dst] = match operand(a, regs, lanes, buffers, &k.tables_f64) {
-                        lane_ops::Operand::Slice(s) => match kind {
-                            Reduce::Sum => lane_ops::sum(s),
-                            Reduce::Min => lane_ops::extreme(s, true),
-                            Reduce::Max => lane_ops::extreme(s, false),
-                        },
-                        lane_ops::Operand::Scalar(v) => v,
-                    };
-                }
-                Instr::Dot { dst, a, b } => {
-                    regs[dst] = match (
-                        operand(a, regs, lanes, buffers, &k.tables_f64),
-                        operand(b, regs, lanes, buffers, &k.tables_f64),
-                    ) {
-                        (lane_ops::Operand::Slice(a), lane_ops::Operand::Slice(b)) => {
-                            lane_ops::dot(a, b)
-                        }
-                        (lane_ops::Operand::Slice(a), lane_ops::Operand::Scalar(b))
-                        | (lane_ops::Operand::Scalar(b), lane_ops::Operand::Slice(a)) => {
-                            lane_ops::sum(a) * b
-                        }
-                        (lane_ops::Operand::Scalar(a), lane_ops::Operand::Scalar(b)) => a * b,
-                    };
-                }
-                Instr::Fir {
-                    dst,
-                    taps,
-                    ring,
-                    from,
-                } => {
-                    regs[dst] = match operand(taps, regs, lanes, buffers, &k.tables_f64) {
-                        lane_ops::Operand::Slice(taps) => {
-                            lane_ops::fir(taps, &buffers[ring], regs[from])
-                        }
-                        lane_ops::Operand::Scalar(t) => {
-                            t * read_at(&buffers[ring], regs[from], Interp::None)
-                        }
-                    };
-                }
-                Instr::Taps {
-                    dst,
-                    ring,
-                    offsets,
-                    from,
-                    interp,
-                } => {
-                    let mut d = std::mem::take(&mut lanes[dst]);
-                    let offsets = operand(offsets, regs, lanes, buffers, &k.tables_f64);
-                    lane_ops::taps(&mut d, &buffers[ring], offsets, regs[from], interp);
-                    lanes[dst] = d;
-                }
-                Instr::Fft { re, im, src, plan } => {
-                    let (mut dre, mut dim) = (
-                        std::mem::take(&mut lanes[re]),
-                        std::mem::take(&mut lanes[im]),
-                    );
-                    if let lane_ops::Operand::Slice(s) =
-                        operand(src, regs, lanes, buffers, &k.tables_f64)
-                    {
-                        let p = &mut plans[plan];
-                        p.time.copy_from_slice(s);
-                        p.fwd
-                            .process_with_scratch(&mut p.time, &mut p.spectrum, &mut p.scratch_fwd)
-                            .expect("fft forward");
-                        for ((c, r), i) in p.spectrum.iter().zip(dre.iter_mut()).zip(dim.iter_mut())
-                        {
-                            (*r, *i) = (c.re, c.im);
-                        }
-                    }
-                    lanes[re] = dre;
-                    lanes[im] = dim;
-                }
-                Instr::Ifft { dst, re, im, plan } => {
-                    let mut d = std::mem::take(&mut lanes[dst]);
-                    if let (lane_ops::Operand::Slice(re), lane_ops::Operand::Slice(im)) = (
-                        operand(re, regs, lanes, buffers, &k.tables_f64),
-                        operand(im, regs, lanes, buffers, &k.tables_f64),
-                    ) {
-                        let p = &mut plans[plan];
-                        for ((c, &r), &i) in p.spectrum.iter_mut().zip(re).zip(im) {
-                            *c = Complex::new(r, i);
-                        }
-                        // a real signal has no imaginary part at the ends
-                        let last = p.spectrum.len() - 1;
-                        p.spectrum[0].im = 0.0;
-                        p.spectrum[last].im = 0.0;
-                        p.inv
-                            .process_with_scratch(&mut p.spectrum, &mut p.time, &mut p.scratch_inv)
-                            .expect("fft inverse");
-                        let scale = 1.0 / p.time.len() as f64;
-                        for (d, &t) in d.iter_mut().zip(&p.time) {
-                            *d = t * scale;
-                        }
-                    }
-                    lanes[dst] = d;
-                }
-                Instr::MatVec {
-                    dst,
-                    matrix,
-                    cols,
-                    v,
-                } => {
-                    let mut d = std::mem::take(&mut lanes[dst]);
-                    if let (lane_ops::Operand::Slice(m), lane_ops::Operand::Slice(v)) = (
-                        operand(matrix, regs, lanes, buffers, &k.tables_f64),
-                        operand(v, regs, lanes, buffers, &k.tables_f64),
-                    ) {
-                        lane_ops::matvec(&mut d, m, cols, v);
-                    }
-                    lanes[dst] = d;
+                let op = &mut self.natives[index];
+                op.process_slots(
+                    ctx,
+                    &self.native_inputs,
+                    &self.native_indices[..call.inputs.len()],
+                    &mut self.native_outputs[..op.outputs()],
+                    held,
+                );
+                for (k, output) in self.native_outputs.iter().take(op.outputs()).enumerate() {
+                    regs[dst + k] = f64::from(output[0]);
                 }
             }
+            Instr::Read { dst, list, idx }
+            | Instr::ReadAt {
+                dst,
+                list,
+                pos: idx,
+                ..
+            } => {
+                let interp = match *instr {
+                    Instr::ReadAt { interp, .. } => interp,
+                    _ => Interp::None,
+                };
+                let value = match list {
+                    ArraySource::Table(t) => k.tables[t].read_at(regs[idx], interp),
+                    ArraySource::State(s) => read_at(&buffers[s], regs[idx], interp),
+                    ArraySource::Lane(l) => read_at(&lanes[l], regs[idx], interp),
+                    ArraySource::Values(a) => {
+                        read_array(k.values[a].len(), regs[idx], interp, |i| {
+                            regs[k.values[a][i]]
+                        })
+                    }
+                };
+                regs[dst] = value;
+            }
+            Instr::LaneBin { dst, op, a, b } => {
+                let mut d = std::mem::take(&mut lanes[dst]);
+                let (a, b) = (
+                    operand(a, regs, lanes, buffers, &k.tables_f64),
+                    operand(b, regs, lanes, buffers, &k.tables_f64),
+                );
+                lane_ops::zip(op, &mut d, a, b);
+                lanes[dst] = d;
+            }
+            Instr::LaneCall { dst, f, a } => {
+                let mut d = std::mem::take(&mut lanes[dst]);
+                let a = operand(a, regs, lanes, buffers, &k.tables_f64);
+                lane_ops::map(f, &mut d, a);
+                lanes[dst] = d;
+            }
+            Instr::LaneFromRegs { dst, values } => {
+                for (d, &r) in lanes[dst].iter_mut().zip(k.values[values].iter()) {
+                    *d = regs[r];
+                }
+            }
+            Instr::LaneStore { list, src, cond } => {
+                if !(section == Section::Init && self.carried)
+                    && cond.is_none_or(|c| regs[c] != 0.0)
+                {
+                    match src {
+                        LaneSrc::Reg(r) => buffers[list].fill(regs[r]),
+                        LaneSrc::Lane(l) => buffers[list].copy_from_slice(&lanes[l]),
+                        LaneSrc::Table(t) => buffers[list].copy_from_slice(&k.tables_f64[t]),
+                        LaneSrc::State(from) if from == list => {}
+                        LaneSrc::State(from) => {
+                            let (to, from) = two_mut(buffers, list, from);
+                            to.copy_from_slice(from);
+                        }
+                    }
+                }
+            }
+            Instr::Reduce { dst, kind, a } => {
+                regs[dst] = match operand(a, regs, lanes, buffers, &k.tables_f64) {
+                    lane_ops::Operand::Slice(s) => match kind {
+                        Reduce::Sum => lane_ops::sum(s),
+                        Reduce::Min => lane_ops::extreme(s, true),
+                        Reduce::Max => lane_ops::extreme(s, false),
+                    },
+                    lane_ops::Operand::Scalar(v) => v,
+                };
+            }
+            Instr::Dot { dst, a, b } => {
+                regs[dst] = match (
+                    operand(a, regs, lanes, buffers, &k.tables_f64),
+                    operand(b, regs, lanes, buffers, &k.tables_f64),
+                ) {
+                    (lane_ops::Operand::Slice(a), lane_ops::Operand::Slice(b)) => {
+                        lane_ops::dot(a, b)
+                    }
+                    (lane_ops::Operand::Slice(a), lane_ops::Operand::Scalar(b))
+                    | (lane_ops::Operand::Scalar(b), lane_ops::Operand::Slice(a)) => {
+                        lane_ops::sum(a) * b
+                    }
+                    (lane_ops::Operand::Scalar(a), lane_ops::Operand::Scalar(b)) => a * b,
+                };
+            }
+            Instr::Fir {
+                dst,
+                taps,
+                ring,
+                from,
+            } => {
+                regs[dst] = match operand(taps, regs, lanes, buffers, &k.tables_f64) {
+                    lane_ops::Operand::Slice(taps) => {
+                        lane_ops::fir(taps, &buffers[ring], regs[from])
+                    }
+                    lane_ops::Operand::Scalar(t) => {
+                        t * read_at(&buffers[ring], regs[from], Interp::None)
+                    }
+                };
+            }
+            Instr::Taps {
+                dst,
+                ring,
+                offsets,
+                from,
+                interp,
+            } => {
+                let mut d = std::mem::take(&mut lanes[dst]);
+                let offsets = operand(offsets, regs, lanes, buffers, &k.tables_f64);
+                lane_ops::taps(&mut d, &buffers[ring], offsets, regs[from], interp);
+                lanes[dst] = d;
+            }
+            Instr::Fft { re, im, src, plan } => {
+                let (mut dre, mut dim) = (
+                    std::mem::take(&mut lanes[re]),
+                    std::mem::take(&mut lanes[im]),
+                );
+                if let lane_ops::Operand::Slice(s) =
+                    operand(src, regs, lanes, buffers, &k.tables_f64)
+                {
+                    let p = &mut plans[plan];
+                    p.time.copy_from_slice(s);
+                    p.fwd
+                        .process_with_scratch(&mut p.time, &mut p.spectrum, &mut p.scratch_fwd)
+                        .expect("fft forward");
+                    for ((c, r), i) in p.spectrum.iter().zip(dre.iter_mut()).zip(dim.iter_mut()) {
+                        (*r, *i) = (c.re, c.im);
+                    }
+                }
+                lanes[re] = dre;
+                lanes[im] = dim;
+            }
+            Instr::Ifft { dst, re, im, plan } => {
+                let mut d = std::mem::take(&mut lanes[dst]);
+                if let (lane_ops::Operand::Slice(re), lane_ops::Operand::Slice(im)) = (
+                    operand(re, regs, lanes, buffers, &k.tables_f64),
+                    operand(im, regs, lanes, buffers, &k.tables_f64),
+                ) {
+                    let p = &mut plans[plan];
+                    for ((c, &r), &i) in p.spectrum.iter_mut().zip(re).zip(im) {
+                        *c = Complex::new(r, i);
+                    }
+                    // a real signal has no imaginary part at the ends
+                    let last = p.spectrum.len() - 1;
+                    p.spectrum[0].im = 0.0;
+                    p.spectrum[last].im = 0.0;
+                    p.inv
+                        .process_with_scratch(&mut p.spectrum, &mut p.time, &mut p.scratch_inv)
+                        .expect("fft inverse");
+                    let scale = 1.0 / p.time.len() as f64;
+                    for (d, &t) in d.iter_mut().zip(&p.time) {
+                        *d = t * scale;
+                    }
+                }
+                lanes[dst] = d;
+            }
+            Instr::MatVec {
+                dst,
+                matrix,
+                cols,
+                v,
+            } => {
+                let mut d = std::mem::take(&mut lanes[dst]);
+                if let (lane_ops::Operand::Slice(m), lane_ops::Operand::Slice(v)) = (
+                    operand(matrix, regs, lanes, buffers, &k.tables_f64),
+                    operand(v, regs, lanes, buffers, &k.tables_f64),
+                ) {
+                    lane_ops::matvec(&mut d, m, cols, v);
+                }
+                lanes[dst] = d;
+            }
+            _ => unreachable!("handled by the hot loop"),
         }
     }
+
     /// One sample through a frame scope: the input goes in, the output that is due comes out, and each
     /// hop the scope's code runs on the latest frame.
     fn run_frame(

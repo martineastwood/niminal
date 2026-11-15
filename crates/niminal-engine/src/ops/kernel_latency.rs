@@ -8,7 +8,8 @@ impl Kernel {
         let mut code = Vec::new();
         for mut instruction in std::mem::take(&mut self.code) {
             let owner = match instruction {
-                Instr::Bin { dst, .. }
+                Instr::MulAdd { dst, .. }
+                | Instr::Bin { dst, .. }
                 | Instr::Cmp { dst, .. }
                 | Instr::Select { dst, .. }
                 | Instr::Neg { dst, .. }
@@ -21,6 +22,7 @@ impl Kernel {
                 _ => None,
             };
             let mut inputs = match instruction {
+                Instr::MulAdd { a, b, c, .. } => vec![a, b, c],
                 Instr::Bin { a, b, .. } | Instr::Cmp { a, b, .. } => vec![a, b],
                 Instr::Select { cond, a, b, .. } => vec![cond, a, b],
                 Instr::Neg { a, .. } | Instr::Copy { src: a, .. } | Instr::Call { a, .. } => {
@@ -84,6 +86,12 @@ impl Kernel {
                 Instr::Bin { dst, a, b, .. } | Instr::Cmp { dst, a, b, .. } => {
                     remap(a);
                     remap(b);
+                    (Some(*dst), 1, 0)
+                }
+                Instr::MulAdd { dst, a, b, c, .. } => {
+                    remap(a);
+                    remap(b);
+                    remap(c);
                     (Some(*dst), 1, 0)
                 }
                 Instr::Select { dst, cond, a, b } => {

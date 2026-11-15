@@ -5,6 +5,7 @@ use niminal_lang::{compile, expand};
 use std::{hint::black_box, path::Path, time::Instant};
 
 const REFERENCE: &str = include_str!("../tests/fixtures/blocks_dsp_reference.nml");
+const REEL_REFERENCE: &str = include_str!("../tests/fixtures/splice_reel_reference.nml");
 const CASES: &[(&str, &str)] = &[
     (
         "contour",
@@ -18,6 +19,10 @@ const CASES: &[(&str, &str)] = &[
     (
         "filter modulated",
         "f = osc(saw, 220hz).multimode_filter(cutoff: 2khz + osc(sine, 3hz) * 1500hz, res: 0.7, drive: 0.3)\n f.low + f.band + f.high + f.notch",
+    ),
+    (
+        "filter stepped",
+        "f = osc(saw, 220hz).multimode_filter(cutoff: 2khz + (phasor(3hz) < 0.5) * 1500hz, res: 0.7, drive: 0.3)\n f.low + f.band + f.high + f.notch",
     ),
     (
         "frequency shifter",
@@ -34,6 +39,10 @@ const CASES: &[(&str, &str)] = &[
     (
         "tap delay 16",
         "t = osc(saw, 220hz).tap_delay(time: 50ms, taps: 16, shifts: [0, 7, 12], feedback: 0.5, filter: lowpass)\n t.left + t.right",
+    ),
+    (
+        "splice reel",
+        "r = splice_reel(osc(saw, 220hz), record: phasor(8hz) < 0.5, grain_size: 0.7, morph: 0.95, speed: 1.37)\n r.left + r.right",
     ),
 ];
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,9 +61,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("case,reference_ns,native_ns,speedup");
     for (name, body) in CASES {
+        let reference = if *name == "splice reel" {
+            let body = body.replacen("splice_reel(", "splice_reel_reference(", 1);
+            format!("{REEL_REFERENCE}\ninstr a() {{ {body} }}")
+        } else {
+            format!("{REFERENCE}\ninstr a() {{ {body} }}")
+        };
+        let native = format!("use std/blocks\ninstr a() {{ {body} }}");
         let mut voices = Vec::new();
-        for prefix in [REFERENCE, "use std/blocks"] {
-            let source = format!("{prefix}\ninstr a() {{ {body} }}");
+        for source in [reference, native] {
             let expanded = expand(&source, Path::new(".")).map_err(|e| e.message)?;
             let program = compile(&expanded.text).map_err(|errors| {
                 errors

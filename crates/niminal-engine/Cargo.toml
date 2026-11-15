@@ -8,6 +8,9 @@ description = "niminal DSP runtime: graph execution, opcodes, voices"
 [lints]
 workspace = true
 
+[features]
+kernel-profile = []
+
 [dependencies]
 realfft = "3.4"
 hound = "3"

@@ -1,0 +1,39 @@
+case,mode,ns_frame,speedup,compile_ms,p99_ns_block,max_ns_block,first_compile_ms
+frozen contour,reference,84.9,1.00,6.250,6542,39416,12.781
+frozen contour,current,86.1,0.99,6.511,7500,15250,13.931
+frozen slew,reference,79.9,1.00,6.362,5417,52292,18.439
+frozen slew,current,62.8,1.27,6.327,4292,11792,18.459
+frozen filter steady,reference,114.7,1.00,6.001,8125,15583,6.452
+frozen filter steady,current,98.6,1.16,6.383,7459,14208,6.943
+frozen filter modulated,reference,177.8,1.00,6.077,12292,39292,9.090
+frozen filter modulated,current,138.3,1.29,6.125,9875,19625,8.778
+frozen filter stepped,reference,141.9,1.00,6.406,9833,72500,6.867
+frozen filter stepped,current,109.8,1.29,6.387,7584,16916,6.896
+frozen frequency shifter,reference,100.0,1.00,6.006,6625,14875,7.311
+frozen frequency shifter,current,105.3,0.95,6.403,7250,26416,7.201
+frozen reverse,reference,188.0,1.00,6.779,14458,47166,7.799
+frozen reverse,current,173.0,1.09,6.917,11916,47917,7.739
+frozen tap delay 4,reference,1041.3,1.00,7.412,73291,115250,8.087
+frozen tap delay 4,current,941.6,1.11,7.709,69500,158417,8.373
+frozen tap delay 16,reference,2996.9,1.00,8.719,216584,303875,9.084
+frozen tap delay 16,current,2561.3,1.17,9.536,183958,450458,9.536
+frozen splice reel,reference,3527.0,1.00,32.355,273083,353542,32.511
+frozen splice reel,current,3250.9,1.08,32.287,245625,341875,32.696
+scalar cascade,reference,254.3,1.00,0.180,17333,67291,0.288
+scalar cascade,current,181.4,1.40,0.193,12375,59500,0.296
+electric piano,reference,1100.3,1.00,8.882,80500,166792,10.365
+electric piano,current,1087.2,1.01,9.878,73500,174750,11.303
+macro voice,reference,1118.8,1.00,12.313,85625,179125,12.949
+macro voice,current,1115.6,1.00,11.007,79083,177709,12.158
+harmonic drone,reference,761.4,1.00,10.657,56416,69125,11.586
+harmonic drone,current,751.5,1.01,9.714,51833,69625,9.964
+kick 808,reference,636.1,1.00,2.618,46792,148833,3.051
+kick 808,current,617.5,1.03,2.529,41917,67167,2.826
+low pass gate,reference,166.7,1.00,16.216,11417,35083,16.315
+low pass gate,current,168.7,0.99,14.881,11209,26750,15.514
+row sequencer,reference,275.4,1.00,15.556,19375,94417,15.946
+row sequencer,current,271.9,1.01,14.634,18333,42083,16.111
+native overdrive path,reference,479.2,1.00,0.093,33125,116166,0.200
+native overdrive path,current,474.7,1.01,0.092,33875,68500,0.224
+native filter,reference,23.8,1.00,14.622,1667,9042,15.865
+native filter,current,25.0,0.95,15.172,1708,1833,17.908
