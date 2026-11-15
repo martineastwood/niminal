@@ -1,24 +1,24 @@
-name: macOS alpha package
+name: macOS release package
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Alpha version (for example 0.0.1-alpha.1)'
+        description: 'Release version (for example 0.0.1 or 0.0.1-beta.1)'
         required: true
         type: string
   push:
-    tags: ['v*-alpha.*']
+    tags: ['v[0-9]*.[0-9]*.[0-9]*']
 
 permissions:
   contents: write
 
 concurrency:
-  group: macos-alpha-${{ inputs.version && format('v{0}', inputs.version) || github.ref_name }}
+  group: macos-release-${{ inputs.version && format('v{0}', inputs.version) || github.ref_name }}
   cancel-in-progress: false
 
 env:
-  CARGO_TARGET_DIR: ${{ github.workspace }}/target/macos-alpha
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/macos-release
   RUSTFLAGS: '-C target-cpu=apple-m1'
   MACOSX_DEPLOYMENT_TARGET: '13.0'
 
@@ -28,14 +28,14 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-      - name: Select alpha version
+      - name: Select release version
         id: version
         env:
           REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           version="${REQUESTED_VERSION:-${GITHUB_REF_NAME#v}}"
-          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]; then
-            echo "Expected an alpha version such as 0.0.1-alpha.1" >&2
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
+            echo "Expected a semantic version such as 0.0.1 or 0.0.1-beta.1" >&2
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -76,18 +76,23 @@ jobs:
             releases/*.dmg
             releases/*.sha256
           if-no-files-found: error
-      - name: Publish GitHub prerelease
+      - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          gh release create "v$RELEASE_VERSION" \
-            "releases/Niminal-$RELEASE_VERSION-macos-arm64.dmg" \
-            "releases/Niminal-$RELEASE_VERSION-macos-arm64.dmg.sha256" \
-            --target "$GITHUB_SHA" \
-            --title "Niminal $RELEASE_VERSION" \
-            --prerelease \
+          args=(
+            "v$RELEASE_VERSION"
+            "releases/Niminal-$RELEASE_VERSION-macos-arm64.dmg"
+            "releases/Niminal-$RELEASE_VERSION-macos-arm64.dmg.sha256"
+            --target "$GITHUB_SHA"
+            --title "Niminal $RELEASE_VERSION"
             --notes-file scripts/macos-release-notes.md
+          )
+          if [[ "$RELEASE_VERSION" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "${args[@]}"
       - name: Update the Homebrew cask
         env:
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}

@@ -2,7 +2,7 @@
 
 **Make music by writing it.** niminal is a live-coding music system with its own audio language. Describe instruments, effects, patterns and arrangements in plain text, hear them instantly, and change them while they play.
 
-> **Alpha.** APIs, syntax, and behavior change without notice. Expect rough edges and the occasional crash. Not ready for production or long-term projects yet.
+> **Beta.** APIs, syntax, and behavior can still change. Expect rough edges and the occasional crash. Not ready for production or long-term projects yet.
 
 ```
 tempo 110bpm
@@ -53,7 +53,7 @@ The engine compiles instruments, effects and routing, and plays timestamped even
 
 ### macOS download (recommended)
 
-The alpha is a single `Niminal` folder (Apple Silicon, macOS 13+) with Stage, the `niminal` command, the VS Code extension and examples. No Rust, Node or installer needed.
+The beta is a single `Niminal` folder (Apple Silicon, macOS 13+) with Stage, the `niminal` command, the VS Code extension and examples. No Rust, Node or installer needed.
 
 1. Download the latest dmg from [GitHub Releases](https://github.com/martineastwood/niminal/releases) and drag the `Niminal` folder onto Applications, so it ends up at `/Applications/Niminal`.
    Or with Homebrew, which also puts `niminal` on your PATH and skips the macOS warning below:
@@ -151,7 +151,7 @@ One Rust workspace (`crates/`), the Stage app, the editor extension, and the doc
 
 ## Feedback
 
-Issues and experiments are welcome while the project is in alpha. If something breaks, a minimal `.nml` file and what you ran (`render`, `server`, etc.) helps a lot.
+Issues and experiments are welcome while the project is in beta. If something breaks, a minimal `.nml` file and what you ran (`render`, `server`, etc.) helps a lot.
 
 ## License
 

@@ -1,6 +1,6 @@
-# Making the macOS alpha download
+# Making the macOS release download
 
-The alpha is one disk image containing a `Niminal` folder. Users copy that folder to
+The release is one disk image containing a `Niminal` folder. Users copy that folder to
 `/Applications/Niminal` and open Stage, which has the audio engine and the sequencer inside it.
 The `niminal` command (language server, offline render, `play`) and the VSIX are optional. There is no installer, background service,
 automatic update or Apple Developer account dependency. The app is ad-hoc signed and is
@@ -12,20 +12,20 @@ Use an Apple Silicon Mac with Xcode command-line tools, stable Rust, Node.js 24
 and Python 3.11 or newer. Build from a clean, committed checkout:
 
 ```sh
-scripts/check.sh --test
-python3 scripts/package-macos.py 0.0.1-alpha.1
+scripts/check.sh --test --apps
+python3 scripts/package-macos.py 0.0.1
 ```
 
-The script installs locked npm dependencies, builds both CLI tools and both
-Tauri apps, packages the extension with its runtime dependencies, signs the
+The script installs locked npm dependencies, builds the CLI tool and the
+Tauri app, packages the extension with its runtime dependencies, signs the
 executables, smoke-tests the staged download, and creates:
 
 ```text
-releases/Niminal-0.0.1-alpha.1-macos-arm64.dmg
-releases/Niminal-0.0.1-alpha.1-macos-arm64.dmg.sha256
+releases/Niminal-0.0.1-macos-arm64.dmg
+releases/Niminal-0.0.1-macos-arm64.dmg.sha256
 ```
 
-It shares Rust build outputs under `target/macos-alpha` and overrides
+It shares Rust build outputs under `target/macos-release` and overrides
 `target-cpu=native` with the M1 baseline. The deployment target is macOS 13.
 Frontend build output also stays under `target`, leaving checked-in `dist`
 files alone. CLI version strings, app bundle versions and `BUILD.json` identify
@@ -36,9 +36,9 @@ Use `--allow-dirty` only for a local preview. The script refuses to overwrite an
 existing ZIP; move the preview aside or choose another version before rebuilding.
 Nothing is uploaded or published by this script.
 
-The **macOS alpha package** GitHub Actions workflow runs the engine/sequencer
+The **macOS release package** GitHub Actions workflow runs the engine/sequencer
 checks, frontend and extension tests, and desktop Rust backend tests before
-building. Run it manually with a version, or push a `v0.0.1-alpha.1`-style tag.
+building. Run it manually with a version, or push a `v0.0.1`-style tag (or `v0.0.1-beta.1` for a prerelease).
 It uploads the ZIP and checksum as workflow artifacts; it does not create a
 public release. Before the first release, exercise the workflow on the intended
 commit so its output comes from a clean runner.
@@ -109,14 +109,13 @@ physical audio/MIDI devices.
 
 ## Publish after review
 
-Pushing a `v*-alpha.N` tag runs the **macOS alpha package** workflow, which tests, builds the dmg and
-publishes the GitHub prerelease, then updates the Homebrew cask. Run the Stage and VS Code
-suites locally first (`npm test` in each, and `cargo test` in `stage/src-tauri`):
-`scripts/check.sh` does not cover them and the workflow does. A failed run leaves a dead tag, so use a
+Pushing a `vX.Y.Z` (or `vX.Y.Z-beta.N`) tag runs the **macOS release package** workflow, which tests, builds the dmg and
+publishes the GitHub release (marked prerelease when the version has a `-...` suffix), then updates the Homebrew cask. Run the Stage and VS Code
+suites locally first (`scripts/check.sh --test --apps`). A failed run leaves a dead tag, so use a
 new version for the retry.
 
-Release archives are immutable: use a new alpha version for fixes. Describe the release as an
-experimental Apple Silicon alpha, state the tested macOS versions, and mention that it is ad-hoc signed
+Release archives are immutable: use a new version for fixes. Describe the release as an
+experimental Apple Silicon beta, state the tested macOS versions, and mention that it is ad-hoc signed
 rather than notarized (`scripts/macos-release-notes.md` does).
 
 ### The Homebrew cask

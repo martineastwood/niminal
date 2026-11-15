@@ -1,4 +1,4 @@
-Apple Silicon macOS alpha (macOS 13 or newer).
+Apple Silicon macOS beta (macOS 13 or newer).
 
 Download **Niminal-<version>-macos-arm64.dmg** below. It includes Stage, the `niminal` command, the optional VS Code extension, and examples. No Rust, Node.js, or Homebrew installation is needed.
 
@@ -10,7 +10,7 @@ Download **Niminal-<version>-macos-arm64.dmg** below. It includes Stage, the `ni
 
 Read **Getting Started.txt** inside the download for editor setup, examples and upgrades. Copy examples into a writable project folder before editing them.
 
-This alpha is ad-hoc signed and **not notarized by Apple**. If macOS blocks Stage or `niminal`, attempt to open it, then approve that specific item under **System Settings → Privacy & Security → Open Anyway** if you trust the download.
+This beta is ad-hoc signed and **not notarized by Apple**. If macOS blocks Stage or `niminal`, attempt to open it, then approve that specific item under **System Settings → Privacy & Security → Open Anyway** if you trust the download.
 
 Syntax and project formats may change. Keep backups of your work. Include `BUILD.json` when [reporting an issue](https://github.com/martineastwood/niminal/issues).
 

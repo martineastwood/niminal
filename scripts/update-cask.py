@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Point the Homebrew cask at a release: update-cask.py Casks/niminal.rb 0.0.1-alpha.7 <sha256 of the dmg>."""
+"""Point the Homebrew cask at a release: update-cask.py Casks/niminal.rb 0.0.1 <sha256 of the dmg>."""
 
 import re
 import sys

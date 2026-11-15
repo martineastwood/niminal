@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a complete, ad-hoc-signed Apple Silicon alpha download (a .dmg). Publishes nothing."""
+"""Build a complete, ad-hoc-signed Apple Silicon release download (a .dmg). Publishes nothing."""
 
 import argparse
 import hashlib
@@ -33,18 +33,18 @@ def digest(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("version", help="release version, e.g. 0.0.1-alpha.1")
+    parser.add_argument("version", help="release version, e.g. 0.0.1 or 0.0.1-beta.1")
     parser.add_argument("--allow-dirty", action="store_true", help="build a local preview from uncommitted sources")
     args = parser.parse_args()
     if not re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?", args.version):
-        parser.error("use a semantic version such as 0.0.1-alpha.1")
+        parser.error("use a semantic version such as 0.0.1 or 0.0.1-beta.1")
     if platform.system() != "Darwin" or platform.machine() != "arm64":
-        parser.error("the alpha package must be built on an Apple Silicon Mac")
+        parser.error("the macOS package must be built on an Apple Silicon Mac")
     dirty = bool(run("git", "status", "--porcelain", capture=True))
     if dirty and not args.allow_dirty:
         parser.error("commit the sources first, or pass --allow-dirty for a local preview")
     commit = run("git", "rev-parse", "HEAD", capture=True)
-    target = ROOT / "target" / "macos-alpha"
+    target = ROOT / "target" / "macos-release"
     output = ROOT / "releases"
     output.mkdir(exist_ok=True)
     archive = output / f"Niminal-{args.version}-macos-arm64.dmg"
@@ -72,7 +72,7 @@ def main():
         apps.append(target / "release" / "bundle" / "macos" / f"{name}.app")
     extension = ROOT / "editors" / "vscode"
     run("npm", "ci", cwd=extension)
-    with tempfile.TemporaryDirectory(prefix="niminal-alpha-") as temp:
+    with tempfile.TemporaryDirectory(prefix="niminal-release-") as temp:
         temp = Path(temp)
         bundle = temp / "Niminal"
         bundle.mkdir()

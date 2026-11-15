@@ -1,4 +1,4 @@
-Niminal macOS alpha — Getting Started
+Niminal macOS beta — Getting Started
 
 This experimental build is for Apple Silicon Macs running macOS 13 or newer.
 APIs, syntax and project formats may change. Keep backups of work you want to keep.
@@ -16,7 +16,7 @@ Open the dmg and drag the entire Niminal folder onto the Applications shortcut:
 
 Rust, Node.js, Homebrew and an installer are not needed.
 
-This alpha is ad-hoc signed and is NOT notarized by Apple. macOS may block the
+This beta is ad-hoc signed and is NOT notarized by Apple. macOS may block the
 app and the niminal command on first use. After attempting to open one, use
 System Settings > Privacy & Security > Open Anyway to approve it if you trust
 this download. Do not disable Gatekeeper globally.
