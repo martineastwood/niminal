@@ -157,7 +157,7 @@ instr additive(freq: hz) {
 }
 ```
 
-The last four are voice modules: each parameter takes a signal, so one module can drive another, and none can be set to anything that blows up. Their named outputs can share a name with your controls.
+Each parameter takes a signal, so one module can drive another, and none can be set to anything that blows up. Their named outputs can share a name with your controls.
 
 ```nml
 use std/blocks
@@ -356,7 +356,7 @@ For a complete drum-machine voice, call `drum(...)` inside your own instrument. 
 
 ## std/fx
 
-Twenty-one effects, taken by name. Effects read `in`; most provide a dry/wet `mix`.
+Twenty effects, taken by name. Effects read `in`; most provide a dry/wet `mix`.
 
 | Family | Effects |
 | --- | --- |

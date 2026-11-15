@@ -7,7 +7,7 @@ description: "JSON-RPC 2.0 over WebSocket for the niminal server: timestamped no
 
 The **engine** is the audio engine that Stage has inside it, and that `niminal server` runs on its own. It holds the instruments, effects, nodes, buses and controls that niminal code defines, and plays timestamped events sent to it: notes, parameter changes, control changes, definitions. It knows nothing of clips, scenes, patterns or quantize, and keeps only a tempo and a meter for each connection (see [Tempo](#tempo)): the rest belongs to a client such as the [live sequencer](/reference/protocol/), which uses this very API. A score editor or a bridge to another tool can be a client too.
 
-`niminal server` runs only the generic engine on port **7401** (`--port`). Any client can connect with its own sequencing model. VS Code owns a separate live sequencer process; the server never starts one. Messages are **JSON-RPC 2.0** text frames over **WebSocket**, on loopback only.
+`niminal server` runs only the generic engine on port **7401** (`--port`). Any client can connect with its own sequencing model. Stage hosts its own live sequencer; `niminal server` never starts one. Messages are **JSON-RPC 2.0** text frames over **WebSocket**, on loopback only.
 
 ## Connection
 
@@ -197,7 +197,7 @@ Every accepted note returns a server `token` in the `events.send` result’s `no
 
 ### Fx resource controls and file players
 
-Fx signatures accept scalar, range, fixed array and buffer parameters. Routing edits `array {id,param,values,glide?}`, `bind_buffer {id,param,buffer}` and `map {id,param,source?,channel?,scale?,offset?}` update a node at the enclosing routing event’s sample. Mapping sources are `{kind:"control",name:"lfo"}` or `{kind:"bus",id:"mod",owner?:7}`. A null source unmaps and holds the last rendered value. Bus modulation has the same 32-sample delay as note modulation. Bindings accept resources created after the fx, and compatible bindings survive replacement. A replacement that removes or changes the unit of a mapped parameter requires an explicit unmap in the same transaction.
+Fx signatures accept scalar, range, fixed array and buffer parameters. Routing edits `array {id,param,values,glide?}`, `bind_buffer {id,param,buffer}` and `map {id,param,source?,channel?,scale?,offset?}` update a node at the enclosing routing event’s sample. Mapping sources are `{kind:"control",name:"lfo"}` or `{kind:"bus",id:"mod",owner?:7}`. A null source unmaps and holds the last rendered value. Bus modulation has the same one-block delay (64 samples by default) as note modulation. Bindings accept resources created after the fx, and compatible bindings survive replacement. A replacement that removes or changes the unit of a mapped parameter requires an explicit unmap in the same transaction.
 
 A routing `player` edit creates a disk-backed source node:
 

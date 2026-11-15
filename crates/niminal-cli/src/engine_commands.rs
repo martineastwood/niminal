@@ -240,13 +240,18 @@ pub fn opcode_reference() -> String {
             .collect::<Vec<_>>()
             .join(", ")
     ));
-    for op in &ops {
-        out.push_str(&format!(
-            "## {}\n\n{}\n\n```niminal\n{}\n```\n\n",
-            op.name,
-            op.doc,
-            op.signature()
-        ));
+    let mut i = 0;
+    while i < ops.len() {
+        let name = &ops[i].name;
+        out.push_str(&format!("## {name}\n\n"));
+        while i < ops.len() && &ops[i].name == name {
+            out.push_str(&format!(
+                "{}\n\n```niminal\n{}\n```\n\n",
+                ops[i].doc,
+                ops[i].signature()
+            ));
+            i += 1;
+        }
     }
     out
 }

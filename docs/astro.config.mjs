@@ -46,6 +46,8 @@ export default defineConfig({
           { slug: 'reference/language/samples' },
           { slug: 'reference/language/functions' },
           { slug: 'reference/language/tables' },
+          { slug: 'reference/language/granular' },
+          { slug: 'reference/language/spectral' },
           { slug: 'reference/language/routing' },
           { slug: 'reference/language/patterns' },
           { slug: 'reference/language/performance' },

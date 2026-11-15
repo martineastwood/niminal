@@ -24,7 +24,7 @@ niminal >=0.1, <0.4          // or a range
 - **When it isn't met** the file is not run, and the error says which side is wrong: update niminal, or update the file.
 - **Leaving it out** is fine: the file is run as it is, and may stop working when the language changes.
 - **Modules** can have their own line; each is checked against the language on its own.
-- **The current version** is 0.1. It goes up only when a change would break files written for the one before, so a file whose requirement the current version meets is meant to keep working. Until 1.0 that is a goal, not a promise.
+- **The current version** is 0.4. It goes up only when a change would break files written for the one before, so a file whose requirement the current version meets is meant to keep working. Until 1.0 that is a goal, not a promise.
 
 ## Bindings and names
 
@@ -97,5 +97,5 @@ instr organ(freq: hz) {
   }
 }
 
-clipials = for n in 1..8 { osc(sine, freq * n) / n }
+partials = for n in 1..8 { osc(sine, freq * n) / n }
 ```

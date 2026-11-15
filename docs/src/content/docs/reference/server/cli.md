@@ -21,7 +21,7 @@ cargo install --path crates/niminal-cli
 | `niminal render` | Render a `.nml` file (or an `arrangement` in it) to WAV; optional `--score`, `--from` / `--to`, `--stems` (one file per node and bus into the `--out` folder). |
 | `niminal server` | The audio engine as a server and [events API](/reference/engine-api/) on port 7401 (`--port`), with audio, `--log`, `--token`, `--no-audio`. For testing and for clients of your own. |
 | `niminal replay` | Render a session log (what Stage or a server recorded) to WAV. |
-| `niminal explain FILE` | Compile a `.nml` file and list, for each instrument and node chain, the ops that run every sample and the ones that run once per block (see [control scopes](/reference/language/units-and-rates/)). |
+| `niminal explain FILE` | Compile a `.nml` file and list, for each instrument and node chain, the ops that run every sample and the ones that run once per block (see [control scopes](/reference/language/units-and-rates/)). Takes optional `--control-step N`. |
 | `niminal lsp` | The language server on stdio, for editors: see [Editor and LSP](/reference/editor/). |
 | `niminal devices` | List the sound cards with the ids `--out-device` and `--in-device` take. |
 | `niminal presets [NAME]` | List the editable sound catalog, or print one preset with its helpers. Filter with `--kind instrument` or `--kind fx`. |
@@ -53,6 +53,7 @@ Default listen `127.0.0.1:7401`, stereo output. `--channels` supports 1, 2, 4, 6
 | `--channels N` | 2 | Output channels. |
 | `--sample-rate HZ` | device's | Sample rate. |
 | `--block-size N` | 64 | Samples per block, as above. |
+| `--control-step N` | 64 | Samples between `control` scope runs (1 to 1024), as above. |
 | `--buffer-size N` | 256, or nearest the device allows | Frames per sound card callback. Smaller is lower latency and less forgiving. |
 | `--device NAME` | system default | Sound card for output and input, by part of its name. |
 | `--out-device ID` | system default | Output device: an id from `niminal devices` (`output:1`) or part of its name. |

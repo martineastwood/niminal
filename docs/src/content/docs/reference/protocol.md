@@ -9,7 +9,7 @@ The engine's own API is the [Engine API](/reference/engine-api/). Clips, scenes,
 
 Niminal Stage has the sequencer inside it and serves this API on its **tools port** (7400 by default, set in the top bar). The VS Code extension connects there, so what it evaluates is the same performance Stage shows. A program of your own can connect to the same port. The engine's API is on the next port up (7401), and `niminal server` serves it on its own.
 
-This page describes the live client's **JSON-RPC 2.0** protocol over **WebSocket**. It is separate from the language server (`niminal-stage lsp`), which speaks LSP on stdio for editing.
+This page describes the live client's **JSON-RPC 2.0** protocol over **WebSocket**. It is separate from the language server (`niminal lsp`), which speaks LSP on stdio for editing.
 
 ## Connection
 
@@ -45,7 +45,7 @@ Limits: up to **16** clients; maximum message size **64 MiB** (large `eval` sour
 ```json
 {
   "protocol": 5,
-  "release": "0.0.1-alpha.10",
+  "release": "0.0.1",
   "sample_rate": 48000,
   "channels": 2,
   "topics": ["landed", "pending", "transport", "meters", "notices", "learned"]
@@ -54,7 +54,7 @@ Limits: up to **16** clients; maximum message size **64 MiB** (large `eval` sour
 
 **`protocol`** must be **`5`** (`PROTOCOL_VERSION` in the server). A mismatch returns error code **-32000**.
 
-**`release`** is the release of the download the server is part of, such as `0.0.1-alpha.10`, or `null` for a build made from source. The VS Code extension compares it with its own and warns when they are not the same release.
+**`release`** is the release of the download the server is part of, such as `0.0.1`, or `null` for a build made from source. The VS Code extension compares it with its own and warns when they are not the same release.
 
 ## Subscriptions
 

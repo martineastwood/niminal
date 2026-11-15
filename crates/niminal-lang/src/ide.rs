@@ -335,22 +335,73 @@ pub fn builtin_ops() -> Vec<OpInfo> {
         for (name, doc) in crate::prelude::DOCS {
             let params: &[(&str, &str, bool)] = match name {
                 "lfo" => &[("rate", "hz", true), ("shape", "sine, tri, saw or square", false)],
-                "synced_lfo" => &[("beats", "number", false), ("shape", "sine, tri, saw or square", false), ("phase", "number", false)],                "unipolar" | "bipolar" | "smoothstep" | "log2" | "log10" | "atan" | "asin" | "acos" => &[("x", "number", true)],
+                "synced_lfo" => &[
+                    ("beats", "number", false),
+                    ("shape", "sine, tri, saw or square", false),
+                    ("phase", "number", false),
+                ],
+                "unipolar" | "bipolar" | "smoothstep" | "log2" | "log10" | "atan" | "asin"
+                | "acos" => &[("x", "number", true)],
                 "lerp" => &[("a", "number", true), ("b", "number", true), ("t", "number", true)],
                 "floor_to" => &[("x", "number", true), ("step", "number", true)],
                 "mtof" => &[("note", "number", true)],
                 "ftom" => &[("freq", "hz", true)],
                 "random_steps" => &[("rate", "hz", true), ("seed", "number", false)],
-                "random_between" => &[("lo", "number", true), ("hi", "number", true), ("seed", "number", false)],
-                _ => &[("rate", "hz", true), ("glide", "time", false), ("seed", "number", false)],
+                "random_between" => &[
+                    ("lo", "number", true),
+                    ("hi", "number", true),
+                    ("seed", "number", false),
+                ],
+                "random_glide" => &[
+                    ("rate", "hz", true),
+                    ("glide", "time", false),
+                    ("seed", "number", false),
+                ],
+                "crossfade" => &[
+                    ("x", "number", true),
+                    ("wet", "number", true),
+                    ("amount", "number", true),
+                ],
+                "apply" => &[
+                    ("x", "number", true),
+                    ("make", "function", true),
+                    ("when", "number", true),
+                    ("blend", "time", false),
+                ],
+                "drum" => &[
+                    ("freq", "hz", false),
+                    ("wave", "sine, tri, square or saw", false),
+                    ("attack", "time", false),
+                    ("decay", "time", false),
+                    ("mod_mode", "drop, wobble or random", false),
+                    ("mod_amount", "number", false),
+                    ("mod_rate", "hz", false),
+                    ("noise_filter", "low, band or high", false),
+                    ("noise_freq", "hz", false),
+                    ("noise_q", "number", false),
+                    ("noise_shape", "soft, linear or burst", false),
+                    ("noise_attack", "time", false),
+                    ("noise_decay", "time", false),
+                    ("mix", "number", false),
+                    ("drive", "number", false),
+                    ("eq_freq", "hz", false),
+                    ("eq_gain", "db", false),
+                    ("amp", "db", false),
+                    ("vel", "number", false),
+                    ("osc_vel", "number", false),
+                    ("noise_vel", "number", false),
+                    ("mod_vel", "number", false),
+                ],
+                _ => &[],
             };
             ops.push(op_info(name, doc, false, params));
         }
         ops.push(op_info("control", "Run a body once per block instead of every sample: `control { osc(sine, 2hz) }`. Oscillators, envelopes and state inside advance by a block's time, values from outside are read at the start of the block, and the result is held through the block (use `.smooth` or `.smooth(5ms)` on it where a step would be heard). Cheap for slow modulation.", false, &[("body", "function", true)]));
-        ops.push(op_info("oversample", "Run sample DSP at 2x, 4x or 8x with filtered rate conversion: `oversample(4) { ... }`. Adds 16 samples of conversion latency; parallel paths are aligned automatically.", false, &[("factor", "constant integer", true), ("body", "function", true)]));
+        ops.push(op_info("oversample", "Run sample DSP at 2x, 4x or 8x with filtered rate conversion: `oversample(4) { ... }`. Adds 25 base-rate samples of conversion latency; parallel paths are aligned automatically.", false, &[("factor", "constant integer", true), ("body", "function", true)]));
         ops.push(op_info("reset_on", "Restart state created inside `reset_on(trigger) { ... }` at each positive edge, before that sample. Signals outside the scope keep running.", false, &[("trigger", "number", true), ("body", "function", true)]));
         ops.push(op_info("late", "In a send to a bus, a copy that arrives one block late: `echo += late(out)`. Breaks a loop between buses; `prev` is one sample.", false, &[("x", "number", true)]));
         ops.push(op_info("after", "Run `after(delay) { ... }` from when the note is `delay` old: the body starts with fresh state and is silent until then.", false, &[("delay", "time", true), ("body", "function", true)]));
+        ops.extend(compiler_builtin_ops());
         ops
     })
     .clone()
@@ -403,11 +454,12 @@ fn array_ops() -> Vec<OpInfo> {
         method("channels", "A signal's channels as an ordinary array.", &[]),
         method(
             "at",
-            "Read a table at a fractional position. Interpolation: none, linear (default) or cubic; edge: wrap or clamp.",
+            "Read a table or buffer at a fractional position. Interpolation: none, linear (default) or cubic; edge: wrap or clamp. `channel` selects a 1-based channel on multichannel buffers.",
             &[
                 ("position", "number", true),
                 ("interp", "interpolation", false),
                 ("edge", "wrap | clamp", false),
+                ("channel", "integer", false),
             ],
         ),
         method(
@@ -417,11 +469,6 @@ fn array_ops() -> Vec<OpInfo> {
                 ("position", "number", true),
                 ("interp", "interpolation", false),
             ],
-        ),
-        method(
-            "waveshape",
-            "Map a signal in -1..1 through a transfer table.",
-            &[("table", "table", true)],
         ),
         method(
             "normalize",
@@ -489,8 +536,12 @@ fn array_ops() -> Vec<OpInfo> {
         ),
         method(
             "record",
-            "Write a signal into a shared buffer.",
-            &[("x", "number", true), ("loop", "bool", false)],
+            "Write a signal into a shared buffer. `channel` selects the 1-based starting channel.",
+            &[
+                ("x", "number", true),
+                ("loop", "bool", false),
+                ("channel", "integer", false),
+            ],
         ),
         method("data", "The underlying table of a sample.", &[]),
         op_info(
@@ -657,6 +708,113 @@ fn envelope_ops() -> Vec<OpInfo> {
     ]
 }
 
+/// Compiler built-in math, rate, vector, spectral frame, and tap calls not in `Registry::builtin()`.
+fn compiler_builtin_ops() -> Vec<OpInfo> {
+    let op = |name, doc, params| op_info(name, doc, false, params);
+    vec![
+        op(
+            "pow",
+            "Raise `x` to the power `y` (same as `x ^ y`). Returns `0` where there is no real answer.",
+            &[("x", "number", true), ("y", "number", true)],
+        ),
+        op(
+            "mod",
+            "Remainder of `x` divided by `y`, with the sign of `y` (`0` when `y` is `0`). Both values share a unit.",
+            &[("x", "value", true), ("y", "value", true)],
+        ),
+        op(
+            "atan2",
+            "Two-argument arctangent of `y` and `x` in radians from `-pi` to `pi` (`0` when both are `0`). Both values share a unit.",
+            &[("y", "value", true), ("x", "value", true)],
+        ),
+        op(
+            "clamp",
+            "Clamp a signal or value to a range: `cutoff.clamp(20hz..18khz)`.",
+            &[("x", "value", true), ("range", "range", true)],
+        ),
+        op(
+            "hold",
+            "Keep a `control` or `init` signal stepped across each block without ramping.",
+            &[("x", "value", true)],
+        ),
+        op(
+            "smooth",
+            "Ramp a `control` signal across each block (`x.smooth`), or smooth any signal with a one-pole filter (`x.smooth(5ms)`).",
+            &[("x", "value", true), ("time", "time", false)],
+        ),
+        op(
+            "init",
+            "Evaluate a signal once at note start (`init` rate).",
+            &[("x", "value", true)],
+        ),
+        op(
+            "prev",
+            "Value of a signal one sample ago, for single-sample feedback loops: `y = x + prev(y) * 0.5`. Use `late` between buses.",
+            &[("x", "number", true)],
+        ),
+        op(
+            "dot",
+            "Dot product of two arrays of the same length.",
+            &[("a", "array", true), ("b", "array", true)],
+        ),
+        op(
+            "fir",
+            "FIR filter over a `state` ring buffer starting at index `from`, using `taps` weights.",
+            &[
+                ("ring", "array", true),
+                ("taps", "array", true),
+                ("from", "integer", true),
+            ],
+        ),
+        op(
+            "taps",
+            "Read multiple delay offsets from a `state` ring buffer starting at index `from`. Interpolation defaults to `linear`.",
+            &[
+                ("ring", "array", true),
+                ("offsets", "array", true),
+                ("from", "integer", true),
+                ("interp", "interpolation", false),
+            ],
+        ),
+        op(
+            "matvec",
+            "Multiply a flat row-major matrix array by a column vector array.",
+            &[("matrix", "array", true), ("v", "array", true)],
+        ),
+        op(
+            "frames",
+            "Window overlapping frames of `x` (power-of-two `size` from 4 to 65536, optional second signal `other`, `overlap` 2/4/8/16) and overlap-add the returned frames. Latency is `size` samples.",
+            &[
+                ("x", "signal", true),
+                ("size", "integer", true),
+                ("body", "function", true),
+                ("other", "signal", false),
+                ("overlap", "integer", false),
+            ],
+        ),
+        op(
+            "fft",
+            "Real FFT of a power-of-two array (length at least 4), returning `[re, im]` arrays of length `n / 2 + 1`.",
+            &[("x", "array", true)],
+        ),
+        op(
+            "ifft",
+            "Inverse real FFT from `[re, im]` (or `re, im`), returning a time-domain array of length `2 * (bins - 1)`.",
+            &[("re", "array", true), ("im", "array", false)],
+        ),
+        op(
+            "report",
+            "Pass an instrument or fx signal (or array of up to 64 values) through and publish it to subscribed `reports` clients at `rate` (default `30hz`, or on rising edges of `on`).",
+            &[
+                ("x", "signal", true),
+                ("name", "text", true),
+                ("rate", "hz", false),
+                ("on", "trigger", false),
+            ],
+        ),
+    ]
+}
+
 /// The waveform names `osc` accepts.
 pub fn waves() -> impl Iterator<Item = &'static str> {
     WAVES.iter().map(|(name, _)| *name)
@@ -699,5 +857,23 @@ mod tests {
         );
         let lpf = ops.iter().find(|o| o.name == "lpf").unwrap();
         assert_eq!(lpf.signature(), "lpf(x: number, cutoff: hz, res?: number)");
+        let apply = ops.iter().find(|o| o.name == "apply").unwrap();
+        assert_eq!(
+            apply.signature(),
+            "apply(x: number, make: function, when: number, blend?: time)"
+        );
+        let crossfade = ops.iter().find(|o| o.name == "crossfade").unwrap();
+        assert_eq!(
+            crossfade.signature(),
+            "crossfade(x: number, wet: number, amount: number)"
+        );
+        let drum = ops.iter().find(|o| o.name == "drum").unwrap();
+        assert!(drum.signature().starts_with("drum(freq?: hz,"));
+        let oversample = ops.iter().find(|o| o.name == "oversample").unwrap();
+        assert!(oversample.doc.contains("25 base-rate samples"));
+        assert_eq!(ops.iter().filter(|o| o.name == "waveshape").count(), 1);
+        for required in ["pow", "mod", "atan2", "clamp", "hold", "smooth", "init", "prev", "dot", "fir", "taps", "matvec", "fft", "ifft", "report", "splice_reel_dsp"] {
+            assert!(ops.iter().any(|o| o.name == required), "missing op {required}");
+        }
     }
 }

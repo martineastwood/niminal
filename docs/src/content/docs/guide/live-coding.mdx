@@ -30,7 +30,7 @@ Open a `.nml` file such as `examples/groove.nml`, and press **Cmd+Enter** / **Ct
 | Cmd+. / Ctrl+. | Hush: stop every clip, letting what's sounding ring out |
 | Cmd+1..9 / Ctrl+1..9 | Launch the Nth scene from the sidebar |
 
-The extension starts its own live sequencer the first time you evaluate (or when you click the status bar to connect), and keeps it for that window. Your clips and scenes live there, not in the server, and closing the window stops it. Each window has its own performance state, so two windows don't share scenes.
+The extension shares Niminal Stage's live sequencer (`main` chair) on the tools port (7400 by default), so clips, scenes and edits stay in sync with Stage across both windows.
 
 Saving a file does nothing by itself — the editor sends what you evaluate. The terminal client below is the one that watches files.
 

@@ -42,7 +42,7 @@ Reload the window (`--cursor` for Cursor). The language server comes from the Ni
 
 The code you evaluate plays through Niminal Stage, which has the engine and the sequencer in it. If Stage is not running, the first evaluation offers to open it (`niminal.stageApp` names the app). Stage serves the sequencer on its tools port (7400 by default), and the extension joins its `main` chair: what you evaluate in the editor shows in Stage's lanes and scene buttons and plays on its transport. If both define the same name, the last one evaluated wins.
 
-The **niminal** sidebar lists scenes and clips. A scene shows how many of its clips are playing, and starts, mutes, solos and stops them as a group; a clip shows what has been done to it and can be muted, soloed and stopped. The file's scenes launch with Cmd/Ctrl+1..9. The status bar flags a soloed or muted clip (`SOLO bass · 2 muted`), since either silences something that is playing. Compile errors show as squiggles at the right place and in the **niminal** output channel; the status bar shows bar, beat, tempo, voices and pending changes, and clicking it hushes. **niminal: Connect to Server** and **niminal: Panic** are in the command palette. Evaluating starts the window's live sequencer; if the server isn't answering, the extension offers to start it in a terminal.
+The **niminal** sidebar lists scenes and clips. A scene shows how many of its clips are playing, and starts, mutes, solos and stops them as a group; a clip shows what has been done to it and can be muted, soloed and stopped. The file's scenes launch with Cmd/Ctrl+1..9. The status bar flags a soloed or muted clip (`SOLO bass · 2 muted`), since either silences something that is playing. Compile errors show as squiggles at the right place and in the **niminal** output channel; the status bar shows bar, beat, tempo, voices and pending changes, and clicking it hushes. **niminal: Connect** and **niminal: Panic** are in the command palette.
 
 ### Settings
 
@@ -62,7 +62,7 @@ With a MIDI input chosen in Stage, a control written as `midi.learn` waits for t
 
 | | **LSP** | **Live session** |
 | --- | --- | --- |
-| Transport | stdio | Private live client → generic server (7401) |
+| Transport | stdio | Sequencer WebSocket → Stage tools port (7400) |
 | Audio | No | Yes |
 | Live `start` / `stop` / changes | No | Yes |
 | Diagnostics / completion | Yes | Eval diagnostics via extension/REPL |

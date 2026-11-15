@@ -28,7 +28,7 @@ A function you write with `fn` can't have the name of a built-in either, since `
 
 | Kind | Names |
 | --- | --- |
-| Arrays and signals | `map`, `sum`, `len`, `channels`, `indices`, `at`, `phase`, `step`, `active`, `normalize`, `reverse`, `rotate`, `resample`, `concat`, `integrate`, `mix`, `record`, `data` |
+| Arrays and signals | `map`, `sum`, `len`, `channels`, `indices`, `at`, `phase`, `step`, `active`, `normalize`, `reverse`, `rotate`, `resample`, `concat`, `integrate`, `mix`, `slice`, `spectrum`, `phases`, `mean`, `rms`, `remove_dc`, `moving_average`, `fade`, `record`, `data` |
 | Numbers | `min`, `max`, `pow`, `mod`, `atan2`, `clamp`, `hold`, `smooth`, `init`, `control`, `late`, `prev`, `range`, `zeros` |
 | Vectors and frames | `dot`, `fir`, `taps`, `matvec`, `frames`, `fft`, `ifft` |
 | Tables | `harmonics`, `partials`, `cosines`, `curve`, `steps`, `poly`, `ramp`, `cheby`, `window`, `random`, `file`, `bank` |

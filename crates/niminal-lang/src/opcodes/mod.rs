@@ -877,7 +877,7 @@ impl Registry {
             ),
             OpSpec::new(
                 "follow",
-                "Nodes the amplitude envelope of a signal. Use it for sidechain effects, reactive visuals, and ducking.",
+                "Tracks the amplitude envelope of a signal. Use it for sidechain effects, reactive visuals, and ducking.",
                 vec![
                     req("x", SIGNAL),
                     opt("attack", Kind::Signal(Unit::Time)),

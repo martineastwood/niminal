@@ -63,7 +63,7 @@ With the macOS download, choose **File > Install VS Code Extension…** in Stage
 cd editors/vscode && npm install && node install.js   # --cursor for Cursor
 ```
 
-Reload the window and open a `.nml` file and press **Cmd+Enter** (macOS) or **Ctrl+Enter** to evaluate the block around the cursor. The status bar shows the bar and tempo, and the sidebar lists scenes and clips. The extension starts the audio server if none is running, and it stops when the last client closes. The language server (`niminal lsp`) works without a server for hover, completion, and errors.
+Reload the window and open a `.nml` file and press **Cmd+Enter** (macOS) or **Ctrl+Enter** to evaluate the block around the cursor. The status bar shows the bar and tempo, and the sidebar lists scenes and clips. The code you evaluate plays through Niminal Stage (if it is not running, the extension offers to open it). The language server (`niminal lsp`) works without Stage or a server for hover, completion, and errors.
 
 ## Live coding in Stage
 
