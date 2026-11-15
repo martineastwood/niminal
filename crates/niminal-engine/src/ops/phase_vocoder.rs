@@ -382,8 +382,8 @@ mod tests {
         let mut s = Spectrum::new(128);
         s.magnitude[10] = 1.0;
         s.magnitude[30] = 0.1;
-        for k in 0..65 {
-            s.frequency[k] = k as f64 / 128.0;
+        for (k, freq) in s.frequency.iter_mut().enumerate() {
+            *freq = k as f64 / 128.0;
         }
         let mut on = PeakWarp::new(128, 32, 16);
         let mut off = PeakWarp::new(128, 32, 16);
