@@ -14,6 +14,7 @@ parser.add_argument('--blocks', type=int, default=2048)
 parser.add_argument('--trials', type=int, default=7)
 parser.add_argument('--output', type=Path)
 parser.add_argument('--reference', type=Path)
+parser.add_argument('--filter', default='')
 args = parser.parse_args()
 if min(args.rounds, args.blocks, args.trials) < 1:
     parser.error('rounds, blocks and trials must be positive')
@@ -36,7 +37,7 @@ for round_index in range(args.rounds):
         env = dict(os.environ, NIMINAL_JIT='0',
                    NIMINAL_BENCH_AUDIO=str(audio))
         run = subprocess.run([str(binaries[mode].resolve()), str(args.blocks),
-                              str(args.trials)], env=env, capture_output=True, text=True, check=True)
+                              str(args.trials), args.filter], env=env, capture_output=True, text=True, check=True)
         if run.stderr:
             print(run.stderr, flush=True)
         (args.output / f'{mode}-{round_index}.csv').write_text(run.stdout)

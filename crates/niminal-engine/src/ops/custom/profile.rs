@@ -37,11 +37,13 @@ const N: usize = NAMES.len();
 #[derive(Clone)]
 pub struct Counts {
     pub instructions: [u64; N],
+    pub state_reads: u64,
+    pub state_writes: u64,
     pub pairs: [[u64; N]; N],
 }
 thread_local! {
     static COUNTS: RefCell<Counts> = const { RefCell::new(Counts {
-        instructions: [0; N], pairs: [[0; N]; N],
+        instructions: [0; N], pairs: [[0; N]; N], state_reads: 0, state_writes: 0,
     }) };
 }
 /// Reset this thread's counters outside rendering.
@@ -50,6 +52,8 @@ pub fn reset() {
         *counts.borrow_mut() = Counts {
             instructions: [0; N],
             pairs: [[0; N]; N],
+            state_reads: 0,
+            state_writes: 0,
         }
     });
 }
@@ -73,7 +77,8 @@ pub(super) fn record(instr: &Instr, pc: usize, previous: &mut Option<(usize, usi
         },
         Instr::LoadState { .. } => 9,
         Instr::StoreState { .. } => 10,
-        Instr::MulAdd { .. } => 11,
+        Instr::MulAdd { .. } | Instr::MulSub { .. } | Instr::SubMul { .. } => 11,
+        Instr::Clamp { .. } => 4,
         Instr::Const { .. } => 12,
         Instr::Input { .. } => 13,
         Instr::SampleRate { .. } => 14,
@@ -95,6 +100,11 @@ pub(super) fn record(instr: &Instr, pc: usize, previous: &mut Option<(usize, usi
     COUNTS.with(|counts| {
         let mut counts = counts.borrow_mut();
         counts.instructions[kind] += 1;
+        match instr {
+            Instr::LoadState { .. } => counts.state_reads += 1,
+            Instr::StoreState { .. } => counts.state_writes += 1,
+            _ => {}
+        }
         if let Some((last_pc, last_kind)) = *previous
             && last_pc + 1 == pc
         {

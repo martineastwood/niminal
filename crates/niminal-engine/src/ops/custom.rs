@@ -286,6 +286,27 @@ pub enum Instr {
         b: usize,
         c: usize,
     },
+    /// `(a * b) - c`, with the product rounded as f64 before subtraction.
+    MulSub {
+        dst: usize,
+        a: usize,
+        b: usize,
+        c: usize,
+    },
+    /// `c - (a * b)`, with the product rounded as f64 before subtraction.
+    SubMul {
+        dst: usize,
+        a: usize,
+        b: usize,
+        c: usize,
+    },
+    /// `x.max(lo).min(hi)`.
+    Clamp {
+        dst: usize,
+        x: usize,
+        lo: usize,
+        hi: usize,
+    },
     Cmp {
         dst: usize,
         op: Cmp,
@@ -413,7 +434,7 @@ pub enum Instr {
 }
 
 /// Which list an instruction reads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArraySource {
     /// A table shared by every voice.
     Table(usize),
@@ -443,7 +464,7 @@ pub enum Reduce {
 }
 
 /// How a read between entries is worked out.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Interp {
     None,
     Linear,
@@ -730,15 +751,17 @@ impl Custom {
         input: &impl Fn(usize, usize) -> f32,
         i: usize,
     ) {
+        let carried_init = section == Section::Init && self.carried;
         // most kernels have no reset scope, and then no instruction needs checking for one
-        if self.kernel.resets.is_empty() {
-            self.exec::<false>(code, section, ctx, input, i);
-        } else {
-            self.exec::<true>(code, section, ctx, input, i);
+        match (self.kernel.resets.is_empty(), carried_init) {
+            (true, false) => self.exec::<false, false>(code, section, ctx, input, i),
+            (true, true) => self.exec::<false, true>(code, section, ctx, input, i),
+            (false, false) => self.exec::<true, false>(code, section, ctx, input, i),
+            (false, true) => self.exec::<true, true>(code, section, ctx, input, i),
         }
     }
 
-    fn exec<const RESETS: bool>(
+    fn exec<const RESETS: bool, const CARRIED_INIT: bool>(
         &mut self,
         code: &[Instr],
         section: Section,
@@ -799,7 +822,7 @@ impl Custom {
                 Instr::SampleRate { dst } => regs[dst] = self.sample_rate,
                 Instr::LoadState { dst, slot } => regs[dst] = state[slot],
                 Instr::StoreState { slot, src } => {
-                    if !(section == Section::Init && self.carried) {
+                    if !CARRIED_INIT {
                         state[slot] = regs[src];
                     }
                 }
@@ -847,10 +870,35 @@ impl Custom {
                     a,
                     b,
                 } => regs[dst] = regs[a].max(regs[b]),
-                Instr::Bin { dst, op, a, b } => regs[dst] = op.apply(regs[a], regs[b]),
+                Instr::Bin {
+                    dst,
+                    op: BinOp::Rem,
+                    a,
+                    b,
+                } => {
+                    let y = regs[b];
+                    regs[dst] = if y == 0.0 {
+                        0.0
+                    } else {
+                        let x = regs[a];
+                        x - y * (x / y).floor()
+                    };
+                }
+                Instr::Bin { dst, op, a, b } => regs[dst] = eval_bin_cold(op, regs[a], regs[b]),
                 Instr::MulAdd { dst, a, b, c } => {
                     let product = regs[a] * regs[b];
                     regs[dst] = product + regs[c];
+                }
+                Instr::MulSub { dst, a, b, c } => {
+                    let product = regs[a] * regs[b];
+                    regs[dst] = product - regs[c];
+                }
+                Instr::SubMul { dst, a, b, c } => {
+                    let product = regs[a] * regs[b];
+                    regs[dst] = regs[c] - product;
+                }
+                Instr::Clamp { dst, x, lo, hi } => {
+                    regs[dst] = regs[x].max(regs[lo]).min(regs[hi]);
                 }
                 Instr::Cmp { dst, op, a, b } => {
                     regs[dst] = if op.holds(regs[a], regs[b]) { 1.0 } else { 0.0 };
@@ -868,26 +916,64 @@ impl Custom {
                     let entry = &mut self.memo[slot];
                     let value = match *entry {
                         Some(hit) if hit.key == key => hit.value,
-                        _ => {
-                            let value = match math {
-                                MemoMath::Unary(f) => f.apply(x),
-                                MemoMath::Binary(op, _) => op.apply(x, y),
-                            };
-                            *entry = Some(MemoEntry { key, value });
-                            value
-                        }
+                        _ => eval_memo_miss(entry, key, math, x, y),
                     };
                     regs[dst] = value;
                 }
                 Instr::Neg { dst, a } => regs[dst] = -regs[a],
                 Instr::Copy { dst, src } => regs[dst] = regs[src],
-                Instr::Call { dst, f, a } => regs[dst] = f.apply(regs[a]),
+                Instr::Call {
+                    dst,
+                    f: Fn1::Floor,
+                    a,
+                } => regs[dst] = regs[a].floor(),
+                Instr::Call {
+                    dst,
+                    f: Fn1::Fract,
+                    a,
+                } => {
+                    let x = regs[a];
+                    regs[dst] = x - x.floor();
+                }
+                Instr::Call {
+                    dst,
+                    f: Fn1::Abs,
+                    a,
+                } => regs[dst] = regs[a].abs(),
+                Instr::Call {
+                    dst,
+                    f: Fn1::Ceil,
+                    a,
+                } => regs[dst] = regs[a].ceil(),
+                Instr::Call {
+                    dst,
+                    f: Fn1::Sqrt,
+                    a,
+                } => regs[dst] = regs[a].max(0.0).sqrt(),
+                Instr::Call {
+                    dst,
+                    f: Fn1::Sign,
+                    a,
+                } => {
+                    let x = regs[a];
+                    regs[dst] = if x > 0.0 {
+                        1.0
+                    } else if x < 0.0 {
+                        -1.0
+                    } else {
+                        0.0
+                    };
+                }
+                Instr::Call { dst, f, a } => regs[dst] = eval_fn1_cold(f, regs[a]),
                 Instr::Native { .. }
                 | Instr::Read {
-                    list: ArraySource::Table(_) | ArraySource::Values(_) | ArraySource::Lane(_),
+                    list: ArraySource::Lane(_),
                     ..
                 }
-                | Instr::ReadAt { .. }
+                | Instr::ReadAt {
+                    list: ArraySource::Values(_) | ArraySource::Lane(_),
+                    ..
+                }
                 | Instr::LaneBin { .. }
                 | Instr::LaneCall { .. }
                 | Instr::LaneFromRegs { .. }
@@ -908,15 +994,45 @@ impl Custom {
                     let data = &buffers[s];
                     regs[dst] = data[wrapped_index(regs[idx], data.len())];
                 }
+                Instr::Read {
+                    dst,
+                    list: ArraySource::Table(t),
+                    idx,
+                } => {
+                    let data = &self.kernel.tables_f64[t];
+                    regs[dst] = data[wrapped_index(regs[idx], data.len())];
+                }
+                Instr::Read {
+                    dst,
+                    list: ArraySource::Values(a),
+                    idx,
+                } => {
+                    let regs_list = &self.kernel.values[a];
+                    regs[dst] = regs[regs_list[wrapped_index(regs[idx], regs_list.len())]];
+                }
+                Instr::ReadAt {
+                    dst,
+                    list: ArraySource::State(s),
+                    pos: idx,
+                    interp,
+                } => {
+                    regs[dst] = read_at(&buffers[s], regs[idx], interp);
+                }
+                Instr::ReadAt {
+                    dst,
+                    list: ArraySource::Table(t),
+                    pos: idx,
+                    interp,
+                } => {
+                    regs[dst] = read_at(&self.kernel.tables_f64[t], regs[idx], interp);
+                }
                 Instr::Write {
                     list,
                     idx,
                     src,
                     cond,
                 } => {
-                    if !(section == Section::Init && self.carried)
-                        && cond.is_none_or(|c| regs[c] != 0.0)
-                    {
+                    if !CARRIED_INIT && cond.is_none_or(|c| regs[c] != 0.0) {
                         let data = &mut buffers[list];
                         let n = data.len();
                         data[wrapped_index(regs[idx], n)] = regs[src];
@@ -1281,13 +1397,48 @@ impl Custom {
         self.block_frames = frames;
         self.run(Section::Block, ctx, &input, 0);
         let kernel = self.kernel.clone();
-        for i in 0..frames {
-            self.run_code(&kernel.code, Section::Sample, ctx, &input, i);
-            for (out, (_, reg)) in outs.iter_mut().zip(&self.kernel.outputs) {
-                out[i] = self.regs[*reg] as f32;
+        if kernel.resets.is_empty() {
+            for i in 0..frames {
+                self.exec::<false, false>(&kernel.code, Section::Sample, ctx, &input, i);
+                for (out, (_, reg)) in outs.iter_mut().zip(&kernel.outputs) {
+                    out[i] = self.regs[*reg] as f32;
+                }
+            }
+        } else {
+            for i in 0..frames {
+                self.exec::<true, false>(&kernel.code, Section::Sample, ctx, &input, i);
+                for (out, (_, reg)) in outs.iter_mut().zip(&kernel.outputs) {
+                    out[i] = self.regs[*reg] as f32;
+                }
             }
         }
     }
+}
+
+#[inline(never)]
+fn eval_memo_miss(
+    entry: &mut Option<MemoEntry>,
+    key: [u64; 2],
+    math: MemoMath,
+    x: f64,
+    y: f64,
+) -> f64 {
+    let value = match math {
+        MemoMath::Unary(f) => f.apply(x),
+        MemoMath::Binary(op, _) => op.apply(x, y),
+    };
+    *entry = Some(MemoEntry { key, value });
+    value
+}
+
+#[inline(never)]
+fn eval_bin_cold(op: BinOp, x: f64, y: f64) -> f64 {
+    op.apply(x, y)
+}
+
+#[inline(never)]
+fn eval_fn1_cold(f: Fn1, x: f64) -> f64 {
+    f.apply(x)
 }
 
 /// Two different entries of a list, the first mutably.
@@ -1327,6 +1478,7 @@ enum Section {
 /// Read a numeric array through its storage-independent element accessor.
 /// This lets tables, buffers and computed arrays share interpolation without
 /// gathering their elements or allocating on the audio thread.
+#[inline]
 pub fn read_array(len: usize, pos: f64, interp: Interp, element: impl Fn(usize) -> f64) -> f64 {
     assert!(len > 0, "cannot read an empty array");
     if !pos.is_finite() {
@@ -1336,8 +1488,18 @@ pub fn read_array(len: usize, pos: f64, interp: Interp, element: impl Fn(usize) 
     let t = pos - base;
     let at = |k: f64| element(wrapped_index(base + k, len));
     match interp {
-        Interp::None => at(0.0),
-        Interp::Linear => at(0.0) + (at(1.0) - at(0.0)) * t,
+        Interp::None => element(wrapped_index(base, len)),
+        Interp::Linear => {
+            if base >= 0.0 && base + 1.0 < len as f64 {
+                let i0 = base as usize;
+                let y0 = element(i0);
+                let y1 = element(i0 + 1);
+                return y0 + (y1 - y0) * t;
+            }
+            let y0 = at(0.0);
+            let y1 = at(1.0);
+            y0 + (y1 - y0) * t
+        }
         Interp::Cubic => {
             let (y0, y1, y2, y3) = (at(-1.0), at(0.0), at(1.0), at(2.0));
             let a = -0.5 * y0 + 1.5 * y1 - 1.5 * y2 + 0.5 * y3;
@@ -1348,6 +1510,7 @@ pub fn read_array(len: usize, pos: f64, interp: Interp, element: impl Fn(usize) 
     }
 }
 
+#[inline]
 pub fn read_at(data: &[f64], pos: f64, interp: Interp) -> f64 {
     read_array(data.len(), pos, interp, |i| data[i])
 }

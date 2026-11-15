@@ -375,9 +375,12 @@ fn compile_scope_depth(
     kernel.fuse_conditional_writes();
     // Discard guards belonging to cheap branches which stayed branchless. This also remaps skips.
     kernel.eliminate_dead_expressions();
+    kernel.eliminate_redundant_expressions();
+    kernel.eliminate_dead_expressions();
     kernel.fuse_compare_skips();
     kernel.memoize_expensive_math();
     kernel.fuse_scalar_chains();
+    kernel.compact_registers();
     Ok((kernel, result))
 }
 

@@ -9,6 +9,9 @@ impl Kernel {
         for mut instruction in std::mem::take(&mut self.code) {
             let owner = match instruction {
                 Instr::MulAdd { dst, .. }
+                | Instr::MulSub { dst, .. }
+                | Instr::SubMul { dst, .. }
+                | Instr::Clamp { dst, .. }
                 | Instr::Bin { dst, .. }
                 | Instr::Cmp { dst, .. }
                 | Instr::Select { dst, .. }
@@ -22,7 +25,12 @@ impl Kernel {
                 _ => None,
             };
             let mut inputs = match instruction {
-                Instr::MulAdd { a, b, c, .. } => vec![a, b, c],
+                Instr::MulAdd { a, b, c, .. }
+                | Instr::MulSub { a, b, c, .. }
+                | Instr::SubMul { a, b, c, .. }
+                | Instr::Clamp {
+                    x: a, lo: b, hi: c, ..
+                } => vec![a, b, c],
                 Instr::Bin { a, b, .. } | Instr::Cmp { a, b, .. } => vec![a, b],
                 Instr::Select { cond, a, b, .. } => vec![cond, a, b],
                 Instr::Neg { a, .. } | Instr::Copy { src: a, .. } | Instr::Call { a, .. } => {
@@ -88,7 +96,15 @@ impl Kernel {
                     remap(b);
                     (Some(*dst), 1, 0)
                 }
-                Instr::MulAdd { dst, a, b, c, .. } => {
+                Instr::MulAdd { dst, a, b, c, .. }
+                | Instr::MulSub { dst, a, b, c, .. }
+                | Instr::SubMul { dst, a, b, c, .. }
+                | Instr::Clamp {
+                    dst,
+                    x: a,
+                    lo: b,
+                    hi: c,
+                } => {
                     remap(a);
                     remap(b);
                     remap(c);

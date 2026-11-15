@@ -875,6 +875,34 @@ impl Kb<'_> {
         i: Value,
         interp: Option<Interp>,
     ) -> Value {
+        if interp.is_none() {
+            match list {
+                ArraySource::Values(id) => {
+                    if let Some(&first) = self.values[id].first()
+                        && self.values[id].iter().all(|&r| r == first)
+                    {
+                        if let Some(&k) = self.consts.get(&first) {
+                            return self.constant(unit, k);
+                        }
+                        return Value {
+                            reg: first,
+                            unit,
+                            rate: self.rate(self.value_rates[id]),
+                            port: None,
+                        };
+                    }
+                }
+                ArraySource::Table(id) => {
+                    let data = self.tables[id].as_f64();
+                    if let Some(&first) = data.first()
+                        && data.iter().all(|v| v.to_bits() == first.to_bits())
+                    {
+                        return self.constant(unit, first);
+                    }
+                }
+                ArraySource::State(_) | ArraySource::Lane(_) => {}
+            }
+        }
         if let Some(pos) = self.konst(&i) {
             let data = match list {
                 ArraySource::Table(id) => Some(self.tables[id].as_f64()),

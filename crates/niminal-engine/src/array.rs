@@ -57,15 +57,28 @@ impl<'a, T> IntoIterator for &'a Array<T> {
 
 /// DSP indexing floors fractional indices and wraps in both directions.
 /// Non-finite positions select element zero.
+#[inline]
 pub fn wrapped_index(index: f64, len: usize) -> usize {
     assert!(len > 0, "cannot index an empty array");
     if !index.is_finite() {
         return 0;
     }
     let floor = index.floor();
+    let n = len as f64;
     // the usual case, which needs no division
-    if floor >= 0.0 && floor < len as f64 {
+    if floor >= 0.0 && floor < n {
         return floor as usize;
     }
-    floor.rem_euclid(len as f64) as usize % len
+    if floor < 0.0 {
+        let wrapped = floor + n;
+        if wrapped >= 0.0 && wrapped < n {
+            return wrapped as usize;
+        }
+    } else {
+        let wrapped = floor - n;
+        if wrapped >= 0.0 && wrapped < n {
+            return wrapped as usize;
+        }
+    }
+    floor.rem_euclid(n) as usize % len
 }

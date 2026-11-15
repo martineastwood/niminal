@@ -99,3 +99,140 @@ fn branch_entries_are_preserved_and_skip_counts_are_remapped() {
     ));
     assert_eq!(render(chain(2.0, 3.0, 4.0, true)), render(skip_pair));
 }
+
+#[test]
+fn mul_sub_sub_mul_and_clamp_fusion_preserve_exact_results() {
+    for (a, b, c) in [
+        (1.0 + 2f64.powi(-27), 1.0 - 2f64.powi(-27), 1.0),
+        (-0.0, 1.0, 0.0),
+        (3.5, 2.0, 10.0),
+        (-4.0, 0.5, -1.0),
+    ] {
+        for product_left in [false, true] {
+            let original = Kernel {
+                registers: 5,
+                init: vec![
+                    Instr::Const { dst: 0, value: a },
+                    Instr::Const { dst: 1, value: b },
+                    Instr::Const { dst: 2, value: c },
+                ],
+                code: vec![
+                    Instr::Bin {
+                        dst: 3,
+                        op: BinOp::Mul,
+                        a: 0,
+                        b: 1,
+                    },
+                    Instr::Bin {
+                        dst: 4,
+                        op: BinOp::Sub,
+                        a: if product_left { 3 } else { 2 },
+                        b: if product_left { 2 } else { 3 },
+                    },
+                ],
+                outputs: vec![("out".into(), 4)],
+                ..Kernel::default()
+            };
+            let mut fused = original.clone();
+            assert_eq!(fused.fuse_scalar_chains(), 1);
+            assert!(matches!(
+                fused.code.as_slice(),
+                [Instr::MulSub { .. }] | [Instr::SubMul { .. }]
+            ));
+            for (expected, actual) in render(original).into_iter().zip(render(fused)) {
+                assert_eq!(expected.to_bits(), actual.to_bits());
+            }
+        }
+        let clamp_orig = Kernel {
+            registers: 5,
+            init: vec![
+                Instr::Const { dst: 0, value: a },
+                Instr::Const { dst: 1, value: -1.0 },
+                Instr::Const { dst: 2, value: 1.0 },
+            ],
+            code: vec![
+                Instr::Bin {
+                    dst: 3,
+                    op: BinOp::Max,
+                    a: 0,
+                    b: 1,
+                },
+                Instr::Bin {
+                    dst: 4,
+                    op: BinOp::Min,
+                    a: 3,
+                    b: 2,
+                },
+            ],
+            outputs: vec![("out".into(), 4)],
+            ..Kernel::default()
+        };
+        let mut clamp_fused = clamp_orig.clone();
+        assert_eq!(clamp_fused.fuse_scalar_chains(), 1);
+        assert!(matches!(clamp_fused.code.as_slice(), [Instr::Clamp { .. }]));
+        assert_eq!(render(clamp_orig), render(clamp_fused));
+    }
+}
+
+#[test]
+fn state_reads_share_unmodified_slots_and_forward_stores() {
+    use niminal_engine::ops::ArraySource;
+    let mut k = Kernel {
+        registers: 7,
+        buffers: vec![vec![2.0, 5.0].into()],
+        init: vec![
+            Instr::Const { dst: 0, value: 0.0 },
+            Instr::Const { dst: 1, value: 1.0 },
+        ],
+        code: vec![
+            Instr::Read {
+                dst: 2,
+                list: ArraySource::State(0),
+                idx: 0,
+            },
+            Instr::Read {
+                dst: 3,
+                list: ArraySource::State(0),
+                idx: 1,
+            },
+            // Writing slot 0 does not invalidate slot 1, and forwards to a subsequent read of slot 0.
+            Instr::Write {
+                list: 0,
+                idx: 0,
+                src: 3,
+                cond: None,
+            },
+            Instr::Read {
+                dst: 4,
+                list: ArraySource::State(0),
+                idx: 0,
+            },
+            Instr::Read {
+                dst: 5,
+                list: ArraySource::State(0),
+                idx: 1,
+            },
+            Instr::Bin {
+                dst: 6,
+                op: BinOp::Add,
+                a: 4,
+                b: 5,
+            },
+        ],
+        outputs: vec![("out".into(), 6)],
+        ..Kernel::default()
+    };
+    let expected = render(k.clone());
+    k.eliminate_redundant_expressions();
+    k.eliminate_dead_expressions();
+    k.compact_registers();
+    assert_eq!(
+        k.code
+            .iter()
+            .filter(|i| matches!(i, Instr::Read { .. }))
+            .count(),
+        1
+    );
+    assert!(k.registers <= 4);
+    assert_eq!(render(k), expected);
+}

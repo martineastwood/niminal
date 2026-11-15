@@ -4,12 +4,18 @@ use super::kernel_opt::prune_where;
 use super::{BinOp, Instr, Kernel, LaneSrc, NativeInput};
 
 impl Kernel {
-    /// Replace a multiply and its sole consumer with one dispatch. Run after scalar
-    /// cleanup and branch resolution. Products observed elsewhere remain ordinary instructions.
+    /// Replace a single-use `Mul` or `Max` and its sole consumer (`Add`, `Sub`, or `Min`)
+    /// in the same basic block with one fused instruction. Run after scalar cleanup and
+    /// branch resolution. Intermediates observed elsewhere remain ordinary instructions.
     pub fn fuse_scalar_chains(&mut self) -> usize {
-        if !self.code.windows(2).any(|pair| {
-            matches!(pair, [Instr::Bin { dst, op: BinOp::Mul, .. },
-                Instr::Bin { op: BinOp::Add, a, b, .. }] if dst == a || dst == b)
+        if !self.code.iter().any(|i| {
+            matches!(
+                i,
+                Instr::Bin {
+                    op: BinOp::Add | BinOp::Sub | BinOp::Min,
+                    ..
+                }
+            )
         }) {
             return 0;
         }
@@ -63,32 +69,108 @@ impl Kernel {
             }
         }
         let mut remove = vec![false; self.code.len()];
-        for pc in 1..self.code.len() {
-            if remove[pc - 1] || targets[pc] {
-                continue;
+        let mut candidates: Vec<Option<(usize, BinOp, usize, usize)>> = vec![None; self.registers];
+        let mut active_candidates: Vec<usize> = Vec::new();
+        for (pc, instr) in self.code.iter_mut().enumerate() {
+            if targets[pc] {
+                for reg in active_candidates.drain(..) {
+                    candidates[reg] = None;
+                }
             }
-            if let Instr::Bin {
-                dst: product,
-                op: BinOp::Mul,
-                a,
-                b,
-            } = self.code[pc - 1]
-                && uses[product] == 1
-                && let Instr::Bin {
+            match *instr {
+                Instr::SkipIfZero { .. }
+                | Instr::CmpSkip { .. }
+                | Instr::BeginBranch { .. }
+                | Instr::EndBranch
+                | Instr::Reset { .. } => {
+                    for reg in active_candidates.drain(..) {
+                        candidates[reg] = None;
+                    }
+                    continue;
+                }
+                Instr::Bin {
                     dst,
                     op: BinOp::Add,
                     a: left,
                     b: right,
-                } = self.code[pc]
-                && (left == product || right == product)
-            {
-                self.code[pc] = Instr::MulAdd {
+                } => {
+                    if let Some((def_pc, BinOp::Mul, a, b)) = candidates[left] {
+                        *instr = Instr::MulAdd {
+                            dst,
+                            a,
+                            b,
+                            c: right,
+                        };
+                        remove[def_pc] = true;
+                        candidates[left] = None;
+                        continue;
+                    }
+                    if let Some((def_pc, BinOp::Mul, a, b)) = candidates[right] {
+                        *instr = Instr::MulAdd { dst, a, b, c: left };
+                        remove[def_pc] = true;
+                        candidates[right] = None;
+                        continue;
+                    }
+                }
+                Instr::Bin {
                     dst,
-                    a,
-                    b,
-                    c: if left == product { right } else { left },
-                };
-                remove[pc - 1] = true;
+                    op: BinOp::Sub,
+                    a: left,
+                    b: right,
+                } => {
+                    if let Some((def_pc, BinOp::Mul, a, b)) = candidates[left] {
+                        *instr = Instr::MulSub {
+                            dst,
+                            a,
+                            b,
+                            c: right,
+                        };
+                        remove[def_pc] = true;
+                        candidates[left] = None;
+                        continue;
+                    }
+                    if let Some((def_pc, BinOp::Mul, a, b)) = candidates[right] {
+                        *instr = Instr::SubMul {
+                            dst,
+                            a,
+                            b,
+                            c: left,
+                        };
+                        remove[def_pc] = true;
+                        candidates[right] = None;
+                        continue;
+                    }
+                }
+                Instr::Bin {
+                    dst,
+                    op: BinOp::Min,
+                    a: left,
+                    b: right,
+                } => {
+                    if let Some((def_pc, BinOp::Max, x, lo)) = candidates[left] {
+                        *instr = Instr::Clamp {
+                            dst,
+                            x,
+                            lo,
+                            hi: right,
+                        };
+                        remove[def_pc] = true;
+                        candidates[left] = None;
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+            if let Instr::Bin {
+                dst,
+                op: op @ (BinOp::Mul | BinOp::Max),
+                a,
+                b,
+            } = *instr
+                && uses[dst] == 1
+            {
+                candidates[dst] = Some((pc, op, a, b));
+                active_candidates.push(dst);
             }
         }
         let removed = remove.iter().filter(|&&r| r).count();

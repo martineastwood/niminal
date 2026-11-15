@@ -100,6 +100,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ] {
         cases.push((name.into(), body.into()));
     }
+    if let Some(filter) = std::env::args().nth(3) {
+        cases.retain(|(name, _)| name.contains(&filter));
+        if cases.is_empty() {
+            return Err(format!("no workload matched {filter:?}").into());
+        }
+    }
     let mut audio = std::env::var("NIMINAL_BENCH_AUDIO")
         .ok()
         .map(std::fs::File::create)
@@ -152,6 +158,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 render(&mut voice, &mut out, &mut buses);
             }
             let counts = kernel_profile::snapshot();
+            eprintln!("{name},state_words,read,{}", counts.state_reads);
+            eprintln!("{name},state_words,write,{}", counts.state_writes);
             for (i, count) in counts.instructions.iter().enumerate() {
                 if *count > 0 {
                     eprintln!("{name},instruction,{},{count}", NAMES[i]);

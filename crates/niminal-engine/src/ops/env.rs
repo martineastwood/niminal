@@ -238,6 +238,21 @@ impl Env {
         }
     }
 
+    fn read_inputs(&mut self, input: impl Fn(usize) -> f32) {
+        for (i, field) in self.fields.iter().enumerate() {
+            let v = input(i);
+            match *field {
+                EnvField::Start => self.start = v,
+                EnvField::Dur(k) => self.segments[k].dur = v,
+                EnvField::Level(k) => self.segments[k].target = v,
+            }
+        }
+        let fields = std::mem::take(&mut self.fields);
+        self.reset(self.sample_rate);
+        self.fields = fields;
+        self.read = true;
+    }
+
     fn step(&mut self) {
         if let Phase::Running { seg, pos, from } = self.phase {
             let s = self.segments[seg];
@@ -295,18 +310,7 @@ impl Opcode for Env {
 
     fn process(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
         if !self.read && !out.is_empty() {
-            for (field, input) in self.fields.iter().zip(inputs) {
-                let v = input[0];
-                match *field {
-                    EnvField::Start => self.start = v,
-                    EnvField::Dur(k) => self.segments[k].dur = v,
-                    EnvField::Level(k) => self.segments[k].target = v,
-                }
-            }
-            let fields = std::mem::take(&mut self.fields);
-            self.reset(self.sample_rate);
-            self.fields = fields;
-            self.read = true;
+            self.read_inputs(|i| inputs[i][0]);
         }
         if !ctx.gate && !self.released {
             self.release();
@@ -315,6 +319,24 @@ impl Opcode for Env {
             *o = self.level;
             self.step();
         }
+    }
+
+    fn has_process_one(&self) -> bool {
+        // Parameterized envelopes avoid assembling input slices for each kernel sample.
+        // With no ports, the existing block adapter is cheaper on the measured workloads.
+        !self.fields.is_empty()
+    }
+
+    fn process_one(&mut self, ctx: &ProcessCtx, inputs: &[f32]) -> f32 {
+        if !self.read {
+            self.read_inputs(|i| inputs[i]);
+        }
+        if !ctx.gate && !self.released {
+            self.release();
+        }
+        let out = self.level;
+        self.step();
+        out
     }
 
     fn is_active(&self) -> bool {

@@ -5,14 +5,25 @@ use super::{BinOp, Fn1, Instr, Kernel, LaneSrc, NativeInput};
 /// Only scalar operations without effects or mutable-array reads can be discarded.
 fn pure(instruction: &Instr) -> Option<(usize, [usize; 3], usize)> {
     match *instruction {
-        Instr::Const { dst, .. } | Instr::SampleRate { dst } | Instr::Input { dst, .. } => {
-            Some((dst, [0; 3], 0))
-        }
-        Instr::MulAdd { dst, a, b, c, .. } => Some((dst, [a, b, c], 3)),
+        Instr::Const { dst, .. }
+        | Instr::SampleRate { dst }
+        | Instr::Input { dst, .. }
+        | Instr::LoadState { dst, .. } => Some((dst, [0; 3], 0)),
+        Instr::MulAdd { dst, a, b, c }
+        | Instr::MulSub { dst, a, b, c }
+        | Instr::SubMul { dst, a, b, c }
+        | Instr::Clamp {
+            dst,
+            x: a,
+            lo: b,
+            hi: c,
+        } => Some((dst, [a, b, c], 3)),
         Instr::Bin { dst, a, b, .. } | Instr::Cmp { dst, a, b, .. } => Some((dst, [a, b, 0], 2)),
-        Instr::Neg { dst, a } | Instr::Call { dst, a, .. } | Instr::Copy { dst, src: a } => {
-            Some((dst, [a, 0, 0], 1))
-        }
+        Instr::Neg { dst, a }
+        | Instr::Call { dst, a, .. }
+        | Instr::Copy { dst, src: a }
+        | Instr::Read { dst, idx: a, .. }
+        | Instr::ReadAt { dst, pos: a, .. } => Some((dst, [a, 0, 0], 1)),
         Instr::Memo { dst, math, a, .. } => match math {
             MemoMath::Unary(_) => Some((dst, [a, 0, 0], 1)),
             MemoMath::Binary(_, b) => Some((dst, [a, b, 0], 2)),
@@ -32,16 +43,20 @@ fn lane(src: LaneSrc, used: &mut Vec<usize>) {
 /// deliberately conservative roots: removing their effects needs a separate analysis.
 fn roots(instruction: &Instr, used: &mut Vec<usize>) {
     match *instruction {
-        Instr::BeginBranch { cond } | Instr::SkipIfZero { cond, .. } => used.push(cond),
+        Instr::BeginBranch { cond } => used.push(cond),
+        Instr::SkipIfZero { cond, count } => {
+            if count > 0 {
+                used.push(cond);
+            }
+        }
         Instr::CmpSkip { a, b, .. } => used.extend([a, b]),
-        Instr::EndBranch | Instr::LoadState { .. } => {}
+        Instr::EndBranch => {}
         Instr::Reset { trigger, guard, .. } => {
             used.push(trigger);
             used.extend(guard);
         }
         Instr::StoreState { src, .. } => used.push(src),
         Instr::Native { guard, .. } => used.extend(guard),
-        Instr::Read { idx, .. } | Instr::ReadAt { pos: idx, .. } => used.push(idx),
         Instr::Write { idx, src, cond, .. } => {
             used.extend([idx, src]);
             used.extend(cond);
@@ -80,14 +95,20 @@ fn roots(instruction: &Instr, used: &mut Vec<usize>) {
         Instr::Const { .. }
         | Instr::SampleRate { .. }
         | Instr::Input { .. }
+        | Instr::LoadState { .. }
         | Instr::Bin { .. }
         | Instr::MulAdd { .. }
+        | Instr::MulSub { .. }
+        | Instr::SubMul { .. }
+        | Instr::Clamp { .. }
         | Instr::Cmp { .. }
         | Instr::Neg { .. }
         | Instr::Call { .. }
         | Instr::Copy { .. }
         | Instr::Memo { .. }
-        | Instr::Select { .. } => unreachable!("pure instructions have explicit dependencies"),
+        | Instr::Select { .. }
+        | Instr::Read { .. }
+        | Instr::ReadAt { .. } => unreachable!("pure instructions have explicit dependencies"),
     }
 }
 
@@ -191,10 +212,22 @@ impl Kernel {
                 used.extend(&inputs[..*count]);
             }
         }
-        let retain = |instruction: &Instr| pure(instruction).is_none_or(|(dst, _, _)| live[dst]);
+        let retain = |instruction: &Instr| {
+            !matches!(instruction, Instr::SkipIfZero { count: 0, .. })
+                && pure(instruction).is_none_or(|(dst, _, _)| live[dst])
+        };
         prune(&mut self.init, retain);
         prune(&mut self.block, retain);
         prune(&mut self.code, retain);
+        if self
+            .code
+            .iter()
+            .any(|i| matches!(i, Instr::SkipIfZero { count: 0, .. }))
+        {
+            prune(&mut self.code, |i| {
+                !matches!(i, Instr::SkipIfZero { count: 0, .. })
+            });
+        }
         for frame in &mut self.frames {
             prune(&mut frame.code, retain);
         }
@@ -258,8 +291,7 @@ fn worthwhile(code: &[Instr]) -> bool {
             } | Instr::Bin {
                 op: BinOp::Pow | BinOp::Atan2 | BinOp::Rem,
                 ..
-            } | Instr::Read { .. }
-                | Instr::ReadAt { .. }
+            } | Instr::ReadAt { .. }
         )
     }) || code
         .iter()

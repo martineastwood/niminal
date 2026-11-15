@@ -122,3 +122,6 @@ cargo run --release -p niminal-server --example bench_std -- 0.3 5
 1,877 tests, including limiter ceilings, numeric guards, stability, real-time
 allocation checks, audio baselines and tempo-ramp note scheduling. No audio
 baselines were re-recorded. The existing nine ignored tests were unchanged.
+
+For the subsequent native-call profiling and envelope optimization, see
+[interpreter-profiling.md](interpreter-profiling.md).

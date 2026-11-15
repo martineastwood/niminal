@@ -91,7 +91,9 @@ impl Kb<'_> {
                 continue;
             };
             let src = self.guarded(guard, v.reg, s.loaded);
-            self.code.push(Instr::StoreState { slot: s.slot, src });
+            if src != s.loaded {
+                self.code.push(Instr::StoreState { slot: s.slot, src });
+            }
         }
         let forward: Vec<(String, (usize, Span))> = self.frame.forward.drain().collect();
         for (name, (slot, span)) in forward {
