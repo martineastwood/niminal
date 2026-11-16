@@ -1,11 +1,15 @@
 // A rhythm built from gates: a clock is multiplied and swung, a coin flip sends hits to two voices, a ratchet fires
 // bursts, a flip-flop halves the clock, and a stepper picks the pitch of a hard-sync lead.
-// clock_mult -> bernoulli -> burst -> gate_length   flip_flop -> stepper -> sync_osc   gate_logic
+// clock_mult -> bernoulli -> ratchet -> gate_length   flip_flop -> stepper -> sync_osc   gate_logic
 // Render: niminal render examples/gates.nml --bars 8 --out gates.wav
 config { channels: stereo }
 tempo 110bpm
 
-use std/blocks
+use std/gates
+use std/modulation
+use std/random
+use std/sequencing
+use std/sources
 
 // The beat as a clock: one pulse a beat.
 fn beat_clock() { impulse((1 / (1beat).num).hz) }
@@ -22,8 +26,8 @@ instr kicks() {
 instr hats() {
   pulses = clock_mult(beat_clock(), factor: 4, swing: 0.15)
   coin = bernoulli(pulses, probability: 0.45, seed: 9)
-  ratchet = burst(coin.a, count: 3, rate: 35hz, accelerate: 0.2)
-  opened = gate_length(ratchet, length: 25ms)
+  hits = ratchet(coin.a, count: 3, rate: 35hz, accelerate: 0.2)
+  opened = gate_length(hits, length: 25ms)
   noise() * opened.smooth(1ms) * 0.18
 }
 

@@ -73,7 +73,7 @@ fn native_blocks_match_the_reference_in_graphs_and_kernels() {
         for stateful in [false, true] {
             for (name, body) in cases {
                 let old = render(REFERENCE, body, rate, stateful);
-                let new = render("use std/blocks", body, rate, stateful);
+                let new = render("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral", body, rate, stateful);
                 assert!(
                     new.iter().all(|v| v.is_finite()),
                     "{name} {rate} {stateful}"
@@ -98,7 +98,7 @@ fn native_blocks_match_the_reference_in_graphs_and_kernels() {
 #[test]
 fn zero_time_linear_slew_follows_large_values_immediately() {
     let out = render(
-        "use std/blocks",
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral",
         "slew(100, rise: 0sec, shape: linear)",
         48000.0,
         false,
@@ -133,7 +133,7 @@ fn native_splice_reel_matches_the_kernel_it_replaced() {
     let reference = include_str!("fixtures/splice_reel_reference.nml");
     let render = |call: &str, set: &dyn Fn(usize, &mut Voice)| -> Vec<f32> {
         let source = format!(
-            "use std/blocks\nconfig {{ channels: stereo }}\n{reference}\ninstr a(r: num, nw: num, ch: num, mk: num, um: num, pl: num = 1, sp: num = 1, gs: num, sl: num, mo: num = 0.33, ck: num, so: num) {{ m = {call}(osc(saw, 110hz) * 0.4 + osc(sine, 3hz) * 0.1, record: r, new_splice: nw, choose: ch, mark: mk, unmark: um, play: pl, speed: sp, grain_size: gs, slide: sl, morph: mo, clock: ck, sos: so, size: 96000, splices: 8)\n [m.left + m.grain_end * 0.001 + m.splice * 0.01 + m.count * 0.1, m.right + m.level * 0.01] }}"
+            "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nconfig {{ channels: stereo }}\n{reference}\ninstr a(r: num, nw: num, ch: num, mk: num, um: num, pl: num = 1, sp: num = 1, gs: num, sl: num, mo: num = 0.33, ck: num, so: num) {{ m = {call}(osc(saw, 110hz) * 0.4 + osc(sine, 3hz) * 0.1, record: r, new_splice: nw, choose: ch, mark: mk, unmark: um, play: pl, speed: sp, grain_size: gs, slide: sl, morph: mo, clock: ck, sos: so, size: 96000, splices: 8)\n [m.left + m.grain_end * 0.001 + m.splice * 0.01 + m.count * 0.1, m.right + m.level * 0.01] }}"
         );
         let expanded = expand(&source, Path::new(".")).unwrap();
         let p = compile(&expanded.text).unwrap_or_else(|e| {
@@ -198,7 +198,7 @@ fn native_splice_reel_matches_the_kernel_it_replaced() {
 /// renders in under a tenth of real time. The .nml kernel it replaced took 25 to 85% of real time; the native one about 2%.
 #[test]
 fn splice_reel_worst_case_runs_well_within_real_time() {
-    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() { m = splice_reel(osc(saw, 110hz) * 0.4, record: if note.time < 1sec { 1 } else { 0 }, grain_size: 0.7, morph: 0.95, speed: 1.37, slide: osc(sine, 0.3hz) * 0.5 + 0.5)\n [m.left, m.right] }";
+    let source = "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nconfig { channels: stereo }\ninstr a() { m = splice_reel(osc(saw, 110hz) * 0.4, record: if note.time < 1sec { 1 } else { 0 }, grain_size: 0.7, morph: 0.95, speed: 1.37, slide: osc(sine, 0.3hz) * 0.5 + 0.5)\n [m.left, m.right] }";
     let expanded = expand(source, Path::new(".")).unwrap();
     let p = compile(&expanded.text).unwrap_or_else(|_| panic!("compiles"));
     let mut v = Voice::new(p.instruments[0].graph.clone(), 48_000.0);

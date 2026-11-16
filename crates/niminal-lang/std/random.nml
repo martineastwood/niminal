@@ -1,0 +1,123 @@
+// Random and chaotic signals: `use std/random`.
+
+/// A random source for tunes and rhythms, in the manner of a stochastic sampler. Each rising edge of `clock` steps
+/// through `length` stored draws. `deja_vu` is the chance of keeping each draw: 1 repeats the loop exactly, 0 makes every
+/// step new, and in between it changes slowly. The draws are stored raw and shaped on the way out, so `spread` (how
+/// far the values range, 0 to 1) and `bias` (where they centre, -1 to 1) can be moved while a loop plays. `steps` is
+/// 1 for values held until the next step and lower for glides that take longer (0 slides across the whole step).
+/// `density` is the share of steps that give a gate. The same `seed` gives the same run. Outputs: value (-1..1)
+/// and gate, high while the clock is high on steps that have one. Quantize value before using it as pitch.
+fn random_source(
+  clock: num = 0,
+  spread: 0..1 = 0.5,
+  bias: -1..1 = 0,
+  steps: 0..1 = 1,
+  deja_vu: 0..1 = 0.5,
+  density: 0..1 = 1,
+  length: const int = 8,
+  seed: const num = 0
+) -> (value, gate) {
+  state _draws = (0..<length).map(fract(sin((it + 1) * 12.9898 + seed * 78.233) * 43758.5453) * 2 - 1)
+  state _chances = (0..<length).map(fract(sin((it + 1) * 78.233 + seed * 12.9898 + 5) * 43758.5453))
+  state _step = 0
+  state _previous = 0
+  _new = noise(seed: seed)
+  _new_chance = noise(seed: seed + 2) * 0.5 + 0.5
+  _keep = noise(seed: seed + 1) * 0.5 + 0.5
+  _high = if clock > 0 { 1 } else { 0 }
+  if _high > 0 and _previous <= 0 {
+    _step = (_step + 1).mod(length)
+    if _keep > deja_vu.max(0).min(1) {
+      _draws[_step] = _new
+      _chances[_step] = _new_chance
+    }
+  }
+  _previous = _high
+  _bias = bias.max(-1).min(1)
+  _held = (_bias + _draws[_step] * spread.max(0).min(1) * (1 - abs(_bias))).max(-1).min(1)
+  state _out = 0
+  _samples = (1 - steps.max(0).min(1)) * clock.beat_length.num * 0.9 * sample_rate.num
+  _out = _out + (_held - _out) * (1 - exp(0 - 1 / _samples.max(0.0001)))
+  value = _out
+  gate = if _high > 0 and _chances[_step] <= density.max(0).min(1) { 1 } else { 0 }
+}
+
+/// A looping random sequence in the manner of a shift register. On each positive edge of `clock` it steps to
+/// the next of `length` stored values, and `lock` is the chance of keeping that value: 1 repeats the loop
+/// exactly, 0 makes every step new, and in between the loop slowly changes. The same `seed` gives the same
+/// run. Outputs: value (-1..1, held between steps) and gate, high while the clock is high on steps whose
+/// value is above 0, so the loop's rhythm repeats with its pitches. Quantize value before using it as pitch.
+fn shift_random(clock: num = 0, lock: 0..1 = 0.75, length: const int = 8, seed: const num = 0) -> (value, gate) {
+  state _register = (0..<length).map(fract(sin((it + 1) * 12.9898 + seed * 78.233) * 43758.5453) * 2 - 1)
+  state _step = 0
+  state _previous = 0
+  _draw = noise(seed: seed)
+  _chance = noise(seed: seed + 1) * 0.5 + 0.5
+  _high = if clock > 0 { 1 } else { 0 }
+  if _high > 0 and _previous <= 0 {
+    _step = (_step + 1).mod(length)
+    if _chance > lock {
+      _register[_step] = _draw
+    }
+  }
+  _previous = _high
+  value = _register[_step]
+  gate = if _high > 0 and value > 0 { 1 } else { 0 }
+}
+
+/// An eight-step shift register clocked by one signal and fed by another, after a classic self-playing patch. Each
+/// rising edge of `clock` (the signal crossing zero upwards) shifts the register along one place and brings in a new
+/// bit: whether `data` is positive, flipped when the bit coming out the end was a one. Feed it two oscillators at
+/// unrelated speeds and the pattern wanders, then nearly repeats. `value` (0 to 1) is the last three bits read as a
+/// number, steppy and good for pitch through `quantize`; `gate` pulses at each clock edge.
+fn rungler(data, clock) -> (value, gate) {
+  state _reg = 0
+  state _previous = 0
+  _high = if clock.sum > 0 { 1 } else { 0 }
+  _edge = if _high > 0 and _previous <= 0 { 1 } else { 0 }
+  _out = floor(_reg / 128)
+  _bit = abs((if data.sum > 0 { 1 } else { 0 }) - _out)
+  _reg = if _edge > 0 { (_reg * 2 - _out * 256) + _bit } else { _reg }
+  _previous = _high
+  _b0 = _reg - floor(_reg / 2) * 2
+  _b1 = floor(_reg / 2) - floor(_reg / 4) * 2
+  _b2 = floor(_reg / 4) - floor(_reg / 8) * 2
+  value = (_b0 * 4 + _b1 * 2 + _b2) / 7
+  gate = _edge
+}
+
+/// Sends each trigger to one of two outputs by a coin flip: `a` with chance `probability`, otherwise `b`. A gate keeps
+/// going to the output it was sent to for as long as it stays high, so it works on gates as well as triggers. Using only
+/// `a` gives a probability gate. The same `seed` gives the same run of choices.
+fn bernoulli(trigger, probability: 0..1 = 0.5, seed: const num = 0) -> (a, b) {
+  state _previous = 0
+  state _route = 0
+  _high = if trigger.sum > 0.5 { 1 } else { 0 }
+  _edge = if _high > 0 and _previous <= 0 { 1 } else { 0 }
+  _previous = _high
+  _draw = noise(seed: seed) * 0.5 + 0.5
+  _route = if _edge > 0 { if _draw < probability.max(0).min(1) { 1 } else { 0 } } else { _route }
+  a = _high * _route
+  b = _high * (1 - _route)
+}
+
+/// A lumpy, never-repeating modulation source from the Lorenz system. `rate` is roughly how many times a second it
+/// swings round, and `chaos` (0 to 1) takes it from a settled loop to the full tangle. `x`, `y` and `z` are three
+/// related views of the same motion, each held to ±1; `x` and `y` flip between two lobes at odd moments, `z` stays
+/// positive-ish. It is bounded whatever the controls do.
+fn chaos(rate: 0.01hz..200hz = 1hz, chaos: 0..1 = 0.8) -> (x, y, z) {
+  state _px = 1
+  state _py = 1
+  state _pz = 1
+  _dt = rate.max(0.01hz).min(200hz).num * 0.65 / sample_rate.num
+  _rho = 20 + chaos.max(0).min(1) * 20
+  _nx = _px + _dt * 10 * (_py - _px)
+  _ny = _py + _dt * (_px * (_rho - _pz) - _py)
+  _nz = _pz + _dt * (_px * _py - 8 / 3 * _pz)
+  _px = _nx.max(-100).min(100)
+  _py = _ny.max(-100).min(100)
+  _pz = _nz.max(-100).min(100)
+  x = (_px / 20).max(-1).min(1)
+  y = (_py / 28).max(-1).min(1)
+  z = ((_pz - 25) / 25).max(-1).min(1)
+}

@@ -17,9 +17,6 @@ const VOICES: [&str; 1] = ["drum"];
 /// The modules made of presets. A plain `use` of one is an error, because it would add every preset.
 pub const SHELVES: [&str; 3] = ["std/instruments", "std/drums", "std/fx"];
 
-/// The module of building blocks a shelf may `use`. A copy of a preset carries the blocks it calls.
-const BLOCKS: &str = "std/blocks";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresetKind {
     Instrument,
@@ -133,12 +130,25 @@ fn parse_shelf(shelf: &'static str) -> Vec<Preset> {
             (!name.is_empty()).then_some(name)
         })
     };
-    let uses_blocks = blocks.iter().any(|b| b.lines().any(|l| l.trim() == format!("use {BLOCKS}")));
-    let library = if uses_blocks {
-        blocks_of(embedded(BLOCKS).expect("std/blocks comes with niminal"))
-    } else {
-        Vec::new()
-    };
+    // The modules of building blocks a shelf `use`s, and the ones they `use`. A copy of a preset carries
+    // the functions it calls.
+    let mut modules: Vec<String> = Vec::new();
+    let mut texts: Vec<&'static str> = Vec::new();
+    let mut pending: Vec<&str> = blocks.clone();
+    while let Some(block) = pending.pop() {
+        for line in block.lines() {
+            let Some(name) = line.trim().strip_prefix("use ") else { continue };
+            if SHELVES.contains(&name) || modules.iter().any(|m| m == name) {
+                continue;
+            }
+            if let Some(text) = embedded(name) {
+                modules.push(name.to_string());
+                texts.push(text);
+                pending.extend(blocks_of(text));
+            }
+        }
+    }
+    let library: Vec<&str> = texts.iter().flat_map(|t| blocks_of(t)).collect();
     let helpers: Vec<(String, &str)> = blocks
         .iter()
         .chain(&library)

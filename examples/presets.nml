@@ -7,7 +7,8 @@ config { channels: stereo }
 tempo 100bpm
 
 use std/instruments.{macro_voice}
-use std/blocks
+use std/modulation
+use std/shaping
 
 // Times are relative to where the file is evaluated, so evaluate it on a bar line.
 // Bar 1: the model knob walks through the five voices on one note.

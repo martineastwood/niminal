@@ -16,7 +16,7 @@ pub(super) fn specs() -> [OpSpec; 7] {
     [
         OpSpec::new(
             "contour_dsp",
-            "Rise/fall contour DSP for std/blocks.contour. Outputs [value, eor, eoc]; times are full-scale travel times, zero takes one sample. Positive trigger edges retrigger from the current level; cycle repeats.",
+            "Rise/fall contour DSP for std/modulation.contour. Outputs [value, eor, eoc]; times are full-scale travel times, zero takes one sample. Positive trigger edges retrigger from the current level; cycle repeats.",
             vec![
                 opt("trigger", SIGNAL),
                 opt("rise", time),
@@ -28,7 +28,7 @@ pub(super) fn specs() -> [OpSpec; 7] {
         ),
         OpSpec::new(
             "slew_dsp",
-            "Asymmetric slew DSP for std/blocks.slew. Rise/fall are seconds; linear above 0.5 selects full-scale linear travel, otherwise exponential smoothing. Zero time follows immediately.",
+            "Asymmetric slew DSP for std/modulation.slew. Rise/fall are seconds; linear above 0.5 selects full-scale linear travel, otherwise exponential smoothing. Zero time follows immediately.",
             vec![
                 req("x", SIGNAL),
                 opt("rise", time),
@@ -39,7 +39,7 @@ pub(super) fn specs() -> [OpSpec; 7] {
         ),
         OpSpec::new(
             "multimode_filter_dsp",
-            "Nonlinear TPT state-variable filter for std/blocks.multimode_filter. Outputs [low, band, high, notch] from shared integrators. Res and drive run 0..1.",
+            "Nonlinear TPT state-variable filter for std/filters.multimode_filter. Outputs [low, band, high, notch] from shared integrators. Res and drive run 0..1.",
             vec![
                 req("x", SIGNAL),
                 opt("cutoff", hz),
@@ -50,13 +50,13 @@ pub(super) fn specs() -> [OpSpec; 7] {
         ),
         OpSpec::new(
             "freq_shifter_dsp",
-            "Quadrature frequency shifter for std/blocks.freq_shifter. Outputs [up, down]. Shift is in hertz, bounded to +/-2000hz.",
+            "Quadrature frequency shifter for std/spectral.freq_shifter. Outputs [up, down]. Shift is in hertz, bounded to +/-2000hz.",
             vec![req("x", SIGNAL), opt("shift", hz)],
             Build::Builtin(|_| Ok(Box::new(FreqShifter::default()))),
         ),
         OpSpec::new(
             "freeze_reverse_dsp",
-            "Record/reverse/freeze ring for std/blocks.freeze_reverse. Reverse and freeze activate above 0.5; freeze wins. Size is fixed in samples. Changes fade over 5ms.",
+            "Record/reverse/freeze ring for std/delays.freeze_reverse. Reverse and freeze activate above 0.5; freeze wins. Size is fixed in samples. Changes fade over 5ms.",
             vec![
                 req("x", SIGNAL),
                 opt("length", time),
@@ -68,7 +68,7 @@ pub(super) fn specs() -> [OpSpec; 7] {
         ),
         OpSpec::new(
             "tap_delay_dsp",
-            "Multi-tap delay DSP for std/blocks.tap_delay. Outputs [left, right]. Shifts, levels and cutoffs are live arrays of exactly taps entries. Groove: 0 straight, 1 swing, 2 hard swing, 3 reverse swing, 4 random. Filter: 0 off, 1 lowpass, 2 bandpass, 3 highpass. Taps is 1..16; size is fixed in samples.",
+            "Multi-tap delay DSP for std/delays.tap_delay. Outputs [left, right]. Shifts, levels and cutoffs are live arrays of exactly taps entries. Groove: 0 straight, 1 swing, 2 hard swing, 3 reverse swing, 4 random. Filter: 0 off, 1 lowpass, 2 bandpass, 3 highpass. Taps is 1..16; size is fixed in samples.",
             vec![
                 req("x", SIGNAL),
                 req("time", time),
@@ -105,7 +105,7 @@ pub(super) fn specs() -> [OpSpec; 7] {
         ),
         OpSpec::new(
             "splice_reel_dsp",
-            "Reel sampler DSP for std/blocks.splice_reel. Outputs [left, right, grain_end, level, splice, count]. Gates act above 0.5 on their rising edge; speed is -4..4; grain_size, slide, morph and choose run 0..1. Size (samples) and splices are fixed.",
+            "Reel sampler DSP for std/granular.splice_reel. Outputs [left, right, grain_end, level, splice, count]. Gates act above 0.5 on their rising edge; speed is -4..4; grain_size, slide, morph and choose run 0..1. Size (samples) and splices are fixed.",
             vec![
                 req("x", SIGNAL),
                 opt("record", SIGNAL),

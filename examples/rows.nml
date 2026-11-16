@@ -6,7 +6,7 @@
 config { channels: stereo }
 tempo 100bpm
 
-use std/blocks
+use std/sequencing
 
 // A tick every sixteenth note.
 fn tick() { impulse((4 / (1beat).num).hz) }

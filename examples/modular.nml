@@ -4,7 +4,12 @@
 config { channels: stereo }
 tempo 120bpm
 
-use std/blocks
+use std/gates
+use std/granular
+use std/random
+use std/sequencing
+use std/shaping
+use std/filters
 use std/instruments.{wandering_voice, rubber_bass, west_coast_pluck, ring_bell}
 
 // A grain cloud cut from a table: `position` scans it, `spread` scatters the grains, and the level stays steady

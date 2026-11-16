@@ -1,7 +1,7 @@
 # Native modular DSP
 
 `contour`, `slew`, `multimode_filter`, `freq_shifter`, `freeze_reverse`, and
-`tap_delay` keep their `std/blocks` interfaces. Thin shelf functions supply
+`tap_delay` keep their building-block interfaces. Thin shelf functions supply
 musical defaults, enums, channel handling, and named outputs; their DSP state
 and sample processing now live in `crates/niminal-engine/src/ops/blocks/`.
 `splice_reel` is native too (`splice_reel_dsp`, `crates/niminal-engine/src/ops/blocks/reel.rs`): its worst case

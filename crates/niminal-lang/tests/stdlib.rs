@@ -143,7 +143,7 @@ fn a_string_is_in_tune() {
     for (freq, damp) in [(220, "0.5"), (440, "0.5"), (220, "0.2")] {
         let out = render(
             &format!(
-                "use std/physical\ninstr a() {{ (noise() * env[1 4ms 0]).string({freq}hz, decay: 0.998, damp: {damp}) }}"
+                "use std/physical\ninstr a() {{ (noise() * env[1 4ms 0]).plucked_string({freq}hz, decay: 0.998, damp: {damp}) }}"
             ),
             1200,
         );
@@ -167,7 +167,7 @@ fn a_string_is_in_tune() {
 #[test]
 fn a_string_rings_at_its_pitch() {
     let out = render(
-        "use std/physical\ninstr a() { (noise() * env[1 4ms 0]).string(220hz, decay: 0.999) }",
+        "use std/physical\ninstr a() { (noise() * env[1 4ms 0]).plucked_string(220hz, decay: 0.999) }",
         1200,
     );
     assert!(finite(&out));
@@ -323,7 +323,7 @@ fn spectral_band_keep_passes_one_band_and_removes_another() {
 
 #[test]
 fn spectral_effects_run_and_make_sound() {
-    for effect in ["robot()", "blur(amount: 0.8)", "denoise(threshold: 0.001)"] {
+    for effect in ["robot()", "spectral_blur(amount: 0.8)", "denoise(threshold: 0.001)"] {
         let out = render(
             &format!("use std/spectral\ninstr a() {{ (osc(saw, 220hz) * 0.5).{effect} }}"),
             300,
@@ -393,7 +393,7 @@ fn the_instrument_library_compiles_and_every_instrument_sounds() {
             "pluck",
             "pad",
             "lead",
-            "bell",
+            "fm_bell",
             "bowed_string",
             "reed_wind",
             "electric_piano",
@@ -408,7 +408,11 @@ fn the_instrument_library_compiles_and_every_instrument_sounds() {
             "rubber_bass",
             "wandering_voice",
             "ring_bell",
-            "macro_voice"
+            "macro_voice",
+            "zap",
+            "blip",
+            "wobble_bass",
+            "sweep"
         ]
     );
     for instrument in &program.instruments {
@@ -464,7 +468,7 @@ fn the_drum_library_compiles_and_every_preset_sounds() {
                 .collect::<String>()
         )
     });
-    assert_eq!(program.instruments.len(), 21);
+    assert_eq!(program.instruments.len(), 17);
     for instrument in &program.instruments {
         let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
         voice.start_note();
@@ -1190,7 +1194,7 @@ fn the_preset_catalog_is_complete() {
     assert!(!filter.contains("fn contour("));
 }
 
-/// A shelf that builds on `std/blocks` brings only the blocks its chosen presets use, so the other block
+/// A shelf that builds on the building-block modules brings only the blocks its chosen presets use, so the other block
 /// names stay free for your own locals and controls; taking the blocks yourself as well still works.
 #[test]
 fn a_preset_brings_only_the_blocks_it_uses() {
@@ -1210,8 +1214,8 @@ fn a_preset_brings_only_the_blocks_it_uses() {
     compiles("use std/fx.{echo}\nctl wobble = 0.5\ninstr a(freq: hz) {\n contour = osc(sine, freq)\n contour * wobble\n}");
     // `filter` uses `multimode_filter`, but not `contour`.
     compiles("use std/fx.{filter}\ninstr a(freq: hz, contour: 0..1 = 0.5) { osc(saw, freq) * contour }");
-    // Taking the whole of std/blocks as well gives every block once.
-    compiles("use std/blocks\nuse std/instruments.{west_coast_pluck}\ninstr a(freq: hz) { complex_osc(freq).sound * contour(trigger: 1).value }");
+    // Taking the modules yourself as well gives every block once.
+    compiles("use std/modulation\nuse std/sources\nuse std/instruments.{west_coast_pluck}\ninstr a(freq: hz) { complex_osc(freq).sound * contour(trigger: 1).value }");
     let expanded = expand("use std/instruments.{west_coast_pluck}", Path::new(".")).unwrap();
     assert!(expanded.text.contains("fn low_pass_gate("));
     assert!(!expanded.text.contains("fn shift_random("));

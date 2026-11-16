@@ -186,7 +186,7 @@ fn an_fx_generator_reopens_after_a_long_silent_run() {
 /// Like `audio`, with a whole body for the effect so a multi-row grid can be kept in a name.
 pub(crate) fn audio_body(body: &str) -> Vec<f32> {
     let src = format!(
-        "use std/blocks\ntempo 120bpm\nbus source\ninstr steady() {{ source += env[1 | 5ms 0] }}\nsteady() for 2sec\nfx chopped {{\n{body}\n}}"
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ntempo 120bpm\nbus source\ninstr steady() {{ source += env[1 | 5ms 0] }}\nsteady() for 2sec\nfx chopped {{\n{body}\n}}"
     );
     let src = niminal_lang::expand(&src, std::path::Path::new("."))
         .unwrap_or_else(|d| panic!("{}", d.message))

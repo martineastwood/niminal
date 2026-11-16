@@ -83,11 +83,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("kick 808", "use std/drums.{kick_808}"),
         (
             "low pass gate",
-            "use std/blocks\ninstr a() { osc(saw, 220hz).low_pass_gate(ping: impulse(7hz)).sound }",
+            "use std/filters\ninstr a() { osc(saw, 220hz).low_pass_gate(ping: impulse(7hz)).sound }",
         ),
         (
             "row sequencer",
-            "use std/blocks\ninstr a() { row_sequencer(impulse(8hz), values: [0, 2, 5, 7]).value }",
+            "use std/sequencing\ninstr a() { row_sequencer(impulse(8hz), values: [0, 2, 5, 7]).value }",
         ),
         (
             "native overdrive path",
@@ -95,7 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
         (
             "native filter",
-            "use std/blocks\ninstr a() { osc(saw, 220hz).multimode_filter(cutoff: 2khz).low }",
+            "use std/filters\ninstr a() { osc(saw, 220hz).multimode_filter(cutoff: 2khz).low }",
         ),
     ] {
         cases.push((name.into(), body.into()));

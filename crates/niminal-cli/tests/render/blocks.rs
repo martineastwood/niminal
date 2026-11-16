@@ -1,4 +1,4 @@
-//! The blocks of `std/blocks` that follow the transport, at the sample level (120 bpm: a beat is 500ms).
+//! The blocks that follow the transport, at the sample level (120 bpm: a beat is 500ms).
 use super::rhythm_gate::{audio_body, level};
 
 fn signal(expression: &str) -> Vec<f32> {

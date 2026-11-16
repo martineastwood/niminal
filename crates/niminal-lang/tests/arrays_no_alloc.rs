@@ -194,7 +194,7 @@ fn wsola_sample_alignment_does_not_allocate_while_processing() {
 #[test]
 fn phase_vocoder_with_dense_overlap_does_not_allocate_while_processing() {
     let source = niminal_lang::expand(
-        "use std/spectral\ninstr a() { spectral_warp(osc(saw, 220hz), shift: 7, size: 512, overlap: 8) }",
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() { spectral_warp(osc(saw, 220hz), shift: 7, size: 512, overlap: 8) }",
         std::path::Path::new("."),
     ).unwrap();
     let program = niminal_lang::compile(&source.text).unwrap();
@@ -306,7 +306,7 @@ fn sustained_waveguides_and_resets_allocate_before_audio_only() {
 
 #[test]
 fn modular_blocks_do_not_allocate_while_rendering_or_completing_contours() {
-    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n shape = contour(cycle: 1, rise: 5ms, fall: 10ms)\n accent = contour(trigger: shape.eoc, rise: 1ms, fall: 20ms)\n bank = harmonic_bank(110hz, centre: shape.value, focus: 0.8)\n voice = scan_mix(bank.partials, centre: accent.value)\n voice.stereo_echo(time: 20ms).space_reverb(size: 0.3 + shape.value * 0.4)\n}";
+    let source = "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nconfig { channels: stereo }\ninstr a() {\n shape = contour(cycle: 1, rise: 5ms, fall: 10ms)\n accent = contour(trigger: shape.eoc, rise: 1ms, fall: 20ms)\n bank = harmonic_bank(110hz, centre: shape.value, focus: 0.8)\n voice = scan_mix(bank.partials, centre: accent.value)\n voice.stereo_echo(time: 20ms).space_reverb(size: 0.3 + shape.value * 0.4)\n}";
     let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
     let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
         panic!(
@@ -332,7 +332,7 @@ fn modular_blocks_do_not_allocate_while_rendering_or_completing_contours() {
 
 #[test]
 fn the_voice_modules_do_not_allocate_while_rendering() {
-    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n steps = shift_random(clock: impulse(40hz), lock: 0.5, seed: 3)\n voice = complex_osc(110hz * (1 + steps.value * 0.5), index: 2, fold: 0.5, am: 0.3)\n gated = voice.low_pass_gate(ping: steps.gate, decay: 30ms)\n f = [gated.sound, voice.modulator].multimode_filter(cutoff: 300hz + gated.opening * 4khz, res: 0.9, drive: 0.5)\n [f.low[0] + f.band[1], f.high[1] + f.notch[0]]\n}";
+    let source = "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nconfig { channels: stereo }\ninstr a() {\n steps = shift_random(clock: impulse(40hz), lock: 0.5, seed: 3)\n voice = complex_osc(110hz * (1 + steps.value * 0.5), index: 2, fold: 0.5, am: 0.3)\n gated = voice.low_pass_gate(ping: steps.gate, decay: 30ms)\n f = [gated.sound, voice.modulator].multimode_filter(cutoff: 300hz + gated.opening * 4khz, res: 0.9, drive: 0.5)\n [f.low[0] + f.band[1], f.high[1] + f.notch[0]]\n}";
     let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
     let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
         panic!(
@@ -359,7 +359,7 @@ fn the_voice_modules_do_not_allocate_while_rendering() {
 
 #[test]
 fn the_processing_modules_do_not_allocate_while_rendering() {
-    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n src = harmonics([1, 0.4, 0.2], size: 512)\n cloud = texture(src, position: phasor(0.3hz), spread: 0.5, detune: 3)\n spoken = vocoder(osc(saw, 110hz), osc(saw, 180hz) * 0.5, bands: 12)\n mangled = cross_mod(spoken, osc(sine, quantize(60 + shift_random(clock: impulse(20hz)).value * 12) * 1hz), mode: fold, amount: 0.7).sound\n [cloud[0] + mangled, cloud[1] + mangled]\n}";
+    let source = "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nconfig { channels: stereo }\ninstr a() {\n src = harmonics([1, 0.4, 0.2], size: 512)\n cloud = texture(src, position: phasor(0.3hz), spread: 0.5, detune: 3)\n spoken = vocoder(osc(saw, 110hz), osc(saw, 180hz) * 0.5, bands: 12)\n mangled = cross_mod(spoken, osc(sine, quantize(60 + shift_random(clock: impulse(20hz)).value * 12) * 1hz), mode: fold, amount: 0.7).sound\n [cloud[0] + mangled, cloud[1] + mangled]\n}";
     let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
     let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
         panic!(
@@ -386,7 +386,7 @@ fn the_processing_modules_do_not_allocate_while_rendering() {
 
 #[test]
 fn the_oscillator_and_modulation_blocks_do_not_allocate_while_rendering() {
-    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n lfos = multi_lfo(rate: 0.7hz, shift: 0.2)\n random = random_source(clock: impulse(30hz), steps: 0.4, deja_vu: 0.6, seed: 4)\n tone = multi_voice(110hz + random.value * 20hz, model: lfos.a * 0.5 + 0.5, timbre: lfos.b * 0.5 + 0.5, morph: lfos.c * 0.5 + 0.5)\n shaped = wavefolder(slew(tone, rise: 5ms, fall: 80ms), amount: lfos.d * 0.5 + 0.5)\n voiced = shaped.formant_filter(freq: 500hz + lfos.a * 100hz).sound\n [voiced * random.gate, morph_osc(220hz, shape: lfos.b * 0.5 + 0.5).sound]\n}";
+    let source = "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nconfig { channels: stereo }\ninstr a() {\n lfos = multi_lfo(rate: 0.7hz, shift: 0.2)\n random = random_source(clock: impulse(30hz), steps: 0.4, deja_vu: 0.6, seed: 4)\n tone = multi_voice(110hz + random.value * 20hz, model: lfos.a * 0.5 + 0.5, timbre: lfos.b * 0.5 + 0.5, morph: lfos.c * 0.5 + 0.5)\n shaped = wavefolder(slew(tone, rise: 5ms, fall: 80ms), amount: lfos.d * 0.5 + 0.5)\n voiced = shaped.formant_filter(freq: 500hz + lfos.a * 100hz).sound\n [voiced * random.gate, morph_osc(220hz, shape: lfos.b * 0.5 + 0.5).sound]\n}";
     let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
     let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
         panic!(
@@ -413,7 +413,7 @@ fn the_oscillator_and_modulation_blocks_do_not_allocate_while_rendering() {
 
 #[test]
 fn the_hold_chaos_resonator_and_shifter_blocks_do_not_allocate_while_rendering() {
-    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n wild = chaos(rate: 3hz)\n steps = rungler(osc(saw, 3.1hz), osc(saw, 7.3hz))\n gate = comparator(wild.x, threshold: 0.1).gate\n held = track_hold(steps.value, gate)\n tone = osc(saw, 110hz * pow(2, held))\n rung = resonant_body(tone * steps.gate, freq: 220hz + wild.y * 50hz, structure: wild.z * 0.5 + 0.5)\n shifted = freq_shifter(rung, shift: 60hz)\n echoes = shimmer_echo(shifted.up, time: 120ms, shift: 7)\n mixed = vca_mix([shifted.up, shifted.down], [wild.x * 0.5 + 0.5, 0.4], curve: exponential)\n [mixed + echoes[0] * 0.3, mixed + echoes[1] * 0.3]\n}";
+    let source = "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nconfig { channels: stereo }\ninstr a() {\n wild = chaos(rate: 3hz)\n steps = rungler(osc(saw, 3.1hz), osc(saw, 7.3hz))\n gate = comparator(wild.x, threshold: 0.1).gate\n held = track_hold(steps.value, gate)\n tone = osc(saw, 110hz * pow(2, held))\n rung = resonant_body(tone * steps.gate, freq: 220hz + wild.y * 50hz, structure: wild.z * 0.5 + 0.5)\n shifted = freq_shifter(rung, shift: 60hz)\n echoes = shimmer_echo(shifted.up, time: 120ms, shift: 7)\n mixed = vca_mix([shifted.up, shifted.down], [wild.x * 0.5 + 0.5, 0.4], curve: exponential)\n [mixed + echoes[0] * 0.3, mixed + echoes[1] * 0.3]\n}";
     let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
     let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
         panic!(
@@ -440,7 +440,7 @@ fn the_hold_chaos_resonator_and_shifter_blocks_do_not_allocate_while_rendering()
 
 #[test]
 fn the_clock_and_logic_blocks_do_not_allocate_while_rendering() {
-    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n ticks = impulse(6hz)\n fast = clock_mult(ticks, factor: 4, swing: 0.2)\n coin = bernoulli(fast, probability: 0.6, seed: 2)\n ratchet = burst(coin.a, count: 3, rate: 90hz, accelerate: 0.1)\n held = gate_length(ratchet, length: 30ms)\n late = gate_delay(coin.b, time: 40ms)\n either = gate_logic(held, late, mode: xor)\n half = flip_flop(either)\n inside = window_comparator(osc(sine, 0.7hz), low: -0.3, high: 0.4)\n pitch_step = stepper([0, 3, 7, 12], half.q, reset: inside.outside)\n tone = sync_osc(110hz * pow(2, pitch_step.value / 12), ratio: mux([1.5, 2.5, 3.5], pitch_step.step), shape: 0.3)\n voiced = tone * (held + late * 0.5).smooth(5ms)\n [voiced, voiced * half.not_q]\n}";
+    let source = "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nconfig { channels: stereo }\ninstr a() {\n ticks = impulse(6hz)\n fast = clock_mult(ticks, factor: 4, swing: 0.2)\n coin = bernoulli(fast, probability: 0.6, seed: 2)\n ratchet = ratchet(coin.a, count: 3, rate: 90hz, accelerate: 0.1)\n held = gate_length(ratchet, length: 30ms)\n late = gate_delay(coin.b, time: 40ms)\n either = gate_logic(held, late, mode: xor)\n half = flip_flop(either)\n inside = window_comparator(osc(sine, 0.7hz), low: -0.3, high: 0.4)\n pitch_step = stepper([0, 3, 7, 12], half.q, reset: inside.outside)\n tone = sync_osc(110hz * pow(2, pitch_step.value / 12), ratio: mux([1.5, 2.5, 3.5], pitch_step.step), shape: 0.3)\n voiced = tone * (held + late * 0.5).smooth(5ms)\n [voiced, voiced * half.not_q]\n}";
     let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
     let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
         panic!(
@@ -469,7 +469,7 @@ fn the_clock_and_logic_blocks_do_not_allocate_while_rendering() {
 
 #[test]
 fn the_row_sequencer_does_not_allocate_while_rendering() {
-    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n seq = row_sequencer(impulse(8hz), reset: osc(square, 0.3hz), values: [0, 3, 7, 12], extras: [0.2, 0.5], durations: [2, 1, 1], repeats: [1, 2], modes: [1, 2, 3], gate_length: 0.4)\n tone = osc(saw, 110hz * pow(2, seq.value / 12)) * 0.3\n voiced = tone * seq.gate.smooth(5ms) * (0.5 + seq.extra)\n [voiced, voiced]\n}";
+    let source = "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nconfig { channels: stereo }\ninstr a() {\n seq = row_sequencer(impulse(8hz), reset: osc(square, 0.3hz), values: [0, 3, 7, 12], extras: [0.2, 0.5], durations: [2, 1, 1], repeats: [1, 2], modes: [1, 2, 3], gate_length: 0.4)\n tone = osc(saw, 110hz * pow(2, seq.value / 12)) * 0.3\n voiced = tone * seq.gate.smooth(5ms) * (0.5 + seq.extra)\n [voiced, voiced]\n}";
     let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
     let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
         panic!(
@@ -498,7 +498,7 @@ fn the_row_sequencer_does_not_allocate_while_rendering() {
 
 #[test]
 fn the_tap_delay_does_not_allocate_while_rendering() {
-    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n hit = osc(saw, 220hz) * env[1 | 30ms 0] * impulse(3hz).smooth(2ms)\n t = tap_delay(hit + noise() * 0.01, time: 90ms, taps: 16, shifts: [0, 7, 12, -5], step: 2, decay: 0.85, curve: 0.8, spread: 0.7, groove: swing, wobble: 0.5, filter: bandpass, cutoffs: [800hz, 2khz], feedback: 0.6, feedback_shift: 7, feedback_tone: 0.3, reverse: osc(square, 0.7hz), freeze: osc(square, 0.3hz))\n [t.left, t.right]\n}";
+    let source = "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nconfig { channels: stereo }\ninstr a() {\n hit = osc(saw, 220hz) * env[1 | 30ms 0] * impulse(3hz).smooth(2ms)\n t = tap_delay(hit + noise() * 0.01, time: 90ms, taps: 16, shifts: [0, 7, 12, -5], step: 2, decay: 0.85, curve: 0.8, spread: 0.7, groove: swing, wobble: 0.5, filter: bandpass, cutoffs: [800hz, 2khz], feedback: 0.6, feedback_shift: 7, feedback_tone: 0.3, reverse: osc(square, 0.7hz), freeze: osc(square, 0.3hz))\n [t.left, t.right]\n}";
     let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
     let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
         panic!(
@@ -527,7 +527,7 @@ fn the_tap_delay_does_not_allocate_while_rendering() {
 
 #[test]
 fn the_splice_reel_does_not_allocate_while_rendering() {
-    let source = "use std/blocks\nconfig { channels: stereo }\ninstr a() {\n x = osc(saw, 110hz * (1 + osc(sine, 0.3hz) * 0.2)) * 0.5\n m = splice_reel(x, record: osc(square, 2.9hz), new_splice: osc(square, 1.7hz), sos: 0.3 + osc(sine, 0.1hz) * 0.2, choose: osc(sine, 0.13hz) * 0.5 + 0.5, shift: osc(square, 1.3hz), mark: osc(square, 0.9hz), unmark: osc(square, 0.45hz), clear: osc(square, 0.07hz), play: osc(square, 2.1hz) * 0.5 + 0.6, speed: 1 + osc(sine, 0.21hz), grain_size: osc(sine, 0.4hz) * 0.5 + 0.5, slide: osc(sine, 0.11hz) * 0.5 + 0.5, morph: osc(sine, 0.05hz) * 0.5 + 0.5, clock: osc(square, 3.1hz), size: 96000)\n [m.left + m.grain_end * 0.01, m.right + m.level * 0.01]\n}";
+    let source = "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nconfig { channels: stereo }\ninstr a() {\n x = osc(saw, 110hz * (1 + osc(sine, 0.3hz) * 0.2)) * 0.5\n m = splice_reel(x, record: osc(square, 2.9hz), new_splice: osc(square, 1.7hz), sos: 0.3 + osc(sine, 0.1hz) * 0.2, choose: osc(sine, 0.13hz) * 0.5 + 0.5, shift: osc(square, 1.3hz), mark: osc(square, 0.9hz), unmark: osc(square, 0.45hz), clear: osc(square, 0.07hz), play: osc(square, 2.1hz) * 0.5 + 0.6, speed: 1 + osc(sine, 0.21hz), grain_size: osc(sine, 0.4hz) * 0.5 + 0.5, slide: osc(sine, 0.11hz) * 0.5 + 0.5, morph: osc(sine, 0.05hz) * 0.5 + 0.5, clock: osc(square, 3.1hz), size: 96000)\n [m.left + m.grain_end * 0.01, m.right + m.level * 0.01]\n}";
     let expanded = niminal_lang::expand(source, std::path::Path::new(".")).unwrap();
     let program = niminal_lang::compile(&expanded.text).unwrap_or_else(|errors| {
         panic!(
@@ -556,7 +556,7 @@ fn the_splice_reel_does_not_allocate_while_rendering() {
 
 #[test]
 fn native_modular_blocks_and_resets_do_not_allocate_while_processing() {
-    let source = "use std/blocks
+    let source = "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nuse std/spectral
 fn patch(t) {
   state used = 0
   c = contour(trigger: t, rise: 0ms, fall: 10ms)

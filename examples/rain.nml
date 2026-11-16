@@ -6,7 +6,8 @@
 config { channels: stereo }
 tempo 90bpm
 
-use std/blocks
+use std/delays
+use std/gates
 
 fn plucks() { impulse((1 / (2beat).num).hz) }
 

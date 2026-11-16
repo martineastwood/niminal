@@ -1,4 +1,4 @@
-// A tour of the modulation sources and effects in std/blocks, each driving something you can hear.
+// A tour of the modulation sources and effects in the building-block modules (std/sources, std/modulation and others), each driving something you can hear.
 // Sources:  clock_div (gates)  shift_random + quantize (a tune)  random_source (a looping, thinned random)
 //           contour (envelopes)  function_gen (a slow swell)  multi_lfo (four phases)  wobble (stepped and smooth random)
 //           slew (smooth anything)
@@ -11,7 +11,16 @@ niminal 0.4
 config { channels: stereo }
 tempo 112bpm
 
-use std/blocks
+use std/delays
+use std/filters
+use std/gates
+use std/granular
+use std/modulation
+use std/random
+use std/sequencing
+use std/shaping
+use std/sources
+use std/spectral
 
 bus voice_bus: stereo
 

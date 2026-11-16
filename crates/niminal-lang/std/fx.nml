@@ -4,7 +4,9 @@
 // own, so you can edit them from there. The glitch effect is
 // made of the opcodes `repeat_last`, `rewind_last`, `slow_down`, `scatter` and `freeze`, and `apply`.
 
-use std/blocks
+use std/filters
+use std/shaping
+use std/sources
 
 // folder: filters
 

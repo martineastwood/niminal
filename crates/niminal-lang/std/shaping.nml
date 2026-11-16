@@ -1,0 +1,46 @@
+// Waveshaping and mixing: `use std/shaping`.
+
+/// Fold a signal back on itself: a waveshaper that turns a plain tone into a rich one. `amount` is how hard it is
+/// pushed (0 leaves the signal alone, 1 folds it several times) and `symmetry` shifts the fold so even harmonics
+/// appear. Two folds in a row, the second gentler, give the Buchla and Serge character. Folding makes harmonics
+/// above the sample rate that alias; for a clean sound run it inside `oversample(4) { ... }`. Output stays within ±1.2.
+fn wavefolder(x, amount: 0..1 = 0.3, symmetry: -1..1 = 0) {
+  _x = x.max(-16).min(16)
+  _amount = amount.max(0).min(1)
+  _shift = symmetry.max(-1).min(1) * _amount
+  _first = sin(1.570796 * (_x * (1 + 4 * _amount) + _shift))
+  _second = sin(1.570796 * (_first * (1 + 2 * _amount) + _shift * 0.5))
+  _x.crossfade(_second.dc_block, (_amount * 4).min(1)).clip(level: 1.2)
+}
+
+/// Two signals into one, the way a mixer of ring modulators and folders does. Inputs `a` and `b` are held to ±16.
+/// `ring` multiplies them, `fold` lets `b`'s size push `a` into a wavefolder, and `diode` multiplies `a` by `b` and by
+/// the positive half of `b`, so `a` also comes through while `b` is positive, with rougher overtones. Silence in `a` is
+/// silence out in every mode, and `ring` and `diode` are silent when `b` is too. `amount` (0 to 1) blends from `a` untouched to the full effect. `aux`
+/// is the plain product of the two, to use on its own. Outputs stay within ±1.2.
+fn cross_mod(
+  a,
+  b,
+  mode: (ring | fold | diode) = ring,
+  amount: 0..1 = 0.5
+) -> (sound, aux) {
+  _a = a.max(-16).min(16)
+  _b = b.max(-16).min(16)
+  _amount = amount.max(0).min(1)
+  _ring = _a * _b
+  _fold = sin(1.570796 * _a * (1 + 6 * _amount * abs(_b))).dc_block
+  _diode = _a * (_b * 0.5 + _b.max(0))
+  _wet = if mode == ring { _ring } else { if mode == fold { _fold } else { _diode } }
+  sound = _a.crossfade(_wet, _amount).clip(level: 1.2)
+  aux = _ring.clip(level: 1.2)
+}
+
+/// A mixer of any number of inputs, each with its own level, so each can be driven by its own control. `inputs` and
+/// `levels` are lists of the same length. Levels run from 0 to 1 and are shaped by `curve`: `linear` is the plain
+/// level, `exponential` squares it, so the bottom of the range is quiet and finely controlled, as on a voltage-controlled
+/// amplifier. `master` scales the sum. Levels outside 0 to 1 are held to that range, and each input to ±1000.
+fn vca_mix(inputs: [num], levels: [num], curve: (linear | exponential) = linear, master: 0..1 = 1) {
+  _l = levels.map(it.max(0).min(1))
+  _shaped = if curve == exponential { _l * _l } else { _l }
+  (inputs.map(it.max(-1000).min(1000)) * _shaped).sum * master.max(0).min(1)
+}

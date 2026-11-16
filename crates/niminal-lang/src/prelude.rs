@@ -234,9 +234,46 @@ fn defined_name(item: &Item) -> Option<&str> {
     })
 }
 
+/// The identifiers in `source`, each with the last non-space character before it. Comments, strings and
+/// numbers (with their units, like `4khz`) are skipped, so a name in a comment is not a use of it.
+fn identifiers(source: &str) -> Vec<(&str, char)> {
+    let bytes = source.as_bytes();
+    let (mut out, mut i, mut prev) = (Vec::new(), 0, ' ');
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'/' && bytes.get(i + 1) == Some(&b'/') {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+        } else if c == b'"' {
+            i += 1;
+            while i < bytes.len() && bytes[i] != b'"' && bytes[i] != b'\n' {
+                i += 1;
+            }
+            i += 1;
+            prev = '"';
+        } else if c.is_ascii_alphanumeric() || c == b'_' {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            if !bytes[start].is_ascii_digit() {
+                out.push((&source[start..i], prev));
+            }
+            prev = 'a';
+        } else {
+            if !c.is_ascii_whitespace() {
+                prev = c as char;
+            }
+            i += 1;
+        }
+    }
+    out
+}
+
 /// Whether `source` calls a prelude function that reads the clock, which needs the tempo controls declared.
 pub fn reads_clock(source: &str) -> bool {
-    source.contains("synced_lfo") || source.contains(": division") || source.contains(":division")
+    identifiers(source).iter().any(|&(name, prev)| name == "synced_lfo" || (name == "division" && prev == ':'))
 }
 
 /// The prelude functions that read the clock which `source` calls and doesn't define.
@@ -250,7 +287,8 @@ pub(crate) fn clock_functions(source: &str) -> String {
 
 /// The prelude functions `source` calls and `items` doesn't already define.
 pub fn needed(source: &str, items: &[Item]) -> Vec<Item> {
-    if !DOCS.iter().any(|(name, _)| source.contains(name)) {
+    let used: std::collections::HashSet<&str> = identifiers(source).into_iter().map(|(name, _)| name).collect();
+    if !DOCS.iter().any(|(name, _)| used.contains(name)) {
         return Vec::new();
     }
     // spans and the names made from them (`<fn@40>`) must not collide with the file's own, so the
@@ -261,8 +299,36 @@ pub fn needed(source: &str, items: &[Item]) -> Vec<Item> {
         .into_iter()
         .filter(|item| {
             defined_name(item).is_some_and(|name| {
-                source.contains(name) && !items.iter().any(|i| defined_name(i) == Some(name))
+                used.contains(name) && !items.iter().any(|i| defined_name(i) == Some(name))
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(source: &str) -> Vec<String> {
+        let items = parser::parse(source).expect("parses");
+        needed(source, &items).iter().filter_map(|i| defined_name(i).map(str::to_string)).collect()
+    }
+
+    #[test]
+    fn a_name_in_a_comment_or_string_or_longer_word_adds_nothing() {
+        assert!(names("// a drum and a lerp\ninstr a(freq: hz = 220hz) { out(osc(sine, 220hz)) }").is_empty());
+        assert!(names("instr a(freq: hz = 220hz) { drummer = 1\n out(osc(sine, 220hz) * drummer) }").is_empty());
+    }
+
+    #[test]
+    fn a_call_adds_its_function() {
+        assert!(names("instr a(freq: hz = 220hz) { out(osc(sine, mtof(60))) }").contains(&"mtof".to_string()));
+    }
+
+    #[test]
+    fn the_clock_is_only_read_by_real_uses() {
+        assert!(!reads_clock("// synced_lfo and : division\n"));
+        assert!(reads_clock("x = synced_lfo(1)"));
+        assert!(reads_clock("fx a(rate: division = 1/4) { }"));
+    }
 }

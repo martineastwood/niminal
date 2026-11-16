@@ -1,4 +1,4 @@
-//! `echo_loop` from `std/blocks`, at the sample level (120 bpm: a quarter of a beat is 125ms, 6000 samples).
+//! `echo_loop` from `std/delays`, at the sample level (120 bpm: a quarter of a beat is 125ms, 6000 samples).
 use super::rhythm_gate::audio_body;
 
 fn peak_near(out: &[f32], at: usize) -> f32 {

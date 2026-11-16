@@ -165,8 +165,8 @@ fn library() {
         "instr a() { osc(saw, 110hz).biquad_lp(800hz) }",
     );
     bench(
-        "std string",
-        "use std/physical\ninstr a() { impulse(2hz).string(220hz) }",
+        "std plucked_string",
+        "use std/physical\ninstr a() { impulse(2hz).plucked_string(220hz) }",
     );
     bench(
         "std drum (8 modes)",
@@ -182,7 +182,7 @@ fn library() {
     );
     bench(
         "std spectral blur (1024)",
-        "use std/spectral\ninstr a() { osc(saw, 110hz).blur() }",
+        "use std/spectral\ninstr a() { osc(saw, 110hz).spectral_blur() }",
     );
 }
 

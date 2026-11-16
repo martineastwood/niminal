@@ -1,9 +1,15 @@
 // Finished melodic instruments: `use std/instruments.{bass, electric_piano, organ}`.
 // For drums use std/drums. Each sound stands alone when copied into a project.
 // gain is the note's loudness and also shapes brightness or excitation.
-// The modular patches are wired from std/blocks; a copy carries the blocks it uses.
+// The modular patches are wired from the building-block modules (std/sources, std/gates, ...); a copy carries the blocks it uses.
 
-use std/blocks
+use std/filters
+use std/gates
+use std/modulation
+use std/random
+use std/sequencing
+use std/shaping
+use std/sources
 
 // folder: synths/bass
 
@@ -67,7 +73,7 @@ instr lead(
 // folder: synths/bells
 
 /// A struck bell: two sines, one bending the phase of the other. `decay` is how long it rings.
-instr bell(
+instr fm_bell(
   freq: hz,
   decay: 300ms..4sec = 2sec,
   gain: db = 0db
@@ -393,3 +399,123 @@ instr macro_voice(
   multi_voice(freq, model: model, timbre: timbre * (0.5 + hit * 0.5), harmonics: harmonics, morph: morph) * env[0 attack 1 | release 0] * 0.4 * gain
 }
 
+// folder: sounds/fx
+
+/// A falling saw laser. Drop sets its pitch sweep in semitones.
+instr zap(
+  freq: hz = c3,
+  decay: 10ms..3sec = 320ms,
+  drop: 0..48 = 44,
+  rate: 1hz..4khz = 18hz,
+  drive: 0..1 = 0,
+  gain: db = 0db
+) {
+  hit = (1 * gain).max(0).min(1)
+  drum(
+    freq: 180hz * (freq / c3),
+    wave: saw,
+    attack: 0.5ms,
+    decay: decay,
+    mod_amount: drop,
+    mod_rate: rate,
+    noise_freq: 4khz,
+    noise_q: 0.3,
+    noise_attack: 1ms,
+    noise_decay: 150ms,
+    mix: 0,
+    drive: drive,
+    eq_freq: 1khz,
+    eq_gain: 0db,
+    amp: -9db,
+    vel: hit,
+    osc_vel: 0.5,
+    noise_vel: 0.5,
+    mod_vel: 0.1
+  ).gain(gain)
+}
+
+// folder: sounds/fx
+
+/// Random-pitch bubbles with a band-passed noise edge.
+instr blip(
+  freq: hz = c3,
+  decay: 10ms..3sec = 600ms,
+  scatter: 0..48 = 24,
+  rate: 1hz..4khz = 14hz,
+  drive: 0..1 = 0.3,
+  gain: db = 0db
+) {
+  hit = (1 * gain).max(0).min(1)
+  drum(
+    freq: 900hz * (freq / c3),
+    mod_mode: random,
+    noise_filter: band,
+    attack: 0.5ms,
+    decay: decay,
+    mod_amount: scatter,
+    mod_rate: rate,
+    noise_freq: 3khz,
+    noise_q: 0.6,
+    noise_attack: 1ms,
+    noise_decay: decay,
+    mix: 0.2,
+    drive: drive,
+    eq_freq: 1khz,
+    eq_gain: 0db,
+    amp: -10db,
+    vel: hit,
+    osc_vel: 0.5,
+    noise_vel: 0.5,
+    mod_vel: 0.1
+  ).gain(gain)
+}
+
+// folder: synths/bass
+
+/// A driven saw bass with a slow pitch wobble.
+instr wobble_bass(
+  freq: hz = c3,
+  decay: 10ms..3sec = 900ms,
+  wobble: 0..12 = 7,
+  rate: 1hz..4khz = 6hz,
+  drive: 0..1 = 0.4,
+  gain: db = 0db
+) {
+  hit = (1 * gain).max(0).min(1)
+  drum(
+    freq: 70hz * (freq / c3),
+    wave: saw,
+    mod_mode: wobble,
+    attack: 8ms,
+    decay: decay,
+    mod_amount: wobble,
+    mod_rate: rate,
+    noise_freq: 4khz,
+    noise_q: 0.3,
+    noise_attack: 1ms,
+    noise_decay: 150ms,
+    mix: 0,
+    drive: drive,
+    eq_freq: 400hz,
+    eq_gain: 5db,
+    amp: -9db,
+    vel: hit,
+    osc_vel: 0.5,
+    noise_vel: 0.5,
+    mod_vel: 0.1
+  ).gain(gain)
+}
+
+// folder: sounds/fx
+
+/// A rising noise sweep. Rise sets its swell and filter travel; decay is the tail after the swell.
+instr sweep(
+  freq: hz = c3,
+  rise: 10ms..3sec = 180ms,
+  decay: 20ms..4sec = 1.2sec,
+  tone: 500hz..12khz = 6khz,
+  gain: db = 0db
+) {
+  cutoff = env[200hz rise tone] * (freq / c3).max(0.1).min(8)
+  noise(seed: 59).bpf(cutoff: cutoff, res: 0.5) * env[0 rise 1 decay 0] * 0.3 * gain
+}

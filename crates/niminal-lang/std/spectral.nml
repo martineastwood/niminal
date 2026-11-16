@@ -21,7 +21,7 @@ fn robot(x, size: const int = 1024) {
 
 /// Smear the spectrum over time: each frame is mixed with what came before. `amount` near 1 is a long
 /// wash.
-fn blur(x, amount: init 0..1 = 0.9, size: const int = 1024) {
+fn spectral_blur(x, amount: init 0..1 = 0.9, size: const int = 1024) {
   x.frames(size, fn(w) {
     state held = zeros(size / 2 + 1)
     s = fft(w)
@@ -88,4 +88,15 @@ fn phase_accumulate(frequency: [num], size: const int = 2048, hop: const 1..6553
   next = phase + frequency * (2 * pi * hop)
   phase = atan2(sin(next), cos(next))
   phase
+}
+
+/// Moves every frequency in a sound up or down by the same number of hertz, which breaks the overtones' whole-number
+/// relationships and gives metallic, bell-like or underwater sounds. It is not a pitch shift: a 220 hz tone shifted by
+/// 100 hz is 320 hz, and its second overtone goes from 440 hz to 540 hz. `up` is the sound shifted by `shift`, `down`
+/// by the same amount the other way, so one of them is always there for a stereo spread. Stereo inputs are mixed to
+/// mono and held to ±16. Accurate from about 100 hz to 18 khz.
+fn freq_shifter(x, shift: -2khz..2khz = 100hz) -> (up, down) {
+  _out = freq_shifter_dsp(x.sum, shift: shift)
+  up = _out[0]
+  down = _out[1]
 }

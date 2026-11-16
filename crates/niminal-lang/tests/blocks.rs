@@ -1,4 +1,4 @@
-//! `std/blocks`: signals in, a sound out, and nothing that can go wrong however the controls are set.
+//! The building-block modules (`std/sources`, `std/gates`, ...): signals in, a sound out, and nothing that can go wrong however the controls are set.
 #![allow(clippy::unwrap_used)]
 
 use std::path::Path;
@@ -37,7 +37,7 @@ fn peak(x: &[f32]) -> f32 {
 
 /// A mono signal's level over the settled second half of a render.
 fn settled_peak(body: &str) -> f32 {
-    let out = render(&format!("use std/blocks\ninstr a() {{ {body} }}"), 400);
+    let out = render(&format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ {body} }}"), 400);
     assert!(out.iter().all(|v| v.is_finite()), "{body}");
     peak(&out[out.len() / 2..])
 }
@@ -87,7 +87,7 @@ fn partials_that_would_alias_are_left_out() {
 #[test]
 fn a_harmonic_oscillator_survives_extreme_controls() {
     let program = program(
-        "use std/blocks\ninstr a(freq: hz, brightness: 0..1, odd_even: -1..1, smoothing: 0..1) {\n  \
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(freq: hz, brightness: 0..1, odd_even: -1..1, smoothing: 0..1) {\n  \
          harmonic_osc(freq, count: 32, brightness: brightness, odd_even: odd_even, gate_smooth: smoothing * 1sec, gates: [1, 0, 0.5])\n}",
     );
     let instrument = program.instruments.iter().find(|i| i.name == "a").unwrap();
@@ -142,7 +142,7 @@ fn control_blocks_survive_extreme_controls_and_stay_within_their_range() {
     let mut failures = Vec::new();
     for (call, lo, hi) in blocks {
         let program = program(&format!(
-            "use std/blocks\ninstr a(x: 0..1, y: 0..1, z: 0..1) {{ {call} }}"
+            "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(x: 0..1, y: 0..1, z: 0..1) {{ {call} }}"
         ));
         let instrument = program.instruments.iter().find(|i| i.name == "a").unwrap();
         for &x in &extremes {
@@ -181,7 +181,7 @@ fn a_blocks_own_names_never_clash_with_your_controls() {
     ];
     let controls: String = names.iter().map(|n| format!("ctl {n} = 0.5\n")).collect();
     program(&format!(
-        "use std/blocks\n{controls}instr a(freq: hz) {{\n  \
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\n{controls}instr a(freq: hz) {{\n  \
          harmonic_osc(freq, gates: [1, 0.5]) * function_gen(cycle: 4) * (wobble(seed: 1) + clock_div(2)) \
          + complex_osc(freq).low_pass_gate().sound.multimode_filter().band * shift_random(impulse(2hz)).value\n}}"
     ));
@@ -192,7 +192,7 @@ fn an_echo_loop_survives_extreme_controls() {
     let mut failures = Vec::new();
     for mode in ["off", "on"] {
         let program = program(&format!(
-            "use std/blocks\ninstr a(x: 0..1, y: 0..1, z: 0..1) {{\n  \
+            "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(x: 0..1, y: 0..1, z: 0..1) {{\n  \
              w = osc(saw, 110hz).echo_loop(time: x * 1sec, feedback: y, filter: z * 1hz, duck: y, ping_pong: {mode})\n  w[0] + w[w.channels.len - 1]\n}}"
         ));
         let instrument = program.instruments.iter().find(|i| i.name == "a").unwrap();
@@ -245,7 +245,7 @@ fn a_harmonic_bank_exposes_the_same_partials_it_mixes() {
     for (centre, frequency) in [(0, 220), (1, 880)] {
         let out = render(
             &format!(
-                "use std/blocks\ninstr a() {{ harmonic_osc(220hz, count: 4, centre: {centre}, width: 1, focus: 1) }}"
+                "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ harmonic_osc(220hz, count: 4, centre: {centre}, width: 1, focus: 1) }}"
             ),
             400,
         );
@@ -265,7 +265,7 @@ fn a_harmonic_bank_exposes_the_same_partials_it_mixes() {
 #[test]
 fn the_stereo_echo_has_a_dry_free_first_repeat_and_a_feedback_tail() {
     let audio = render(
-        "use std/blocks\ninstr a() {\n x = env[1 1ms 0]\n e = x.stereo_echo(time: 50ms, feedback: 0.5, skew: 0, diffusion: 0, motion: 0)\n e[0]\n}",
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {\n x = env[1 1ms 0]\n e = x.stereo_echo(time: 50ms, feedback: 0.5, skew: 0, diffusion: 0, motion: 0)\n e[0]\n}",
         200,
     );
     assert!(peak(&audio[..2300]) < 1e-6);
@@ -286,7 +286,7 @@ fn stereo_echo_controls_change_the_returned_sound() {
         let sound = |value| {
             render(
                 &format!(
-                    "use std/blocks\ninstr a() {{ e = osc(saw, 220hz).stereo_echo(time: 20ms, {control}: {value})\n e[0] }}"
+                    "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ e = osc(saw, 220hz).stereo_echo(time: 20ms, {control}: {value})\n e[0] }}"
                 ),
                 400,
             )
@@ -316,7 +316,7 @@ fn scanning_and_stereo_echo_stay_finite_under_extreme_modulation() {
         "e = osc(saw, 110hz).stereo_echo(time: x * 1sec, feedback: y, colour: z, skew: x, diffusion: y, motion: z, duck: x, drive: y)\n e[0] + e[1]",
     ] {
         let p = program(&format!(
-            "use std/blocks\ninstr a(x: num, y: num, z: num) {{ {body} }}"
+            "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(x: num, y: num, z: num) {{ {body} }}"
         ));
         let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
         for &x in &extremes {
@@ -345,12 +345,12 @@ fn scanning_and_stereo_echo_stay_finite_under_extreme_modulation() {
 #[test]
 fn stereo_echo_preserves_separate_inputs_and_skew_separates_mono_repeats() {
     let silent = render(
-        "use std/blocks\ninstr a() { e = [env[1 1ms 0], 0].stereo_echo(time: 50ms)\n e[1] }",
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() { e = [env[1 1ms 0], 0].stereo_echo(time: 50ms)\n e[1] }",
         300,
     );
     assert_eq!(peak(&silent), 0.0);
     let difference = render(
-        "use std/blocks\ninstr a() { e = env[1 1ms 0].stereo_echo(time: 50ms, skew: 1, motion: 0, diffusion: 0, feedback: 0)\n e[0] - e[1] }",
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() { e = env[1 1ms 0].stereo_echo(time: 50ms, skew: 1, motion: 0, diffusion: 0, feedback: 0)\n e[0] - e[1] }",
         300,
     );
     assert!(peak(&difference[..1100]) < 1e-6);
@@ -363,7 +363,7 @@ fn a_held_trigger_runs_one_contour_with_sample_pulses_at_its_turns() {
     let read = |field| {
         render(
             &format!(
-                "use std/blocks\ninstr a() {{ contour(trigger: 1, rise: 10ms, fall: 20ms).{field} }}"
+                "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ contour(trigger: 1, rise: 10ms, fall: 20ms).{field} }}"
             ),
             40,
         )
@@ -391,7 +391,7 @@ fn a_held_trigger_runs_one_contour_with_sample_pulses_at_its_turns() {
 #[test]
 fn contour_retrigger_rises_from_the_present_level_and_cycle_off_finishes() {
     let p = program(
-        "use std/blocks\ninstr a(t: num, cycling: num) { contour(trigger: t, rise: 10ms, fall: 20ms, cycle: cycling) }",
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(t: num, cycling: num) { contour(trigger: t, rise: 10ms, fall: 20ms, cycle: cycling) }",
     );
     let mut voice = Voice::new(p.instruments[0].graph.clone(), 48_000.0);
     voice.set_param_by_name("t", 1.0);
@@ -429,13 +429,13 @@ fn contour_retrigger_rises_from_the_present_level_and_cycle_off_finishes() {
 #[test]
 fn contours_cycle_chain_and_keep_timing_when_the_curve_changes() {
     let cycle = render(
-        "use std/blocks\ninstr a() { contour(rise: 0ms, fall: 0ms, cycle: 1).eoc }",
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() { contour(rise: 0ms, fall: 0ms, cycle: 1).eoc }",
         2,
     );
     assert!(cycle.iter().all(|x| *x == 0.0 || *x == 1.0));
     assert_eq!(cycle.iter().filter(|x| **x == 1.0).count(), cycle.len() / 2);
     let chained = render(
-        "use std/blocks\ninstr a() { first = contour(trigger: 1, rise: 10ms, fall: 20ms)\n contour(trigger: first.eoc, rise: 10ms, fall: 20ms) }",
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() { first = contour(trigger: 1, rise: 10ms, fall: 20ms)\n contour(trigger: first.eoc, rise: 10ms, fall: 20ms) }",
         40,
     );
     assert!(peak(&chained[..1438]) == 0.0);
@@ -443,7 +443,7 @@ fn contours_cycle_chain_and_keep_timing_when_the_curve_changes() {
     for curve in [0.1, 1.0, 10.0] {
         let eor = render(
             &format!(
-                "use std/blocks\ninstr a() {{ contour(trigger: 1, rise: 10ms, curve: {curve}).eor }}"
+                "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ contour(trigger: 1, rise: 10ms, curve: {curve}).eor }}"
             ),
             10,
         );
@@ -457,7 +457,7 @@ fn space_reverb_returns_a_tail_and_its_controls_do_audible_work() {
     let sound = |control: &str| {
         render(
             &format!(
-                "use std/blocks\ninstr a() {{ w = (noise(seed: 3) * env[1 10ms 0]).space_reverb({control})\n w[0] }}"
+                "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ w = (noise(seed: 3) * env[1 10ms 0]).space_reverb({control})\n w[0] }}"
             ),
             1600,
         )
@@ -498,7 +498,7 @@ fn ducking_responds_to_opposite_polarity_stereo_input() {
         let sound = |duck| {
             render(
                 &format!(
-                    "use std/blocks\ninstr a() {{ s = osc(saw, 220hz)\n w = [s, 0-s].{block}, duck: {duck})\n w[0] }}"
+                    "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ s = osc(saw, 220hz)\n w = [s, 0-s].{block}, duck: {duck})\n w[0] }}"
                 ),
                 500,
             )
@@ -532,7 +532,7 @@ fn contour_and_space_survive_independent_extreme_controls() {
         "w = osc(saw, 110hz).space_reverb(size: x, decay: y, absorption: z, diffusion: x, motion: y, rate: z * 1hz, predelay: x * 1sec, tilt: y, duck: z)\n w[0] + w[1]",
     ] {
         let p = program(&format!(
-            "use std/blocks\ninstr a(x: num, y: num, z: num) {{ {body} }}"
+            "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(x: num, y: num, z: num) {{ {body} }}"
         ));
         for x in extremes {
             for y in extremes {
@@ -568,7 +568,7 @@ fn sine_content(x: &[f32], frequency: f64) -> f64 {
 }
 
 fn settled(body: &str) -> Vec<f32> {
-    let out = render(&format!("use std/blocks\ninstr a() {{ {body} }}"), 400);
+    let out = render(&format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ {body} }}"), 400);
     assert!(out.iter().all(|v| v.is_finite()), "{body}");
     out[out.len() / 2..].to_vec()
 }
@@ -606,7 +606,7 @@ fn the_multimode_filter_holds_its_resonance_and_filters_channels_apart() {
 #[test]
 fn a_low_pass_gate_strikes_closes_and_darkens_as_it_closes() {
     // The default strikes once as the note starts and has closed by the end.
-    let struck = render("use std/blocks\ninstr a() { osc(saw, 220hz).low_pass_gate(decay: 100ms).sound }", 800);
+    let struck = render("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() { osc(saw, 220hz).low_pass_gate(decay: 100ms).sound }", 800);
     assert!(peak(&struck[..4800]) > 0.5);
     assert!(peak(&struck[struck.len() - 4800..]) < 1e-3);
     // The opening is 0..1 and level holds it open without a strike.
@@ -640,7 +640,7 @@ fn a_shift_random_loop_repeats_when_locked_and_changes_when_not() {
     // 48 steps a second, eight to a loop: read the value at each step.
     let steps = |lock: f32, seed: u32| {
         let out = render(
-            &format!("use std/blocks\ninstr a() {{ shift_random(clock: impulse(48hz), lock: {lock}, seed: {seed}).value }}"),
+            &format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ shift_random(clock: impulse(48hz), lock: {lock}, seed: {seed}).value }}"),
             1000,
         );
         assert!(out.iter().all(|v| (-1.0..=1.0).contains(v)));
@@ -676,7 +676,7 @@ fn the_voice_modules_stay_finite_under_extreme_modulation() {
         ("shift_random(clock: x, lock: y, seed: 2).value", 1.0),
     ] {
         let p = program(&format!(
-            "use std/blocks\ninstr a(x: num, y: num, z: num) {{ {body} }}"
+            "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(x: num, y: num, z: num) {{ {body} }}"
         ));
         let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
         for &x in &extremes {
@@ -706,7 +706,7 @@ fn the_voice_modules_stay_finite_under_extreme_modulation() {
 #[test]
 fn the_voice_module_example_in_the_docs_plays() {
     let out = render(
-        "use std/blocks\ninstr a() {\n  freq = 130.81hz\n  steps = shift_random(clock: clock_div(1/4), lock: 0.9, seed: 4)\n  voice = complex_osc(freq * (1 + steps.value.max(0)), ratio: 1.5, index: 2, fold: 0.3)\n  gated = voice.low_pass_gate(ping: steps.gate, decay: 180ms)\n  gated.sound.multimode_filter(cutoff: 300hz + gated.opening * 3khz, res: 0.7).band * env[1 | 50ms 0]\n}",
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {\n  freq = 130.81hz\n  steps = shift_random(clock: clock_div(1/4), lock: 0.9, seed: 4)\n  voice = complex_osc(freq * (1 + steps.value.max(0)), ratio: 1.5, index: 2, fold: 0.3)\n  gated = voice.low_pass_gate(ping: steps.gate, decay: 180ms)\n  gated.sound.multimode_filter(cutoff: 300hz + gated.opening * 3khz, res: 0.7).band * env[1 | 50ms 0]\n}",
         400,
     );
     assert!(out.iter().all(|v| v.is_finite()));
@@ -716,7 +716,7 @@ fn the_voice_module_example_in_the_docs_plays() {
 
 /// The last sample of a render of a constant expression.
 fn settled_value(body: &str) -> f32 {
-    let out = render(&format!("use std/blocks\ninstr a() {{ {body} }}"), 4);
+    let out = render(&format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ {body} }}"), 4);
     assert!(out.iter().all(|v| v.is_finite()), "{body}");
     out[out.len() - 1]
 }
@@ -745,7 +745,7 @@ fn quantize_snaps_to_the_nearest_scale_note_and_ties_go_down() {
 
 fn stereo_render(body: &str, blocks: usize) -> Vec<f32> {
     let p = program(&format!(
-        "use std/blocks\nconfig {{ channels: stereo }}\ninstr a() {{ src = harmonics([1, 0.3, 0.2], size: 512)\n {body} }}"
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nconfig {{ channels: stereo }}\ninstr a() {{ src = harmonics([1, 0.3, 0.2], size: 512)\n {body} }}"
     ));
     let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
     let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
@@ -833,9 +833,9 @@ fn the_processing_modules_stay_finite_under_extreme_modulation() {
         ("texture(src, position: x, size: y * 1ms, density: z * 1hz, pitch: x, spread: y, detune: z, width: x, gain: y)", 4.0, true),
     ] {
         let source = if stereo {
-            format!("use std/blocks\nconfig {{ channels: stereo }}\ninstr a(x: num, y: num, z: num) {{ src = harmonics([1, 0.3], size: 512)\n {body} }}")
+            format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nconfig {{ channels: stereo }}\ninstr a(x: num, y: num, z: num) {{ src = harmonics([1, 0.3], size: 512)\n {body} }}")
         } else {
-            format!("use std/blocks\ninstr a(x: num, y: num, z: num) {{ {body} }}")
+            format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(x: num, y: num, z: num) {{ {body} }}")
         };
         let p = program(&source);
         let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
@@ -914,7 +914,7 @@ fn a_passed_on_choice_the_callee_does_not_have_is_an_error() {
 
 /// The last sample after holding each value of the control `x` for `blocks` blocks, in turn.
 fn after_holding(body: &str, values: &[f32], blocks: usize) -> Vec<f32> {
-    let p = program(&format!("use std/blocks\ninstr a(x: num) {{ {body} }}"));
+    let p = program(&format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(x: num) {{ {body} }}"));
     let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
     let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
     voice.start_note();
@@ -968,7 +968,7 @@ fn morph_osc_starts_as_a_sine_and_stays_within_one() {
     }
     // the sub is an octave down: half as many zero crossings as the sound at shape 0
     let crossings = |body: &str| {
-        let out = render(&format!("use std/blocks\ninstr a() {{ {body} }}"), 400);
+        let out = render(&format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ {body} }}"), 400);
         out.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f32
     };
     let ratio = crossings("morph_osc(220hz).sound") / crossings("morph_osc(220hz).sub");
@@ -982,7 +982,7 @@ fn a_wavefolder_leaves_a_quiet_signal_alone_and_adds_overtones_when_pushed() {
     assert!(settled_peak("wavefolder(0 * osc(sine, 110hz), amount: 1)") < 1e-4);
     // pushed hard, a sine gains many more zero crossings than it began with
     let crossings = |body: &str| {
-        let out = render(&format!("use std/blocks\ninstr a() {{ {body} }}"), 400);
+        let out = render(&format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ {body} }}"), 400);
         out.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count()
     };
     assert!(crossings("wavefolder(osc(sine, 110hz), amount: 1)") > 2 * crossings("osc(sine, 110hz)"));
@@ -1026,7 +1026,7 @@ fn the_oscillator_and_modulation_blocks_stay_finite_under_extreme_modulation() {
         ("multi_lfo(rate: x * 1hz, shape: y, smooth: z, shift: x).d", 1.0001),
         ("osc(saw, 110hz).formant_filter(freq: x * 1hz, span: y, res: z, tilt: x).sound", 2.0),
     ] {
-        let p = program(&format!("use std/blocks\ninstr a(x: num, y: num, z: num) {{ {body} }}"));
+        let p = program(&format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(x: num, y: num, z: num) {{ {body} }}"));
         let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
         for &x in &extremes {
             for &y in &extremes {
@@ -1055,7 +1055,7 @@ fn the_oscillator_and_modulation_blocks_stay_finite_under_extreme_modulation() {
 fn a_stateful_helper_can_be_called_on_a_signal_made_inside_a_function() {
     // `state s = x * 0` is zeros shaped like x: x may be computed in the calling function, not only passed to it.
     let out = render(
-        "use std/blocks\nfn damp(x) { state s = x * 0\n s = s + (x - s) * 0.1\n s }\nfn voice(freq: hz) { osc(saw, freq).damp.multimode_filter(cutoff: freq * 3).low }\ninstr a() { voice(220hz) * 0.3 }",
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nfn damp(x) { state s = x * 0\n s = s + (x - s) * 0.1\n s }\nfn voice(freq: hz) { osc(saw, freq).damp.multimode_filter(cutoff: freq * 3).low }\ninstr a() { voice(220hz) * 0.3 }",
         40,
     );
     assert!(out.iter().all(|v| v.is_finite()) && peak(&out[out.len() / 2..]) > 0.01);
@@ -1063,7 +1063,7 @@ fn a_stateful_helper_can_be_called_on_a_signal_made_inside_a_function() {
 
 fn random_run(args: &str, blocks: usize) -> (Vec<f32>, Vec<f32>) {
     let source = |field: &str| {
-        format!("use std/blocks\ninstr a() {{ random_source(clock: impulse(48hz), {args}).{field} }}")
+        format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ random_source(clock: impulse(48hz), {args}).{field} }}")
     };
     (render(&source("value"), blocks), render(&source("gate"), blocks))
 }
@@ -1106,7 +1106,7 @@ fn a_random_source_loops_shapes_and_thins_its_draws() {
 #[test]
 fn a_multi_voice_has_five_models_that_sound_different() {
     let model = |m: f32| {
-        let out = render(&format!("use std/blocks\ninstr a() {{ multi_voice(220hz, model: {m}) }}"), 200);
+        let out = render(&format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ multi_voice(220hz, model: {m}) }}"), 200);
         assert!(out.iter().all(|v| v.is_finite()), "model {m}");
         out[out.len() / 2..].to_vec()
     };
@@ -1132,7 +1132,7 @@ fn the_random_and_voice_blocks_stay_finite_under_extreme_modulation() {
         ("multi_voice(x * 1hz, model: y, timbre: z, harmonics: x, morph: y)", 1.5),
         ("multi_voice(220hz, model: x, timbre: y, harmonics: z, morph: x)", 1.5),
     ] {
-        let p = program(&format!("use std/blocks\ninstr a(x: num, y: num, z: num) {{ {body} }}"));
+        let p = program(&format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(x: num, y: num, z: num) {{ {body} }}"));
         let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
         for &x in &extremes {
             for &y in &extremes {
@@ -1160,7 +1160,7 @@ fn the_random_and_voice_blocks_stay_finite_under_extreme_modulation() {
 #[test]
 fn a_track_hold_follows_while_open_and_holds_when_closed() {
     // x goes 0.3, 0.8 with the gate open (it follows), then 0.1 with the gate closed (it holds 0.8)
-    let p = program("use std/blocks\ninstr a(x: num, g: num) { track_hold(x, g) }");
+    let p = program("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(x: num, g: num) { track_hold(x, g) }");
     let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
     let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
     voice.start_note();
@@ -1180,7 +1180,7 @@ fn a_track_hold_follows_while_open_and_holds_when_closed() {
 fn a_comparator_has_a_margin_and_an_inverted_output() {
     let both = |x: &[f32]| {
         let p = program(
-            "use std/blocks\ninstr a(x: num) { c = comparator(x, threshold: 0.5, hysteresis: 0.2)\n c.gate + c.inverted * 10 }",
+            "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(x: num) { c = comparator(x, threshold: 0.5, hysteresis: 0.2)\n c.gate + c.inverted * 10 }",
         );
         let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
         let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
@@ -1202,12 +1202,12 @@ fn a_comparator_has_a_margin_and_an_inverted_output() {
 fn chaos_swings_between_lobes_and_stays_in_range() {
     for (rate, chaos_amount) in [(2.0, 1.0), (20.0, 0.8), (200.0, 1.0), (0.01, 0.0)] {
         let out = render(
-            &format!("use std/blocks\ninstr a() {{ c = chaos(rate: {rate}hz, chaos: {chaos_amount})\n c.x + c.y * 10 + c.z * 100 }}"),
+            &format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ c = chaos(rate: {rate}hz, chaos: {chaos_amount})\n c.x + c.y * 10 + c.z * 100 }}"),
             1500,
         );
         assert!(out.iter().all(|v| v.is_finite()), "{rate}");
         let x = render(
-            &format!("use std/blocks\ninstr a() {{ chaos(rate: {rate}hz, chaos: {chaos_amount}).x }}"),
+            &format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ chaos(rate: {rate}hz, chaos: {chaos_amount}).x }}"),
             1500,
         );
         assert!(peak(&x) <= 1.0, "{rate}: {}", peak(&x));
@@ -1222,7 +1222,7 @@ fn chaos_swings_between_lobes_and_stays_in_range() {
 #[test]
 fn a_rungler_steps_through_eight_levels_on_the_clock_edges() {
     let out = render(
-        "use std/blocks\ninstr a() { r = rungler(osc(saw, 3.1hz), osc(saw, 7.3hz))\n r.value }",
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() { r = rungler(osc(saw, 3.1hz), osc(saw, 7.3hz))\n r.value }",
         2000,
     );
     let mut levels: Vec<i32> = out.iter().map(|v| (v * 7.0).round() as i32).collect();
@@ -1235,7 +1235,7 @@ fn a_rungler_steps_through_eight_levels_on_the_clock_edges() {
     assert!(distinct.len() >= 4, "{distinct:?}");
     // the value only moves where the clock edge is: constant clocks and data give a constant register
     let flat = render(
-        "use std/blocks\ninstr a() { rungler(0.5, 0.5).value }",
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() { rungler(0.5, 0.5).value }",
         200,
     );
     assert!(peak(&flat) <= 1.0 && flat.iter().all(|v| v.is_finite()));
@@ -1245,7 +1245,7 @@ fn a_rungler_steps_through_eight_levels_on_the_clock_edges() {
 fn a_resonant_body_rings_at_its_pitch_and_the_structure_moves_the_overtones() {
     let ring = |structure: f32| {
         render(
-            &format!("use std/blocks\ninstr a() {{ resonant_body(noise() * env[1 5ms 0], freq: 220hz, structure: {structure}, decay: 1sec) }}"),
+            &format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ resonant_body(noise() * env[1 5ms 0], freq: 220hz, structure: {structure}, decay: 1sec) }}"),
             120,
         )
     };
@@ -1258,14 +1258,14 @@ fn a_resonant_body_rings_at_its_pitch_and_the_structure_moves_the_overtones() {
     // damping makes the highs die sooner
     let tail = |damping: f32| {
         let out = render(
-            &format!("use std/blocks\ninstr a() {{ resonant_body(impulse(1hz) * 4, freq: 1khz, decay: 1sec, damping: {damping}).hpf(2.5khz) }}"),
+            &format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ resonant_body(impulse(1hz) * 4, freq: 1khz, decay: 1sec, damping: {damping}).hpf(2.5khz) }}"),
             300,
         );
         peak(&out[out.len() / 2..])
     };
     assert!(tail(0.0) > tail(1.0), "{} {}", tail(0.0), tail(1.0));
     // mix 0 is the dry sound
-    let dry = render("use std/blocks\ninstr a() { resonant_body(osc(sine, 100hz), mix: 0) }", 20);
+    let dry = render("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() { resonant_body(osc(sine, 100hz), mix: 0) }", 20);
     assert!((peak(&dry) - 1.0).abs() < 0.01);
 }
 
@@ -1307,7 +1307,7 @@ fn a_shimmer_echo_repeats_climb_in_pitch_and_alternate_sides() {
 fn a_frequency_shifter_moves_every_frequency_by_the_same_amount() {
     let shift = |input: f32, amount: f32| {
         let out = render(
-            &format!("use std/blocks\ninstr a() {{ freq_shifter(osc(sine, {input}hz), shift: {amount}hz).up }}"),
+            &format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ freq_shifter(osc(sine, {input}hz), shift: {amount}hz).up }}"),
             200,
         );
         out[out.len() / 2..].to_vec()
@@ -1352,7 +1352,7 @@ fn the_new_modulation_and_effect_blocks_stay_finite_under_extreme_modulation() {
         ("freq_shifter(osc(saw, 110hz) * x, shift: y * 1hz).up + freq_shifter(osc(saw, 110hz), shift: z * 1hz).down", 3.1),
         ("vca_mix([osc(saw, 110hz) * x, osc(saw, 70hz)], [y, z], master: x)", 2100.0),
     ] {
-        let p = program(&format!("use std/blocks\ninstr a(x: num, y: num, z: num) {{ {body} }}"));
+        let p = program(&format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(x: num, y: num, z: num) {{ {body} }}"));
         let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
         for &x in &extremes {
             for &y in &extremes {
@@ -1377,7 +1377,7 @@ fn the_new_modulation_and_effect_blocks_stay_finite_under_extreme_modulation() {
     // the shimmer echo takes a stereo-capable path of its own
     for (x, y) in [(1e30f32, -1e30f32), (f32::NAN, 0.5), (0.5, f32::INFINITY), (-1.0, 1.0)] {
         let p = program(
-            "use std/blocks\nconfig { channels: stereo }\ninstr a(x: num, y: num) { shimmer_echo(osc(saw, 220hz) * x, time: y * 1ms, shift: x, feedback: y, window: x * 1ms) }",
+            "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nconfig { channels: stereo }\ninstr a(x: num, y: num) { shimmer_echo(osc(saw, 220hz) * x, time: y * 1ms, shift: x, feedback: y, window: x * 1ms) }",
         );
         let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
         let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
@@ -1399,7 +1399,7 @@ fn rising(x: &[f32]) -> Vec<usize> {
 }
 
 fn gate_render(body: &str, blocks: usize) -> Vec<f32> {
-    render(&format!("use std/blocks\ninstr a() {{ {body} }}"), blocks)
+    render(&format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ {body} }}"), blocks)
 }
 
 #[test]
@@ -1443,7 +1443,7 @@ fn a_bernoulli_gate_splits_every_gate_between_its_two_outputs() {
 
 #[test]
 fn a_burst_fires_its_count_of_pulses_a_rate_apart() {
-    let pulses = rising(&gate_render("burst(impulse(2hz), count: 4, rate: 40hz)", 1500));
+    let pulses = rising(&gate_render("ratchet(impulse(2hz), count: 4, rate: 40hz)", 1500));
     // 2 hz triggers every 24000 samples; 40 hz is a pulse every 1200
     // the first pulse of a burst lands with its trigger: the list starts with the second burst's four
     let gaps: Vec<usize> = pulses[3..7].windows(2).map(|w| w[1] - w[0]).collect();
@@ -1453,10 +1453,10 @@ fn a_burst_fires_its_count_of_pulses_a_rate_apart() {
 
 #[test]
 fn a_burst_accelerates_and_a_count_of_one_is_a_single_pulse() {
-    let fast = rising(&gate_render("burst(impulse(1hz), count: 5, rate: 40hz, accelerate: 0.3)", 1500));
+    let fast = rising(&gate_render("ratchet(impulse(1hz), count: 5, rate: 40hz, accelerate: 0.3)", 1500));
     let gaps: Vec<usize> = fast[..4].windows(2).map(|w| w[1] - w[0]).collect();
     assert!(gaps.windows(2).all(|g| g[1] < g[0]), "{gaps:?}");
-    let one = rising(&gate_render("burst(impulse(2hz), count: 1)", 1500));
+    let one = rising(&gate_render("ratchet(impulse(2hz), count: 1)", 1500));
     assert!(one.len() >= 2 && one[1] - one[0] == 24_000, "{one:?}");
 }
 
@@ -1484,7 +1484,7 @@ fn gate_logic_follows_its_truth_tables() {
     ] {
         for (i, expected) in table.iter().enumerate() {
             let (a, b) = ((i >> 1) as f32, (i & 1) as f32);
-            let got = last_of(&format!("use std/blocks\ninstr a() {{ gate_logic({a}, {b}, mode: {mode}) }}"));
+            let got = last_of(&format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ gate_logic({a}, {b}, mode: {mode}) }}"));
             assert_eq!(got, *expected, "{mode} {a} {b}");
         }
     }
@@ -1555,7 +1555,7 @@ fn the_clock_and_logic_blocks_stay_finite_under_extreme_modulation() {
     for (body, limit) in [
         ("clock_mult(osc(square, 5hz) * x, factor: y, swing: z)", 1.0),
         ("bernoulli(osc(square, 5hz) * x, probability: y, seed: 2).a + bernoulli(x, probability: z).b", 2.0),
-        ("burst(osc(square, 5hz) * x, count: y, rate: z * 1hz, accelerate: x)", 1.0),
+        ("ratchet(osc(square, 5hz) * x, count: y, rate: z * 1hz, accelerate: x)", 1.0),
         ("gate_length(osc(square, 5hz) * x, length: y * 1sec)", 1.0),
         ("gate_delay(osc(square, 5hz) * x, time: y * 1sec)", 1000.5),
         ("gate_logic(x, y, mode: xor) + gate_logic(y, z, mode: nand)", 2.0),
@@ -1565,7 +1565,7 @@ fn the_clock_and_logic_blocks_stay_finite_under_extreme_modulation() {
         ("stepper([x, y, z], osc(square, 5hz) * x, reset: z).value", 1000.5),
         ("sync_osc(110hz * x, ratio: y, shape: z, width: x)", 1.3),
     ] {
-        let p = program(&format!("use std/blocks\ninstr a(x: num, y: num, z: num) {{ {body} }}"));
+        let p = program(&format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(x: num, y: num, z: num) {{ {body} }}"));
         let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
         for &x in &extremes {
             for &y in &extremes {
@@ -1637,7 +1637,7 @@ fn the_row_sequencer_stays_finite_under_extreme_inputs() {
         ("row_sequencer(osc(square, 5hz) * x, values: [1, y, 3], extras: [z, x], start: y, length: z, gate_length: x).gate", 1.0),
         ("row_sequencer(osc(square, 9hz), values: [x, y], start: x, length: y).row", 70.0),
     ] {
-        let p = program(&format!("use std/blocks\ninstr a(x: num, y: num, z: num) {{ {body} }}"));
+        let p = program(&format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(x: num, y: num, z: num) {{ {body} }}"));
         let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
         for &x in &extremes {
             for &y in &extremes {
@@ -1722,7 +1722,7 @@ fn a_tap_delay_curve_moves_the_taps_and_step_climbs_the_pitch() {
 #[test]
 fn a_tap_delay_stays_finite_and_bounded_under_extreme_controls() {
     let p = program(
-        "use std/blocks\nconfig { channels: stereo }\ninstr a(x: num, y: num, z: num) { t = tap_delay(osc(saw, 220hz) * x, time: y * 1ms, taps: 16, shifts: [z, x, y], step: z, decay: y, curve: z, spread: x, window: x * 1ms)\n [t.left, t.right] }",
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nconfig { channels: stereo }\ninstr a(x: num, y: num, z: num) { t = tap_delay(osc(saw, 220hz) * x, time: y * 1ms, taps: 16, shifts: [z, x, y], step: z, decay: y, curve: z, spread: x, window: x * 1ms)\n [t.left, t.right] }",
     );
     let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
     let extremes = [-1e30f32, -1.0, 0.0, 0.5, 1.0, 1e30, f32::NAN, f32::INFINITY];
@@ -1762,7 +1762,7 @@ fn render_with(source: &str, name: &str, blocks: usize, mut set: impl FnMut(usiz
     out
 }
 
-const TAPE_SOURCE: &str = "use std/blocks\nfn src() { osc(saw, 220hz * (1 + phasor(2hz))) * 0.5 }\ninstr dry() { src() }\ninstr a(r: num, f: num) { freeze_reverse(src(), length: 100ms, reverse: r, freeze: f) }";
+const TAPE_SOURCE: &str = "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nfn src() { osc(saw, 220hz * (1 + phasor(2hz))) * 0.5 }\ninstr dry() { src() }\ninstr a(r: num, f: num) { freeze_reverse(src(), length: 100ms, reverse: r, freeze: f) }";
 
 #[test]
 fn freeze_reverse_passes_the_input_and_plays_each_window_backwards() {
@@ -1803,7 +1803,7 @@ fn freeze_reverse_loops_the_last_window_while_frozen_and_lets_go_after() {
 #[test]
 fn freeze_reverse_stays_finite_under_extreme_controls() {
     let extremes = [-1e30f32, -1.0, 0.0, 0.5, 1.0, 1e30, f32::NAN, f32::INFINITY];
-    let p = program("use std/blocks\ninstr a(x: num, y: num, z: num) { freeze_reverse(osc(saw, 220hz) * x, length: y * 1sec, reverse: z, freeze: x) }");
+    let p = program("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(x: num, y: num, z: num) { freeze_reverse(osc(saw, 220hz) * x, length: y * 1sec, reverse: z, freeze: x) }");
     let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
     for &x in &extremes {
         for &y in &extremes {
@@ -1867,7 +1867,7 @@ fn a_tap_delay_feeds_a_tap_back_with_its_own_pitch_and_can_freeze() {
     assert!(near(&second, 860.0, 900.0) > 4.0 * sine_content(&second, 440.0), "second echo is an octave up");
     // freeze keeps looping the last 100 ms (the tap's time) after the input has gone
     let freeze = |on: bool| {
-        let source = "use std/blocks\nconfig { channels: stereo }\ninstr a(f: num) { x = osc(sine, 440hz) * env[1 50ms 0]\n t = tap_delay(x, time: 100ms, taps: 1, spread: 0, decay: 1, freeze: f)\n [t.left, t.right] }";
+        let source = "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nconfig { channels: stereo }\ninstr a(f: num) { x = osc(sine, 440hz) * env[1 50ms 0]\n t = tap_delay(x, time: 100ms, taps: 1, spread: 0, decay: 1, freeze: f)\n [t.left, t.right] }";
         let p = program(source);
         let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
         let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
@@ -1895,7 +1895,7 @@ fn a_tap_delay_wobble_moves_the_taps_and_everything_stays_bounded_under_extreme_
     let difference: f32 = still.iter().zip(&moving).map(|(a, b)| (a - b).abs()).sum();
     assert!(difference > 100.0 && moving.iter().all(|v| v.is_finite()), "{difference}");
     let p = program(
-        "use std/blocks\nconfig { channels: stereo }\ninstr a(x: num, y: num, z: num) { t = tap_delay(osc(saw, 220hz) * x, time: y * 1ms, taps: 16, shifts: [z, x], step: z, levels: [x, y], decay: y, curve: z, groove: random, groove_amount: z, wobble: y, wobble_rate: z * 1hz, spread: x, filter: bandpass, cutoffs: [y * 1hz, z * 1hz], resonance: x, feedback: y, feedback_tap: z, feedback_shift: z, feedback_tone: x, reverse: z, freeze: x, window: x * 1ms)\n [t.left, t.right] }",
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nconfig { channels: stereo }\ninstr a(x: num, y: num, z: num) { t = tap_delay(osc(saw, 220hz) * x, time: y * 1ms, taps: 16, shifts: [z, x], step: z, levels: [x, y], decay: y, curve: z, groove: random, groove_amount: z, wobble: y, wobble_rate: z * 1hz, spread: x, filter: bandpass, cutoffs: [y * 1hz, z * 1hz], resonance: x, feedback: y, feedback_tap: z, feedback_shift: z, feedback_tone: x, reverse: z, freeze: x, window: x * 1ms)\n [t.left, t.right] }",
     );
     let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
     let extremes = [-1e30f32, -1.0, 0.0, 0.5, 1.0, 1e30, f32::NAN, f32::INFINITY];
@@ -1953,7 +1953,7 @@ fn morph_source() -> String {
     let params = "r: num, g: num = 0.5, nw: num, org: num, sp: num = 1, gs: num, sl: num, mk: num, um: num, cl: num, mo: num = 0.33, ck: num, sos: num, pl: num = 1";
     let call = "splice_reel(src(g), record: r, new_splice: nw, choose: org, speed: sp, grain_size: gs, slide: sl, mark: mk, unmark: um, clear: cl, morph: mo, clock: ck, sos: sos, play: pl)";
     format!(
-        "use std/blocks\nfn src(g) {{ osc(saw, 110hz) * g }}\ninstr dry(g: num = 0.5) {{ src(g) }}\ninstr a({params}) {{ {call}.left }}\ninstr n({params}) {{ {call}.count }}\ninstr e({params}) {{ {call}.grain_end }}\ninstr s({params}) {{ {call}.splice }}"
+        "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\nfn src(g) {{ osc(saw, 110hz) * g }}\ninstr dry(g: num = 0.5) {{ src(g) }}\ninstr a({params}) {{ {call}.left }}\ninstr n({params}) {{ {call}.count }}\ninstr e({params}) {{ {call}.grain_end }}\ninstr s({params}) {{ {call}.splice }}"
     )
 }
 
@@ -2139,7 +2139,7 @@ fn splice_reel_morph_makes_gaps_and_overlaps_and_the_clock_steps_or_stretches() 
 
 #[test]
 fn splice_reel_stays_finite_and_bounded_under_extreme_controls() {
-    let p = program("use std/blocks\ninstr a(x: num, y: num, z: num) { m = splice_reel(osc(saw, 220hz) * x, record: y, new_splice: z, sos: x, choose: z, shift: y, mark: y, unmark: z, clear: x, play: y, speed: z, grain_size: y, slide: x, morph: z, clock: y)\n m.left + m.right + m.level + m.grain_end + m.splice + m.count }");
+    let p = program("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(x: num, y: num, z: num) { m = splice_reel(osc(saw, 220hz) * x, record: y, new_splice: z, sos: x, choose: z, shift: y, mark: y, unmark: z, clear: x, play: y, speed: z, grain_size: y, slide: x, morph: z, clock: y)\n m.left + m.right + m.level + m.grain_end + m.splice + m.count }");
     let instrument = p.instruments.iter().find(|i| i.name == "a").unwrap();
     let extremes = [-1e30f32, -1.0, 0.0, 0.5, 1.0, 3.0, 1e30, f32::NAN, f32::INFINITY];
     for &x in &extremes {
@@ -2163,7 +2163,7 @@ fn splice_reel_stays_finite_and_bounded_under_extreme_controls() {
 #[test]
 fn splice_reel_switches_splices_and_flips_direction_without_clicks() {
     // a smooth sine, so any click stands out: its biggest step is 0.6 * 2 pi * 110 / 48000 = 0.0086
-    let source = "use std/blocks\ninstr a(r: num, g: num, nw: num, org: num, sp: num = 1) { splice_reel(osc(sine, 110hz) * g, record: r, new_splice: nw, choose: org, speed: sp).left }";
+    let source = "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(r: num, g: num, nw: num, org: num, sp: num = 1) { splice_reel(osc(sine, 110hz) * g, record: r, new_splice: nw, choose: org, speed: sp).left }";
     let record = |n: usize, v: &mut Voice| {
         v.set_param_by_name("g", if n < 200 { 0.2 } else { 0.6 });
         v.set_param_by_name("r", if n < 75 || (200..275).contains(&n) { 1.0 } else { 0.0 });
@@ -2192,7 +2192,7 @@ fn splice_reel_switches_splices_and_flips_direction_without_clicks() {
 #[test]
 fn splice_reel_has_no_dip_at_the_loop_point_at_fractional_speeds() {
     // reading between samples at the end of a splice used the sample after it (outside the splice), which dipped to zero there
-    let source = "use std/blocks\ninstr a(r: num, sp: num = 1) { splice_reel(0.3 + osc(sine, 110hz) * 0.5, record: r, speed: sp).left }";
+    let source = "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(r: num, sp: num = 1) { splice_reel(0.3 + osc(sine, 110hz) * 0.5, record: r, speed: sp).left }";
     for speed in [0.7f32, 1.37, -0.7, -1.37, 2.9] {
         let out = render_with(source, "a", 700, |n, v| {
             v.set_param_by_name("r", if n < 75 { 1.0 } else { 0.0 });
@@ -2208,7 +2208,7 @@ fn splice_reel_has_no_dip_at_the_loop_point_at_fractional_speeds() {
 #[test]
 fn splice_reel_retriggers_and_clocked_grain_steps_do_not_click() {
     // stepping grains with the clock, or restarting with play, used to cut every sounding grain off at once
-    let source = "use std/blocks\ninstr a(r: num, ck: num, pl: num = 1, gs: num, mo: num = 0.33) { splice_reel(0.3 + osc(sine, 110hz) * 0.5, record: r, clock: ck, play: pl, grain_size: gs, morph: mo).left }";
+    let source = "use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(r: num, ck: num, pl: num = 1, gs: num, mo: num = 0.33) { splice_reel(0.3 + osc(sine, 110hz) * 0.5, record: r, clock: ck, play: pl, grain_size: gs, morph: mo).left }";
     let step = |x: &[f32]| x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
     let stepped = render_with(source, "a", 900, |n, v| {
         v.set_param_by_name("r", if n < 150 { 1.0 } else { 0.0 });

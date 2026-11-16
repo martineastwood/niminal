@@ -67,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             format!("{REFERENCE}\ninstr a() {{ {body} }}")
         };
-        let native = format!("use std/blocks\ninstr a() {{ {body} }}");
+        let native = format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a() {{ {body} }}");
         let mut voices = Vec::new();
         for source in [reference, native] {
             let expanded = expand(&source, Path::new(".")).map_err(|e| e.message)?;

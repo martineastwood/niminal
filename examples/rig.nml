@@ -8,7 +8,9 @@ config { channels: stereo }
 tempo 112bpm
 
 // building blocks you wire together (harmonic_bank, scan_mix, function_gen, contour, wobble, clock_div, stereo_echo, space_reverb)
-use std/blocks
+use std/delays
+use std/modulation
+use std/sources
 
 // ---------------------------------------------------------------------------------------------
 // Material: two motifs, a long one and a short one. They are never edited while playing.

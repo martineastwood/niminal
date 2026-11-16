@@ -1,0 +1,85 @@
+// Grains and reels cut from samples: `use std/granular`.
+
+/// A cloud of grains cut from a sample or table, with every control held to a range that cannot run away.
+/// `position` (0 to 1) is where in the source the grains start and `spread` (0 to 1) scatters them either side of it,
+/// up to 400ms of the source. Each grain is `size` long (5ms to 500ms) and `density` of them start every second
+/// (1hz to 100hz); a grain is a smooth bell shape, so the cloud has no clicks. `pitch` transposes in semitones, `detune`
+/// adds up to that many semitones either way to each grain at random, and `width` spreads grains across the stereo
+/// field. The level is scaled down as the grains overlap more, so a thick cloud is no louder than a thin one. The same
+/// `seed` gives the same cloud each time. Move `position` with a slow signal, like `phasor(0.1hz)`, to scan the source.
+fn texture(
+  source: [num],
+  position: 0..1 = 0.5,
+  size: 5ms..500ms = 100ms,
+  density: 1hz..100hz = 20hz,
+  pitch: -24..24 = 0,
+  spread: 0..1 = 0.2,
+  detune: 0..12 = 0,
+  width: 0..1 = 0.5,
+  gain: 0..2 = 1,
+  seed: const num = 0
+) {
+  _size = size.max(5ms).min(500ms)
+  _density = density.max(1hz).min(100hz)
+  _overlap = (_density.num * _size.num).max(1)
+  granular(source, density: _density, duration: _size, position: position.max(0).min(1),
+    pitch: pitch.max(-24).min(24), spray: spread.max(0).min(1) * 400ms,
+    pitch_scatter: detune.max(0).min(12), spread: width.max(0).min(1),
+    gain: gain.max(0).min(2) / sqrt(_overlap), seed: seed)
+}
+
+/// A sampler that records into a reel, divides the recording into splices, and plays one splice back as grains (small
+/// windows of it). Returns `left` and `right` (the playback),
+/// `grain_end` (a 1 ms gate at the end of each grain), `level` (0 to 1, how loud the playback is), `splice` (the splice now
+/// playing, from 0) and `count` (how many splices the reel has).
+/// Recording: while `record` is high (above 0.5) the input `x` is recorded (stereo is summed to mono). If the reel is empty,
+/// or `new_splice` is high when recording starts, it goes into a new splice at the end of the reel; otherwise it
+/// records over the splice now playing, round and round for as long as `record` stays high. What is written is `x`
+/// with `1 - sos` and the playback with `sos`, so `sos` 0 records only the input, and above 0 layers on top of what is there.
+/// Recording and playback are independent, so what you hear while recording (speed, direction, grains) is what is recorded.
+/// Splices: `choose` (0 to 1) picks one evenly across the reel, a high `shift` moves to the next, `mark` drops a splice
+/// marker at the playback position, `unmark` joins the splice with the next, and `clear` empties the reel. Each is a gate:
+/// it acts on the rising edge.
+/// Playback: `speed` (-4 to 4, times normal speed) sets speed and direction, 0 stops it, and `play` (high is on; a rising edge
+/// starts again from the start, with what was playing fading out over 3 ms) lets the splice loop while high and stop at its end
+/// when low. `grain_size` (0 to 1) shrinks the
+/// window from the whole splice down to 2 ms, and `slide` (0 to 1) moves where in the splice it starts, wrapping round.
+/// `morph` (0 to 1) shapes the grains: below 0.33 there are gaps between them, 0.33 loops them seamlessly, and above it they
+/// overlap, up to four at once; from 0.45 the overlapping grains start at evenly spaced points in the window (with a little
+/// randomness) so they blend instead of combing, from 0.5 they pan at random, and above 0.8 some are pitched up.
+/// Grains cross-fade at equal power (a whole splice, which joins the same sound, at equal gain) and overlaps are held to a
+/// steady level. A splice loops at exactly its length without a click. One cut from a longer recording with `mark` cross-fades
+/// its last 10 ms into the sound just before its start, so its start plays at full strength; one that began a fresh recording
+/// fades its last 10 ms out and its first 2 ms in.
+/// `clock` (a gate) steps the window through the splice one grain at each tick when `morph` is 0.45 or below, and above that
+/// it time-stretches: the splice is played through once per tick whatever `speed` is, which changes only the pitch.
+/// `size` is the reel in samples (20 seconds at 48 khz by default), and `splices` how many it can hold.
+fn splice_reel(
+  x,
+  record: 0..1 = 0,
+  new_splice: 0..1 = 0,
+  sos: 0..1 = 0,
+  choose: 0..1 = 0,
+  shift: 0..1 = 0,
+  mark: 0..1 = 0,
+  unmark: 0..1 = 0,
+  clear: 0..1 = 0,
+  play: 0..1 = 1,
+  speed: -4..4 = 1,
+  grain_size: 0..1 = 0,
+  slide: 0..1 = 0,
+  morph: 0..1 = 0.33,
+  clock: 0..1 = 0,
+  size: const int = 960000,
+  splices: const int = 32
+) -> (left, right, grain_end, level, splice, count) {
+  _out = splice_reel_dsp(x.sum, record: record, new_splice: new_splice, sos: sos, choose: choose, shift: shift,
+    mark: mark, unmark: unmark, clear: clear, play: play, speed: speed, grain_size: grain_size, slide: slide,
+    morph: morph, clock: clock, size: size, splices: splices)
+  left = _out[0]
+  right = _out[1]
+  grain_end = _out[2]
+  level = _out[3]
+  splice = _out[4]
+  count = _out[5]
+}

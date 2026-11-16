@@ -38,7 +38,7 @@ fn comb_cloud(x, mix: 0..1 = 0.4) {
 /// A regular train of echoes: four, 180ms apart, each about half as loud as the one before.
 instr pluck(freq: init hz, decay: 0..1 = 0.997) {
   tail = 4sec
-  plucked = (noise() * env[1 3ms 0]).string(freq, decay: decay).gain(-6db)
+  plucked = (noise() * env[1 3ms 0]).plucked_string(freq, decay: decay).gain(-6db)
   out = plucked.echoes(count: 4, spacing: 180ms, fade: 0.55)
   space += out.gain(-12db)
 }
@@ -46,7 +46,7 @@ instr pluck(freq: init hz, decay: 0..1 = 0.997) {
 /// Taps placed by hand. Each `delay` is its own tap, so one drifts in time and one is darkened.
 instr drift(freq: init hz, decay: 0..1 = 0.997) {
   tail = 4sec
-  plucked = (noise() * env[1 3ms 0]).string(freq, decay: decay).gain(-6db)
+  plucked = (noise() * env[1 3ms 0]).plucked_string(freq, decay: decay).gain(-6db)
   sway = osc(sine, 0.4hz) * 6ms
   out = plucked + plucked.delay(250ms + sway, max: 300ms) * 0.4 + plucked.delay(500ms).lpf(cutoff: 1.5khz) * 0.35
   space += out.gain(-12db)

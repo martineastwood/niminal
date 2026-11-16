@@ -5,7 +5,7 @@
 /// a delay line of one period that loses a little each time round, so it settles into a tone at `freq`.
 /// `decay` near 1 rings longer and `damp` is how fast the highs die away (0 keeps them). `max` is the
 /// longest period, so the lowest `freq` is 1 / `max`. It is `comb` with the delay tuned to the pitch.
-fn string(x, freq: init hz, decay: 0..1 = 0.996, damp: 0..0.95 = 0.5, max: const sec = 50ms) {
+fn plucked_string(x, freq: init hz, decay: 0..1 = 0.996, damp: 0..0.95 = 0.5, max: const sec = 50ms) {
   x.comb(time: 1sec / freq.num - 1sec * damp / (1 - damp) / sample_rate.num, feedback: decay, damp: damp, max: max)
 }
 
@@ -26,4 +26,36 @@ fn free_bar(x, freq: init hz, decay: 10ms..10sec = 500ms) {
 /// A bell, with a hum tone an octave below the strike note.
 fn bell(x, freq: init hz, decay: 10ms..10sec = 750ms) {
   x.modal(freq, bell_modes, decay: decay)
+}
+
+/// Rings a sound like a struck object, with eight tuned modes at once. Any sound can excite it: percussion hits and noise
+/// become bars, strings and bells. `freq` is the pitch of the lowest mode. `structure` moves the overtones from a
+/// string (0, whole-number overtones) through a bar (0.5) to a bell (1). `decay` is how long the lowest mode rings,
+/// `damping` makes the higher ones die faster, and `brightness` lowers their level. `spread` detunes the modes against
+/// each other. `mix` blends from the dry sound to the ringing one. A sound that matches a mode's pitch is boosted a lot, so the ringing is softly limited below ±1. Stereo inputs are mixed to mono and held to ±16.
+fn resonant_body(
+  x,
+  freq: 20hz..4khz = 220hz,
+  structure: 0..1 = 0.5,
+  decay: 20ms..8sec = 1sec,
+  damping: 0..1 = 0.5,
+  brightness: 0..1 = 0.5,
+  spread: 0..1 = 0,
+  mix: 0..1 = 1
+) {
+  _string = [1, 2, 3, 4, 5, 6, 7, 8]
+  _bar = [1, 2.756, 5.404, 8.933, 13.344, 18.64, 24.82, 31.88]
+  _bell = [1, 2.32, 2.9, 3.7, 4.8, 6.1, 7.6, 9.2]
+  _s = structure.max(0).min(1)
+  _w1 = (1 - _s * 2).max(0)
+  _w2 = 1 - abs(_s * 2 - 1)
+  _w3 = (_s * 2 - 1).max(0)
+  _ratios = _string * _w1 + _bar * _w2 + _bell * _w3
+  _in = x.sum.max(-16).min(16)
+  _pitch = freq.max(20hz).min(4khz)
+  _freqs = (0..<8).map((_pitch * _ratios[it] * (1 + spread.max(0).min(1) * 0.01 * (it * 0.37 - floor(it * 0.37) - 0.5))).max(20hz).min(sample_rate * 0.45))
+  _life = (0..<8).map(decay.max(20ms).min(8sec) * pow(1 - damping.max(0).min(1) * 0.9, it * 0.5))
+  _level = (0..<8).map(pow(0.3 + brightness.max(0).min(1) * 0.7, it))
+  _wet = (_in.resonator(_freqs, decay: _life) * _level).sum * 4
+  _in.crossfade(_wet.tanh, mix.max(0).min(1))
 }

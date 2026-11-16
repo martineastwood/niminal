@@ -6,7 +6,9 @@
 config { channels: stereo }
 tempo 90bpm
 
-use std/blocks
+use std/gates
+use std/granular
+use std/sequencing
 
 // A tick every eighth note.
 fn tick() { impulse((2 / (1beat).num).hz) }

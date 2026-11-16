@@ -1,0 +1,76 @@
+// Shapes that move other controls: `use std/modulation`.
+
+/// A shape that repeats against the transport, from 0 up to 1 and back: `cycle` beats long, rising for the first
+/// `rise` of them (a share, 0 to 1) and falling for the rest. `curve` bends both sides: 1 is straight, above 1
+/// holds back at the bottom, below 1 hurries away from it. It follows the tempo and the bar, so a swell
+/// `function_gen(cycle: 32, rise: 0.75)` always peaks on the same beat of every eight bars of four beats.
+fn function_gen(cycle: num = 8, rise: 0..1 = 0.5, curve: 0.1..10 = 1) {
+  _phase = (clock.beat / cycle.max(0.001)).mod(1)
+  _up = _phase / rise.max(0.001)
+  _down = (1 - _phase) / (1 - rise).max(0.001)
+  pow(_up.min(_down).max(0).min(1), curve.max(0.001))
+}
+
+/// A triggered rise/fall contour. A positive edge starts a rise from the current level, then a fall.
+/// Holding trigger high does not retrigger. Cycle starts immediately and repeats until switched off;
+/// switching it off finishes the current contour. Rise/fall are full-scale travel times, up to 60sec.
+/// Zero time takes one sample. Curve 1 is linear; higher curves hold the output closer to zero.
+/// Outputs: value (0..1), eor and eoc (one-sample pulses at end of rise and end of cycle).
+fn contour(
+  trigger: num = 0,
+  rise: 0sec..60sec = 10ms,
+  fall: 0sec..60sec = 300ms,
+  curve: 0.1..10 = 1,
+  cycle: 0..1 = 0
+) -> (value, eor, eoc) {
+  _out = contour_dsp(trigger: trigger, rise: rise, fall: fall, curve: curve, cycle: cycle)
+  value = _out[0]
+  eor = _out[1]
+  eoc = _out[2]
+}
+
+/// Random values from -1 to 1, a new one every `beats` beats: `stepped` holds each until the next, `smooth` slides
+/// to it over most of the beats. The same `seed` is the same run every time, and another seed is another run.
+fn wobble(beats: num = 0.5, shape: (stepped | smooth) = stepped, seed: const num = 0) {
+  _rate = 1hz * (clock.bpm / 60 / beats.max(0.001))
+  if shape == stepped {
+    random_steps(_rate, seed: seed)
+  } else {
+    random_glide(_rate, glide: clock.beat_length * beats.max(0.001) * 0.9, seed: seed).smooth(10ms)
+  }
+}
+
+/// A low-frequency oscillator with four outputs a fixed phase apart, for motion that moves around a stereo or
+/// surround space or drives several controls out of step. `rate` is in hz (for the tempo use
+/// `1hz * clock.bpm / 60 / beats`). `shape` is where the peak falls in each cycle (a ramp at 0 or 1, a triangle at 0.5),
+/// `smooth` rounds the corners towards a sine, and `shift` is the phase between neighbouring outputs in cycles:
+/// 0.25 gives four quarter-turns, 0 gives four copies. Outputs run from -1 to 1.
+fn multi_lfo(
+  rate: 0.01hz..200hz = 1hz,
+  shape: 0..1 = 0.5,
+  smooth: 0..1 = 0.5,
+  shift: 0..1 = 0.25
+) -> (a, b, c, d) {
+  _phase = phasor(rate.max(0.01hz).min(200hz))
+  _rise = shape.max(0.02).min(0.98)
+  _round = smooth.max(0).min(1)
+  _shift = shift.max(0).min(1)
+  _all = for i in 0..<4 {
+    _p = (_phase + i * _shift).mod(1)
+    _t = (_p / _rise).min((1 - _p) / (1 - _rise)).max(0).min(1)
+    _t.crossfade(0.5 + 0.5 * sin(3.141593 * (_t - 0.5)), _round) * 2 - 1
+  }
+  a = _all[0]
+  b = _all[1]
+  c = _all[2]
+  d = _all[3]
+}
+
+/// Follow a signal with separate `rise` and `fall` times, so it climbs quickly and falls slowly, or the other way round.
+/// It works on any signal: smooth a stepped random value, turn a gate into an envelope, add portamento to a pitch,
+/// or make a sound swell in and decay out. `smooth` takes the time to cover about two thirds of the distance, with fast
+/// moves starting quickly and slowing down; `linear` takes that time to travel a full 1.0 at a steady rate. A time of 0
+/// follows at once. Stereo signals are followed channel by channel.
+fn slew(x, rise: 0sec..60sec = 10ms, fall: 0sec..60sec = 100ms, shape: (smooth | linear) = smooth) {
+  slew_dsp(x, rise: rise, fall: fall, linear: if shape == linear { 1 } else { 0 })
+}

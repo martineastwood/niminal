@@ -106,19 +106,43 @@ const REEL: &str = "r = splice_reel(osc(saw, 220hz), record: phasor(8hz) < 0.5)
  r.left + r.right";
 
 pub fn time_block(body: &str, seconds: f64, trials: usize) -> Result<f64, String> {
-    let source = format!("use std/blocks\ninstr a(freq: hz = 220hz) {{ {body} }}");
+    let source = format!("use std/sources\nuse std/modulation\nuse std/gates\nuse std/random\nuse std/sequencing\nuse std/filters\nuse std/shaping\nuse std/granular\nuse std/delays\nuse std/physical\nuse std/spectral\ninstr a(freq: hz = 220hz) {{ {body} }}");
     time_voice(&source, "a", seconds, trials)
 }
 
 /// Supply representative inputs for the block parameters that have no defaults.
 pub fn block_calls() -> Result<Vec<(String, String)>, String> {
-    let text = include_str!("../../../niminal-lang/std/blocks.nml");
-    let items = parse_composition(text).map_err(|e| e.render("std/blocks", text))?;
+    let text = [
+        include_str!("../../../niminal-lang/std/sources.nml"),
+        include_str!("../../../niminal-lang/std/modulation.nml"),
+        include_str!("../../../niminal-lang/std/gates.nml"),
+        include_str!("../../../niminal-lang/std/random.nml"),
+        include_str!("../../../niminal-lang/std/sequencing.nml"),
+        include_str!("../../../niminal-lang/std/filters.nml"),
+        include_str!("../../../niminal-lang/std/shaping.nml"),
+        include_str!("../../../niminal-lang/std/granular.nml"),
+        include_str!("../../../niminal-lang/std/delays.nml"),
+        include_str!("../../../niminal-lang/std/physical.nml"),
+        include_str!("../../../niminal-lang/std/spectral.nml"),
+    ]
+    .join("\n")
+    .lines()
+    .filter(|line| !line.starts_with("use "))
+    .collect::<Vec<_>>()
+    .join("\n");
+    let items = parse_composition(&text).map_err(|e| e.render("the building blocks", &text))?;
     Ok(items
         .into_iter()
         .filter_map(|item| {
             let Item::Fn(def) = item else { return None };
             let name = def.name.name;
+            // the frame helpers take arrays of spectrum frames, which a generic call cannot supply
+            if matches!(
+                name.as_str(),
+                "spectral_envelope" | "envelope_transfer" | "phase_frequency" | "phase_accumulate"
+            ) {
+                return None;
+            }
             if name == "splice_reel" {
                 return Some((name, REEL.into()));
             }

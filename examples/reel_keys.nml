@@ -8,7 +8,8 @@
 config { channels: stereo }
 tempo 100bpm
 use std/instruments.{electric_piano}
-use std/blocks
+use std/granular
+use std/sequencing
 
 fn every_bar() { impulse((1 / (4beat).num).hz) }
 fn every_beat() { impulse((1 / (1beat).num).hz) }

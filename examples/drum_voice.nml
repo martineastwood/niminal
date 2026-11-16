@@ -3,7 +3,8 @@
 // Gain changes both loudness and strike, and the open and closed hats choke each other.
 // my_snare shows how to call the full drum machine directly.
 // Render with:  niminal render examples/drum_voice.nml --out drum_voice.wav --bars 4
-use std/drums.{kick_808, kick_punch, snare_tri, clap, hat_closed, hat_open, cowbell, rim, tom, blip, zap, wobble_bass}
+use std/drums.{kick_808, kick_punch, snare_tri, clap, hat_closed, hat_open, cowbell, rim, tom}
+use std/instruments.{blip, zap, wobble_bass}
 
 config { channels: stereo }
 tempo 124bpm

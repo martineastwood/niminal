@@ -1,0 +1,104 @@
+// Filters beyond the built-in ones: `use std/filters`.
+
+/// A state-variable filter with all four responses at once: low, band, high and notch come from the same
+/// two integrators, so they can be crossfaded, summed or sent to different places. Stable for any cutoff
+/// (held to 10hz..45% of the sample rate) and any resonance, including changes at audio rate; stereo input
+/// is filtered channel by channel. Resonance 1 rings long without running away: above 0.6 the filter
+/// saturates more as it rises, so low and band stay near ±1.5 for a full-scale input. Band has the
+/// same gain as low at the cutoff: 0.5 at resonance 0, rising with resonance. `drive` (0..1) pushes the input into a
+/// soft clip and saturates the filter at any resonance, for a thicker, rounder sound.
+fn multimode_filter(x, cutoff: hz = 1khz, res: 0..1 = 0.2, drive: 0..1 = 0) -> (low, band, high, notch) {
+  _out = x.channels.map(multimode_filter_dsp(it, cutoff: cutoff, res: res, drive: drive))
+  low = if x.channels.len == 1 { _out[0][0] } else { _out.map(it[0]) }
+  band = if x.channels.len == 1 { _out[0][1] } else { _out.map(it[1]) }
+  high = if x.channels.len == 1 { _out[0][2] } else { _out.map(it[2]) }
+  notch = if x.channels.len == 1 { _out[0][3] } else { _out.map(it[3]) }
+}
+
+/// A low-pass gate: one control opens a filter and an amplifier together, the way a light-dependent
+/// resistor does, so a sound darkens as it fades. `ping` strikes it on each positive edge; the default, 1,
+/// strikes once as a note starts. A strike opens it in a few milliseconds and lets it close over about
+/// `decay`, quickly at first and then lingering. `level` (0..1) holds it open on top of the strikes, for a
+/// gate driven by an envelope or a slow shape. `mode` opens the filter and amplifier together (`both`), the
+/// filter alone or the amplifier alone; `res` adds a little ring. Outputs: sound, and opening (0..1) to drive other things.
+fn low_pass_gate(
+  x,
+  ping: num = 1,
+  level: 0..1 = 0,
+  decay: 10ms..10sec = 400ms,
+  res: 0..1 = 0.1,
+  mode: (both | filter | gate) = both
+) -> (sound, opening) {
+  state _light = 0
+  state _rising = 0
+  state _previous = 0
+  _high = if ping > 0 { 1 } else { 0 }
+  if _high > 0 and _previous <= 0 {
+    _rising = 1
+  }
+  _previous = _high
+  if _rising > 0 {
+    _light = _light + (1 - _light) * 0.004
+    if _light > 0.98 {
+      _light = 1
+      _rising = 0
+    }
+  } else {
+    _fall = exp(-6.9 / (decay.num.max(0.01).min(10) * sample_rate.num))
+    _light = _light * pow(_fall, 0.35 + 0.65 * _light)
+  }
+  opening = _light.max(level.max(0).min(1).smooth(5ms))
+  _cutoff = 60hz * pow(250, opening)
+  _filtered = if mode == gate { x } else { x.multimode_filter(cutoff: _cutoff, res: res.max(0).min(1) * 0.6).low }
+  sound = if mode == filter { _filtered } else { _filtered * opening * opening }
+}
+
+/// Three band-pass peaks that move together, the way the throat shapes a voice: put a sound through it and it
+/// takes on vowels. `freq` is the lowest peak, `span` spreads the other two above it (0 close together, 1 far apart),
+/// `res` narrows the peaks and `tilt` favours the low peak (-1) or the high one (1). Outputs: sound (the three mixed)
+/// and low, mid and high, each peak on its own to send elsewhere. Stable for any setting; sound stays within ±2.
+fn formant_filter(
+  x,
+  freq: 100hz..4khz = 600hz,
+  span: 0..1 = 0.5,
+  res: 0..1 = 0.6,
+  tilt: -1..1 = 0
+) -> (sound, low, mid, high) {
+  _f1 = freq.max(100hz).min(4khz)
+  _f2 = _f1 * (1.5 + span.max(0).min(1) * 2.5)
+  _f3 = _f2 * (1.2 + span.max(0).min(1) * 0.8)
+  _res = res.max(0).min(1)
+  _gain = 1 / (0.5 + _res)
+  low = x.multimode_filter(cutoff: _f1, res: _res).band * _gain
+  mid = x.multimode_filter(cutoff: _f2, res: _res).band * _gain
+  high = x.multimode_filter(cutoff: _f3, res: _res).band * _gain
+  _tilt = tilt.max(-1).min(1)
+  sound = (low * (1 - _tilt * 0.5) + mid * 0.7 + high * (0.5 + _tilt * 0.5)).clip(level: 2)
+}
+
+/// A channel vocoder: the loudness of `modulator` in each of `bands` frequency bands (from `low` to `high`, spaced
+/// evenly in pitch) shapes the same bands of `carrier`, so a voice speaks through a synth. Use a rich carrier,
+/// such as a saw or a chord. `width` narrows the bands (more is sharper), `attack` and `release` set how fast
+/// each band follows the modulator, and `hiss` lets the modulator's consonants through as noise. Stereo
+/// inputs are mixed to mono.
+fn vocoder(
+  carrier,
+  modulator,
+  bands: const int = 16,
+  low: 40hz..2khz = 120hz,
+  high: 1khz..16khz = 8khz,
+  width: 0.5..8 = 3,
+  attack: 1ms..100ms = 4ms,
+  release: 5ms..500ms = 40ms,
+  hiss: 0..1 = 0.3
+) {
+  _low = low.max(40hz).min(2khz)
+  _high = high.max(_low * 2).min(sample_rate * 0.4)
+  _centres = (0..<bands).map(_low * pow(_high / _low, it / (bands - 1).max(1)))
+  _res = width.max(0.5).min(8) * 0.15
+  _speech = modulator.sum
+  _bands = _speech.bpf(_centres, res: _res).follow(attack: attack.max(1ms).min(100ms), release: release.max(5ms).min(500ms))
+  _voiced = (carrier.sum.bpf(_centres, res: _res) * _bands).sum
+  _hissy = noise() * _speech.hpf(_high * 0.7).follow(attack: 2ms, release: 20ms) * hiss.max(0).min(1)
+  (_voiced * 4 / sqrt(bands) + _hissy).clip(level: 1.5)
+}
