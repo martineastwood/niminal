@@ -433,20 +433,6 @@ cargo run -p niminal-lang --example audition -- target/audition
 
 Open `target/audition/index.html` for each instrument's default, soft, short and long notes, plus melodic chords. Preview gain targets -20 dBFS RMS over the default note's first half-second, capped by a -6 dBFS peak and 18 dB of boost. That gain is fixed across each preset's variations, preserving velocity differences. `report.csv` contains the original levels and preview gains, and each patch is saved beside its audio. The preview is for comparison; it does not change the preset's output gain.
 
-## Migrating to language 0.4
-
-- Replace the `lowpass`, `highpass`, `bandpass` and `band_cut` effects with `filter`. Its `response` picks the shape: 0 for low-pass, 1/3 band-pass, 2/3 high-pass, 1 notch. `cutoff`, `sweep_beats`, `sweep_depth` and `mix` are unchanged, and `resonance` now runs to 1. Its filter is a state-variable one, so it sounds a little different from the old biquads; for the old sound, use `in.lpf(...)`, `in.hpf(...)`, `in.bpf(...)` or `in.notch(...)` in your own `fx`.
-- A function's named results may now share a name with a control. A control called `value` no longer stops `contour` working.
-
-## Migrating to language 0.3
-
-- Remove `use std/filters`; `onepole_lp` and `onepole_hp` are now native and need no import.
-- Replace `spectral_pitch(...)` with `spectral_warp(...)`; its arguments and latency are unchanged.
-- Replace `std/delays`'s `tape(...)` with `dark_echo(...)`. This is a damped delay recipe, without a tape model.
-- Take drums from `std/drums`. The introductory `kick`, `snare` and `hat` patches were removed from `std/instruments`; editable teaching versions remain in `examples/synth_drums.nml`.
-- Drum presets now expose musical controls rather than every `drum` parameter. For hats and claps, use `decay` instead of `noise_decay`, and `tone` instead of `noise_freq`. Kicks use `punch` instead of `mod_amount` and `click` instead of `mix`; snares use `snap` instead of `mix`. Use `niminal presets NAME` for each full signature, or copy a patch and call `drum(...)` for the full machine.
-- A drum note's `gain` now changes its actual output level as well as its strike. Zero gain is silent. Existing patterns that relied on the old velocity-only behavior will play more softly.
-
 ## Examples
 
 Each of these is a whole piece: the code is the file that made the sound.

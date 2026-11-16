@@ -11,5 +11,5 @@ const src = `${media}/${file.replace(/\.nml$/, '')}.mp3`;
 ---
 <div class="example">
   <Code code={code} lang="niminal" title={file} />
-  {audio && <audio controls preload="none" src={src}></audio>}
+  {audio && <audio controls preload="metadata" src={src}></audio>}
 </div>
