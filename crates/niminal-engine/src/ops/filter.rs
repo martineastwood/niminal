@@ -189,6 +189,224 @@ impl Opcode for Svf {
     }
 }
 
+/// Several state-variable filters of one kind that run side by side: lane `j` has its own `x`, `cutoff`
+/// and `res`, and gives exactly what a lone [`Svf`] would. The lanes advance in lockstep, one sample
+/// at a time, so their independent recurrences overlap instead of each waiting on its own.
+#[derive(Clone)]
+pub struct SvfBank {
+    mode: FilterMode,
+    lanes: usize,
+    ports: Vec<Port>,
+    /// Each lane's coefficient bookkeeping; its state lives in `ic1` and `ic2`.
+    filters: Vec<Svf>,
+    /// The cutoff and resonance each lane's coefficients were made for.
+    seen_cutoff: Vec<f32>,
+    seen_res: Vec<f32>,
+    ic1: Vec<f64>,
+    ic2: Vec<f64>,
+    a1: Vec<f64>,
+    a2: Vec<f64>,
+    a3: Vec<f64>,
+    k: Vec<f64>,
+    m11: Vec<f64>,
+    m12: Vec<f64>,
+    n1: Vec<f64>,
+    m21: Vec<f64>,
+    m22: Vec<f64>,
+    n2: Vec<f64>,
+    /// This sample's inputs and results, one entry per lane.
+    row_x: Vec<f32>,
+    row_cutoff: Vec<f32>,
+    row_res: Vec<f32>,
+    row_y: Vec<f32>,
+}
+
+impl SvfBank {
+    pub fn new(mode: FilterMode, lanes: usize) -> Self {
+        assert!(lanes > 0, "a bank has at least one filter");
+        let mut ports = Vec::with_capacity(3 * lanes);
+        for j in 0..lanes {
+            ports.push(Port::named(format!("x{j}"), None));
+        }
+        for j in 0..lanes {
+            ports.push(Port::named(format!("cutoff{j}"), None));
+        }
+        for j in 0..lanes {
+            ports.push(Port::named(format!("res{j}"), Some(0.0)));
+        }
+        let zeros = || vec![0.0f64; lanes];
+        let mut bank = SvfBank {
+            mode,
+            lanes,
+            ports,
+            filters: (0..lanes).map(|_| Svf::new(mode)).collect(),
+            seen_cutoff: vec![0.0; lanes],
+            seen_res: vec![0.0; lanes],
+            ic1: zeros(),
+            ic2: zeros(),
+            a1: zeros(),
+            a2: zeros(),
+            a3: zeros(),
+            k: zeros(),
+            m11: zeros(),
+            m12: zeros(),
+            n1: zeros(),
+            m21: zeros(),
+            m22: zeros(),
+            n2: zeros(),
+            row_x: vec![0.0; lanes],
+            row_cutoff: vec![0.0; lanes],
+            row_res: vec![0.0; lanes],
+            row_y: vec![0.0; lanes],
+        };
+        for j in 0..lanes {
+            bank.take_coefficients(j);
+        }
+        bank
+    }
+
+    /// Copy lane `j`'s coefficients, and what they were made for, out of its filter.
+    fn take_coefficients(&mut self, j: usize) {
+        let f = &self.filters[j];
+        self.seen_cutoff[j] = f.cached_for.0;
+        self.seen_res[j] = f.cached_for.1;
+        self.a1[j] = f.a1;
+        self.a2[j] = f.a2;
+        self.a3[j] = f.a3;
+        self.k[j] = f.k;
+        self.m11[j] = f.m11;
+        self.m12[j] = f.m12;
+        self.n1[j] = f.n1;
+        self.m21[j] = f.m21;
+        self.m22[j] = f.m22;
+        self.n2[j] = f.n2;
+    }
+
+    fn run<const MODE: u8>(
+        &mut self,
+        slots: &[Vec<f32>],
+        indices: &[usize],
+        outs: &mut [Vec<f32>],
+        frames: usize,
+    ) {
+        let n = self.lanes;
+        for i in 0..frames {
+            let mut changed = false;
+            for j in 0..n {
+                let (c, r) = (slots[indices[n + j]][i], slots[indices[2 * n + j]][i]);
+                self.row_x[j] = slots[indices[j]][i];
+                self.row_cutoff[j] = c;
+                self.row_res[j] = r;
+                changed |= (c != self.seen_cutoff[j]) | (r != self.seen_res[j]);
+            }
+            if changed {
+                for j in 0..n {
+                    let (c, r) = (self.row_cutoff[j], self.row_res[j]);
+                    if c != self.seen_cutoff[j] || r != self.seen_res[j] {
+                        self.filters[j].update(c, r);
+                        self.take_coefficients(j);
+                    }
+                }
+            }
+            // Every lane does the same arithmetic as `Svf::step`, on its own state.
+            let (a1, a2, a3, k) = (&self.a1[..n], &self.a2[..n], &self.a3[..n], &self.k[..n]);
+            let (m11, m12, n1) = (&self.m11[..n], &self.m12[..n], &self.n1[..n]);
+            let (m21, m22, n2) = (&self.m21[..n], &self.m22[..n], &self.n2[..n]);
+            let (ic1s, ic2s) = (&mut self.ic1[..n], &mut self.ic2[..n]);
+            let (row_x, row_y) = (&self.row_x[..n], &mut self.row_y[..n]);
+            for j in 0..n {
+                let x = f64::from(row_x[j]);
+                let (ic1, ic2) = (ic1s[j], ic2s[j]);
+                let v3 = x - ic2;
+                let y = match MODE {
+                    LOW => ic2 + a2[j] * ic1 + a3[j] * v3,
+                    BAND => k[j] * (a1[j] * ic1 + a2[j] * v3),
+                    HIGH => {
+                        let v1 = a1[j] * ic1 + a2[j] * v3;
+                        let v2 = ic2 + a2[j] * ic1 + a3[j] * v3;
+                        x - k[j] * v1 - v2
+                    }
+                    _ => x - k[j] * (a1[j] * ic1 + a2[j] * v3),
+                };
+                ic1s[j] = flush((m11[j] * ic1 + m12[j] * ic2) + n1[j] * x);
+                ic2s[j] = flush((m21[j] * ic1 + m22[j] * ic2) + n2[j] * x);
+                row_y[j] = y as f32;
+            }
+            for (out, &y) in outs.iter_mut().zip(&self.row_y) {
+                out[i] = y;
+            }
+        }
+    }
+}
+
+impl Opcode for SvfBank {
+    fn reset(&mut self) {
+        self.ic1.fill(0.0);
+        self.ic2.fill(0.0);
+    }
+
+    fn name(&self) -> &str {
+        match self.mode {
+            FilterMode::Low => "lpf",
+            FilterMode::High => "hpf",
+            FilterMode::Band => "bpf",
+            FilterMode::Notch => "notch",
+        }
+    }
+
+    fn ports(&self) -> &[Port] {
+        &self.ports
+    }
+
+    fn outputs(&self) -> usize {
+        self.lanes
+    }
+
+    fn max_inputs(&self) -> usize {
+        self.ports.len()
+    }
+
+    fn box_clone(&self) -> Box<dyn Opcode> {
+        Box::new(SvfBank::new(self.mode, self.lanes))
+    }
+
+    fn prepare(&mut self, sample_rate: f32) {
+        for j in 0..self.lanes {
+            self.filters[j].prepare(sample_rate);
+            self.take_coefficients(j);
+        }
+    }
+
+    fn carry_state(&mut self, old: &mut dyn Opcode) {
+        if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>()
+            && old.lanes == self.lanes
+        {
+            self.ic1.copy_from_slice(&old.ic1);
+            self.ic2.copy_from_slice(&old.ic2);
+        }
+    }
+
+    fn process(&mut self, _: &ProcessCtx, _: &[&[f32]], _: &mut [f32]) {
+        unreachable!("a filter bank uses graph slots")
+    }
+
+    fn process_slots(
+        &mut self,
+        _: &ProcessCtx,
+        slots: &[Vec<f32>],
+        indices: &[usize],
+        outs: &mut [Vec<f32>],
+        frames: usize,
+    ) {
+        match self.mode {
+            FilterMode::Low => self.run::<LOW>(slots, indices, outs, frames),
+            FilterMode::High => self.run::<HIGH>(slots, indices, outs, frames),
+            FilterMode::Band => self.run::<BAND>(slots, indices, outs, frames),
+            FilterMode::Notch => self.run::<NOTCH>(slots, indices, outs, frames),
+        }
+    }
+}
+
 #[cfg(test)]
 mod one_sample_tests {
     use super::*;
@@ -309,6 +527,82 @@ mod chain_tests {
                 peak = peak.max(w.abs());
             }
             assert!(worst <= 1e-4 * peak.max(1.0), "{mode:?}: worst {worst} against a peak of {peak}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod bank_tests {
+    use super::*;
+
+    /// A bank must give, lane by lane and bit for bit, what separate filters give: with steady and
+    /// swept cutoffs, a resonance that moves in some lanes only, a lane fed a non-finite cutoff, and a
+    /// run split into uneven blocks.
+    #[test]
+    fn a_bank_matches_separate_filters_bit_for_bit() {
+        let lanes = 7;
+        let n = 3000;
+        let mut seed = 99u32;
+        let mut noise = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1u32 << 23) as f32 - 1.0
+        };
+        let x: Vec<Vec<f32>> = (0..lanes).map(|_| (0..n).map(|_| noise()).collect()).collect();
+        let cutoff: Vec<Vec<f32>> = (0..lanes)
+            .map(|j| {
+                (0..n)
+                    .map(|i| match j {
+                        0 | 1 => 300.0 + 700.0 * j as f32,
+                        5 if i > 1200 && i < 1300 => f32::NAN,
+                        _ => 200.0 + 6000.0 * (0.5 + 0.5 * (i as f32 * 0.003 * j as f32).sin()),
+                    })
+                    .collect()
+            })
+            .collect();
+        let res: Vec<Vec<f32>> = (0..lanes)
+            .map(|j| {
+                (0..n)
+                    .map(|i| if j % 2 == 0 { 0.4 } else { 0.5 + 0.4 * (i as f32 * 0.001).sin() })
+                    .collect()
+            })
+            .collect();
+        for mode in [FilterMode::Low, FilterMode::High, FilterMode::Band, FilterMode::Notch] {
+            let ctx = ProcessCtx::new(48_000.0, true);
+            let mut alone: Vec<Svf> = (0..lanes).map(|_| Svf::new(mode)).collect();
+            let mut want = vec![vec![0.0f32; n]; lanes];
+            for j in 0..lanes {
+                alone[j].prepare(48_000.0);
+                alone[j].process(&ctx, &[&x[j], &cutoff[j], &res[j]], &mut want[j]);
+            }
+            let mut bank = SvfBank::new(mode, lanes);
+            bank.prepare(48_000.0);
+            assert_eq!(bank.ports().len(), 3 * lanes);
+            assert_eq!(bank.outputs(), lanes);
+            let mut got = vec![vec![0.0f32; n]; lanes];
+            let mut start = 0;
+            for len in [64, 1, 100, 7, 63].iter().cycle() {
+                if start >= n {
+                    break;
+                }
+                let len = (*len).min(n - start);
+                let slots: Vec<Vec<f32>> = (0..lanes)
+                    .map(|j| x[j][start..start + len].to_vec())
+                    .chain((0..lanes).map(|j| cutoff[j][start..start + len].to_vec()))
+                    .chain((0..lanes).map(|j| res[j][start..start + len].to_vec()))
+                    .collect();
+                let indices: Vec<usize> = (0..3 * lanes).collect();
+                let mut outs = vec![vec![0.0f32; len]; lanes];
+                bank.process_slots(&ctx, &slots, &indices, &mut outs, len);
+                for j in 0..lanes {
+                    got[j][start..start + len].copy_from_slice(&outs[j]);
+                }
+                start += len;
+            }
+            for j in 0..lanes {
+                for i in 0..n {
+                    assert_eq!(got[j][i].to_bits(), want[j][i].to_bits(), "{mode:?} lane {j} sample {i}");
+                }
+            }
         }
     }
 }

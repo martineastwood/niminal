@@ -78,7 +78,7 @@ pub use distortion::Distortion;
 pub use env::{Curve, Env, EnvField, Segment, shape};
 pub use eq::{Eq, EqMode};
 pub use fdn::Fdn;
-pub use filter::{FilterMode, Svf};
+pub use filter::{FilterMode, Svf, SvfBank};
 pub use fold::{Clip, Fold};
 pub use follow::Follow;
 pub use formant::Formant;

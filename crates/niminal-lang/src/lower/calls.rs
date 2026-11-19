@@ -1,6 +1,7 @@
 //! Calls: ranges, `spawn` scopes and built-in opcode dispatch.
 
 use super::*;
+use niminal_engine::ops::{FilterMode, SvfBank};
 
 impl Lower<'_> {
     /// `x.range(200hz..4khz)`: a plain signal from 0 to 1 (a control, a knob) mapped to a range. Decibels
@@ -807,15 +808,75 @@ impl Lower<'_> {
         let rows = call::rows(&vals)
             .map_err(|m| Diagnostic::new(m, span))?
             .expect("a call with an array argument has rows");
-        let items = rows
-            .iter()
-            .map(|row| self.dispatch_arrays(spec, row, span))
-            .collect::<Res<_>>()?;
+        let banked = match filter_mode(&spec.name) {
+            Some(mode) if rows.len() > 1 => self.filter_rows(mode, spec, &rows),
+            _ => None,
+        };
+        let items = match banked {
+            Some(srcs) => srcs
+                .into_iter()
+                .map(|src| Datum::Sig(Sig::signal(src, Unit::Num)))
+                .collect(),
+            None => rows
+                .iter()
+                .map(|row| self.dispatch_arrays(spec, row, span))
+                .collect::<Res<_>>()?,
+        };
         let result = Datum::Array(items);
         match layout {
             Some(layout) => Self::signal_array(result, layout, span),
             None => Ok(result),
         }
+    }
+
+    /// One node for several filters of the same kind, so that they advance side by side. Lane `j` is
+    /// wired as a lone filter would be; `res` is left to its default when `None`.
+    fn filter_bank(
+        &mut self,
+        mode: FilterMode,
+        x: Vec<Src>,
+        cutoff: Vec<Src>,
+        res: Option<Vec<Src>>,
+    ) -> Vec<Src> {
+        let lanes = x.len();
+        let mut wired: Vec<(String, Src)> = Vec::with_capacity(3 * lanes);
+        for (j, src) in x.into_iter().enumerate() {
+            wired.push((format!("x{j}"), src));
+        }
+        for (j, src) in cutoff.into_iter().enumerate() {
+            wired.push((format!("cutoff{j}"), src));
+        }
+        for (j, src) in res.into_iter().flatten().enumerate() {
+            wired.push((format!("res{j}"), src));
+        }
+        let args: Vec<(&str, Src)> = wired.iter().map(|(n, s)| (n.as_str(), *s)).collect();
+        self.g
+            .add_outputs(SvfBank::new(mode, lanes), &args)
+            .expect("ports match the filter bank")
+    }
+
+    /// A filter called over an array, as one bank: every row has plain one-channel signals to filter, to
+    /// set the cutoff and (all of them, or none) to set the resonance. `None` if a row is anything else.
+    fn filter_rows(
+        &mut self,
+        mode: FilterMode,
+        spec: &opcodes::OpSpec,
+        rows: &[Vec<Option<Val>>],
+    ) -> Option<Vec<Src>> {
+        let column = |name: &str| spec.params.iter().position(|p| p.name == name);
+        let (ix, ic, ir) = (column("x")?, column("cutoff")?, column("res")?);
+        let one = |row: &Vec<Option<Val>>, k: usize| match &row[k] {
+            Some(Val::Sig(sig)) if sig.count() == 1 => Some(sig.pick(0)),
+            _ => None,
+        };
+        let x: Option<Vec<Src>> = rows.iter().map(|row| one(row, ix)).collect();
+        let cutoff: Option<Vec<Src>> = rows.iter().map(|row| one(row, ic)).collect();
+        let res = if rows.iter().all(|row| row[ir].is_none()) {
+            None
+        } else {
+            Some(rows.iter().map(|row| one(row, ir)).collect::<Option<Vec<Src>>>()?)
+        };
+        Some(self.filter_bank(mode, x?, cutoff?, res))
     }
 
     pub(super) fn dispatch(
@@ -860,6 +921,22 @@ impl Lower<'_> {
                 }
                 width = sig.count();
                 layout = sig.layout;
+            }
+        }
+
+        if width > 1
+            && let Some(mode) = filter_mode(&spec.name)
+        {
+            let lane = |name: &str| -> Option<Vec<Src>> {
+                let (_, v) = spec.params.iter().zip(vals).find(|(p, _)| p.name == name)?;
+                match v {
+                    Some(Val::Sig(sig)) => Some((0..width).map(|k| sig.pick(k)).collect()),
+                    _ => None,
+                }
+            };
+            if let (Some(x), Some(cutoff)) = (lane("x"), lane("cutoff")) {
+                let srcs = self.filter_bank(mode, x, cutoff, lane("res"));
+                return Ok(Sig::channels(srcs, layout));
             }
         }
 
@@ -981,4 +1058,15 @@ impl Lower<'_> {
     }
 
     // ---- envelopes -------------------------------------------------------
+}
+
+/// The kind of filter a built-in is, for those that can run several side by side.
+fn filter_mode(name: &str) -> Option<FilterMode> {
+    match name {
+        "lpf" => Some(FilterMode::Low),
+        "hpf" => Some(FilterMode::High),
+        "bpf" => Some(FilterMode::Band),
+        "notch" => Some(FilterMode::Notch),
+        _ => None,
+    }
 }

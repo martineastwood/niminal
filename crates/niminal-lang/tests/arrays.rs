@@ -383,3 +383,49 @@ fn unused_array_elements_do_not_add_running_dsp_nodes() {
         selected.instruments[0].graph.node_count()
     );
 }
+
+/// A filter called over an array of cutoffs runs as one bank. It must sound exactly like the same
+/// filters written out one by one, whatever the kind, with a steady or moving cutoff, and with or
+/// without a resonance.
+#[test]
+fn a_filter_over_an_array_sounds_like_the_filters_written_out() {
+    for kind in ["lpf", "hpf", "bpf", "notch"] {
+        for (cutoffs, res) in [
+            ("[300hz, 900hz, 2khz, 5khz]", ""),
+            ("[300hz, 900hz, 2khz, 5khz]", ", res: 0.6"),
+            ("[300hz, 900hz, 2khz, 5khz].map(it * (1 + 0.5 * osc(sine, 3hz)))", ", res: 0.4"),
+        ] {
+            let banked = format!(
+                "instr a() {{ x = osc(saw, 110hz)\n x.{kind}({cutoffs}{res}).sum }}"
+            );
+            let written = if cutoffs.contains("map") {
+                (0..4)
+                    .map(|k| {
+                        let c = [300, 900, 2000, 5000][k];
+                        format!("x.{kind}({c}hz * (1 + 0.5 * osc(sine, 3hz)){res})")
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                [300, 900, 2000, 5000]
+                    .iter()
+                    .map(|c| format!("x.{kind}({c}hz{res})"))
+                    .collect::<Vec<_>>()
+            }
+            .join(" + ");
+            let alone = format!("instr a() {{ x = osc(saw, 110hz)\n {written} }}");
+            assert!(
+                program(&banked).instruments[0].graph.node_count()
+                    < program(&alone).instruments[0].graph.node_count(),
+                "{kind} {cutoffs}{res} should run as one bank"
+            );
+            let (want, got) = (render(&alone, 3000, 64), render(&banked, 3000, 64));
+            assert_eq!(want.len(), got.len());
+            for (w, g) in want[0].iter().zip(&got[0]) {
+                assert_eq!(w.to_bits(), g.to_bits(), "{kind} {cutoffs}{res}");
+            }
+            // And in blocks of other sizes.
+            let odd = render(&banked, 3000, 37);
+            assert_eq!(got[0], odd[0], "{kind} {cutoffs}{res} in odd blocks");
+        }
+    }
+}
