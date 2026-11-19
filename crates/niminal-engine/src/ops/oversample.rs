@@ -1,43 +1,63 @@
 use crate::opcode::{Opcode, Port, ProcessCtx, blocks};
 use std::f64::consts::PI;
 
-struct Fir {
-    history: Vec<f32>,
+/// The last `len` samples pushed, kept twice over so that any run of them is one contiguous slice.
+struct Ring {
+    buf: Vec<f32>,
+    len: usize,
     pos: usize,
 }
-impl Fir {
+impl Ring {
     fn new(len: usize) -> Self {
         Self {
-            history: vec![0.0; len],
+            buf: vec![0.0; 2 * len],
+            len,
             pos: 0,
         }
     }
     fn reset(&mut self) {
-        self.history.fill(0.0);
+        self.buf.fill(0.0);
         self.pos = 0;
     }
+    fn fill(&mut self, x: f32) {
+        self.buf.fill(x);
+    }
     fn push(&mut self, x: f32) {
-        self.history[self.pos] = x;
-        self.pos = (self.pos + 1) % self.history.len();
-    }
-    /// The sum of `taps[first + k * stride]` times the sample pushed `first + k * stride` pushes ago
-    /// (0 is the latest).
-    fn dot(&self, taps: &[f32], first: usize, stride: usize) -> f32 {
-        let len = self.history.len();
-        let mut y = 0.0;
-        let mut index = (self.pos + len - 1 - first) % len;
-        let mut k = first;
-        while k < taps.len() {
-            y += taps[k] * self.history[index];
-            index = if index >= stride {
-                index - stride
-            } else {
-                index + len - stride
-            };
-            k += stride;
+        self.buf[self.pos] = x;
+        self.buf[self.pos + self.len] = x;
+        self.pos += 1;
+        if self.pos == self.len {
+            self.pos = 0;
         }
-        y
     }
+    /// The latest `n` samples, oldest first.
+    fn window(&self, n: usize) -> &[f32] {
+        let end = self.pos + self.len;
+        &self.buf[end - n..end]
+    }
+    /// Every sample held, in no particular order.
+    fn samples(&self) -> &[f32] {
+        &self.buf[..self.len]
+    }
+}
+
+/// `sum(x[i] * taps[i])`, with eight running sums so the loop vectorises.
+#[inline(always)]
+fn dot(x: &[f32], taps: &[f32]) -> f32 {
+    let n = x.len().min(taps.len());
+    let (x, taps) = (&x[..n], &taps[..n]);
+    let mut acc = [0.0f32; 8];
+    let ((xs, xr), (ts, tr)) = (x.as_chunks::<8>(), taps.as_chunks::<8>());
+    for (a, b) in xs.iter().zip(ts) {
+        for j in 0..8 {
+            acc[j] += a[j] * b[j];
+        }
+    }
+    let mut y = ((acc[0] + acc[4]) + (acc[1] + acc[5])) + ((acc[2] + acc[6]) + (acc[3] + acc[7]));
+    for (a, b) in xr.iter().zip(tr) {
+        y += a * b;
+    }
+    y
 }
 
 /// The zeroth-order modified Bessel function, by its power series.
@@ -57,10 +77,12 @@ fn bessel_i0(x: f64) -> f64 {
 pub struct Oversample {
     op: Box<dyn Opcode>,
     factor: usize,
+    /// The filter that brings the oversampled signal back down, last tap first.
     taps: Vec<f32>,
-    up_taps: Vec<f32>,
-    up: Vec<Fir>,
-    down: Vec<Fir>,
+    /// One sub-filter per phase of the upsampling filter, over the base-rate samples, last tap first.
+    up_phases: Vec<Vec<f32>>,
+    up: Vec<Ring>,
+    down: Vec<Ring>,
     inputs: Vec<Vec<f32>>,
     indices: Vec<usize>,
     scratch: Vec<Vec<f32>>,
@@ -99,15 +121,30 @@ impl Oversample {
                 *tap /= sum * factor as f32;
             }
         }
+        // Only every factor-th input of the upsampling filter is not zero, so each phase is a short filter
+        // over the base-rate samples.
+        let up_phases: Vec<Vec<f32>> = (0..factor)
+            .map(|phase| {
+                up_taps
+                    .iter()
+                    .skip(phase)
+                    .step_by(factor)
+                    .rev()
+                    .copied()
+                    .collect()
+            })
+            .collect();
+        let up_len = up_phases.iter().map(Vec::len).max().unwrap_or(0);
+        taps.reverse();
         let inputs = op.ports().len();
         let outputs = op.outputs();
         Self {
             op,
             factor,
             taps,
-            up_taps,
-            up: (0..inputs).map(|_| Fir::new(len)).collect(),
-            down: (0..outputs).map(|_| Fir::new(len)).collect(),
+            up_phases,
+            up: (0..inputs).map(|_| Ring::new(up_len)).collect(),
+            down: (0..outputs).map(|_| Ring::new(len)).collect(),
             inputs: blocks(inputs),
             indices: (0..inputs).collect(),
             scratch: blocks(outputs),
@@ -167,7 +204,7 @@ impl Opcode for Oversample {
             || match self.tail_left {
                 Some(left) => left > 0,
                 None => self.down.iter().any(|f| {
-                    f.history
+                    f.samples()
                         .iter()
                         .any(|x| x.abs() > crate::opcode::TAIL_LEVEL)
                 }),
@@ -198,39 +235,30 @@ impl Opcode for Oversample {
             sample_rate: ctx.sample_rate * self.factor as f32,
             ..*ctx
         };
+        let scale = self.factor as f32;
         for i in 0..frames {
             if !self.started {
                 // Extend the first input backwards so init parameters see their actual value.
-                for (fir, &index) in self.up.iter_mut().zip(indices) {
-                    for k in 0..fir.history.len() {
-                        fir.history[k] = if k == 0 || (fir.history.len() - k) % self.factor == 0 {
-                            slots[index][i] * self.factor as f32
-                        } else {
-                            0.0
-                        };
-                    }
+                for (ring, &index) in self.up.iter_mut().zip(indices) {
+                    ring.fill(slots[index][i] * scale);
                 }
                 self.started = true;
             }
-            for phase in 0..self.factor {
-                for ((fir, input), &index) in self.up.iter_mut().zip(&mut self.inputs).zip(indices)
-                {
-                    // Only every factor-th input is not zero, so only those taps count.
-                    fir.push(if phase == 0 {
-                        slots[index][i] * self.factor as f32
-                    } else {
-                        0.0
-                    });
-                    input[0] = fir.dot(&self.up_taps, phase, self.factor);
+            for (ring, &index) in self.up.iter_mut().zip(indices) {
+                ring.push(slots[index][i] * scale);
+            }
+            for (phase, taps) in self.up_phases.iter().enumerate() {
+                for (ring, input) in self.up.iter().zip(&mut self.inputs) {
+                    input[0] = dot(ring.window(taps.len()), taps);
                 }
                 self.op
                     .process_slots(&sub, &self.inputs, &self.indices, &mut self.scratch, 1);
-                for ((fir, scratch), out) in
+                for ((ring, scratch), out) in
                     self.down.iter_mut().zip(&self.scratch).zip(outs.iter_mut())
                 {
-                    fir.push(scratch[0]);
+                    ring.push(scratch[0]);
                     if phase == 0 {
-                        out[i] = fir.dot(&self.taps, 0, 1);
+                        out[i] = dot(ring.window(self.taps.len()), &self.taps);
                     }
                 }
             }

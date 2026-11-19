@@ -247,6 +247,16 @@ pub trait Opcode: Send + Sync + std::any::Any {
             indices.len() <= MAX_INPUTS,
             "scalar opcode has too many ports"
         );
+        // Nearly every opcode has a handful of ports, so most calls fill only a small array.
+        const FEW: usize = 8;
+        if indices.len() <= FEW {
+            let mut inputs: [&[f32]; FEW] = [&[]; FEW];
+            for (input, &index) in inputs.iter_mut().zip(indices) {
+                *input = &slots[index][..frames];
+            }
+            self.process_outputs(ctx, &inputs[..indices.len()], outs, frames);
+            return;
+        }
         let mut inputs: [&[f32]; MAX_INPUTS] = [&[]; MAX_INPUTS];
         for (input, &index) in inputs.iter_mut().zip(indices) {
             *input = &slots[index][..frames];

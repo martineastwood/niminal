@@ -65,7 +65,7 @@ impl Lower<'_> {
                     return Ok(Sig::constant(Unit::Num, niminal_engine::ops::pow(x, y)));
                 }
                 self.elementwise(&a, &b, Unit::Num, b_span, |g, x, y| {
-                    g.add(Pow, &[("a", x), ("b", y)]).expect("pow ports")
+                    g.add(Pow::default(), &[("a", x), ("b", y)]).expect("pow ports")
                 })
             }
             m => {

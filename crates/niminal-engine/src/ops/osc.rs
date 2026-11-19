@@ -126,22 +126,58 @@ impl Wavetable {
         Wavetable { levels, top }
     }
 
-    /// The wave at phase `t` (in cycles, 0 to 1) for a note that advances `inc` cycles a sample.
-    fn read(&self, t: f64, inc: f64) -> f32 {
+    /// The levels to read, and how far between them, for a note that advances `inc` cycles a sample.
+    fn pick(&self, inc: f64) -> Pick {
         // The level that keeps the harmonics up to the Nyquist limit, and one more level of margin.
         let octaves = fast_log2(self.top as f64 * 2.0 * inc.abs());
         let p = (octaves * LEVELS_PER_OCTAVE + 1.0).clamp(0.0, (self.levels.len() - 1) as f64);
         let a = p as usize;
         let b = (a + 1).min(self.levels.len() - 1);
         let w = (p - a as f64) as f32;
+        Pick { a, b, w }
+    }
+
+    /// The wave at phase `t` (in cycles, 0 to 1) for a note that advances `inc` cycles a sample.
+    fn read(&self, t: f64, inc: f64) -> f32 {
+        self.read_with(t, self.pick(inc))
+    }
+
+    /// The wave at phase `t` between the levels `pick` chose.
+    #[inline(always)]
+    fn read_with(&self, t: f64, pick: Pick) -> f32 {
         // A phase that rounds up to exactly 1 (or anything else out of range) reads the last interval, not past it.
         let t = if t.is_finite() { t } else { 0.0 };
         let pos = (t * LEVEL_SIZE as f64).clamp(0.0, LEVEL_SIZE as f64);
         let i = (pos as usize).min(LEVEL_SIZE - 1);
         let f = (pos - i as f64) as f32;
-        let at = |level: &[f32]| level[i] + (level[i + 1] - level[i]) * f;
-        let low = at(&self.levels[a]);
-        low + (at(&self.levels[b]) - low) * w
+        let at = |level: &[f32]| {
+            let pair = &level[i..i + 2];
+            pair[0] + (pair[1] - pair[0]) * f
+        };
+        let low = at(&self.levels[pick.a]);
+        low + (at(&self.levels[pick.b]) - low) * pick.w
+    }
+}
+
+/// Which levels of a table to read, and the weight of the upper one.
+#[derive(Clone, Copy)]
+struct Pick {
+    a: usize,
+    b: usize,
+    w: f32,
+}
+
+/// The levels for `inc`, reusing the last choice while the pitch stays the same.
+#[inline(always)]
+fn picked(cache: &mut Option<(u64, Pick)>, table: &Wavetable, inc: f64) -> Pick {
+    let key = inc.to_bits();
+    match *cache {
+        Some((k, pick)) if k == key => pick,
+        _ => {
+            let pick = table.pick(inc);
+            *cache = Some((key, pick));
+            pick
+        }
     }
 }
 
@@ -165,6 +201,10 @@ pub struct Osc {
     correction: f64,
     sample_rate: f32,
     modulation: Option<(f64, f64)>,
+    /// The levels of the table chosen for the last pitch.
+    pick: Option<(u64, Pick)>,
+    /// The cycles a sample for the last frequency.
+    increment: Option<(u32, f64)>,
 }
 
 impl Osc {
@@ -189,6 +229,8 @@ impl Osc {
             correction: 0.0,
             sample_rate: 48_000.0,
             modulation: None,
+            pick: None,
+            increment: None,
         }
     }
 
@@ -264,6 +306,7 @@ impl Opcode for Osc {
 
     fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
+        self.increment = None;
         if self.table.is_none() && self.bank.is_none() {
             match self.wave {
                 Wave::Sine => {
@@ -288,15 +331,19 @@ impl Opcode for Osc {
     }
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-        let position = inputs.get(3);
+        // Ports that were not given read as their defaults.
+        let n = out.len();
+        let port = |k: usize| inputs.get(k).map(|p| &p[..n]);
+        let (width, position, phase, sync) = (port(2), port(3), port(4), port(5));
+        let (freq, phase_mod) = (&inputs[0][..n], &inputs[1][..n]);
         for (i, o) in out.iter_mut().enumerate() {
             *o = self.step(
-                inputs[0][i],
-                inputs[1][i],
-                inputs.get(2).map_or(0.5, |w| w[i]),
+                freq[i],
+                phase_mod[i],
+                width.map_or(0.5, |w| w[i]),
                 position.map_or(0.0, |p| p[i]),
-                inputs.get(4).map_or(0.0, |p| p[i]),
-                inputs.get(5).map_or(0.0, |p| p[i]),
+                phase.map_or(0.0, |p| p[i]),
+                sync.map_or(0.0, |p| p[i]),
             );
         }
     }
@@ -340,8 +387,14 @@ impl Osc {
         }
         self.sync_phase = 0.0;
         self.correction = 0.0;
-        let sr = f64::from(self.sample_rate);
-        let inc = f64::from(freq) / sr;
+        let inc = match self.increment {
+            Some((bits, inc)) if bits == freq.to_bits() => inc,
+            _ => {
+                let inc = f64::from(freq) / f64::from(self.sample_rate);
+                self.increment = Some((freq.to_bits(), inc));
+                inc
+            }
+        };
         let pm = f64::from(phase_mod);
         let width = if self.wave == Wave::Square {
             0.5
@@ -371,23 +424,27 @@ impl Osc {
 
         if let Some(table) = &self.table {
             self.phase = wrap(self.phase + inc);
-            return table.read(t, effective_inc);
+            let pick = picked(&mut self.pick, table, effective_inc);
+            return table.read_with(t, pick);
         }
 
         let v = match self.wave {
             Wave::Sine => {
                 self.phase = wrap(self.phase + inc);
-                return SINE_TABLE.read(t, effective_inc);
+                let pick = picked(&mut self.pick, &SINE_TABLE, effective_inc);
+                return SINE_TABLE.read_with(t, pick);
             }
             Wave::Saw => {
                 self.phase = wrap(self.phase + inc);
-                return SAW_TABLE.read(t, effective_inc);
+                let pick = picked(&mut self.pick, &SAW_TABLE, effective_inc);
+                return SAW_TABLE.read_with(t, pick);
             }
             Wave::Square | Wave::Pulse => {
                 // A pulse is one saw minus another shifted by its width, plus the offset that width leaves.
                 self.phase = wrap(self.phase + inc);
-                let shifted = SAW_TABLE.read(wrap(t - width), effective_inc);
-                return (2.0 * width - 1.0) as f32 - (SAW_TABLE.read(t, effective_inc) - shifted);
+                let pick = picked(&mut self.pick, &SAW_TABLE, effective_inc);
+                let shifted = SAW_TABLE.read_with(wrap(t - width), pick);
+                return (2.0 * width - 1.0) as f32 - (SAW_TABLE.read_with(t, pick) - shifted);
             }
             Wave::Tri => {
                 let naive = if t < 0.25 {

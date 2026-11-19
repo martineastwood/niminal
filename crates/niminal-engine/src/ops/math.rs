@@ -21,8 +21,9 @@ macro_rules! binary_op {
             }
 
             fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-                for (i, o) in out.iter_mut().enumerate() {
-                    let ($x, $y) = (inputs[0][i], inputs[1][i]);
+                // Slices of the same length, so the loop has no bounds checks and vectorises.
+                let n = out.len();
+                for ((o, &$x), &$y) in out.iter_mut().zip(&inputs[0][..n]).zip(&inputs[1][..n]) {
                     *o = $body;
                 }
             }
@@ -70,11 +71,9 @@ impl Opcode for Compare {
     }
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-        for (i, o) in out.iter_mut().enumerate() {
-            *o = if self
-                .0
-                .holds(f64::from(inputs[0][i]), f64::from(inputs[1][i]))
-            {
+        let n = out.len();
+        for ((o, &a), &b) in out.iter_mut().zip(&inputs[0][..n]).zip(&inputs[1][..n]) {
+            *o = if self.0.holds(f64::from(a), f64::from(b)) {
                 1.0
             } else {
                 0.0
@@ -106,12 +105,10 @@ impl Opcode for Select {
     }
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-        for (i, o) in out.iter_mut().enumerate() {
-            *o = if inputs[0][i] != 0.0 {
-                inputs[1][i]
-            } else {
-                inputs[2][i]
-            };
+        let n = out.len();
+        let (cond, a, b) = (&inputs[0][..n], &inputs[1][..n], &inputs[2][..n]);
+        for (((o, &c), &x), &y) in out.iter_mut().zip(cond).zip(a).zip(b) {
+            *o = if c != 0.0 { x } else { y };
         }
     }
 }
@@ -130,10 +127,44 @@ binary_op!(
     /// The larger of `a` and `b`
     Max, "max", "a", "b", Port::required("b"), |a, b| a.max(b)
 );
-binary_op!(
-    /// `a` raised to `b`
-    Pow, "pow", "a", "b", Port::required("b"), |a, b| super::custom::pow32(a, b)
-);
+/// `a` raised to `b`. Pitch and gain maths feed it values that hold still for many samples, so it
+/// keeps the last power it worked out.
+#[derive(Clone, Default)]
+pub struct Pow {
+    last: Option<(u32, u32, f32)>,
+}
+
+impl Opcode for Pow {
+    fn name(&self) -> &'static str {
+        "pow"
+    }
+
+    fn ports(&self) -> &'static [Port] {
+        const PORTS: &[Port] = &[Port::required("a"), Port::required("b")];
+        PORTS
+    }
+
+    fn box_clone(&self) -> Box<dyn Opcode> {
+        Box::new(Pow::default())
+    }
+
+    fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
+        let n = out.len();
+        let mut last = self.last;
+        for ((o, &a), &b) in out.iter_mut().zip(&inputs[0][..n]).zip(&inputs[1][..n]) {
+            let (ka, kb) = (a.to_bits(), b.to_bits());
+            *o = match last {
+                Some((x, y, r)) if x == ka && y == kb => r,
+                _ => {
+                    let r = super::custom::pow32(a, b);
+                    last = Some((ka, kb, r));
+                    r
+                }
+            };
+        }
+        self.last = last;
+    }
+}
 binary_op!(
     /// The angle of the point (`b`, `a`), in radians
     Atan2, "atan2", "a", "b", Port::required("b"), |a, b| a.atan2(b)
@@ -569,6 +600,34 @@ impl Opcode for ArrayRead {
                 self.interp,
                 |k| f64::from(slots[indices[k + 1]][i]),
             ) as f32;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The remembered power must never change an answer, whether the inputs hold still, change
+    /// every sample or come back.
+    #[test]
+    fn pow_gives_the_same_answers_with_and_without_its_memory() {
+        let a = [2.0, 2.0, 2.0, 3.0, 3.0, 2.0, 0.0, 0.0, -8.0, -8.0, f32::NAN, f32::NAN, 0.5];
+        let b = [1.5, 1.5, 0.5, 0.5, 0.5, 1.5, -1.0, -1.0, 0.5, 0.5, 1.0, 1.0, f32::INFINITY];
+        let mut pow = Pow::default();
+        let mut out = [0.0; 13];
+        let ctx = ProcessCtx::new(48_000.0, true);
+        // Twice, with the second pass starting from a warm memory and split across calls.
+        for _ in 0..2 {
+            pow.process(&ctx, &[&a, &b], &mut out);
+            for i in 0..13 {
+                assert_eq!(out[i].to_bits(), super::super::custom::pow32(a[i], b[i]).to_bits());
+            }
+            for i in 0..13 {
+                let mut one = [0.0];
+                pow.process(&ctx, &[&a[i..=i], &b[i..=i]], &mut one);
+                assert_eq!(one[0].to_bits(), out[i].to_bits());
+            }
         }
     }
 }
