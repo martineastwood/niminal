@@ -19,10 +19,48 @@ function executable(file) {
   catch { return false; }
 }
 
-/** The command that opens the Stage app by name: `open -a` on macOS, nothing known elsewhere yet. */
-function openStageCommand(app, platform = process.platform) {
-  if (!app) return null;
-  return platform === "darwin" ? ["open", "-a", app] : null;
+const STAGE_APP = "Niminal Stage";
+const PROD_BUNDLES = [
+  "/Applications/Niminal/Niminal Stage.app",
+  "/Applications/Niminal Stage.app",
+];
+
+function appModifiedMs(bundle) {
+  try {
+    const bin = path.join(bundle, "Contents", "MacOS", "niminal-stage");
+    return fs.statSync(fs.existsSync(bin) ? bin : bundle).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The command that opens Stage on macOS (`null` elsewhere). When left at the default name,
+ * opens the newest bundle among any dev build in the open workspace and the installed prod app,
+ * avoiding LaunchServices picking stale copies from elsewhere on disk.
+ */
+function openStageCommand(app, { platform = process.platform, workspaces = [], mtime = appModifiedMs } = {}) {
+  if (!app || platform !== "darwin") return null;
+  if (app !== STAGE_APP) return ["open", "-a", app];
+
+  const candidates = [];
+  for (const ws of workspaces) {
+    for (const profile of ["release", "debug"]) {
+      candidates.push(path.join(ws, "stage", "src-tauri", "target", profile, "bundle", "macos", "niminal stage.app"));
+    }
+  }
+  candidates.push(...PROD_BUNDLES);
+
+  let best = null;
+  let bestTime = -Infinity;
+  for (const bundle of candidates) {
+    const t = mtime(bundle);
+    if (t !== null && t > bestTime) {
+      best = bundle;
+      bestTime = t;
+    }
+  }
+  return ["open", "-a", best ?? app];
 }
 
 module.exports = { findBinary, openStageCommand };

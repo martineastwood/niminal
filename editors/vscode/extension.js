@@ -225,7 +225,8 @@ async function openStage() {
     "Open Stage",
   );
   if (choice !== "Open Stage") return null;
-  const command = openStageCommand(stageApp);
+  const workspaces = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+  const command = openStageCommand(stageApp, { workspaces });
   if (!command) {
     vscode.window.showWarningMessage("niminal: open Niminal Stage yourself, then evaluate again.");
     return null;
