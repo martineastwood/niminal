@@ -18,6 +18,11 @@ pub struct Distortion {
     tone_state: f64,
     /// The tone split's fixed 1kHz pole.
     tone_coeff: f64,
+    /// The DC blocker's 10Hz pole.
+    dc_r: f64,
+    /// Cached tone gain to avoid `powf` when `tone` does not change.
+    last_tone: f64,
+    high_gain: f64,
 
     /// The DC blocker's memory: its last input and output.
     dc_in: f64,
@@ -29,13 +34,52 @@ const DC_CUTOFF_HZ: f64 = 10.0;
 
 impl Default for Distortion {
     fn default() -> Self {
+        let sample_rate = 48_000.0;
         Distortion {
-            sample_rate: 48_000.0,
+            sample_rate,
             tone_state: 0.0,
             tone_coeff: 0.0,
+            dc_r: (-std::f64::consts::TAU * DC_CUTOFF_HZ / f64::from(sample_rate)).exp(),
+            last_tone: 0.5,
+            high_gain: 1.0,
             dc_in: 0.0,
             dc_out: 0.0,
         }
+    }
+}
+
+impl Distortion {
+    #[inline(always)]
+    fn step(&mut self, dry: f64, drive: f64, tone: f64, mix: f64) -> f32 {
+        let drive = drive.max(1.0);
+        let tone = tone.clamp(0.0, 1.0);
+        let mix = mix.clamp(0.0, 1.0);
+
+        // asymmetric soft clipping: positive side clips harder
+        let driven = dry * drive;
+        let shaped = if driven >= 0.0 {
+            1.0 - (-driven).exp()
+        } else {
+            -(1.0 - (driven * 0.7).exp()) / 0.7
+        };
+
+        // take the offset the asymmetry makes out of the signal
+        let centred = flush(shaped - self.dc_in + self.dc_r * self.dc_out);
+        self.dc_in = shaped;
+        self.dc_out = centred;
+
+        // Split at 1kHz and apply reciprocal shelf gains, ±6dB at either end.
+        // At the midpoint both gains are exactly one, preserving the centred signal.
+        self.tone_state =
+            flush(centred * (1.0 - self.tone_coeff) + self.tone_state * self.tone_coeff);
+        if tone != self.last_tone {
+            self.last_tone = tone;
+            self.high_gain = 10.0_f64.powf((tone - 0.5) * 12.0 / 20.0);
+        }
+        let high_gain = self.high_gain;
+        let toned = self.tone_state / high_gain + (centred - self.tone_state) * high_gain;
+
+        (dry * (1.0 - mix) + toned * mix) as f32
     }
 }
 
@@ -66,7 +110,9 @@ impl Opcode for Distortion {
 
     fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
-        self.tone_coeff = (-std::f64::consts::TAU * 1000.0 / f64::from(sample_rate)).exp();
+        let sr = f64::from(sample_rate);
+        self.tone_coeff = (-std::f64::consts::TAU * 1000.0 / sr).exp();
+        self.dc_r = (-std::f64::consts::TAU * DC_CUTOFF_HZ / sr).exp();
     }
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {
@@ -77,36 +123,27 @@ impl Opcode for Distortion {
         }
     }
 
+    fn has_process_one(&self) -> bool {
+        true
+    }
+
+    fn process_one(&mut self, _ctx: &ProcessCtx, inputs: &[f32]) -> f32 {
+        self.step(
+            f64::from(inputs[0]),
+            f64::from(inputs[1]),
+            f64::from(inputs[2]),
+            f64::from(inputs[3]),
+        )
+    }
+
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-        let sr = f64::from(self.sample_rate);
-        let dc_r = (-std::f64::consts::TAU * DC_CUTOFF_HZ / sr).exp();
         for (i, o) in out.iter_mut().enumerate() {
-            let dry = f64::from(inputs[0][i]);
-            let drive = f64::from(inputs[1][i]).max(1.0);
-            let tone = f64::from(inputs[2][i]).clamp(0.0, 1.0);
-            let mix = f64::from(inputs[3][i]).clamp(0.0, 1.0);
-
-            // asymmetric soft clipping: positive side clips harder
-            let driven = dry * drive;
-            let shaped = if driven >= 0.0 {
-                1.0 - (-driven).exp()
-            } else {
-                -(1.0 - (driven * 0.7).exp()) / 0.7
-            };
-
-            // take the offset the asymmetry makes out of the signal
-            let centred = flush(shaped - self.dc_in + dc_r * self.dc_out);
-            self.dc_in = shaped;
-            self.dc_out = centred;
-
-            // Split at 1kHz and apply reciprocal shelf gains, ±6dB at either end.
-            // At the midpoint both gains are exactly one, preserving the centred signal.
-            self.tone_state =
-                flush(centred * (1.0 - self.tone_coeff) + self.tone_state * self.tone_coeff);
-            let high_gain = 10.0_f64.powf((tone - 0.5) * 12.0 / 20.0);
-            let toned = self.tone_state / high_gain + (centred - self.tone_state) * high_gain;
-
-            *o = (dry * (1.0 - mix) + toned * mix) as f32;
+            *o = self.step(
+                f64::from(inputs[0][i]),
+                f64::from(inputs[1][i]),
+                f64::from(inputs[2][i]),
+                f64::from(inputs[3][i]),
+            );
         }
     }
 }

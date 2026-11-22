@@ -117,6 +117,26 @@ impl Opcode for Noise {
         }
     }
 
+    fn has_process_one(&self) -> bool {
+        true
+    }
+
+    fn process_one(&mut self, ctx: &ProcessCtx, _inputs: &[f32]) -> f32 {
+        if !self.started {
+            self.start(ctx.index);
+        }
+        match self.color {
+            NoiseColor::White => self.next_white(),
+            NoiseColor::Pink => {
+                let white = self.next_white();
+                self.b0 = 0.99765 * self.b0 + white * 0.0990460;
+                self.b1 = 0.96300 * self.b1 + white * 0.2965164;
+                self.b2 = 0.57000 * self.b2 + white * 1.0526913;
+                (self.b0 + self.b1 + self.b2 + white * 0.1848) * 0.05
+            }
+        }
+    }
+
     fn process(&mut self, ctx: &ProcessCtx, _inputs: &[&[f32]], out: &mut [f32]) {
         if !self.started {
             self.start(ctx.index);

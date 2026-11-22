@@ -92,10 +92,12 @@ Big modules are directories split by concern, not single files. Start at the `mo
 - `crates/niminal-lang/src/parser/`: `input`, `items`, `stmts`, `exprs`, `env`, `helpers`, `tests`.
 - `crates/niminal-lang/src/opcodes/`: `mod.rs` (registry) and `granular.rs`.
 - `crates/niminal-compose/src/perform/`: `values`, `ops`, `clip_ops`, `args`, `clips`, `commands`, `grid`, `music`, `convert`.
-- `crates/niminal-server/src/session/`: `mod.rs` (state and definitions), `input.rs` (events), `realtime.rs` (the audio-thread renderer).
+- `crates/niminal-compose/src/schedule/`: `mod.rs` (types, construction, state), `query.rs` (events and control lanes), `tests.rs`.
+- `crates/niminal-server/src/session/`: `mod.rs` (state and definitions), `input.rs` (events), `realtime/` (`mod.rs`, `plan.rs`, `render.rs`, `tests.rs`).
+- `crates/niminal-sequencer/src/live/`: `mod.rs` (types, lifecycle), `advance.rs` (landing and fetching), `clock.rs` (tempo and MIDI clock), `status.rs` (inspection and meters), `eval.rs`, `input.rs`, `playing.rs`, `scenes.rs`.
 - `stage/src-tauri/src/`: `session.rs` (the engine, the sequencer, the sockets, audio settings), `main.rs` (Tauri commands), `audio.rs`, `settings.rs`.
 
-Methods of one struct (`Lower`, `Kb`, `Parser`, `Perform`) are spread over several `impl` blocks, one per file; cross-file methods are `pub(super)`. Prefer adding to the file that matches the concern over growing `mod.rs`, and split again if a file passes about 1000 lines. The largest files now are `crates/niminal-compose/src/tests.rs`, `crates/niminal-sequencer/src/live/mod.rs`, `crates/niminal-server/src/session/realtime.rs` and `.../input.rs`, `crates/niminal-compose/src/schedule.rs`, `crates/niminal-engine/src/mixer.rs` and `crates/niminal-lsp/src/lib.rs` (1500-3300 lines): search them rather than reading them whole.
+Methods of one struct (`Lower`, `Kb`, `Parser`, `Perform`, `Live`, `Schedule`) are spread over several `impl` blocks, one per file; cross-file methods are `pub(super)`. Prefer adding to the file that matches the concern over growing `mod.rs`, and split again if a file passes about 1000 lines. The largest files now are `crates/niminal-compose/src/tests.rs`, `crates/niminal-server/src/session/input.rs`, `crates/niminal-engine/src/ops/custom.rs`, `crates/niminal-engine/src/mixer.rs` and `crates/niminal-lsp/src/lib.rs` (1600-3500 lines): search them rather than reading them whole.
 
 ## Things that surprise people
 
