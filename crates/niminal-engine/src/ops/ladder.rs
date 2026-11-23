@@ -59,22 +59,26 @@ impl Ladder {
             (error, t, input)
         };
         let mut y = self.y;
+        let (mut error, mut t, mut input) = residual(y);
         for _ in 0..8 {
-            let (error, t, input) = residual(y);
             let norm = error.iter().fold(0.0_f64, |m, e| m.max(e.abs()));
             if norm < 1e-9 {
                 break;
             }
             let d = t.map(|t| 1.0 - t * t);
-            let denominator = d.map(|d| 1.0 + g * d);
-            let a: [f64; 4] = std::array::from_fn(|i| {
-                if i == 0 {
-                    -k * g * (1.0 - input * input) / denominator[0]
-                } else {
-                    g * d[i - 1] / denominator[i]
-                }
-            });
-            let b: [f64; 4] = std::array::from_fn(|i| -error[i] / denominator[i]);
+            let inv_denom = d.map(|d| 1.0 / (1.0 + g * d));
+            let a: [f64; 4] = [
+                -k * g * (1.0 - input * input) * inv_denom[0],
+                g * d[0] * inv_denom[1],
+                g * d[1] * inv_denom[2],
+                g * d[2] * inv_denom[3],
+            ];
+            let b: [f64; 4] = [
+                -error[0] * inv_denom[0],
+                -error[1] * inv_denom[1],
+                -error[2] * inv_denom[2],
+                -error[3] * inv_denom[3],
+            ];
             let chain = a[3] * a[2] * a[1];
             let last =
                 (chain * b[0] + a[3] * a[2] * b[1] + a[3] * b[2] + b[3]) / (1.0 - chain * a[0]);
@@ -86,14 +90,22 @@ impl Ladder {
             // Backtracking prevents an extreme drive/control jump from throwing
             // Newton into the flat part of the opposite saturator.
             let mut scale = 1.0;
+            let mut accepted = false;
             for _ in 0..8 {
                 let candidate = std::array::from_fn(|i| y[i] + scale * delta[i]);
-                let (next, _, _) = residual(candidate);
-                if next.iter().all(|e| e.abs() <= norm) {
+                let (next_error, next_t, next_input) = residual(candidate);
+                if next_error.iter().all(|e| e.abs() <= norm) {
                     y = candidate;
+                    error = next_error;
+                    t = next_t;
+                    input = next_input;
+                    accepted = true;
                     break;
                 }
                 scale *= 0.5;
+            }
+            if !accepted {
+                break;
             }
         }
         for (state, output) in self.s.iter_mut().zip(y) {

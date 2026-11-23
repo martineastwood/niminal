@@ -11,6 +11,7 @@ const MAX_DELAY_MS: f32 = 40.0;
 #[derive(Clone)]
 pub struct Chorus {
     buf: Vec<f32>,
+    max_delay: usize,
     write: usize,
     sample_rate: f32,
     phase: f64,
@@ -21,6 +22,7 @@ impl Default for Chorus {
     fn default() -> Self {
         let mut c = Chorus {
             buf: Vec::new(),
+            max_delay: 0,
             write: 0,
             sample_rate: 48_000.0,
             phase: 0.0,
@@ -59,9 +61,12 @@ impl Opcode for Chorus {
     }
 
     fn prepare(&mut self, sample_rate: f32) {
+        super::osc::ensure_sine_table();
         self.sample_rate = sample_rate;
         let max = ((MAX_DELAY_MS / 1000.0) * sample_rate).ceil() as usize + 4;
-        self.buf = vec![0.0; max.max(8)];
+        let base_len = max.max(8);
+        self.max_delay = base_len - 3;
+        self.buf = vec![0.0; base_len.next_power_of_two()];
         self.write = 0;
         self.quiet_run = 0;
     }
@@ -79,9 +84,10 @@ impl Opcode for Chorus {
     }
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-        let len = self.buf.len();
+        let mask = self.buf.len() - 1;
         let sr = f64::from(self.sample_rate);
-        let max_delay = (len - 3) as f64;
+        let inv_sr = 1.0 / sr;
+        let max_delay = self.max_delay as f64;
         for (i, o) in out.iter_mut().enumerate() {
             let rate = f64::from(inputs[1][i]).max(0.0);
             let depth = f64::from(inputs[2][i]).clamp(0.0, 1.0);
@@ -89,8 +95,8 @@ impl Opcode for Chorus {
             let mix = inputs[4][i].clamp(0.0, 1.0);
             let dry = inputs[0][i];
 
-            let lfo = (self.phase * std::f64::consts::TAU).sin() * 0.5 + 0.5;
-            self.phase = (self.phase + rate / sr).fract();
+            let lfo = f64::from(super::osc::sine_lookup(self.phase)) * 0.5 + 0.5;
+            self.phase = (self.phase + rate * inv_sr).fract();
             let samples = (base * (1.0 + depth * (lfo * 2.0 - 1.0) * 0.9)).clamp(1.0, max_delay);
             let whole = samples.floor() as usize;
             let frac = (samples - samples.floor()) as f32;
@@ -100,7 +106,7 @@ impl Opcode for Chorus {
                 if back == 0 {
                     dry
                 } else {
-                    self.buf[(self.write + len - back) % len]
+                    self.buf[self.write.wrapping_sub(back) & mask]
                 }
             };
             let (a, b, c, d) = (at(whole - 1), at(whole), at(whole + 1), at(whole + 2));
@@ -110,7 +116,7 @@ impl Opcode for Chorus {
                     + frac * (2.0 * a - 5.0 * b + 4.0 * c - d + frac * (3.0 * (b - c) + d - a)));
 
             self.buf[self.write] = flush32(dry);
-            self.write = (self.write + 1) % len;
+            self.write = (self.write + 1) & mask;
             let mixed = dry * (1.0 - mix) + wet * mix;
             self.quiet_run = if mixed.abs() < TAIL_LEVEL {
                 self.quiet_run.saturating_add(1)
@@ -122,6 +128,6 @@ impl Opcode for Chorus {
     }
 
     fn is_active(&self) -> bool {
-        self.quiet_run < self.buf.len()
+        self.quiet_run < self.max_delay + 3
     }
 }

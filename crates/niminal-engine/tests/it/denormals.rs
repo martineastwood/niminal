@@ -3,7 +3,7 @@
 //! (the mixer's guard), so they hold on any machine and in a browser too.
 #![allow(clippy::unwrap_used)]
 
-mod common;
+use crate::common;
 use common::*;
 use niminal_engine::ops::{Delay, FilterMode, Reverb, Svf};
 use niminal_engine::{Graph, GraphBuilder, Opcode, Port, ProcessCtx, Src};

@@ -10,26 +10,15 @@ use crate::opcode::{Opcode, Port, ProcessCtx};
 /// those two are more than 180 degrees apart (as the gap behind a stereo pair
 /// is) the source goes to the nearer one alone. `spread` (0..1) blends towards
 /// all speakers equally.
-pub fn pan_gains(
-    speakers: &[Option<f32>],
+fn pan_gains_sorted(
+    ring: &[(f32, usize)],
     angle: f32,
     spread: f32,
 ) -> [f32; crate::mixer::MAX_CHANNELS] {
     let mut gains = [0.0f32; crate::mixer::MAX_CHANNELS];
-    // the speakers that can be panned to, by angle (no allocation: this runs for every sample of a pan)
-    let mut slots = [(0.0f32, 0usize); crate::mixer::MAX_CHANNELS];
-    let mut count = 0;
-    for (i, a) in speakers.iter().enumerate().take(slots.len()) {
-        if let Some(a) = a {
-            slots[count] = (a.rem_euclid(360.0), i);
-            count += 1;
-        }
-    }
-    if count == 0 {
+    if ring.is_empty() {
         return gains;
     }
-    let ring = &mut slots[..count];
-    ring.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     let az = angle.rem_euclid(360.0);
     // The speaker at or before the source going round the circle, and the next.
@@ -59,25 +48,45 @@ pub fn pan_gains(
         }
     } else {
         let t = (into / gap).clamp(0.0, 1.0);
-        gains[a_idx] = (t * std::f32::consts::FRAC_PI_2).cos();
-        gains[b_idx] = (t * std::f32::consts::FRAC_PI_2).sin();
+        let (s, c) = (t * std::f32::consts::FRAC_PI_2).sin_cos();
+        gains[a_idx] = c;
+        gains[b_idx] = s;
     }
 
     let spread = spread.clamp(0.0, 1.0);
     if spread > 0.0 {
-        let uniform = 1.0 / (ring.len() as f32).sqrt();
+        let uniform_sq = 1.0 / ring.len() as f32;
         for &(_, i) in ring.iter() {
-            gains[i] = ((1.0 - spread) * gains[i] * gains[i] + spread * uniform * uniform).sqrt();
+            gains[i] = ((1.0 - spread) * gains[i] * gains[i] + spread * uniform_sq).sqrt();
         }
     }
     gains
+}
+
+pub fn pan_gains(
+    speakers: &[Option<f32>],
+    angle: f32,
+    spread: f32,
+) -> [f32; crate::mixer::MAX_CHANNELS] {
+    let mut slots = [(0.0f32, 0usize); crate::mixer::MAX_CHANNELS];
+    let mut count = 0;
+    for (i, a) in speakers.iter().enumerate().take(slots.len()) {
+        if let Some(a) = a {
+            slots[count] = (a.rem_euclid(360.0), i);
+            count += 1;
+        }
+    }
+    let ring = &mut slots[..count];
+    ring.sort_by(|a, b| a.0.total_cmp(&b.0));
+    pan_gains_sorted(ring, angle, spread)
 }
 
 /// One output channel of a pan: the mono input scaled by this speaker's gain
 /// for the current angle. A pan to N speakers is N of these sharing inputs.
 #[derive(Clone)]
 pub struct PanChannel {
-    speakers: Arc<[Option<f32>]>,
+    /// Pre-sorted `(angle, channel_index)` ring, avoiding per-sample sorting under modulation.
+    ring: Arc<[(f32, usize)]>,
     index: usize,
     /// The angle and spread the gain was last worked out for, and that gain. Panning rarely moves,
     /// and working it out is far dearer than the multiply.
@@ -86,8 +95,15 @@ pub struct PanChannel {
 
 impl PanChannel {
     pub fn new(speakers: Arc<[Option<f32>]>, index: usize) -> Self {
+        let mut ring: Vec<(f32, usize)> = speakers
+            .iter()
+            .enumerate()
+            .take(crate::mixer::MAX_CHANNELS)
+            .filter_map(|(i, a)| a.map(|a| (a.rem_euclid(360.0), i)))
+            .collect();
+        ring.sort_by(|a, b| a.0.total_cmp(&b.0));
         PanChannel {
-            speakers,
+            ring: ring.into(),
             index,
             last: None,
         }
@@ -122,7 +138,7 @@ impl Opcode for PanChannel {
                     gain
                 }
                 _ => {
-                    let gain = pan_gains(&self.speakers, angle, spread)[self.index];
+                    let gain = pan_gains_sorted(&self.ring, angle, spread)[self.index];
                     self.last = Some((angle, spread, gain));
                     gain
                 }

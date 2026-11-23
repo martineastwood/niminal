@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used)]
-mod support;
+use crate::support;
 use niminal_lang::Layout;
 use niminal_server::{RealtimeConfig, Session};
 use serde_json::json;

@@ -64,6 +64,38 @@ impl StreamCache {
         }
         slot.tag.store(page * 2, Ordering::Release);
     }
+    fn find_page(&self, page: u64) -> Option<usize> {
+        let tag = page * 2;
+        self.pages
+            .iter()
+            .position(|p| p.tag.load(Ordering::Acquire) == tag)
+    }
+    /// Fast path: read and interpolate all channels for `frame` and `frame + 1` when both lie
+    /// on the same cached page `slot_idx`, using a single seqlock check instead of 2*channels.
+    fn read_frame_same_page(
+        &self,
+        slot_idx: usize,
+        page: u64,
+        frame: u64,
+        frac: f32,
+        out: &mut [Vec<f32>],
+        out_i: usize,
+    ) -> bool {
+        let tag = page * 2;
+        let slot = &self.pages[slot_idx];
+        if slot.tag.load(Ordering::Acquire) != tag {
+            return false;
+        }
+        let base = (frame as usize % STREAM_PAGE) * self.channels;
+        let next = base + self.channels;
+        for (channel, output) in out.iter_mut().enumerate() {
+            let a = f32::from_bits(slot.values[base + channel].load(Ordering::Relaxed));
+            let b = f32::from_bits(slot.values[next + channel].load(Ordering::Relaxed));
+            output[out_i] = a + (b - a) * frac;
+        }
+        std::sync::atomic::fence(Ordering::Acquire);
+        slot.tag.load(Ordering::Relaxed) == tag
+    }
     fn read(&self, frame: u64, channel: usize) -> Option<f32> {
         if frame >= self.frames {
             return Some(0.);
@@ -74,9 +106,6 @@ impl StreamCache {
             .pages
             .iter()
             .find(|p| p.tag.load(Ordering::Acquire) == tag)?;
-        if slot.tag.load(Ordering::Acquire) != tag {
-            return None;
-        }
         let value = f32::from_bits(
             slot.values[(frame as usize % STREAM_PAGE) * self.channels + channel]
                 .load(Ordering::Relaxed),
@@ -142,40 +171,77 @@ impl Opcode for StreamOut {
         out: &mut [Vec<f32>],
         frames: usize,
     ) {
+        if frames == 0 {
+            return;
+        }
+        let stream_sr = f64::from(self.cache.sample_rate);
+        let rate_scale = stream_sr / f64::from(ctx.sample_rate);
+        let mut failed = self.cache.failed.load(Ordering::Acquire);
+        let mut cached_slot: Option<(u64, usize)> = None;
+        let mut last_requested_page: Option<u64> = None;
+        let mut last_loop_start: Option<u64> = None;
+        let mut last_at = self.position.floor().max(0.) as u64;
+
         for i in 0..frames {
             if inputs[3][i] != self.trigger {
-                self.position = f64::from(inputs[2][i]) * f64::from(self.cache.sample_rate);
+                self.position = f64::from(inputs[2][i]) * stream_sr;
                 self.trigger = inputs[3][i];
             }
             let looped = inputs[4][i] > 0.;
-            let start = (f64::from(inputs[5][i]) * f64::from(self.cache.sample_rate)).max(0.);
-            let end = (f64::from(inputs[6][i]) * f64::from(self.cache.sample_rate))
-                .min(self.cache.frames as f64);
+            let start = (f64::from(inputs[5][i]) * stream_sr).max(0.);
+            let end = (f64::from(inputs[6][i]) * stream_sr).min(self.cache.frames as f64);
             if looped && end > start && self.position >= end {
                 self.position = start + (self.position - start) % (end - start);
             }
-            self.cache.loop_start.store(
-                if looped { start as u64 } else { u64::MAX },
-                Ordering::Relaxed,
-            );
+            let loop_start = if looped { start as u64 } else { u64::MAX };
+            if last_loop_start != Some(loop_start) {
+                self.cache.loop_start.store(loop_start, Ordering::Relaxed);
+                last_loop_start = Some(loop_start);
+            }
             let at = self.position.floor().max(0.) as u64;
-            self.cache.requested.store(at, Ordering::Release);
-            let playing = inputs[1][i] > 0.
-                && at < self.cache.frames
-                && !self.cache.failed.load(Ordering::Acquire);
-            let mut missing = false;
-            for (channel, output) in out.iter_mut().enumerate() {
-                if !playing {
+            last_at = at;
+            let page = at / STREAM_PAGE as u64;
+            if last_requested_page != Some(page) {
+                self.cache.requested.store(at, Ordering::Release);
+                last_requested_page = Some(page);
+            }
+            let playing = inputs[1][i] > 0. && at < self.cache.frames && !failed;
+            if !playing {
+                for output in out.iter_mut() {
                     output[i] = 0.;
+                }
+                continue;
+            }
+            let frac = self.position.fract() as f32;
+            let same_page =
+                (at as usize % STREAM_PAGE) + 1 < STREAM_PAGE && at + 1 < self.cache.frames;
+            if same_page {
+                let slot_idx = match cached_slot {
+                    Some((p, idx)) if p == page => Some(idx),
+                    _ => self.cache.find_page(page).inspect(|&idx| {
+                        cached_slot = Some((page, idx));
+                    }),
+                };
+                if let Some(idx) = slot_idx
+                    && self
+                        .cache
+                        .read_frame_same_page(idx, page, at, frac, out, i)
+                {
+                    self.position += f64::from(inputs[0][i].clamp(0.25, 4.)) * rate_scale;
                     continue;
                 }
+                cached_slot = None;
+            }
+            let mut missing = false;
+            for (channel, output) in out.iter_mut().enumerate() {
                 let value = loop {
                     if let Some(a) = self.cache.read(at, channel)
                         && let Some(b) = self.cache.read(at + 1, channel)
                     {
-                        break Some(a + (b - a) * (self.position.fract() as f32));
+                        break Some(a + (b - a) * frac);
                     }
                     if ctx.realtime || self.cache.failed.load(Ordering::Acquire) {
+                        failed = self.cache.failed.load(Ordering::Acquire);
                         break None;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(1));
@@ -186,11 +252,8 @@ impl Opcode for StreamOut {
             if missing {
                 self.cache.underruns.fetch_add(1, Ordering::Relaxed);
             }
-            if playing {
-                self.position += f64::from(inputs[0][i].clamp(0.25, 4.))
-                    * f64::from(self.cache.sample_rate)
-                    / f64::from(ctx.sample_rate);
-            }
+            self.position += f64::from(inputs[0][i].clamp(0.25, 4.)) * rate_scale;
         }
+        self.cache.requested.store(last_at, Ordering::Release);
     }
 }

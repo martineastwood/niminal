@@ -11,6 +11,7 @@ use crate::opcode::{Opcode, Port, ProcessCtx, TAIL_LEVEL};
 #[derive(Clone)]
 pub struct Allpass {
     max_seconds: f32,
+    max_samples: f64,
     buf: Vec<f32>,
     write: usize,
     sample_rate: f32,
@@ -23,6 +24,7 @@ impl Allpass {
     pub fn new(max_seconds: f32) -> Self {
         let mut a = Allpass {
             max_seconds,
+            max_samples: 1.0,
             buf: Vec::new(),
             write: 0,
             sample_rate: 48_000.0,
@@ -65,7 +67,8 @@ impl Opcode for Allpass {
         self.sample_rate = sample_rate;
         self.time = DelayTime::new(sample_rate);
         let max = (self.max_seconds * sample_rate).round().max(1.0);
-        self.buf = vec![0.0; max as usize + 3];
+        self.max_samples = f64::from(max);
+        self.buf = vec![0.0; (max as usize + 3).next_power_of_two()];
         self.write = 0;
         self.quiet_run = 0;
         self.in_flight = 0;
@@ -85,8 +88,8 @@ impl Opcode for Allpass {
     }
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-        let len = self.buf.len();
-        let max_samples = (len - 3) as f64;
+        let mask = self.buf.len() - 1;
+        let max_samples = self.max_samples;
         let sr = f64::from(self.sample_rate);
         for (i, o) in out.iter_mut().enumerate() {
             let exact = f64::from(inputs[1][i]) * sr;
@@ -101,8 +104,8 @@ impl Opcode for Allpass {
             let whole = samples.floor() as usize;
             let frac = (samples - samples.floor()) as f32;
 
-            let newer = self.buf[(self.write + len - whole) % len];
-            let older = self.buf[(self.write + len - whole - 1) % len];
+            let newer = self.buf[self.write.wrapping_sub(whole) & mask];
+            let older = self.buf[self.write.wrapping_sub(whole + 1) & mask];
             let delayed = newer + (older - newer) * frac;
 
             let g = inputs[2][i].clamp(-0.995, 0.995);
@@ -112,7 +115,7 @@ impl Opcode for Allpass {
             let y = -g * x + delayed;
             let written = flush32(x + g * y);
             self.buf[self.write] = written;
-            self.write = (self.write + 1) % len;
+            self.write = (self.write + 1) & mask;
             self.in_flight = samples.ceil() as usize + 1;
             self.quiet_run = if y.abs() < TAIL_LEVEL {
                 self.quiet_run.saturating_add(1)

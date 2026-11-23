@@ -490,7 +490,7 @@ fn the_drum_library_compiles_and_every_preset_sounds() {
 /// that uses both quietly plays nothing.
 #[test]
 fn no_drum_preset_is_named_like_a_choice_of_the_drum_voice() {
-    let text = include_str!("../std/drums.nml");
+    let text = include_str!("../../std/drums.nml");
     let helpers = &niminal_lang::presets::find("kick_deep").unwrap().helpers;
     let voice = &helpers[helpers.find("fn drum(").unwrap()..];
     let signature = &voice[..voice.find(") {").unwrap()];
@@ -578,7 +578,7 @@ fn the_drum_waves_have_their_own_harmonics() {
 
 #[test]
 fn closed_hats_share_a_choke_group_with_open_ones() {
-    let text = include_str!("../std/drums.nml");
+    let text = include_str!("../../std/drums.nml");
     for name in ["hat_closed", "hat_open", "hat_tick"] {
         let start = text.find(&format!("instr {name}(")).unwrap();
         let body = &text[start

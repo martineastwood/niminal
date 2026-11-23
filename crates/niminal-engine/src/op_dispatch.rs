@@ -296,12 +296,14 @@ op_enum! {
         NoteRandom(ops::NoteRandom),
         DcBlock(ops::DcBlock),
         Distortion(ops::Distortion),
+        Phasor(ops::Phasor),
     }
     boxed {
         Osc(ops::Osc),
         Noise(ops::Noise),
         Env(ops::Env),
         Svf(ops::Svf),
+        SvfBank(ops::SvfBank),
         Contour(ops::Contour),
         FreqShifter(ops::FreqShifter),
         FreezeReverse(ops::FreezeReverse),

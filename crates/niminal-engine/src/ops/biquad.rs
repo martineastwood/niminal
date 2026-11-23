@@ -25,10 +25,17 @@ pub struct Biquad {
     z1: f64,
     z2: f64,
     cached_for: (f32, f32),
+    g: f64,
     c: [f64; 5],
     // Named sections use a TPT state variable topology for cutoff modulation.
     svf: [f64; 4],
 }
+
+const LOW: u8 = 0;
+const HIGH: u8 = 1;
+const BAND: u8 = 2;
+const NOTCH: u8 = 3;
+const ALL: u8 = 4;
 
 impl Biquad {
     pub fn new(mode: BiquadMode) -> Self {
@@ -38,6 +45,7 @@ impl Biquad {
             z1: 0.0,
             z2: 0.0,
             cached_for: (f32::NAN, f32::NAN),
+            g: 0.0,
             c: [1.0, 0.0, 0.0, 0.0, 0.0],
             svf: [0.0; 4],
         }
@@ -47,17 +55,20 @@ impl Biquad {
         if (cutoff, q) == self.cached_for {
             return;
         }
+        if cutoff != self.cached_for.0 {
+            let sr = f64::from(self.sample_rate);
+            let fc = f64::from(cutoff).clamp(1.0, sr * 0.49);
+            self.g = (std::f64::consts::PI * fc / sr).tan();
+        }
         self.cached_for = (cutoff, q);
-        let sr = f64::from(self.sample_rate);
-        let fc = f64::from(cutoff).clamp(1.0, sr * 0.49);
-        let g = (std::f64::consts::PI * fc / sr).tan();
+        let g = self.g;
         let k = 1.0 / f64::from(q).max(0.01);
         let a1 = 1.0 / (1.0 + g * (g + k));
         self.svf = [a1, g * a1, g * g * a1, k];
     }
 
     #[inline(always)]
-    fn run(&mut self, x: f64) -> f32 {
+    fn run_raw(&mut self, x: f64) -> f32 {
         let [b0, b1, b2, a1, a2] = self.c;
         let y = b0 * x + self.z1;
         self.z1 = flush(b1 * x - a1 * y + self.z2);
@@ -66,34 +77,51 @@ impl Biquad {
     }
 
     #[inline(always)]
-    fn step(&mut self, inputs: &[f32]) -> f32 {
-        if self.mode == BiquadMode::Raw {
-            self.c = [
-                f64::from(inputs[1]),
-                f64::from(inputs[2]),
-                f64::from(inputs[3]),
-                f64::from(inputs[4]),
-                f64::from(inputs[5]),
-            ];
-        } else {
-            self.update(inputs[1], inputs[2]);
-            let [a1, a2, a3, k] = self.svf;
-            let x = f64::from(inputs[0]);
-            let v3 = x - self.z2;
-            let band = a1 * self.z1 + a2 * v3;
-            let low = self.z2 + a2 * self.z1 + a3 * v3;
-            self.z1 = flush(2.0 * band - self.z1);
-            self.z2 = flush(2.0 * low - self.z2);
-            return match self.mode {
-                BiquadMode::Low => low,
-                BiquadMode::High => x - k * band - low,
-                BiquadMode::Band => k * band,
-                BiquadMode::Notch => x - k * band,
-                BiquadMode::All => x - 2.0 * k * band,
-                BiquadMode::Raw => unreachable!(),
-            } as f32;
+    fn step_named<const MODE: u8>(&mut self, x: f32, cutoff: f32, q: f32) -> f32 {
+        self.update(cutoff, q);
+        let [a1, a2, a3, k] = self.svf;
+        let x = f64::from(x);
+        let v3 = x - self.z2;
+        let band = a1 * self.z1 + a2 * v3;
+        let low = self.z2 + a2 * self.z1 + a3 * v3;
+        self.z1 = flush(2.0 * band - self.z1);
+        self.z2 = flush(2.0 * low - self.z2);
+        (match MODE {
+            LOW => low,
+            HIGH => x - k * band - low,
+            BAND => k * band,
+            NOTCH => x - k * band,
+            _ => x - 2.0 * k * band,
+        }) as f32
+    }
+
+    fn run_named<const MODE: u8>(&mut self, inputs: &[&[f32]], out: &mut [f32]) {
+        let n = out.len();
+        let (x, cutoff, q) = (&inputs[0][..n], &inputs[1][..n], &inputs[2][..n]);
+        for (i, o) in out.iter_mut().enumerate() {
+            *o = self.step_named::<MODE>(x[i], cutoff[i], q[i]);
         }
-        self.run(f64::from(inputs[0]))
+    }
+
+    #[inline(always)]
+    fn step(&mut self, inputs: &[f32]) -> f32 {
+        match self.mode {
+            BiquadMode::Raw => {
+                self.c = [
+                    f64::from(inputs[1]),
+                    f64::from(inputs[2]),
+                    f64::from(inputs[3]),
+                    f64::from(inputs[4]),
+                    f64::from(inputs[5]),
+                ];
+                self.run_raw(f64::from(inputs[0]))
+            }
+            BiquadMode::Low => self.step_named::<LOW>(inputs[0], inputs[1], inputs[2]),
+            BiquadMode::High => self.step_named::<HIGH>(inputs[0], inputs[1], inputs[2]),
+            BiquadMode::Band => self.step_named::<BAND>(inputs[0], inputs[1], inputs[2]),
+            BiquadMode::Notch => self.step_named::<NOTCH>(inputs[0], inputs[1], inputs[2]),
+            BiquadMode::All => self.step_named::<ALL>(inputs[0], inputs[1], inputs[2]),
+        }
     }
 }
 
@@ -156,12 +184,33 @@ impl Opcode for Biquad {
     }
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-        let mut one = [0.0f32; 6];
-        for (i, o) in out.iter_mut().enumerate() {
-            for (slot, input) in one.iter_mut().zip(inputs) {
-                *slot = input[i];
+        match self.mode {
+            BiquadMode::Raw => {
+                let n = out.len();
+                let (x, b0, b1, b2, a1, a2) = (
+                    &inputs[0][..n],
+                    &inputs[1][..n],
+                    &inputs[2][..n],
+                    &inputs[3][..n],
+                    &inputs[4][..n],
+                    &inputs[5][..n],
+                );
+                for (i, o) in out.iter_mut().enumerate() {
+                    self.c = [
+                        f64::from(b0[i]),
+                        f64::from(b1[i]),
+                        f64::from(b2[i]),
+                        f64::from(a1[i]),
+                        f64::from(a2[i]),
+                    ];
+                    *o = self.run_raw(f64::from(x[i]));
+                }
             }
-            *o = self.step(&one);
+            BiquadMode::Low => self.run_named::<LOW>(inputs, out),
+            BiquadMode::High => self.run_named::<HIGH>(inputs, out),
+            BiquadMode::Band => self.run_named::<BAND>(inputs, out),
+            BiquadMode::Notch => self.run_named::<NOTCH>(inputs, out),
+            BiquadMode::All => self.run_named::<ALL>(inputs, out),
         }
     }
 

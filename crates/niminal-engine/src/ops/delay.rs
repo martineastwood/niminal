@@ -28,6 +28,7 @@ pub struct Delay {
     in_flight: usize,
     /// The low-pass in the feedback path.
     lp: f32,
+    cached_damp: (u32, f32),
     time: DelayTime,
 }
 
@@ -42,6 +43,7 @@ impl Delay {
             quiet_run: ALREADY_QUIET,
             in_flight: 0,
             lp: 0.0,
+            cached_damp: (f32::NAN.to_bits(), 0.0),
             time: DelayTime::new(48_000.0),
         };
         d.prepare(48_000.0);
@@ -81,12 +83,15 @@ impl Opcode for Delay {
         self.time = DelayTime::new(sample_rate);
         let max = (self.max_seconds * sample_rate).round().max(1.0);
         self.max_samples = f64::from(max);
-        // room for the longest delay, two samples of interpolation, and the write head
-        self.buf = vec![0.0; max as usize + 4];
+        // room for the longest delay, two samples of interpolation, and the write head;
+        // power-of-two length turns ring-buffer modulo into a bitmask.
+        let len = (max as usize + 4).next_power_of_two();
+        self.buf = vec![0.0; len];
         self.write = 0;
         self.quiet_run = ALREADY_QUIET;
         self.in_flight = 0;
         self.lp = 0.0;
+        self.cached_damp = (f32::NAN.to_bits(), 0.0);
     }
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {
@@ -104,10 +109,11 @@ impl Opcode for Delay {
     }
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-        let len = self.buf.len();
+        let mask = self.buf.len() - 1;
         let longest = self.max_samples;
+        let sr = f64::from(self.sample_rate);
         for (i, o) in out.iter_mut().enumerate() {
-            let exact = f64::from(inputs[1][i]) * f64::from(self.sample_rate);
+            let exact = f64::from(inputs[1][i]) * sr;
             // A time like 10ms isn't exactly 480 samples in floating point; snap
             // when within a thousandth of a sample so round times land cleanly.
             let snapped = exact.round();
@@ -122,7 +128,7 @@ impl Opcode for Delay {
             let frac = (samples - whole) as f32;
             let whole = whole as usize;
 
-            let at = |back: usize| self.buf[(self.write + len - back) % len];
+            let at = |back: usize| self.buf[self.write.wrapping_sub(back) & mask];
             let (newer, older) = (at(whole), at(whole + 1));
             let delayed = if whole >= 2 {
                 // Cubic (Catmull-Rom) through the four nearest samples: linear interpolation would
@@ -142,7 +148,13 @@ impl Opcode for Delay {
             let feedback = inputs[2][i].clamp(0.0, 0.995);
             let damp = inputs[3][i];
             let heard = if damp > 0.0 {
-                let a = (-std::f32::consts::TAU * damp / self.sample_rate).exp();
+                let a = if damp.to_bits() == self.cached_damp.0 {
+                    self.cached_damp.1
+                } else {
+                    let a = (-std::f32::consts::TAU * damp / self.sample_rate).exp();
+                    self.cached_damp = (damp.to_bits(), a);
+                    a
+                };
                 self.lp = flush32(delayed * (1.0 - a) + self.lp * a);
                 self.lp
             } else {
@@ -157,7 +169,7 @@ impl Opcode for Delay {
                 0
             };
             self.in_flight = samples.ceil() as usize + 1;
-            self.write = (self.write + 1) % len;
+            self.write = (self.write + 1) & mask;
             *o = delayed;
         }
     }

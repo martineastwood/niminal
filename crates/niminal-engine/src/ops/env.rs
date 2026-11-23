@@ -99,6 +99,9 @@ pub struct Env {
     /// Cached curve parameters for the current segment, avoiding per-sample exp().
     seg_k: f64,
     seg_inv_denom: f64,
+    seg_exp: f64,
+    seg_mul: f64,
+    seg_rising: bool,
 }
 
 /// A part of an envelope that can come from an input.
@@ -136,6 +139,9 @@ impl Env {
             read: true,
             seg_k: 0.0,
             seg_inv_denom: 0.0,
+            seg_exp: 1.0,
+            seg_mul: 1.0,
+            seg_rising: true,
         };
         env.reset(48_000.0);
         env
@@ -212,12 +218,24 @@ impl Env {
                 seg += 1;
                 continue;
             }
+            let seg_len = f64::from(self.lengths[seg]);
             self.seg_k = self.segments[seg].curve.bend();
-            self.seg_inv_denom = if self.seg_k.abs() < 1e-6 {
-                0.0
+            self.seg_rising = self.segments[seg].target >= from;
+            if self.seg_k.abs() < 1e-6 {
+                self.seg_inv_denom = 0.0;
+                self.seg_exp = 1.0;
+                self.seg_mul = 1.0;
             } else {
-                1.0 / (self.seg_k.exp() - 1.0)
-            };
+                let exp_k = self.seg_k.exp();
+                self.seg_inv_denom = 1.0 / (exp_k - 1.0);
+                if self.seg_rising {
+                    self.seg_exp = 1.0;
+                    self.seg_mul = (self.seg_k / seg_len).exp();
+                } else {
+                    self.seg_exp = exp_k;
+                    self.seg_mul = (-self.seg_k / seg_len).exp();
+                }
+            }
             self.phase = Phase::Running { seg, pos: 0, from };
             return;
         }
@@ -257,12 +275,23 @@ impl Env {
         if let Phase::Running { seg, pos, from } = self.phase {
             let s = self.segments[seg];
             let pos = pos + 1;
-            if pos >= self.lengths[seg] {
+            let len = self.lengths[seg];
+            if pos >= len {
                 self.level = s.target;
                 self.enter(seg + 1, s.target);
             } else {
-                let t = f64::from(pos) / f64::from(self.lengths[seg]);
-                self.level = shape_fast(from, s.target, t, self.seg_k, self.seg_inv_denom);
+                if self.seg_k.abs() < 1e-6 {
+                    let t = f64::from(pos) / f64::from(len);
+                    self.level = from + (s.target - from) * t as f32;
+                } else {
+                    self.seg_exp *= self.seg_mul;
+                    let sv = ((self.seg_exp - 1.0) * self.seg_inv_denom) as f32;
+                    self.level = if self.seg_rising {
+                        from + (s.target - from) * sv
+                    } else {
+                        s.target + (from - s.target) * sv
+                    };
+                }
                 self.phase = Phase::Running { seg, pos, from };
             }
         }
@@ -305,19 +334,82 @@ impl Opcode for Env {
             self.level = old.level;
             self.phase = old.phase;
             self.released = old.released;
+            self.seg_k = old.seg_k;
+            self.seg_inv_denom = old.seg_inv_denom;
+            self.seg_exp = old.seg_exp;
+            self.seg_mul = old.seg_mul;
+            self.seg_rising = old.seg_rising;
         }
     }
 
     fn process(&mut self, ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-        if !self.read && !out.is_empty() {
+        if out.is_empty() {
+            return;
+        }
+        if !self.read {
             self.read_inputs(|i| inputs[i][0]);
         }
         if !ctx.gate && !self.released {
             self.release();
         }
-        for o in out.iter_mut() {
-            *o = self.level;
-            self.step();
+        let mut idx = 0;
+        let total = out.len();
+        while idx < total {
+            match self.phase {
+                Phase::Hold | Phase::Done => {
+                    out[idx..].fill(self.level);
+                    return;
+                }
+                Phase::Running { seg, mut pos, from } => {
+                    let s = self.segments[seg];
+                    let len = self.lengths[seg];
+                    let chunk = ((len - pos) as usize).min(total - idx);
+                    let end_idx = idx + chunk;
+                    if self.seg_k.abs() < 1e-6 {
+                        let inv_len = 1.0 / f64::from(len);
+                        let delta = s.target - from;
+                        let mut level = self.level;
+                        for o in &mut out[idx..end_idx] {
+                            *o = level;
+                            pos += 1;
+                            level = from + delta * (f64::from(pos) * inv_len) as f32;
+                        }
+                        self.level = level;
+                    } else {
+                        let inv_denom = self.seg_inv_denom;
+                        let mul = self.seg_mul;
+                        let mut exp_state = self.seg_exp;
+                        let mut level = self.level;
+                        if self.seg_rising {
+                            let delta = s.target - from;
+                            for o in &mut out[idx..end_idx] {
+                                *o = level;
+                                pos += 1;
+                                exp_state *= mul;
+                                level = from + delta * ((exp_state - 1.0) * inv_denom) as f32;
+                            }
+                        } else {
+                            let target = s.target;
+                            let delta = from - target;
+                            for o in &mut out[idx..end_idx] {
+                                *o = level;
+                                pos += 1;
+                                exp_state *= mul;
+                                level = target + delta * ((exp_state - 1.0) * inv_denom) as f32;
+                            }
+                        }
+                        self.seg_exp = exp_state;
+                        self.level = level;
+                    }
+                    idx = end_idx;
+                    if pos >= len {
+                        self.level = s.target;
+                        self.enter(seg + 1, s.target);
+                    } else {
+                        self.phase = Phase::Running { seg, pos, from };
+                    }
+                }
+            }
         }
     }
 

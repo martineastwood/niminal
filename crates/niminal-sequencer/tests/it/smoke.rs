@@ -29,7 +29,7 @@ fn a_clip_plays_through_the_engine() {
 fn breakbeat_example_produces_audio_when_evaluated_live() {
     let mut s = Offline::new(48_000.0, Layout::Stereo).without_limiter();
     s.set_sample_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples"));
-    s.eval(include_str!("../../../examples/breakbeat.nml"), Some("now"))
+    s.eval(include_str!("../../../../examples/breakbeat.nml"), Some("now"))
         .unwrap();
     let out = s.process(96_000);
     let notices = s.take_notices();

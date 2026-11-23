@@ -332,6 +332,9 @@ impl Opcode for MultiSampler {
             self.start(ctx, inputs);
         }
         out.fill(0.0);
+        if self.playing.is_empty() {
+            return;
+        }
         let n = out.len();
         debug_assert!(n <= block_size());
         let mut freq = [0.0_f32; crate::opcode::MAX_BLOCK];
@@ -351,17 +354,26 @@ impl Opcode for MultiSampler {
             let mut local: [&[f32]; PORTS.len()] = [&[]; PORTS.len()];
             local.copy_from_slice(&inputs[..PORTS.len()]);
             // tuning and key tracking become a change of the pitch the player is asked for
-            if voice.tune != 0.0 || voice.keytrack != 1.0 {
+            if voice.tune != 0.0 {
                 for i in 0..n {
                     pitch[i] = inputs[1][i] + voice.tune;
-                    freq[i] = if voice.keytrack == 1.0 {
-                        inputs[0][i]
-                    } else {
-                        voice.root_hz * (inputs[0][i] / voice.root_hz).powf(voice.keytrack)
+                }
+                local[1] = &pitch[..n];
+            }
+            if voice.keytrack != 1.0 {
+                let mut last: Option<(u32, f32)> = None;
+                for i in 0..n {
+                    let f = inputs[0][i];
+                    freq[i] = match last {
+                        Some((bits, v)) if bits == f.to_bits() => v,
+                        _ => {
+                            let v = voice.root_hz * (f / voice.root_hz).powf(voice.keytrack);
+                            last = Some((f.to_bits(), v));
+                            v
+                        }
                     };
                 }
                 local[0] = &freq[..n];
-                local[1] = &pitch[..n];
             }
             voice.sampler.process(ctx, &local, &mut heard[..n]);
             let held = ctx.gate || voice.one_shot;

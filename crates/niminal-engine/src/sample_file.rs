@@ -154,7 +154,9 @@ fn read_compressed(path: &Path) -> Result<Vec<Table>, String> {
         .make(&params, &DecoderOptions::default())
         .map_err(|e| fail(&e))?;
     let mut buffers: Vec<Vec<f32>> = Vec::new();
+    let mut block: Option<SampleBuffer<f32>> = None;
     let mut rate = params.sample_rate;
+    let initial_frames = params.n_frames.unwrap_or(0).min(16 * 1024 * 1024) as usize;
     loop {
         let packet = match format.next_packet() {
             Ok(packet) => packet,
@@ -171,12 +173,18 @@ fn read_compressed(path: &Path) -> Result<Vec<Table>, String> {
                 let spec = *decoded.spec();
                 let channels = spec.channels.count();
                 if buffers.is_empty() {
-                    buffers = vec![Vec::new(); channels];
+                    buffers = (0..channels)
+                        .map(|_| Vec::with_capacity(initial_frames))
+                        .collect();
                     rate = Some(spec.rate);
                 }
-                let mut block = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
-                block.copy_interleaved_ref(decoded);
-                for frame in block.samples().chunks_exact(channels) {
+                let needed = decoded.capacity() * channels;
+                let buf = match &mut block {
+                    Some(b) if b.capacity() >= needed => b,
+                    slot => slot.insert(SampleBuffer::<f32>::new(decoded.capacity() as u64, spec)),
+                };
+                buf.copy_interleaved_ref(decoded);
+                for frame in buf.samples().chunks_exact(channels) {
                     for (buffer, &x) in buffers.iter_mut().zip(frame) {
                         buffer.push(x);
                     }
@@ -265,28 +273,56 @@ fn decode_wav(
     let mut reader = reader;
     let spec = reader.spec();
     let channels = usize::from(spec.channels);
-    let interleaved: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Float => reader
-            .samples::<f32>()
-            .collect::<Result<_, _>>()
-            .map_err(|e| fail(&e))?,
-        hound::SampleFormat::Int => {
-            let scale = 1.0 / (1_u64 << (spec.bits_per_sample - 1)) as f32;
-            reader
-                .samples::<i32>()
-                .map(|s| s.map(|v| v as f32 * scale))
-                .collect::<Result<_, _>>()
-                .map_err(|e| fail(&e))?
-        }
-    };
-    if channels == 0 || interleaved.is_empty() {
+    if channels == 0 {
         return Err(format!("{label} has no audio in it"));
     }
-    let mut buffers = vec![Vec::with_capacity(interleaved.len() / channels); channels];
-    for frame in interleaved.chunks_exact(channels) {
-        for (buffer, &x) in buffers.iter_mut().zip(frame) {
-            buffer.push(x);
+    let frames_hint = (reader.len() as usize / channels).min(16 * 1024 * 1024);
+    let mut buffers: Vec<Vec<f32>> = (0..channels)
+        .map(|_| Vec::with_capacity(frames_hint))
+        .collect();
+    let mut ch = 0usize;
+    match spec.sample_format {
+        hound::SampleFormat::Float => {
+            for sample in reader.samples::<f32>() {
+                let x = sample.map_err(|e| fail(&e))?;
+                buffers[ch].push(x);
+                ch += 1;
+                if ch == channels {
+                    ch = 0;
+                }
+            }
         }
+        hound::SampleFormat::Int if spec.bits_per_sample == 16 => {
+            const SCALE_I16: f32 = 1.0 / 32768.0;
+            for sample in reader.samples::<i16>() {
+                let x = f32::from(sample.map_err(|e| fail(&e))?) * SCALE_I16;
+                buffers[ch].push(x);
+                ch += 1;
+                if ch == channels {
+                    ch = 0;
+                }
+            }
+        }
+        hound::SampleFormat::Int => {
+            let scale = 1.0 / (1_u64 << (spec.bits_per_sample - 1)) as f32;
+            for sample in reader.samples::<i32>() {
+                let x = sample.map_err(|e| fail(&e))? as f32 * scale;
+                buffers[ch].push(x);
+                ch += 1;
+                if ch == channels {
+                    ch = 0;
+                }
+            }
+        }
+    }
+    // Drop any incomplete trailing frame to match `chunks_exact(channels)`.
+    if ch != 0 {
+        for buffer in &mut buffers[..ch] {
+            buffer.pop();
+        }
+    }
+    if buffers[0].is_empty() {
+        return Err(format!("{label} has no audio in it"));
     }
     let rate = Some(spec.sample_rate as f32);
     Ok(buffers

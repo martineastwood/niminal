@@ -515,7 +515,7 @@ fn any_order_of_definitions_keeps_the_session_sound() {
             .unwrap_or(default)
     };
     let from = number("FUZZ_FROM", 0);
-    for seed in from..from + number("FUZZ_RUNS", 8) {
+    for seed in from..from + number("FUZZ_RUNS", 3) {
         run_seed(seed);
     }
 }

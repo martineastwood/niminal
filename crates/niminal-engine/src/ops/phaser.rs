@@ -83,11 +83,12 @@ impl Opcode for Phaser {
 
             // sweep the allpass frequency across a range centered on `center`
             let octaves = depth * 3.0; // up to 3 octaves of sweep
-            let freq = (center * (2.0_f64).powf(lfo * octaves)).clamp(20.0, sr * 0.45);
+            let freq = (center * (lfo * octaves).exp2()).clamp(20.0, sr * 0.45);
 
             // first-order allpass coefficient from frequency
             let w = std::f64::consts::PI * freq / sr;
-            let coeff = (w.tan() - 1.0) / (w.tan() + 1.0);
+            let t = w.tan();
+            let coeff = (t - 1.0) / (t + 1.0);
 
             // run through allpass chain
             let mut x = dry + self.feedback_state * feedback;

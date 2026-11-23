@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used)]
-mod common;
+use crate::common;
 use common::*;
 use niminal_engine::ops::{FilterMode, Gain, Osc, Svf, Wave};
 use niminal_engine::{GraphBuilder, GraphError, Src};

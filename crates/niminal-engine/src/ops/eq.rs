@@ -23,6 +23,7 @@ pub struct Eq {
     ic1: f64,
     ic2: f64,
     cached_for: (f32, f32, f32),
+    base_g: f64,
     a1: f64,
     a2: f64,
     a3: f64,
@@ -37,6 +38,7 @@ impl Eq {
             ic1: 0.0,
             ic2: 0.0,
             cached_for: (f32::NAN, f32::NAN, f32::NAN),
+            base_g: 0.0,
             a1: 0.0,
             a2: 0.0,
             a3: 0.0,
@@ -57,12 +59,15 @@ impl Eq {
         if (cutoff, gain, q) == self.cached_for {
             return;
         }
+        if cutoff != self.cached_for.0 {
+            let sr = f64::from(self.sample_rate);
+            let fc = f64::from(cutoff).clamp(10.0, sr * 0.45);
+            self.base_g = (std::f64::consts::PI * fc / sr).tan();
+        }
         self.cached_for = (cutoff, gain, q);
 
-        let sr = f64::from(self.sample_rate);
-        let fc = f64::from(cutoff).clamp(10.0, sr * 0.45);
         let a = f64::from(gain.max(1e-6)).sqrt();
-        let mut g = (std::f64::consts::PI * fc / sr).tan();
+        let mut g = self.base_g;
         let q = f64::from(q).max(0.1);
         let k = match self.mode {
             EqMode::Peak => 1.0 / (q * a),

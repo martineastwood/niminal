@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used)]
-mod common;
+use crate::common;
 use common::*;
 use niminal_engine::ops::{Delay, Reverb};
 use niminal_engine::{Graph, GraphBuilder, Opcode, Port, ProcessCtx, Src};

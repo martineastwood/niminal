@@ -102,6 +102,7 @@ pub struct Sampler {
     started: bool,
     done: bool,
     sample_rate: f32,
+    cached_pitch: (u32, f64),
 }
 
 impl Sampler {
@@ -128,6 +129,7 @@ impl Sampler {
             started: false,
             done: false,
             sample_rate: 48_000.0,
+            cached_pitch: (0.0f32.to_bits(), 1.0),
         }
     }
 
@@ -166,8 +168,7 @@ impl Sampler {
                 continue;
             }
             let w = SINC[k] + (SINC[k + 1] - SINC[k]) * (x - k as f64);
-            let index = self.loop_position(i as f64) as i64;
-            sum += f64::from(self.at(index)) * w;
+            sum += f64::from(self.at(i)) * w;
             weight += w;
         }
         if weight.abs() < 1e-12 {
@@ -228,7 +229,17 @@ impl Sampler {
         let i = self.position.floor();
         let t = (self.position - i) as f32;
         let i = i as i64;
-        let (a, b, c, d) = (self.at(i - 1), self.at(i), self.at(i + 1), self.at(i + 2));
+        let (a, b, c, d) = if self.loop_mode == LoopMode::None
+            && self.read_bounds.is_none()
+            && i > self.range.0 as i64
+            && i + 2 < self.range.1 as i64
+        {
+            let buf = self.data.data();
+            let idx = i as usize;
+            (buf[idx - 1], buf[idx], buf[idx + 1], buf[idx + 2])
+        } else {
+            (self.at(i - 1), self.at(i), self.at(i + 1), self.at(i + 2))
+        };
         // Catmull-Rom spline through b and c.
         b + 0.5 * t * (c - a + t * (2.0 * a - 5.0 * b + 4.0 * c - d + t * (3.0 * (b - c) + d - a)))
     }
@@ -238,7 +249,17 @@ impl Sampler {
         let i = self.position.floor();
         let t = (self.position - i) as f32;
         let i = i as i64;
-        let (a, b) = (self.at(i), self.at(i + 1));
+        let (a, b) = if self.loop_mode == LoopMode::None
+            && self.read_bounds.is_none()
+            && i >= self.range.0 as i64
+            && i + 1 < self.range.1 as i64
+        {
+            let buf = self.data.data();
+            let idx = i as usize;
+            (buf[idx], buf[idx + 1])
+        } else {
+            (self.at(i), self.at(i + 1))
+        };
         a + t * (b - a)
     }
 
@@ -574,10 +595,15 @@ impl Opcode for Sampler {
         }
 
         let (first, last) = (self.range.0 as f64, self.range.1 as f64);
-        let sliced = self.range != (0, self.data.len()) && self.loop_mode == LoopMode::None;
+        let looped_mode = self.loop_mode != LoopMode::None;
+        let sliced = self.range != (0, self.data.len()) && !looped_mode;
         let source_rate = f64::from(self.source_rate());
+        let sr = f64::from(self.sample_rate);
+        let rate_scale = source_rate / sr;
+        let inv_root = 1.0 / f64::from(self.root_hz);
+        let grain_inc = 1.0 / (0.05 * sr);
         for (n, y) in out.iter_mut().enumerate() {
-            if self.loop_mode == LoopMode::None {
+            if !looped_mode {
                 if self.position >= last || self.position < first {
                     self.done = true;
                     *y = 0.0;
@@ -636,24 +662,37 @@ impl Opcode for Sampler {
                     self.grain_offsets = [0.0; 2];
                 }
             }
-            let pitch = f64::from(inputs[1][n]) / 12.0;
-            let ratio = f64::from(inputs[0][n]) / f64::from(self.root_hz)
-                * if pitch == 0.0 { 1.0 } else { pitch.exp2() }
-                * f64::from(inputs[2][n]).abs();
-            let mut step = ratio.max(0.0) * source_rate / f64::from(self.sample_rate);
+            let pitch_raw = inputs[1][n];
+            let pitch_factor = if pitch_raw.to_bits() == self.cached_pitch.0 {
+                self.cached_pitch.1
+            } else {
+                let factor = if pitch_raw == 0.0 {
+                    1.0
+                } else {
+                    (f64::from(pitch_raw) / 12.0).exp2()
+                };
+                self.cached_pitch = (pitch_raw.to_bits(), factor);
+                factor
+            };
+            let ratio =
+                f64::from(inputs[0][n]) * inv_root * pitch_factor * f64::from(inputs[2][n]).abs();
+            let mut step = ratio.max(0.0) * rate_scale;
             let stretch = inputs.get(6).map_or(1.0, |input| input[n]);
             let stretch = if stretch.is_finite() {
                 stretch.clamp(0.25, 4.0)
             } else {
                 1.0
             };
-            let mut advance = step / f64::from(stretch);
+            let mut advance = if stretch == 1.0 {
+                step
+            } else {
+                step / f64::from(stretch)
+            };
             let duration = inputs.get(11).map_or(0.0, |input| input[n]);
             if duration.is_finite() && duration > 0.0 {
-                let fitted =
-                    self.data.len() as f64 / (f64::from(duration) * f64::from(self.sample_rate));
+                let fitted = self.data.len() as f64 / (f64::from(duration) * sr);
                 if self.repitch {
-                    step *= fitted / (source_rate / f64::from(self.sample_rate));
+                    step *= fitted / rate_scale;
                     advance = step / f64::from(stretch);
                 } else {
                     advance = if step > 0.0 {
@@ -664,7 +703,13 @@ impl Opcode for Sampler {
                 }
             }
             // The grain readers follow pitch; only the transport follows fitted time.
-            let stretch = if advance > 0.0 { step / advance } else { 1.0 };
+            let stretch = if advance == step {
+                1.0
+            } else if advance > 0.0 {
+                step / advance
+            } else {
+                1.0
+            };
             let mode = inputs.get(7).map_or(0.0, |input| input[n]);
             // Reverse grains use ordinary WSOLA; attack protection is forward-only.
             let transient = mode >= 1.5 && self.direction > 0.0 && stretch != 1.0;
@@ -681,11 +726,20 @@ impl Opcode for Sampler {
                 advance
             };
 
-            let fade = self.crossfade_frames(inputs, n);
+            let fade = if looped_mode {
+                self.crossfade_frames(inputs, n)
+            } else {
+                0.0
+            };
             if stretch == 1.0 || attack {
                 let transport = self.position;
                 self.position = mapped;
-                *y = self.read_loop(step, fade, self.requested_loop(inputs, n));
+                let next_loop = if looped_mode {
+                    self.requested_loop(inputs, n)
+                } else {
+                    self.loop_range
+                };
+                *y = self.read_loop(step, fade, next_loop);
                 self.position = transport;
                 self.grain_offsets = [0.0; 2];
                 if attack {
@@ -696,6 +750,11 @@ impl Opcode for Sampler {
                 // pitch while the transport follows duration. No audio-thread allocation.
                 let transport = self.position;
                 let weight = (std::f64::consts::PI * self.grain_phase).sin().powi(2);
+                let next_loop = if looped_mode {
+                    self.requested_loop(inputs, n)
+                } else {
+                    self.loop_range
+                };
                 *y = 0.0;
                 for (head, weight) in [weight, 1.0 - weight].into_iter().enumerate() {
                     self.position = mapped + self.grain_offsets[head];
@@ -705,8 +764,7 @@ impl Opcode for Sampler {
                             .clamp(bounds.0, (bounds.1 - 1.0).max(bounds.0));
                     }
                     self.position = self.loop_position(self.position);
-                    *y +=
-                        weight as f32 * self.read_loop(step, fade, self.requested_loop(inputs, n));
+                    *y += weight as f32 * self.read_loop(step, fade, next_loop);
                     self.grain_offsets[head] += self.direction * (step - mapped_advance);
                 }
                 self.position = transport;
@@ -717,7 +775,7 @@ impl Opcode for Sampler {
             }
             self.position += self.direction * advance;
             let previous = self.grain_phase;
-            self.grain_phase += 1.0 / (0.05 * f64::from(self.sample_rate));
+            self.grain_phase += grain_inc;
             let restart = if self.grain_phase >= 1.0 {
                 self.grain_phase -= 1.0;
                 Some(0)

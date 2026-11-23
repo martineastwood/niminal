@@ -2,7 +2,7 @@
 #![allow(clippy::unwrap_used)]
 
 use niminal_server::{At, Op, Session};
-mod support;
+use crate::support;
 use niminal_lang::Layout;
 use niminal_score::{Time, Value};
 use support::Eval;

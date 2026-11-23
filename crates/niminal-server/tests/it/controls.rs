@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
 use niminal_server::{Session, from_lines, to_lines};
-mod support;
+use crate::support;
 use niminal_lang::Layout;
 use support::{Eval, play, set_control};
 

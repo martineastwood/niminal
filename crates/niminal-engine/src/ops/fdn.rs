@@ -38,6 +38,7 @@ pub struct Fdn {
     longest: usize,
     channel: usize,
     sample_rate: f32,
+    base_lengths: [f32; 8],
     read_times: [DelayTime; 8],
     cached_damp: f32,
     pole: f32,
@@ -55,6 +56,7 @@ impl Fdn {
             longest: 0,
             channel,
             sample_rate: 48_000.0,
+            base_lengths: [0.0; 8],
             read_times: [DelayTime::new(48_000.0); 8],
             cached_damp: f32::NAN,
             pole: 0.0,
@@ -110,14 +112,19 @@ impl Opcode for Fdn {
 
     fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
+        self.base_lengths = std::array::from_fn(|i| self.base_length(i));
         self.read_times = [DelayTime::new(sample_rate); 8];
         self.cached_damp = f32::NAN;
         self.cached_feedback.0 = f32::NAN;
-        // room for the longest line at the largest size, and a sample either side for interpolating
-        self.lines = (0..8)
-            .map(|i| vec![0.0; (self.base_length(i) * MAX_SIZE).ceil() as usize + 4])
+        // room for the longest line at the largest size, and a sample either side for interpolating;
+        // power-of-two lengths turn ring-buffer modulo into a bitmask.
+        let min_lengths: [usize; 8] =
+            std::array::from_fn(|i| (self.base_lengths[i] * MAX_SIZE).ceil() as usize + 4);
+        self.lines = min_lengths
+            .iter()
+            .map(|&len| vec![0.0; len.next_power_of_two()])
             .collect();
-        self.longest = self.lines.iter().map(Vec::len).max().unwrap_or(0);
+        self.longest = min_lengths.into_iter().max().unwrap_or(0);
         self.pos = [0; 8];
         self.lowpass = [0.0; 8];
         self.quiet_run = self.longest;
@@ -151,7 +158,7 @@ impl Opcode for Fdn {
                 self.cached_damp = damp;
             }
             let delay: [f32; 8] = std::array::from_fn(|i| {
-                let target = (self.base_length(i) * size).max(2.0);
+                let target = (self.base_lengths[i] * size).max(2.0);
                 self.read_times[i].next(f64::from(target)) as f32
             });
             if (time, delay) != self.cached_feedback {
@@ -164,10 +171,10 @@ impl Opcode for Fdn {
             let mut read = [0.0f32; 8];
             for i in 0..8 {
                 let line = &self.lines[i];
-                let len = line.len();
+                let mask = line.len() - 1;
                 // `delay` samples back, between the two stored samples either side
-                let newer = (self.pos[i] + len - whole[i]) % len;
-                let older = if newer == 0 { len - 1 } else { newer - 1 };
+                let newer = self.pos[i].wrapping_sub(whole[i]) & mask;
+                let older = newer.wrapping_sub(1) & mask;
                 read[i] = line[newer] + (line[older] - line[newer]) * fraction[i];
             }
             *o = (0..8).map(|i| read[i] * SIGNS[i]).sum::<f32>() * GAIN;
@@ -189,8 +196,9 @@ impl Opcode for Fdn {
                     flush(self.lowpass[i] * self.pole + mixed * HADAMARD_SCALE * (1.0 - self.pole));
                 let stored = flush(x + self.lowpass[i] * self.feedback[i]);
                 loudest = loudest.max(stored.abs());
+                let mask = self.lines[i].len() - 1;
                 self.lines[i][self.pos[i]] = stored;
-                self.pos[i] = (self.pos[i] + 1) % self.lines[i].len();
+                self.pos[i] = (self.pos[i] + 1) & mask;
             }
             self.quiet_run = if loudest < quiet {
                 self.quiet_run + 1

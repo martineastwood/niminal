@@ -4,7 +4,7 @@ use niminal_sequencer::Offline;
 
 #[test]
 fn a_long_attack_through_a_fx_renders_in_each_output_layout() {
-    let source = include_str!("../../../examples/room.nml").replace("env[0 2ms", "env[0 65536ms");
+    let source = include_str!("../../../../examples/room.nml").replace("env[0 2ms", "env[0 65536ms");
     for layout in [Layout::Mono, Layout::Stereo, Layout::Quad] {
         let mut session = Offline::new(48_000.0, layout);
         session.eval(&source, Some("now")).unwrap();
@@ -276,7 +276,7 @@ fn level_cycles(out: &[f32]) -> usize {
 
 /// A shelf effect from `std/fx` reading the bus `src` where it reads `in`, with some of its defaults replaced.
 fn shelf_insert(name: &str, defaults: &[(&str, &str)]) -> String {
-    let shelf = include_str!("../../../crates/niminal-lang/std/fx.nml");
+    let shelf = include_str!("../../../../crates/niminal-lang/std/fx.nml");
     let start = shelf.find(&format!("fx {name}(")).unwrap();
     let end = start + shelf[start..].find("\n}\n").unwrap() + 3;
     let mut text = shelf[start..end]

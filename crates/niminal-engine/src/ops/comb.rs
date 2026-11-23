@@ -15,6 +15,7 @@ use crate::opcode::{Opcode, Port, ProcessCtx, TAIL_LEVEL};
 #[derive(Clone)]
 pub struct Comb {
     max_seconds: f32,
+    max_samples: f64,
     buf: Vec<f32>,
     write: usize,
     sample_rate: f32,
@@ -26,12 +27,14 @@ pub struct Comb {
     interp_in: f64,
     interp_out: f64,
     interp_delay: f64,
+    interp_a: f64,
 }
 
 impl Comb {
     pub fn new(max_seconds: f32) -> Self {
         let mut c = Comb {
             max_seconds,
+            max_samples: 1.0,
             buf: Vec::new(),
             write: 0,
             sample_rate: 48_000.0,
@@ -41,6 +44,7 @@ impl Comb {
             interp_in: 0.0,
             interp_out: 0.0,
             interp_delay: f64::NAN,
+            interp_a: 0.0,
         };
         c.prepare(48_000.0);
         c
@@ -81,7 +85,8 @@ impl Opcode for Comb {
     fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
         let max = (self.max_seconds * sample_rate).round().max(1.0);
-        self.buf = vec![0.0; max as usize + 3];
+        self.max_samples = f64::from(max);
+        self.buf = vec![0.0; (max as usize + 3).next_power_of_two()];
         self.write = 0;
         self.quiet_run = 0;
         self.in_flight = 0;
@@ -89,6 +94,7 @@ impl Opcode for Comb {
         self.interp_in = 0.0;
         self.interp_out = 0.0;
         self.interp_delay = f64::NAN;
+        self.interp_a = 0.0;
     }
 
     fn carry_state(&mut self, old: &mut dyn Opcode) {
@@ -104,12 +110,13 @@ impl Opcode for Comb {
             self.interp_in = old.interp_in;
             self.interp_out = old.interp_out;
             self.interp_delay = old.interp_delay;
+            self.interp_a = old.interp_a;
         }
     }
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-        let len = self.buf.len();
-        let max_samples = (len - 3) as f64;
+        let mask = self.buf.len() - 1;
+        let max_samples = self.max_samples;
         let sr = f64::from(self.sample_rate);
         for (i, o) in out.iter_mut().enumerate() {
             let exact = f64::from(inputs[1][i]) * sr;
@@ -123,19 +130,19 @@ impl Opcode for Comb {
             let whole = samples.floor() as usize;
             let frac = (samples - samples.floor()) as f32;
 
-            let newer = self.buf[(self.write + len - whole) % len];
-            let a = (1.0 - f64::from(frac)) / (1.0 + f64::from(frac));
+            let newer = self.buf[self.write.wrapping_sub(whole) & mask];
             let delayed = if samples != self.interp_delay {
                 // A time-varying allpass can pump energy into a nearly lossless
                 // feedback loop. Use bounded linear interpolation while time moves.
-                let older = self.buf[(self.write + len - whole - 1) % len];
+                let older = self.buf[self.write.wrapping_sub(whole + 1) & mask];
+                self.interp_delay = samples;
+                self.interp_a = (1.0 - f64::from(frac)) / (1.0 + f64::from(frac));
                 f64::from(newer + (older - newer) * frac)
             } else if frac == 0.0 {
                 f64::from(newer)
             } else {
-                a * (f64::from(newer) - self.interp_out) + self.interp_in
+                self.interp_a * (f64::from(newer) - self.interp_out) + self.interp_in
             };
-            self.interp_delay = samples;
             self.interp_in = f64::from(newer);
             self.interp_out = crate::denormals::flush(delayed);
             let delayed = delayed as f32;
@@ -151,7 +158,7 @@ impl Opcode for Comb {
 
             let written = flush32(inputs[0][i] + fb_damped);
             self.buf[self.write] = written;
-            self.write = (self.write + 1) % len;
+            self.write = (self.write + 1) & mask;
             self.in_flight = samples.ceil() as usize + 1;
 
             let result = inputs[0][i] + delayed * ff + fb_damped;

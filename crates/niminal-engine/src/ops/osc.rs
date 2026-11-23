@@ -2,12 +2,32 @@ use std::sync::{Arc, LazyLock};
 
 use crate::opcode::{Opcode, Port, ProcessCtx};
 
-static SINE_TABLE: LazyLock<Wavetable> = LazyLock::new(|| {
-    let cycle: Vec<f64> = (0..LEVEL_SIZE)
-        .map(|i| (i as f64 / LEVEL_SIZE as f64 * std::f64::consts::TAU).sin())
+static SINE_TABLE: LazyLock<Box<[f32]>> = LazyLock::new(|| {
+    let mut level: Vec<f32> = (0..LEVEL_SIZE)
+        .map(|i| (i as f64 / LEVEL_SIZE as f64 * std::f64::consts::TAU).sin() as f32)
         .collect();
-    Wavetable::from_cycle(&cycle)
+    level.push(level[0]);
+    level.into_boxed_slice()
 });
+
+#[inline(always)]
+pub(super) fn sine_lookup(t: f64) -> f32 {
+    read_level(&SINE_TABLE, t)
+}
+
+pub(super) fn ensure_sine_table() {
+    LazyLock::force(&SINE_TABLE);
+}
+
+#[inline(always)]
+fn read_level(level: &[f32], t: f64) -> f32 {
+    let t = if t.is_finite() { t } else { 0.0 };
+    let pos = (t * LEVEL_SIZE as f64).clamp(0.0, LEVEL_SIZE as f64);
+    let i = (pos as usize).min(LEVEL_SIZE - 1);
+    let f = (pos - i as f64) as f32;
+    let pair = &level[i..i + 2];
+    pair[0] + (pair[1] - pair[0]) * f
+}
 
 fn fast_log2(x: f64) -> f64 {
     if x <= 0.0 {
@@ -60,23 +80,43 @@ impl Wavetable {
         let n = cycle.len();
         assert!(n > 0, "a table has at least one entry");
         let top = (n / 2).clamp(1, MAX_HARMONICS);
-        let angle = |k: usize, size: usize| std::f64::consts::TAU * (k % size) as f64 / size as f64;
-        // harmonic h: cos and sin parts, found by a direct transform
-        let (cos_n, sin_n): (Vec<f64>, Vec<f64>) = (0..n)
-            .map(|k| angle(k, n).sin_cos())
-            .map(|(s, c)| (c, s))
-            .unzip();
-        let dc = cycle.iter().sum::<f64>() / n as f64;
-        let parts: Vec<(f64, f64)> = (1..=top)
-            .map(|h| {
-                let (mut a, mut b) = (0.0, 0.0);
-                for (i, x) in cycle.iter().enumerate() {
-                    a += x * cos_n[h * i % n];
-                    b += x * sin_n[h * i % n];
-                }
-                (2.0 * a / n as f64, 2.0 * b / n as f64)
-            })
-            .collect();
+        let (dc, parts) = if n >= 2 && n.is_multiple_of(2) {
+            let mut planner = realfft::RealFftPlanner::<f64>::new();
+            let fft = planner.plan_fft_forward(n);
+            let mut input = cycle.to_vec();
+            let mut spectrum = fft.make_output_vec();
+            let mut scratch = fft.make_scratch_vec();
+            fft.process_with_scratch(&mut input, &mut spectrum, &mut scratch)
+                .expect("realfft forward buffer lengths match");
+            let inv_n = 1.0 / n as f64;
+            let dc = spectrum[0].re * inv_n;
+            let parts: Vec<(f64, f64)> = (1..=top)
+                .map(|h| {
+                    let c = spectrum[h];
+                    (2.0 * c.re * inv_n, -2.0 * c.im * inv_n)
+                })
+                .collect();
+            (dc, parts)
+        } else {
+            let angle =
+                |k: usize, size: usize| std::f64::consts::TAU * (k % size) as f64 / size as f64;
+            let (cos_n, sin_n): (Vec<f64>, Vec<f64>) = (0..n)
+                .map(|k| angle(k, n).sin_cos())
+                .map(|(s, c)| (c, s))
+                .unzip();
+            let dc = cycle.iter().sum::<f64>() / n as f64;
+            let parts: Vec<(f64, f64)> = (1..=top)
+                .map(|h| {
+                    let (mut a, mut b) = (0.0, 0.0);
+                    for (i, x) in cycle.iter().enumerate() {
+                        a += x * cos_n[h * i % n];
+                        b += x * sin_n[h * i % n];
+                    }
+                    (2.0 * a / n as f64, 2.0 * b / n as f64)
+                })
+                .collect();
+            (dc, parts)
+        };
         Self::from_parts(dc, &parts, false)
     }
 
@@ -85,40 +125,40 @@ impl Wavetable {
     /// overshooting at them.
     fn from_parts(dc: f64, parts: &[(f64, f64)], taper: bool) -> Self {
         let top = parts.len();
-        let angle = |k: usize, size: usize| std::f64::consts::TAU * (k % size) as f64 / size as f64;
-        let (cos_l, sin_l): (Vec<f64>, Vec<f64>) = (0..LEVEL_SIZE)
-            .map(|k| angle(k, LEVEL_SIZE).sin_cos())
-            .map(|(s, c)| (c, s))
-            .unzip();
         let count = (LEVELS_PER_OCTAVE * (top as f64).log2()).floor() as usize + 1;
+        let mut planner = realfft::RealFftPlanner::<f64>::new();
+        let ifft = planner.plan_fft_inverse(LEVEL_SIZE);
+        let mut spectrum = ifft.make_input_vec();
+        let mut time = ifft.make_output_vec();
+        let mut scratch = ifft.make_scratch_vec();
+        let nyquist_bin = LEVEL_SIZE / 2;
         let levels = (0..count)
             .map(|k| {
                 let keep = ((top as f64 / (k as f64 / LEVELS_PER_OCTAVE).exp2()) as usize).max(1);
                 let fade_from = keep as f64 * 2.0 / 3.0;
-                // The harmonics this level plays, with their taper applied; silent ones are skipped.
-                let used: Vec<(usize, f64, f64)> = parts[..keep]
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(j, &(a, b))| {
-                        let h = j + 1;
-                        let weight = if taper && keep >= 3 && h as f64 > fade_from {
-                            let x = (h as f64 - fade_from) / (keep as f64 - fade_from);
-                            0.5 + 0.5 * (std::f64::consts::PI * x.min(1.0)).cos()
-                        } else {
-                            1.0
-                        };
-                        (a.abs() > 1e-9 || b.abs() > 1e-9).then_some((h, a * weight, b * weight))
-                    })
-                    .collect();
-                let mut level: Vec<f32> = (0..LEVEL_SIZE)
-                    .map(|i| {
-                        let sum: f64 = used
-                            .iter()
-                            .map(|&(h, a, b)| a * cos_l[h * i % LEVEL_SIZE] + b * sin_l[h * i % LEVEL_SIZE])
-                            .sum();
-                        (dc + sum) as f32
-                    })
-                    .collect();
+                spectrum.fill(realfft::num_complex::Complex::new(0.0, 0.0));
+                spectrum[0].re = dc;
+                for (j, &(a, b)) in parts[..keep].iter().enumerate() {
+                    let h = j + 1;
+                    if h > nyquist_bin || (a.abs() <= 1e-9 && b.abs() <= 1e-9) {
+                        continue;
+                    }
+                    let weight = if taper && keep >= 3 && h as f64 > fade_from {
+                        let x = (h as f64 - fade_from) / (keep as f64 - fade_from);
+                        0.5 + 0.5 * (std::f64::consts::PI * x.min(1.0)).cos()
+                    } else {
+                        1.0
+                    };
+                    if h == nyquist_bin {
+                        spectrum[h].re = a * weight;
+                    } else {
+                        spectrum[h].re = 0.5 * a * weight;
+                        spectrum[h].im = -0.5 * b * weight;
+                    }
+                }
+                ifft.process_with_scratch(&mut spectrum, &mut time, &mut scratch)
+                    .expect("realfft inverse buffer lengths match");
+                let mut level: Vec<f32> = time.iter().map(|&v| v as f32).collect();
                 level.push(level[0]);
                 level.into_boxed_slice()
             })
@@ -331,20 +371,263 @@ impl Opcode for Osc {
     }
 
     fn process(&mut self, _ctx: &ProcessCtx, inputs: &[&[f32]], out: &mut [f32]) {
-        // Ports that were not given read as their defaults.
         let n = out.len();
+        if n == 0 {
+            return;
+        }
         let port = |k: usize| inputs.get(k).map(|p| &p[..n]);
-        let (width, position, phase, sync) = (port(2), port(3), port(4), port(5));
-        let (freq, phase_mod) = (&inputs[0][..n], &inputs[1][..n]);
-        for (i, o) in out.iter_mut().enumerate() {
-            *o = self.step(
-                freq[i],
-                phase_mod[i],
-                width.map_or(0.5, |w| w[i]),
-                position.map_or(0.0, |p| p[i]),
-                phase.map_or(0.0, |p| p[i]),
-                sync.map_or(0.0, |p| p[i]),
-            );
+        let (width_in, position_in, phase_in, sync_in) = (port(2), port(3), port(4), port(5));
+        let (freq_in, phase_mod_in) = (&inputs[0][..n], &inputs[1][..n]);
+
+        if self.initial_phase.is_none() {
+            let initial = wrap(f64::from(phase_in.map_or(0.0, |p| p[0])));
+            self.initial_phase = Some(initial);
+            self.phase = initial;
+        }
+
+        let has_sync = self.correction != 0.0 || sync_in.is_some_and(|s| s.iter().any(|&v| v > 0.0));
+        if has_sync {
+            for (i, o) in out.iter_mut().enumerate() {
+                *o = self.step(
+                    freq_in[i],
+                    phase_mod_in[i],
+                    width_in.map_or(0.5, |w| w[i]),
+                    position_in.map_or(0.0, |p| p[i]),
+                    phase_in.map_or(0.0, |p| p[i]),
+                    sync_in.map_or(0.0, |p| p[i]),
+                );
+            }
+            return;
+        }
+
+        self.sync_phase = 0.0;
+        self.correction = 0.0;
+        let sr = f64::from(self.sample_rate);
+        let mut inc_cache = self.increment;
+        let mut next_inc = |f: f32| -> f64 {
+            match inc_cache {
+                Some((bits, inc)) if bits == f.to_bits() => inc,
+                _ => {
+                    let inc = f64::from(f) / sr;
+                    inc_cache = Some((f.to_bits(), inc));
+                    inc
+                }
+            }
+        };
+
+        if let Some(bank) = self.bank.as_deref() {
+            let slots = (bank.len() - 1) as f64;
+            let mut phase = self.phase;
+            let mut prev_pm = self.modulation.map(|(p, _)| p);
+            let mut last_width = 0.5;
+            let mut cached_a: Option<(usize, u64, Pick)> = None;
+            let mut cached_b: Option<(usize, u64, Pick)> = None;
+            for (i, o) in out.iter_mut().enumerate() {
+                let inc = next_inc(freq_in[i]);
+                let pm = f64::from(phase_mod_in[i]);
+                let width = if self.wave == Wave::Square {
+                    0.5
+                } else {
+                    f64::from(width_in.map_or(0.5, |w| w[i])).clamp(0.01, 0.99)
+                };
+                let p_pm = prev_pm.unwrap_or(pm);
+                prev_pm = Some(pm);
+                last_width = width;
+                let effective_inc = inc + pm - p_pm;
+                let t = wrap(phase + pm);
+                let pos = f64::from(position_in.map_or(0.0, |p| p[i])).clamp(0.0, 1.0);
+                let p = pos * slots;
+                let a = p as usize;
+                let b = (a + 1).min(bank.len() - 1);
+                let w = (p - a as f64) as f32;
+                let key = effective_inc.to_bits();
+                let pick_a = match cached_a {
+                    Some((idx, k, pick)) if idx == a && k == key => pick,
+                    _ => {
+                        let pick = bank[a].pick(effective_inc);
+                        cached_a = Some((a, key, pick));
+                        pick
+                    }
+                };
+                let pick_b = match cached_b {
+                    Some((idx, k, pick)) if idx == b && k == key => pick,
+                    _ => {
+                        let pick = bank[b].pick(effective_inc);
+                        cached_b = Some((b, key, pick));
+                        pick
+                    }
+                };
+                let low = bank[a].read_with(t, pick_a);
+                let high = bank[b].read_with(t, pick_b);
+                phase = wrap(phase + inc);
+                *o = low + (high - low) * w;
+            }
+            self.phase = phase;
+            self.increment = inc_cache;
+            if let Some(pm) = prev_pm {
+                self.modulation = Some((pm, last_width));
+            }
+            return;
+        }
+
+        if let Some(table) = self.table.as_deref() {
+            let mut phase = self.phase;
+            let mut prev_pm = self.modulation.map(|(p, _)| p);
+            let mut last_width = 0.5;
+            let mut pick_cache = self.pick;
+            for (i, o) in out.iter_mut().enumerate() {
+                let inc = next_inc(freq_in[i]);
+                let pm = f64::from(phase_mod_in[i]);
+                let width = if self.wave == Wave::Square {
+                    0.5
+                } else {
+                    f64::from(width_in.map_or(0.5, |w| w[i])).clamp(0.01, 0.99)
+                };
+                let p_pm = prev_pm.unwrap_or(pm);
+                prev_pm = Some(pm);
+                last_width = width;
+                let effective_inc = inc + pm - p_pm;
+                let t = wrap(phase + pm);
+                phase = wrap(phase + inc);
+                let pick = picked(&mut pick_cache, table, effective_inc);
+                *o = table.read_with(t, pick);
+            }
+            self.phase = phase;
+            self.increment = inc_cache;
+            self.pick = pick_cache;
+            if let Some(pm) = prev_pm {
+                self.modulation = Some((pm, last_width));
+            }
+            return;
+        }
+
+        match self.wave {
+            Wave::Sine => {
+                let table = &*SINE_TABLE;
+                let mut phase = self.phase;
+                for (i, o) in out.iter_mut().enumerate() {
+                    let inc = next_inc(freq_in[i]);
+                    let pm = f64::from(phase_mod_in[i]);
+                    let t = wrap(phase + pm);
+                    phase = wrap(phase + inc);
+                    *o = read_level(table, t);
+                }
+                self.phase = phase;
+                self.increment = inc_cache;
+                self.modulation = Some((
+                    f64::from(phase_mod_in[n - 1]),
+                    f64::from(width_in.map_or(0.5, |w| w[n - 1])).clamp(0.01, 0.99),
+                ));
+            }
+            Wave::Saw => {
+                let table = &*SAW_TABLE;
+                let mut phase = self.phase;
+                let mut prev_pm = self.modulation.map(|(p, _)| p);
+                let mut pick_cache = self.pick;
+                for (i, o) in out.iter_mut().enumerate() {
+                    let inc = next_inc(freq_in[i]);
+                    let pm = f64::from(phase_mod_in[i]);
+                    let p_pm = prev_pm.unwrap_or(pm);
+                    prev_pm = Some(pm);
+                    let effective_inc = inc + pm - p_pm;
+                    let t = wrap(phase + pm);
+                    phase = wrap(phase + inc);
+                    let pick = picked(&mut pick_cache, table, effective_inc);
+                    *o = table.read_with(t, pick);
+                }
+                self.phase = phase;
+                self.increment = inc_cache;
+                self.pick = pick_cache;
+                if let Some(pm) = prev_pm {
+                    self.modulation = Some((
+                        pm,
+                        f64::from(width_in.map_or(0.5, |w| w[n - 1])).clamp(0.01, 0.99),
+                    ));
+                }
+            }
+            Wave::Square => {
+                let table = &*SAW_TABLE;
+                let mut phase = self.phase;
+                let mut prev_pm = self.modulation.map(|(p, _)| p);
+                let mut pick_cache = self.pick;
+                for (i, o) in out.iter_mut().enumerate() {
+                    let inc = next_inc(freq_in[i]);
+                    let pm = f64::from(phase_mod_in[i]);
+                    let p_pm = prev_pm.unwrap_or(pm);
+                    prev_pm = Some(pm);
+                    let effective_inc = inc + pm - p_pm;
+                    let t = wrap(phase + pm);
+                    phase = wrap(phase + inc);
+                    let pick = picked(&mut pick_cache, table, effective_inc);
+                    let shifted = table.read_with(wrap(t - 0.5), pick);
+                    *o = -(table.read_with(t, pick) - shifted);
+                }
+                self.phase = phase;
+                self.increment = inc_cache;
+                self.pick = pick_cache;
+                if let Some(pm) = prev_pm {
+                    self.modulation = Some((pm, 0.5));
+                }
+            }
+            Wave::Pulse => {
+                let table = &*SAW_TABLE;
+                let mut phase = self.phase;
+                let mut prev_pm = self.modulation.map(|(p, _)| p);
+                let mut last_width = 0.5;
+                let mut pick_cache = self.pick;
+                for (i, o) in out.iter_mut().enumerate() {
+                    let inc = next_inc(freq_in[i]);
+                    let pm = f64::from(phase_mod_in[i]);
+                    let width = f64::from(width_in.map_or(0.5, |w| w[i])).clamp(0.01, 0.99);
+                    let p_pm = prev_pm.unwrap_or(pm);
+                    prev_pm = Some(pm);
+                    last_width = width;
+                    let effective_inc = inc + pm - p_pm;
+                    let t = wrap(phase + pm);
+                    phase = wrap(phase + inc);
+                    let pick = picked(&mut pick_cache, table, effective_inc);
+                    let shifted = table.read_with(wrap(t - width), pick);
+                    *o = (2.0 * width - 1.0) as f32 - (table.read_with(t, pick) - shifted);
+                }
+                self.phase = phase;
+                self.increment = inc_cache;
+                self.pick = pick_cache;
+                if let Some(pm) = prev_pm {
+                    self.modulation = Some((pm, last_width));
+                }
+            }
+            Wave::Tri => {
+                let mut phase = self.phase;
+                let mut prev_pm = self.modulation.map(|(p, _)| p);
+                for (i, o) in out.iter_mut().enumerate() {
+                    let inc = next_inc(freq_in[i]);
+                    let pm = f64::from(phase_mod_in[i]);
+                    let p_pm = prev_pm.unwrap_or(pm);
+                    prev_pm = Some(pm);
+                    let effective_inc = inc + pm - p_pm;
+                    let dt = effective_inc.abs().min(0.5);
+                    let t = wrap(phase + pm);
+                    let naive = if t < 0.25 {
+                        4.0 * t
+                    } else if t < 0.75 {
+                        2.0 - 4.0 * t
+                    } else {
+                        4.0 * t - 4.0
+                    };
+                    let v = naive - 4.0 * poly_blamp(wrap(t - 0.25), dt)
+                        + 4.0 * poly_blamp(wrap(t - 0.75), dt);
+                    phase = wrap(phase + inc);
+                    *o = v as f32;
+                }
+                self.phase = phase;
+                self.increment = inc_cache;
+                if let Some(pm) = prev_pm {
+                    self.modulation = Some((
+                        pm,
+                        f64::from(width_in.map_or(0.5, |w| w[n - 1])).clamp(0.01, 0.99),
+                    ));
+                }
+            }
         }
     }
 
@@ -431,8 +714,7 @@ impl Osc {
         let v = match self.wave {
             Wave::Sine => {
                 self.phase = wrap(self.phase + inc);
-                let pick = picked(&mut self.pick, &SINE_TABLE, effective_inc);
-                return SINE_TABLE.read_with(t, pick);
+                return read_level(&SINE_TABLE, t);
             }
             Wave::Saw => {
                 self.phase = wrap(self.phase + inc);
@@ -523,7 +805,7 @@ impl Osc {
             return f64::from(table.read(t, inc));
         }
         match self.wave {
-            Wave::Sine => f64::from(SINE_TABLE.read(t, inc)),
+            Wave::Sine => f64::from(read_level(&SINE_TABLE, t)),
             Wave::Saw => 2.0 * t - 1.0,
             Wave::Square | Wave::Pulse => {
                 if t < width {
@@ -656,11 +938,11 @@ mod tests {
         // `wrap(phase - width)` rounds to exactly 1.0 when the phase is one ulp short of the width.
         let nearly_one = 1.0 - f64::EPSILON / 2.0;
         for t in [0.0, 1.0, nearly_one, 1.0 + 1e-12, -1e-17, 2.0, -3.0, f64::NAN, f64::INFINITY] {
+            let v = sine_lookup(t);
+            assert!(v.is_finite() && v.abs() < 2.5, "sine t {t}: {v}");
             for inc in [0.0, 1e-4, 0.01, 0.2, 0.5, -0.3, f64::NAN] {
-                for table in [&SAW_TABLE, &SINE_TABLE] {
-                    let v = table.read(t, inc);
-                    assert!(v.is_finite() && v.abs() < 2.5, "t {t} inc {inc}: {v}");
-                }
+                let v = SAW_TABLE.read(t, inc);
+                assert!(v.is_finite() && v.abs() < 2.5, "t {t} inc {inc}: {v}");
             }
         }
         assert!((SAW_TABLE.read(1.0, 0.001) - SAW_TABLE.read(0.0, 0.001)).abs() < 1e-3);

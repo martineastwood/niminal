@@ -139,34 +139,53 @@ fn examples_render_as_they_did() {
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| p.extension().is_some_and(|e| e == "nml"))
+        // reel_keys renders its whole 28 bars whatever `--bars` says (15 s, a third of the suite); the splice reel it
+        // shows is covered by the blocks tests
+        .filter(|p| p.file_name().is_some_and(|n| n != "reel_keys.nml"))
         .collect();
     files.sort();
     let dir = std::env::temp_dir().join(format!("niminal-baseline-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let (mut lines, mut digests) = (Vec::new(), Vec::new());
-    for file in files {
-        let out = dir.join("out.wav");
-        let _ = std::fs::remove_file(&out);
-        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_niminal"));
-        command.arg("render").arg(&file);
-        if file
-            .file_name()
-            .is_some_and(|name| name == "song.nml" || name == "section_sweep.nml")
-        {
-            command.arg("song");
+    // Every example renders in its own process, so render them side by side; results keep the sorted order.
+    let workers = std::thread::available_parallelism().map_or(4, usize::from);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(file) = files.get(i) else { break };
+                    let out = dir.join(format!("out{i}.wav"));
+                    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_niminal"));
+                    command.arg("render").arg(file);
+                    if file
+                        .file_name()
+                        .is_some_and(|name| name == "song.nml" || name == "section_sweep.nml")
+                    {
+                        command.arg("song");
+                    }
+                    let run = command
+                        .args(["--bars", "4", "--out"])
+                        .arg(&out)
+                        .output()
+                        .unwrap();
+                    let (value, sound) = if run.status.success() {
+                        let audio = read_wav(&out);
+                        (dimensions(&audio), digest(&audio))
+                    } else {
+                        ("does not render".to_string(), "does not render".to_string())
+                    };
+                    let name = file.file_name().unwrap().to_string_lossy().into_owned();
+                    results.lock().unwrap().push((i, name, value, sound));
+                }
+            });
         }
-        let run = command
-            .args(["--bars", "4", "--out"])
-            .arg(&out)
-            .output()
-            .unwrap();
-        let name = file.file_name().unwrap().to_string_lossy().into_owned();
-        let (value, sound) = if run.status.success() {
-            let audio = read_wav(&out);
-            (dimensions(&audio), digest(&audio))
-        } else {
-            ("does not render".to_string(), "does not render".to_string())
-        };
+    });
+    let mut results = results.into_inner().unwrap();
+    results.sort();
+    let (mut lines, mut digests) = (Vec::new(), Vec::new());
+    for (_, name, value, sound) in results {
         lines.push((name.clone(), value));
         digests.push((name, sound));
     }

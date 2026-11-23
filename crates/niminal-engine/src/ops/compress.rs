@@ -16,6 +16,8 @@ pub struct Compressor {
     attack_coeff: f32,
     release_coeff: f32,
     knee_db: f32,
+    /// Linear ratio below which `over_db <= -knee_db / 2` (so `target_db == 0` without `log10`).
+    knee_start_ratio: f32,
 }
 
 impl Default for Compressor {
@@ -27,6 +29,7 @@ impl Default for Compressor {
             attack_coeff: 0.0,
             release_coeff: 0.0,
             knee_db: 0.0,
+            knee_start_ratio: 1.0,
         }
     }
 }
@@ -86,6 +89,8 @@ impl Opcode for Compressor {
                 self.attack_coeff = (-1.0 / (controls.0 * sr).max(1.0)).exp();
                 self.release_coeff = (-1.0 / (controls.1 * sr).max(1.0)).exp();
                 self.knee_db = 20.0 * controls.2.log10();
+                // over_db <= -knee_db / 2  <=>  detect / threshold <= 1 / sqrt(knee)
+                self.knee_start_ratio = 1.0 / controls.2.sqrt();
                 self.cached_for = controls;
             }
             let knee_db = self.knee_db;
@@ -97,16 +102,20 @@ impl Opcode for Compressor {
             let detect = if side.is_nan() { x } else { side }.abs();
 
             // The detector smooths only the excess above threshold, in dB.
-            // The floor makes silence safe without adding a DC offset to the envelope.
-            let over_db = 20.0 * (detect.max(1e-20) / threshold).log10();
-            let target_db = if knee_db <= 0.0 {
-                over_db.max(0.0)
-            } else if over_db <= -knee_db / 2.0 {
+            // Below the knee start, target_db is 0 without needing log10().
+            let target_db = if detect <= threshold * self.knee_start_ratio {
                 0.0
-            } else if over_db >= knee_db / 2.0 {
-                over_db
             } else {
-                (over_db + knee_db / 2.0).powi(2) / (2.0 * knee_db)
+                let over_db = 20.0 * (detect.max(1e-20) / threshold).log10();
+                if knee_db <= 0.0 {
+                    over_db.max(0.0)
+                } else if over_db <= -knee_db * 0.5 {
+                    0.0
+                } else if over_db >= knee_db * 0.5 {
+                    over_db
+                } else {
+                    (over_db + knee_db * 0.5).powi(2) / (2.0 * knee_db)
+                }
             };
             let coeff = if target_db > self.envelope_db {
                 self.attack_coeff
@@ -114,8 +123,14 @@ impl Opcode for Compressor {
                 self.release_coeff
             };
             self.envelope_db = target_db + coeff * (self.envelope_db - target_db);
-            let reduction_db = self.envelope_db * (1.0 / ratio - 1.0);
-            let gain = 10f32.powf(reduction_db / 20.0);
+            let gain = if self.envelope_db <= 0.0 {
+                1.0
+            } else {
+                let reduction_db = self.envelope_db * (1.0 / ratio - 1.0);
+                // 10^(db/20) = 2^(db * log2(10) / 20)
+                const DB_TO_LOG2: f32 = std::f32::consts::LOG2_10 / 20.0;
+                (reduction_db * DB_TO_LOG2).exp2()
+            };
             *o = x * gain * makeup;
         }
     }
