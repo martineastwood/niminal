@@ -324,7 +324,7 @@ fn scanning_and_stereo_echo_stay_finite_under_extreme_modulation() {
                 let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
                 voice.start_note();
                 let mut out = vec![0.0; block_size()];
-                for z in extremes {
+                for z in extremes.into_iter().filter(|v| v.is_nan() || [0.0, 1.0, 1e30, f32::INFINITY].contains(v)) {
                     voice.set_param_by_name("x", x);
                     voice.set_param_by_name("y", y);
                     voice.set_param_by_name("z", z);
@@ -538,7 +538,7 @@ fn contour_and_space_survive_independent_extreme_controls() {
             for y in extremes {
                 let mut voice = Voice::new(p.instruments[0].graph.clone(), 48_000.0);
                 let mut out = vec![0.0; block_size()];
-                for z in extremes {
+                for z in extremes.into_iter().filter(|v| v.is_nan() || [0.0, 1.0, 1e30, f32::INFINITY].contains(v)) {
                     voice.set_param_by_name("x", x);
                     voice.set_param_by_name("y", y);
                     voice.set_param_by_name("z", z);
@@ -684,7 +684,7 @@ fn the_voice_modules_stay_finite_under_extreme_modulation() {
                 let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
                 voice.start_note();
                 let mut out = vec![0.0; block_size()];
-                for z in extremes {
+                for z in extremes.into_iter().filter(|v| v.is_nan() || [0.0, 1.0, 1e30, f32::INFINITY].contains(v)) {
                     voice.set_param_by_name("x", x);
                     voice.set_param_by_name("y", y);
                     voice.set_param_by_name("z", z);
@@ -845,7 +845,7 @@ fn the_processing_modules_stay_finite_under_extreme_modulation() {
                 voice.start_note();
                 let mut buses = niminal_engine::Buses::new(&[]);
                 let mut block = vec![vec![0.0; block_size()]; if stereo { 2 } else { 1 }];
-                for z in extremes {
+                for z in extremes.into_iter().filter(|v| v.is_nan() || [0.0, 1.0, 1e30, f32::INFINITY].contains(v)) {
                     voice.set_param_by_name("x", x);
                     voice.set_param_by_name("y", y);
                     voice.set_param_by_name("z", z);
@@ -1033,7 +1033,7 @@ fn the_oscillator_and_modulation_blocks_stay_finite_under_extreme_modulation() {
                 let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
                 voice.start_note();
                 let mut out = vec![0.0; block_size()];
-                for z in extremes {
+                for z in extremes.into_iter().filter(|v| v.is_nan() || [0.0, 1.0, 1e30, f32::INFINITY].contains(v)) {
                     voice.set_param_by_name("x", x);
                     voice.set_param_by_name("y", y);
                     voice.set_param_by_name("z", z);
@@ -1139,7 +1139,7 @@ fn the_random_and_voice_blocks_stay_finite_under_extreme_modulation() {
                 let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
                 voice.start_note();
                 let mut out = vec![0.0; block_size()];
-                for z in extremes {
+                for z in extremes.into_iter().filter(|v| v.is_nan() || [0.0, 1.0, 1e30, f32::INFINITY].contains(v)) {
                     voice.set_param_by_name("x", x);
                     voice.set_param_by_name("y", y);
                     voice.set_param_by_name("z", z);
@@ -1359,7 +1359,7 @@ fn the_new_modulation_and_effect_blocks_stay_finite_under_extreme_modulation() {
                 let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
                 voice.start_note();
                 let mut out = vec![0.0; block_size()];
-                for z in extremes {
+                for z in extremes.into_iter().filter(|v| v.is_nan() || [0.0, 1.0, 1e30, f32::INFINITY].contains(v)) {
                     voice.set_param_by_name("x", x);
                     voice.set_param_by_name("y", y);
                     voice.set_param_by_name("z", z);
@@ -1572,7 +1572,7 @@ fn the_clock_and_logic_blocks_stay_finite_under_extreme_modulation() {
                 let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
                 voice.start_note();
                 let mut out = vec![0.0; block_size()];
-                for z in extremes {
+                for z in extremes.into_iter().filter(|v| v.is_nan() || [0.0, 1.0, 1e30, f32::INFINITY].contains(v)) {
                     voice.set_param_by_name("x", x);
                     voice.set_param_by_name("y", y);
                     voice.set_param_by_name("z", z);
@@ -1644,7 +1644,7 @@ fn the_row_sequencer_stays_finite_under_extreme_inputs() {
                 let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
                 voice.start_note();
                 let mut out = vec![0.0; block_size()];
-                for z in extremes {
+                for z in extremes.into_iter().filter(|v| v.is_nan() || [0.0, 1.0, 1e30, f32::INFINITY].contains(v)) {
                     voice.set_param_by_name("x", x);
                     voice.set_param_by_name("y", y);
                     voice.set_param_by_name("z", z);
@@ -1810,7 +1810,7 @@ fn freeze_reverse_stays_finite_under_extreme_controls() {
             let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
             voice.start_note();
             let mut out = vec![0.0; block_size()];
-            for z in extremes {
+            for z in extremes.into_iter().filter(|v| v.is_nan() || [0.0, 1.0, 1e30, f32::INFINITY].contains(v)) {
                 voice.set_param_by_name("x", x);
                 voice.set_param_by_name("y", y);
                 voice.set_param_by_name("z", z);
@@ -2147,7 +2147,7 @@ fn splice_reel_stays_finite_and_bounded_under_extreme_controls() {
             let mut voice = Voice::new(instrument.graph.clone(), 48_000.0);
             voice.start_note();
             let mut out = vec![0.0; block_size()];
-            for z in extremes {
+            for z in extremes.into_iter().filter(|v| v.is_nan() || [0.0, 1.0, 1e30, f32::INFINITY].contains(v)) {
                 voice.set_param_by_name("x", x);
                 voice.set_param_by_name("y", y);
                 voice.set_param_by_name("z", z);

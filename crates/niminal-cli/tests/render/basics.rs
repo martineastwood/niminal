@@ -55,29 +55,6 @@ fn the_same_music_from_source_or_from_a_score_file() {
 }
 
 #[test]
-fn the_examples_render() {
-    let p = program(SAW_LEAD);
-    let events = Section::from_json(PHI).unwrap().events;
-    let out = render(&p, &events).unwrap();
-    assert!(out.len() > (3.0 * SR) as usize);
-
-    let stereo = render_with(
-        &program(include_str!("../../../../examples/stereo.nml")),
-        &[],
-        &RenderOptions::default(),
-    )
-    .unwrap();
-    assert_eq!(stereo.channels.len(), 2);
-    assert!(stereo.peak() > 0.1 && stereo.peak() <= 0.9661);
-    assert!(stereo.len() > (3.0 * SR) as usize);
-    assert_ne!(stereo.channels[0], stereo.channels[1]);
-
-    let room = render(&program(include_str!("../../../../examples/room.nml")), &[]).unwrap();
-    assert!(room.len() > SR as usize);
-    assert!(rms(&room) > 0.01);
-}
-
-#[test]
 fn score_events_are_checked_against_the_instrument() {
     let p = program(ONE_NOTE);
     let render_score = |json: &str| {

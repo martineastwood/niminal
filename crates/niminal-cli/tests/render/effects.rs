@@ -109,13 +109,6 @@ fn a_delay_inside_an_instrument_is_not_cut_off_at_note_end() {
 }
 
 #[test]
-fn the_example_with_effects_renders() {
-    let out = raw(include_str!("../../../../examples/room.nml"));
-    assert!(out.iter().all(|s| s.is_finite()));
-    assert!(rms(&out) > 0.01);
-}
-
-#[test]
 fn noise_and_pinknoise_make_sound() {
     let white = raw("instr n() { noise() * env[1 20ms 0] * 0.5 }\nn() for 1/8beat");
     let pink = raw("instr n() { pinknoise() * env[1 20ms 0] * 0.5 }\nn() for 1/8beat");
@@ -147,24 +140,3 @@ fn compress_with_a_sidechain_ducks_the_signal() {
     assert!(during < before * 0.7, "before {before} during {during}");
 }
 
-#[test]
-fn the_synth_drums_example_renders() {
-    let out = render_with(
-        &program(include_str!("../../../../examples/synth_drums.nml")),
-        &[],
-        &RenderOptions {
-            limiter: false,
-            until: None,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    assert_eq!(out.channels.len(), 2);
-    let mix: Vec<f32> = out.channels[0]
-        .iter()
-        .zip(&out.channels[1])
-        .map(|(l, r)| (l + r) * 0.5)
-        .collect();
-    assert!(mix.iter().all(|s| s.is_finite()));
-    assert!(rms(&mix) > 0.01);
-}

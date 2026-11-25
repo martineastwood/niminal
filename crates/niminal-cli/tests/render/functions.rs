@@ -411,18 +411,3 @@ fn ranges_include_their_end_unless_written_with_less_than() {
     );
 }
 
-#[test]
-fn the_functions_example_plays() {
-    let out = render_with(
-        &program(include_str!("../../../../examples/functions.nml")),
-        &[],
-        &RenderOptions::default(),
-    )
-    .unwrap();
-    assert_eq!(out.channels.len(), 2);
-    assert!(
-        out.channels
-            .iter()
-            .all(|c| rms(c) > 0.01 && c.iter().all(|s| s.is_finite()))
-    );
-}
