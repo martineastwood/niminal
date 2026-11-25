@@ -83,6 +83,7 @@ export function renderShell(app: HTMLElement) {
         <div class="stage-hint" id="stage-hint"></div>
       </div>
       <div class="stage-scroll"><div id="lanes"></div></div>
+      <div id="scope" class="scope"></div>
       <div id="pending" class="pending"></div>
       <div id="notices" class="notices"></div>
       <div id="take" class="take" hidden></div>

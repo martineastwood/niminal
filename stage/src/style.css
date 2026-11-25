@@ -246,6 +246,17 @@ body.resizing, body.resizing * { user-select: none; cursor: col-resize !importan
 .playhead::before { content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 1px; background: var(--accent-text); }
 .playhead-dot { display: none; }
 
+/* ---- scope (oscilloscope & spectrum) --------------------------------------------------------- */
+
+.scope { border-top: 1px solid var(--line); background: var(--bg-bar); flex-shrink: 0; }
+.scope-head { display: flex; align-items: center; gap: calc(6px * var(--z)); min-height: calc(22px * var(--z)); padding: 2px calc(6px * var(--z)); }
+.scope-title { color: var(--dim); font-size: calc(9px * var(--z)); font-weight: 600; letter-spacing: 1px; text-transform: uppercase; }
+.scope-modes { display: flex; gap: 2px; margin-left: auto; }
+.scope-modes button { height: calc(16px * var(--z)); padding: 0 calc(5px * var(--z)); font-family: var(--mono); font-size: calc(9px * var(--z)); color: var(--dim); }
+.scope-modes button.active { color: #1a1006; background: var(--accent); border-color: #7a4a1a; font-weight: 600; }
+.scope-body { padding: 0 calc(6px * var(--z)) calc(6px * var(--z)); }
+.scope-canvas { display: block; width: 100%; height: calc(88px * var(--z)); border: 1px solid #2a2e34; background: var(--bg-input); }
+
 /* ---- pending and notices --------------------------------------------------------------------- */
 
 .pending { display: flex; flex-wrap: wrap; gap: calc(4px * var(--z)); padding: calc(4px * var(--z)) calc(6px * var(--z)); border-top: 1px solid var(--line); background: var(--bg-bar); }

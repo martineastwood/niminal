@@ -150,6 +150,12 @@ export type OpenedProject = {
   files: OpenedFile[];
 };
 
+export type ScopeFrame = {
+  sample_rate: number;
+  channels: number;
+  samples: number[];
+};
+
 export type Action = {
   action: string;
   target?: string;
@@ -192,6 +198,12 @@ export const stage = {
   },
   snapshot() {
     return invoke<Snapshot>('snapshot');
+  },
+  scopeSet(enabled: boolean) {
+    return invoke<void>('scope_set', { enabled });
+  },
+  scopeFrame(frames = 1024) {
+    return invoke<ScopeFrame | null>('scope_frame', { frames });
   },
   async evaluate(source: string, quantize: string, dir: string | null, origin: number) {
     return invoke<EvalOutcome>('eval', { source, quantize: quantize || null, dir, origin });

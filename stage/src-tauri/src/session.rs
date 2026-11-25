@@ -54,6 +54,10 @@ pub struct Shared {
     midi: Mutex<Midi>,
     /// MIDI clock sent to an output, and followed from an input.
     clock: Mutex<Clock>,
+    /// The running engine's master meter, for lock-free oscilloscope/spectrum reads.
+    master_meter: Mutex<Option<(u32, Arc<niminal_engine::Meter>)>>,
+    /// Whether the window's oscilloscope/spectrum is currently open.
+    scope_on: AtomicBool,
 }
 
 /// The two APIs the stage offers on this machine: the sequencer's, which the VS Code extension plays through,
@@ -99,6 +103,8 @@ impl Shared {
             health: Mutex::new(None),
             midi: Mutex::new(Midi::default()),
             clock: Mutex::new(Clock::default()),
+            master_meter: Mutex::new(None),
+            scope_on: AtomicBool::new(false),
         }
     }
 }
@@ -276,6 +282,7 @@ fn connect_with(shared: &Shared, port: u16, token: Option<&str>) -> Result<(), S
         Err(e) => return Err(e),
     };
     let engine = host.engine();
+    attach_master_meter(shared, &engine, host.sample_rate());
     let mut live = Live::new(InProcess::new(engine.clone()), host.sample_rate() as f32, host.layout())
         .with_clock_sync(Duration::from_millis(100));
     live.set_metering(true);
@@ -375,6 +382,7 @@ pub fn apply_audio(shared: &Shared, choice: AudioChoice) -> Result<AudioState, S
     let no_audio = shared.no_audio.load(Ordering::Relaxed);
     // the old engine goes first, so that the sound card is free for the new one
     lock(&shared.tools).engine = None;
+    *lock(&shared.master_meter) = None;
     *lock(&shared.host) = None;
     let (host, used, failure) = match Host::start(host_config(&choice, no_audio)) {
         Ok(host) => (host, choice, None),
@@ -384,6 +392,7 @@ pub fn apply_audio(shared: &Shared, choice: AudioChoice) -> Result<AudioState, S
         },
     };
     let engine = host.engine();
+    attach_master_meter(shared, &engine, host.sample_rate());
     let mut fresh = Live::new(InProcess::new(engine.clone()), host.sample_rate() as f32, host.layout())
         .with_clock_sync(Duration::from_millis(100));
     fresh.set_metering(true);
@@ -577,6 +586,38 @@ fn health_from(status: &serde_json::Value) -> Option<Health> {
         deadline_misses: count("deadline_misses"),
         capacity_drops: count("capacity_drops"),
     })
+}
+
+/// Recent master output samples for the window's oscilloscope and spectrum analyzer.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScopeFrame {
+    pub sample_rate: u32,
+    pub channels: usize,
+    pub samples: Vec<f32>,
+}
+
+fn attach_master_meter(shared: &Shared, engine: &niminal_host::audio::Shared, sample_rate: u32) {
+    let meter = niminal_host::audio::lock(engine).session().master_meter();
+    if shared.scope_on.load(Ordering::Relaxed) {
+        meter.waveform().enabled.store(true, Ordering::Relaxed);
+    }
+    *lock(&shared.master_meter) = Some((sample_rate, meter));
+}
+
+/// Turn lock-free master waveform capture on or off. When off, the audio thread skips copying samples.
+pub fn set_scope(shared: &Shared, enabled: bool) {
+    shared.scope_on.store(enabled, Ordering::Relaxed);
+    if let Some((_, meter)) = lock(&shared.master_meter).as_ref() {
+        meter.waveform().enabled.store(enabled, Ordering::Relaxed);
+    }
+}
+
+/// Read the latest coherent master waveform window without locking the audio engine.
+pub fn scope_frame(shared: &Shared, frames: usize) -> Option<ScopeFrame> {
+    let (sample_rate, meter) = lock(&shared.master_meter).clone()?;
+    let frames = frames.clamp(64, niminal_engine::WAVEFORM_FRAMES);
+    let (_, channels, samples) = meter.waveform().read(frames)?;
+    Some(ScopeFrame { sample_rate, channels, samples })
 }
 
 pub fn snapshot(shared: &Shared) -> Snapshot {
@@ -942,5 +983,27 @@ mod tests {
         assert_eq!(audio_state(&shared).unwrap().osc_port, Some(port));
         osc_listen(&shared, None).unwrap();
         assert_eq!(settings_now(&shared).osc_port, None);
+    }
+
+    #[test]
+    fn scope_captures_master_samples_only_when_enabled() {
+        let shared = Arc::new(Shared::new());
+        shared.no_audio.store(true, Ordering::Relaxed);
+        connect_with(&shared, 0, None).unwrap();
+        assert!(scope_frame(&shared, 256).is_none(), "off by default so audio thread skips capture");
+
+        set_scope(&shared, true);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut got = None;
+        while Instant::now() < deadline && got.is_none() {
+            got = scope_frame(&shared, 256);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let frame = got.expect("enabled scope receives master samples");
+        assert!(frame.sample_rate > 0);
+        assert_eq!(frame.channels, 2);
+        assert!(!frame.samples.is_empty());
+
+        set_scope(&shared, false);
     }
 }

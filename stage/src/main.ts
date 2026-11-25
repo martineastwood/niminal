@@ -10,6 +10,7 @@ import { LaneView } from './laneview';
 import { $, input, renderShell, setupLayout } from './layout';
 import { Action, EvalOutcome, Problem, Snapshot, stage } from './live';
 import { loadLook } from './look';
+import { createScope } from './scope';
 import { settingsPage } from './settings';
 import { createStageView } from './stage-view';
 import { createTransport } from './transport';
@@ -44,6 +45,7 @@ function setConnection(ok: boolean) {
   connection.hidden = ok;
   connection.querySelector('span')!.textContent = 'engine offline';
   $('setup').hidden = ok;
+  scope.setConnected(ok);
 }
 
 /** A yes or no question in a native dialog: the webview's own `confirm` does nothing here. */
@@ -160,6 +162,7 @@ const laneView = new LaneView($('lanes'), (action, target, change) => {
   if (action === 'connect') void reconnect();
   else void act({ action, target, change });
 });
+const scope = createScope($('scope'));
 
 async function evaluate(scope: Scope = 'chunk') {
   if (!(await ensureConnected())) return;

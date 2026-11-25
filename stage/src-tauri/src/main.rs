@@ -118,6 +118,16 @@ async fn snapshot(state: State<'_, AppState>) -> Result<Snapshot, String> {
 }
 
 #[tauri::command]
+fn scope_set(state: State<'_, AppState>, enabled: bool) {
+    session::set_scope(&state.shared, enabled);
+}
+
+#[tauri::command]
+fn scope_frame(state: State<'_, AppState>, frames: Option<usize>) -> Option<session::ScopeFrame> {
+    session::scope_frame(&state.shared, frames.unwrap_or(1024))
+}
+
+#[tauri::command]
 async fn eval(
     state: State<'_, AppState>,
     source: String,
@@ -421,6 +431,8 @@ fn main() {
             clock_out,
             clock_in,
             snapshot,
+            scope_set,
+            scope_frame,
             eval,
             perform,
             cancel,

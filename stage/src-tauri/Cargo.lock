@@ -2298,6 +2298,7 @@ dependencies = [
  "hound",
  "midir",
  "niminal-compose",
+ "niminal-engine",
  "niminal-host",
  "niminal-lang",
  "niminal-lsp",
