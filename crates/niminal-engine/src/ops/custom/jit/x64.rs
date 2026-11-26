@@ -11,13 +11,16 @@
 //! except `!=`.
 //!
 //! Frame (below the six pushed callee-saved registers): 0..128 spill area for `xmm0`-`xmm15`,
-//! 128..192 eight temporaries, 192 the input table, 200 the output table, 208 the sample rate.
+//! 128..192 eight temporaries, 192 the input table, 200 the output table, 208 the sample rate, 216
+//! the state a call into a built-in opcode needs.
 
 use dynasmrt::x64::Assembler;
 use dynasmrt::{DynamicLabel, DynasmApi, DynasmLabelApi, dynasm};
 
-use super::{Analysis, Generated, bin_id, fn_id, list_slot};
-use crate::ops::custom::{ArraySource, BinOp, Cmp, Fn1, Instr, Interp, Kernel, MemoMath};
+use super::{Analysis, Generated, NativeState, bin_id, fn_id, list_slot, native_call};
+use crate::ops::custom::{
+    ArraySource, BinOp, Cmp, Fn1, Instr, Interp, Kernel, MemoMath, NativeInput,
+};
 
 /// FP registers the allocator may hand out.
 pub(super) const ALLOCATABLE: &[u8] = &[6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
@@ -30,6 +33,7 @@ pub(super) type Entry = unsafe extern "sysv64" fn(
     memo: *mut u64,
     frames: usize,
     lists: *const *mut f64,
+    native: *mut NativeState,
     sample_rate: f64,
 );
 
@@ -41,6 +45,11 @@ extern "sysv64" fn host_wrap(x: f64, n: f64) -> u64 {
     crate::wrapped_index(x, n as usize) as u64
 }
 
+extern "sysv64" fn host_native(state: *mut NativeState, dst: u32, index: u32) {
+    // SAFETY: the generated code passes the NativeState it was given.
+    unsafe { native_call(state, dst, index) }
+}
+
 extern "sysv64" fn host_f1(id: u32, x: f64) -> f64 {
     Fn1::ALL[id as usize].apply(x)
 }
@@ -50,6 +59,7 @@ const TEMP: i32 = 128;
 const INPUTS: i32 = 192;
 const OUTPUTS: i32 = 200;
 const SAMPLE_RATE: i32 = 208;
+const NATIVE: i32 = 216;
 
 /// `cmpsd` predicates.
 const EQ: i8 = 0;
@@ -167,6 +177,27 @@ impl Gen<'_> {
         }
     }
 
+    /// Calls the built-in opcode `index`, whose results go to `dst` onwards in the register file.
+    /// Its register inputs are already in memory; every other register survives through the spill
+    /// area.
+    fn call_native(&mut self, dst: usize, index: usize) {
+        for r in 0..16u8 {
+            let off = i32::from(r) * 8;
+            dynasm!(self.ops ; .arch x64 ; movsd [rsp + off], Rx(r));
+        }
+        dynasm!(self.ops
+            ; .arch x64
+            ; mov rdi, [rsp + NATIVE]
+            ; mov esi, dst as i32
+            ; mov edx, index as i32
+            ; mov rax, QWORD host_native as *const () as usize as i64
+            ; call rax);
+        for r in 0..16u8 {
+            let off = i32::from(r) * 8;
+            dynasm!(self.ops ; .arch x64 ; movsd Rx(r), [rsp + off]);
+        }
+    }
+
     fn sse(&mut self, op: Sse, dst: u8, src: u8) {
         match op {
             Sse::Add => dynasm!(self.ops ; .arch x64 ; addsd Rx(dst), Rx(src)),
@@ -229,45 +260,49 @@ impl Gen<'_> {
         dynasm!(self.ops ; .arch x64 ; movq xmm1, rcx ; andpd xmm0, xmm1);
     }
 
-    /// `rax = wrapped_index(value in Rx(a), len)`. Clobbers `xmm0`-`xmm3` and `rcx`; the rare
-    /// out-of-range case calls the host and keeps everything else.
-    fn wrap(&mut self, a: u8, len: usize) {
-        let neg = self.ops.new_dynamic_label();
-        let inrange = self.ops.new_dynamic_label();
-        let fast_sub = self.ops.new_dynamic_label();
+    /// `rax = wrapped_index(floor(value in Rx(a)) + k, len)`, with the arithmetic in integers: the
+    /// floor converts in two instructions (`cvttsd2si` gives i64::MIN for a NaN or anything out of
+    /// range), and an index within one length of the list on either side, which is nearly every
+    /// read of a ring buffer, takes a compare and at most an add. Anything else calls the host with
+    /// the float, keeping every other register. Clobbers `xmm0`-`xmm3`, `rcx` and `rdx`.
+    fn wrap(&mut self, a: u8, k: i32, len: usize) {
+        let take = self.ops.new_dynamic_label();
         let slow = self.ops.new_dynamic_label();
         let done = self.ops.new_dynamic_label();
-        dynasm!(self.ops ; .arch x64 ; roundsd xmm0, Rx(a), 9);
-        self.constant(1, len as f64);
         dynasm!(self.ops
             ; .arch x64
-            ; xorpd xmm2, xmm2
-            ; ucomisd xmm0, xmm2
-            ; jp =>slow
-            ; jb =>neg
-            ; ucomisd xmm0, xmm1
-            ; jb =>inrange
-            ; movaps xmm3, xmm0
-            ; subsd xmm3, xmm1
-            ; ucomisd xmm3, xmm1
-            ; jb =>fast_sub
+            ; roundsd xmm0, Rx(a), 9
+            ; cvttsd2si rax, xmm0);
+        if k > 0 {
+            dynasm!(self.ops ; .arch x64 ; add rax, k);
+        } else if k < 0 {
+            dynasm!(self.ops ; .arch x64 ; sub rax, -k);
+        }
+        dynasm!(self.ops
+            ; .arch x64
+            ; mov rcx, QWORD len as i64
+            ; cmp rax, rcx
+            ; jb =>done
+            // -n <= rax < 0
+            ; lea rdx, [rax + rcx]
+            ; cmp rdx, rcx
+            ; jb =>take
+            // n <= rax < 2n
+            ; mov rdx, rax
+            ; sub rdx, rcx
+            ; cmp rdx, rcx
+            ; jb =>take
             ; jmp =>slow
-            ; =>neg
-            ; movaps xmm3, xmm0
-            ; addsd xmm3, xmm1
-            ; ucomisd xmm3, xmm2
-            ; jb =>slow
-            ; ucomisd xmm3, xmm1
-            ; jb =>fast_sub
-            ; jmp =>slow
-            ; =>inrange
-            ; cvttsd2si rax, xmm0
-            ; jmp =>done
-            ; =>fast_sub
-            ; cvttsd2si rax, xmm3
+            ; =>take
+            ; mov rax, rdx
             ; jmp =>done
             ; =>slow);
-        // xmm0 = the floor, xmm1 = n: exactly the host function's arguments
+        // xmm0 = the floor (plus k), xmm1 = n: exactly the host function's arguments
+        if k != 0 {
+            self.constant(1, f64::from(k));
+            dynasm!(self.ops ; .arch x64 ; addsd xmm0, xmm1);
+        }
+        self.constant(1, len as f64);
         self.call(host_wrap as *const () as usize, 0);
         dynasm!(self.ops ; .arch x64 ; =>done);
     }
@@ -381,6 +416,7 @@ pub(super) fn generate(kernel: &Kernel, a: &Analysis) -> Result<Generated, Strin
     let entry = g.ops.offset();
     // rbx regs, r12 state, r13 lists, r14 sample, r15 frames, rbp memo
     let lists_arg = FRAME + 6 * 8 + 8;
+    let native_arg = FRAME + 6 * 8 + 16;
     dynasm!(g.ops
         ; .arch x64
         ; push rbp
@@ -397,6 +433,8 @@ pub(super) fn generate(kernel: &Kernel, a: &Analysis) -> Result<Generated, Strin
         ; mov rbp, r8
         ; mov r15, r9
         ; mov r13, [rsp + lists_arg]
+        ; mov rax, [rsp + native_arg]
+        ; mov [rsp + NATIVE], rax
         ; movsd [rsp + SAMPLE_RATE], xmm0
         ; xor r14, r14);
     for v in 0..g.alloc.len() {
@@ -573,7 +611,7 @@ pub(super) fn generate(kernel: &Kernel, a: &Analysis) -> Result<Generated, Strin
             Instr::Read { dst, list, idx } => {
                 let (slot, len) = list_slot(kernel, list)?;
                 let a = g.read(idx, 1);
-                g.wrap(a, len);
+                g.wrap(a, 0, len);
                 let t = g.target(dst, 0);
                 g.element(t, slot);
                 g.finish(dst, t);
@@ -588,7 +626,7 @@ pub(super) fn generate(kernel: &Kernel, a: &Analysis) -> Result<Generated, Strin
                 let p = g.read(pos, 1);
                 let t = g.target(dst, 0);
                 if interp == Interp::None {
-                    g.wrap(p, len);
+                    g.wrap(p, 0, len);
                     g.element(t, slot);
                 } else {
                     let nonfinite = g.ops.new_dynamic_label();
@@ -607,19 +645,15 @@ pub(super) fn generate(kernel: &Kernel, a: &Analysis) -> Result<Generated, Strin
                         ; movaps xmm2, Rx(p)
                         ; subsd xmm2, xmm0
                         ; movsd [rsp + t_slot], xmm2);
-                    let offsets: &[f64] = if interp == Interp::Linear {
-                        &[0.0, 1.0]
+                    let offsets: &[i32] = if interp == Interp::Linear {
+                        &[0, 1]
                     } else {
-                        &[-1.0, 0.0, 1.0, 2.0]
+                        &[-1, 0, 1, 2]
                     };
                     for (k, offset) in offsets.iter().enumerate() {
                         let at = y + (k as i32) * 8;
-                        g.constant(1, *offset);
-                        dynasm!(g.ops
-                            ; .arch x64
-                            ; movsd xmm0, [rsp + b_slot]
-                            ; addsd xmm0, xmm1);
-                        g.wrap(0, len);
+                        dynasm!(g.ops ; .arch x64 ; movsd xmm0, [rsp + b_slot]);
+                        g.wrap(0, *offset, len);
                         g.element(0, slot);
                         dynasm!(g.ops ; .arch x64 ; movsd [rsp + at], xmm0);
                     }
@@ -701,7 +735,7 @@ pub(super) fn generate(kernel: &Kernel, a: &Analysis) -> Result<Generated, Strin
                         ; =>go);
                 }
                 let a = g.read(idx, 1);
-                g.wrap(a, len);
+                g.wrap(a, 0, len);
                 let s = g.read(src, 2);
                 let off = (slot * 8) as i32;
                 dynasm!(g.ops
@@ -709,6 +743,36 @@ pub(super) fn generate(kernel: &Kernel, a: &Analysis) -> Result<Generated, Strin
                     ; mov rdx, [r13 + off]
                     ; movsd [rdx + rax * 8], Rx(s)
                     ; =>skip);
+            }
+            Instr::Native { dst, index, guard } => {
+                let call = &kernel.natives[index];
+                let skip = g.ops.new_dynamic_label();
+                if let Some(gr) = guard {
+                    let c = g.read(gr, 1);
+                    let go = g.ops.new_dynamic_label();
+                    dynasm!(g.ops
+                        ; .arch x64
+                        ; xorpd xmm0, xmm0
+                        ; ucomisd Rx(c), xmm0
+                        ; jp =>go
+                        ; je =>skip
+                        ; =>go);
+                }
+                // the opcode reads its inputs from the register file in memory
+                for input in &call.inputs {
+                    if let NativeInput::Reg(r) = *input
+                        && let Some(x) = g.alloc[r]
+                    {
+                        g.store(x, r);
+                    }
+                }
+                g.call_native(dst, index);
+                for k in 0..call.op.outputs() {
+                    if let Some(x) = g.alloc[dst + k] {
+                        g.load(x, dst + k);
+                    }
+                }
+                dynasm!(g.ops ; .arch x64 ; =>skip);
             }
             Instr::Memo { dst, slot, math, a } => {
                 let at = (slot * 32) as i32;

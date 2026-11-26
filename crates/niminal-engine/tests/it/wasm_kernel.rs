@@ -466,3 +466,95 @@ fn the_jit_hands_back_to_the_interpreter_for_buffers_it_cannot_use() {
     Custom::new_jit(kernel).expect("generates").process_outputs(&ctx, &[], &mut out_j, frames);
     assert_eq!(out_i, out_j);
 }
+
+/// The random scalar kernel with a one-pole filter, a lag and a noise source called from it, with
+/// register and constant inputs and sometimes a guard.
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+fn random_native_kernel(rng: &mut Rng) -> Kernel {
+    use niminal_engine::ops::{Lag, Native, NativeInput, Noise, NoiseColor, OnePole};
+    let mut kernel = random_scalar_kernel(rng);
+    let ops: Vec<Box<dyn Opcode>> = vec![
+        Box::new(OnePole::lowpass()),
+        Box::new(Lag::default()),
+        Box::new(Noise::new(NoiseColor::White, Some(7), 3)),
+    ];
+    for op in ops {
+        let inputs = (0..op.ports().len())
+            .map(|_| {
+                if rng.below(3) == 0 {
+                    NativeInput::Const(rng.pick(&POOL))
+                } else {
+                    NativeInput::Reg(rng.below(REGS))
+                }
+            })
+            .collect();
+        kernel.natives.push(Native { op, inputs });
+    }
+    let len = kernel.code.len();
+    for at in (3..len).step_by(5) {
+        kernel.code[at] = Instr::Native {
+            dst: rng.below(REGS),
+            index: rng.below(3),
+            guard: if rng.below(3) == 0 { Some(rng.below(REGS)) } else { None },
+        };
+    }
+    kernel
+}
+
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+#[test]
+fn random_kernels_that_call_built_in_opcodes_match_the_interpreter_on_the_jit() {
+    for seed in 1..=300 {
+        run_pair_with(seed, random_native_kernel, Custom::new_jit);
+    }
+}
+
+/// Positions on both sides of both ends of a list, where the generated code switches between its
+/// integer paths and the host call.
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+#[test]
+fn positions_around_the_ends_of_a_list_match_the_interpreter_on_the_jit() {
+    let ctx = ProcessCtx::new(48_000.0, true);
+    for len in [1usize, 2, 3, 7, 64, 100] {
+        let n = len as f32;
+        let mut positions: Vec<f32> = vec![0.0, -0.0, n, n - 0.5, -n, -n - 0.5, 2.0 * n, 2.0 * n - 0.5, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1e30, -1e30];
+        let mut p = -3.0 * n - 0.5;
+        while p < 3.0 * n + 0.5 {
+            positions.push(p);
+            p += 0.37;
+        }
+        let kernel = Arc::new(Kernel {
+            ports: vec![Port::required("pos")],
+            registers: 6,
+            buffers: vec![Array::from((0..len).map(|i| (i as f64 + 1.0) * 0.25).collect::<Vec<f64>>())],
+            code: vec![
+                Instr::Input { dst: 0, port: 0 },
+                Instr::Read { dst: 1, list: ArraySource::State(0), idx: 0 },
+                Instr::ReadAt { dst: 2, list: ArraySource::State(0), pos: 0, interp: Interp::None },
+                Instr::ReadAt { dst: 3, list: ArraySource::State(0), pos: 0, interp: Interp::Linear },
+                Instr::ReadAt { dst: 4, list: ArraySource::State(0), pos: 0, interp: Interp::Cubic },
+                Instr::Write { list: 0, idx: 0, src: 4, cond: None },
+            ],
+            outputs: (1..5).map(|r| (format!("r{r}"), r)).collect(),
+            ..Kernel::default()
+        });
+        let mut interp = Custom::new_interpreted(kernel.clone());
+        let mut jit = Custom::new_jit(kernel).expect("generates");
+        for chunk in positions.chunks(64) {
+            let frames = chunk.len();
+            let mut out_i = vec![vec![0.0f32; frames]; 4];
+            let mut out_j = vec![vec![0.0f32; frames]; 4];
+            interp.process_outputs(&ctx, &[chunk], &mut out_i, frames);
+            jit.process_outputs(&ctx, &[chunk], &mut out_j, frames);
+            for k in 0..4 {
+                for i in 0..frames {
+                    assert!(
+                        same(out_i[k][i], out_j[k][i]),
+                        "list of {len}, position {}: output {k} interpreter {} jit {}",
+                        chunk[i], out_i[k][i], out_j[k][i]
+                    );
+                }
+            }
+        }
+    }
+}

@@ -336,6 +336,42 @@ impl Custom {
         }
     }
 
+    /// One sample of the kernel's `index`th built-in opcode, its inputs read from the registers and
+    /// its results written to `dst` onwards. The sample-section half of [`Instr::Native`]; the code
+    /// generators call it for the opcodes a kernel uses.
+    pub(super) fn exec_native_sample(&mut self, dst: usize, index: usize, ctx: &ProcessCtx) {
+        let call = &self.kernel.natives[index];
+        let op = &mut self.natives[index];
+        if self.one_sample[index] {
+            let mut x = [0.0f32; MAX_INPUTS];
+            for (value, input) in x.iter_mut().zip(&call.inputs) {
+                *value = match *input {
+                    NativeInput::Reg(r) => self.regs[r] as f32,
+                    NativeInput::Const(c) => c as f32,
+                };
+            }
+            self.regs[dst] = f64::from(op.process_one(ctx, &x[..call.inputs.len()]));
+            return;
+        }
+        for (value, input) in self.native_inputs.iter_mut().zip(&call.inputs) {
+            value[0] = match *input {
+                NativeInput::Reg(r) => self.regs[r] as f32,
+                NativeInput::Const(c) => c as f32,
+            };
+        }
+        let outputs = self.native_outputs_n[index];
+        op.process_slots(
+            ctx,
+            &self.native_inputs,
+            &self.native_indices[..call.inputs.len()],
+            &mut self.native_outputs[..outputs],
+            1,
+        );
+        for (k, output) in self.native_outputs.iter().take(outputs).enumerate() {
+            self.regs[dst + k] = f64::from(output[0]);
+        }
+    }
+
     /// The instructions that are rare or heavy, kept out of the hot loop so that it stays small.
     #[inline(never)]
     fn exec_cold(
@@ -392,35 +428,7 @@ impl Custom {
                 let call = &k.natives[index];
                 // a native run once per block (a control scope) sees its inputs held through it
                 if section != Section::Block {
-                    let op = &mut self.natives[index];
-                    if self.one_sample[index] {
-                        let mut x = [0.0f32; MAX_INPUTS];
-                        for (value, input) in x.iter_mut().zip(&call.inputs) {
-                            *value = match *input {
-                                NativeInput::Reg(r) => regs[r] as f32,
-                                NativeInput::Const(c) => c as f32,
-                            };
-                        }
-                        regs[dst] = f64::from(op.process_one(ctx, &x[..call.inputs.len()]));
-                        return;
-                    }
-                    for (value, input) in self.native_inputs.iter_mut().zip(&call.inputs) {
-                        value[0] = match *input {
-                            NativeInput::Reg(r) => regs[r] as f32,
-                            NativeInput::Const(c) => c as f32,
-                        };
-                    }
-                    let outputs = self.native_outputs_n[index];
-                    op.process_slots(
-                        ctx,
-                        &self.native_inputs,
-                        &self.native_indices[..call.inputs.len()],
-                        &mut self.native_outputs[..outputs],
-                        1,
-                    );
-                    for (k, output) in self.native_outputs.iter().take(outputs).enumerate() {
-                        regs[dst + k] = f64::from(output[0]);
-                    }
+                    self.exec_native_sample(dst, index, ctx);
                     return;
                 }
                 let held = self.block_frames;
@@ -692,7 +700,7 @@ impl Custom {
         self.run(Section::Block, ctx, &input, 0);
         #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
         if let Some(mut jit) = self.jit.take() {
-            let done = jit.render(self, &input, outs, frames);
+            let done = jit.render(self, ctx, &input, outs, frames);
             self.jit = Some(jit);
             if done {
                 return;

@@ -9,8 +9,10 @@
 use dynasmrt::aarch64::Assembler;
 use dynasmrt::{DynamicLabel, DynasmApi, DynasmLabelApi, dynasm};
 
-use super::{Analysis, Generated, bin_id, fn_id};
-use crate::ops::custom::{ArraySource, BinOp, Cmp, Fn1, Instr, Interp, Kernel, MemoMath};
+use super::{Analysis, Generated, NativeState, bin_id, fn_id, native_call};
+use crate::ops::custom::{
+    ArraySource, BinOp, Cmp, Fn1, Instr, Interp, Kernel, MemoMath, NativeInput,
+};
 
 /// FP registers the allocator may hand out.
 pub(super) const ALLOCATABLE: &[u8] = &[
@@ -25,6 +27,7 @@ pub(super) type Entry = unsafe extern "C" fn(
     memo: *mut u64,
     frames: usize,
     lists: *const *mut f64,
+    native: *mut NativeState,
     sample_rate: f64,
 );
 
@@ -34,6 +37,11 @@ extern "C" fn host_bin(op: u32, a: f64, b: f64) -> f64 {
 
 extern "C" fn host_wrap(x: f64, n: f64) -> u64 {
     crate::wrapped_index(x, n as usize) as u64
+}
+
+extern "C" fn host_native(state: *mut NativeState, dst: u32, index: u32) {
+    // SAFETY: the generated code passes the NativeState it was given.
+    unsafe { native_call(state, dst, index) }
 }
 
 extern "C" fn host_f1(id: u32, x: f64) -> f64 {
@@ -176,6 +184,30 @@ impl Gen<'_> {
         }
     }
 
+    /// Calls the built-in opcode `index`, whose results go to `dst` onwards in the register file.
+    /// Its register inputs are already in memory; the caller-saved registers that hold virtual
+    /// registers survive through the frame.
+    fn call_native(&mut self, dst: usize, index: usize) {
+        let mut hi: Vec<u8> = self.alloc.iter().flatten().copied().filter(|&d| d >= 16).collect();
+        hi.sort_unstable();
+        hi.dedup();
+        for (k, d) in hi.iter().enumerate() {
+            let off = 64 + (k as u32) * 8;
+            dynasm!(self.ops ; .arch aarch64 ; str D(*d), [sp, off]);
+        }
+        dynasm!(self.ops
+            ; .arch aarch64
+            ; mov x0, x27
+            ; movz w1, dst as u32
+            ; movz w2, index as u32);
+        self.constant_x(16, host_native as *const () as usize as u64);
+        dynasm!(self.ops ; .arch aarch64 ; blr x16);
+        for (k, d) in hi.iter().enumerate() {
+            let off = 64 + (k as u32) * 8;
+            dynasm!(self.ops ; .arch aarch64 ; ldr D(*d), [sp, off]);
+        }
+    }
+
     fn constant_x(&mut self, x: u8, bits: u64) {
         dynasm!(self.ops ; .arch aarch64 ; movz X(x), (bits & 0xffff) as u32);
         for shift in [16u32, 32, 48] {
@@ -196,52 +228,56 @@ impl Gen<'_> {
         Ok(((slot * 8) as u32, len))
     }
 
-    /// `x9 = wrapped_index(value in D(a), len)`. Uses d0, d1, d6, d7 and x9; the rare out-of-range
-    /// case calls the host and keeps every live register.
-    fn wrap(&mut self, a: u8, len: usize) {
-        let neg = self.ops.new_dynamic_label();
-        let inrange = self.ops.new_dynamic_label();
-        let fast_sub = self.ops.new_dynamic_label();
+    /// `x9 = wrapped_index(floor(value in D(a)) + k, len)`, with the arithmetic in integers: a float
+    /// converts to its floor in one instruction (saturating, and a NaN gives 0, which is also what the
+    /// host gives it), and an index within one length of the list on either side, which is nearly
+    /// every read of a ring buffer, takes a compare and at most an add. Anything else (a huge or
+    /// infinite position) calls the host with the float, keeping every live register. Uses d0, d1,
+    /// x9-x11.
+    fn wrap(&mut self, a: u8, k: i32, len: usize) {
+        let take = self.ops.new_dynamic_label();
         let slow = self.ops.new_dynamic_label();
         let done = self.ops.new_dynamic_label();
-        dynasm!(self.ops ; .arch aarch64 ; frintm d0, D(a));
-        self.constant(1, len as f64);
+        dynasm!(self.ops ; .arch aarch64 ; fcvtms x9, D(a));
+        if k > 0 {
+            dynasm!(self.ops ; .arch aarch64 ; add x9, x9, k as u32);
+        } else if k < 0 {
+            dynasm!(self.ops ; .arch aarch64 ; sub x9, x9, (-k) as u32);
+        }
+        self.constant_x(11, len as u64);
         dynasm!(self.ops
             ; .arch aarch64
-            ; fmov d7, xzr
-            ; fcmp d0, d7
-            ; b.mi =>neg
-            ; fcmp d0, d1
-            ; b.mi =>inrange
-            ; fsub d6, d0, d1
-            ; fcmp d6, d1
-            ; b.mi =>fast_sub
+            ; cmp x9, x11
+            ; b.lo =>done
+            // -n <= x9 < 0
+            ; add x10, x9, x11
+            ; cmp x10, x11
+            ; b.lo =>take
+            // n <= x9 < 2n
+            ; sub x10, x9, x11
+            ; cmp x10, x11
+            ; b.lo =>take
             ; b =>slow
-            ; =>neg
-            ; fadd d6, d0, d1
-            ; fcmp d6, d7
-            ; b.mi =>slow
-            ; fcmp d6, d1
-            ; b.mi =>fast_sub
-            ; b =>slow
-            ; =>inrange
-            ; fcvtzu x9, d0
-            ; b =>done
-            ; =>fast_sub
-            ; fcvtzu x9, d6
+            ; =>take
+            ; mov x9, x10
             ; b =>done
             ; =>slow
-            ; fmov d0, D(a));
+            ; frintm d0, D(a));
+        if k != 0 {
+            self.constant(1, f64::from(k));
+            dynasm!(self.ops ; .arch aarch64 ; fadd d0, d0, d1);
+        }
+        self.constant(1, len as f64);
         // everything the call clobbers that is live: the scratch registers, then the call saves
         // the allocated caller-saved ones
-        for (k, d) in [2u32, 3, 4, 5, 29, 30, 31].into_iter().enumerate() {
-            let off = 288 + (k as u32) * 8;
+        for (j, d) in [2u32, 3, 4, 5, 29, 30, 31].into_iter().enumerate() {
+            let off = 288 + (j as u32) * 8;
             dynasm!(self.ops ; .arch aarch64 ; str D(d as u8), [sp, off]);
         }
         self.call(host_wrap as *const () as usize, 0);
         dynasm!(self.ops ; .arch aarch64 ; mov x9, x0);
-        for (k, d) in [2u32, 3, 4, 5, 29, 30, 31].into_iter().enumerate() {
-            let off = 288 + (k as u32) * 8;
+        for (j, d) in [2u32, 3, 4, 5, 29, 30, 31].into_iter().enumerate() {
+            let off = 288 + (j as u32) * 8;
             dynasm!(self.ops ; .arch aarch64 ; ldr D(d as u8), [sp, off]);
         }
         dynasm!(self.ops ; .arch aarch64 ; =>done);
@@ -339,6 +375,7 @@ pub(super) fn generate(kernel: &Kernel, a: &Analysis) -> Result<Generated, Strin
             ; stp x23, x24, [sp, 48]
             ; str x25, [sp, 64 + 128]
             ; str x26, [sp, 200]
+            ; str x27, [sp, 280]
             ; stp d8, d9, [sp, 208]
             ; stp d10, d11, [sp, 224]
             ; stp d12, d13, [sp, 240]
@@ -351,6 +388,7 @@ pub(super) fn generate(kernel: &Kernel, a: &Analysis) -> Result<Generated, Strin
             ; mov x25, x4
             ; mov x23, x5
             ; mov x26, x6
+            ; mov x27, x7
             ; movz x24, 0
         );
         // registers and state into their FP registers
@@ -545,7 +583,7 @@ pub(super) fn generate(kernel: &Kernel, a: &Analysis) -> Result<Generated, Strin
                 Instr::Read { dst, list, idx } => {
                     let (slot, len) = g.list_slot(list)?;
                     let a = g.read(idx, 2);
-                    g.wrap(a, len);
+                    g.wrap(a, 0, len);
                     let t = g.target(dst, 0);
                     g.element(t, slot);
                     g.finish(dst, t);
@@ -560,7 +598,7 @@ pub(super) fn generate(kernel: &Kernel, a: &Analysis) -> Result<Generated, Strin
                     let p = g.read(pos, 2);
                     let t = g.target(dst, 0);
                     if interp == Interp::None {
-                        g.wrap(p, len);
+                        g.wrap(p, 0, len);
                         g.element(t, slot);
                     } else {
                         let nonfinite = g.ops.new_dynamic_label();
@@ -573,10 +611,9 @@ pub(super) fn generate(kernel: &Kernel, a: &Analysis) -> Result<Generated, Strin
                             ; frintm d3, D(p)
                             ; fsub d4, D(p), d3);
                         if interp == Interp::Linear {
-                            g.wrap(3, len);
+                            g.wrap(3, 0, len);
                             g.element(5, slot);
-                            dynasm!(g.ops ; .arch aarch64 ; fmov d2, 1.0 ; fadd d2, d3, d2);
-                            g.wrap(2, len);
+                            g.wrap(3, 1, len);
                             g.element(2, slot);
                             dynasm!(g.ops
                                 ; .arch aarch64
@@ -585,18 +622,8 @@ pub(super) fn generate(kernel: &Kernel, a: &Analysis) -> Result<Generated, Strin
                                 ; fadd D(t), d5, d2);
                         } else {
                             // y0..y3 are the entries at floor-1 ..= floor+2
-                            for (k, (offset, y)) in [(-1.0f64, 5u8), (0.0, 29), (1.0, 30), (2.0, 31)]
-                                .into_iter()
-                                .enumerate()
-                            {
-                                let _ = k;
-                                match offset as i32 {
-                                    -1 => dynasm!(g.ops ; .arch aarch64 ; fmov d2, -1.0 ; fadd d2, d3, d2),
-                                    0 => dynasm!(g.ops ; .arch aarch64 ; fmov d2, d3),
-                                    1 => dynasm!(g.ops ; .arch aarch64 ; fmov d2, 1.0 ; fadd d2, d3, d2),
-                                    _ => dynasm!(g.ops ; .arch aarch64 ; fmov d2, 2.0 ; fadd d2, d3, d2),
-                                }
-                                g.wrap(2, len);
+                            for (offset, y) in [(-1, 5u8), (0, 29), (1, 30), (2, 31)] {
+                                g.wrap(3, offset, len);
                                 g.element(y, slot);
                             }
                             // a = -0.5*y0 + 1.5*y1 - 1.5*y2 + 0.5*y3 (left to right, no fma)
@@ -655,7 +682,7 @@ pub(super) fn generate(kernel: &Kernel, a: &Analysis) -> Result<Generated, Strin
                         dynasm!(g.ops ; .arch aarch64 ; fcmp D(c), 0.0 ; b.eq =>skip);
                     }
                     let a = g.read(idx, 2);
-                    g.wrap(a, len);
+                    g.wrap(a, 0, len);
                     let s = g.read(src, 3);
                     dynasm!(g.ops
                         ; .arch aarch64
@@ -663,7 +690,30 @@ pub(super) fn generate(kernel: &Kernel, a: &Analysis) -> Result<Generated, Strin
                         ; str D(s), [x10, x9, lsl 3]
                         ; =>skip);
                 }
-                Instr::Memo { dst, slot, math, a } => {
+                Instr::Native { dst, index, guard } => {
+                let call = &kernel.natives[index];
+                let skip = g.ops.new_dynamic_label();
+                if let Some(gr) = guard {
+                    let c = g.read(gr, 2);
+                    dynasm!(g.ops ; .arch aarch64 ; fcmp D(c), 0.0 ; b.eq =>skip);
+                }
+                // the opcode reads its inputs from the register file in memory
+                for input in &call.inputs {
+                    if let NativeInput::Reg(r) = *input
+                        && let Some(d) = g.alloc[r]
+                    {
+                        g.store(d, r);
+                    }
+                }
+                g.call_native(dst, index);
+                for k in 0..call.op.outputs() {
+                    if let Some(d) = g.alloc[dst + k] {
+                        g.load(d, dst + k);
+                    }
+                }
+                dynasm!(g.ops ; .arch aarch64 ; =>skip);
+            }
+            Instr::Memo { dst, slot, math, a } => {
                     let at = (slot * 32) as u32;
                     let x = g.read(a, 2);
                     let miss = g.ops.new_dynamic_label();
@@ -758,6 +808,7 @@ pub(super) fn generate(kernel: &Kernel, a: &Analysis) -> Result<Generated, Strin
             ; ldp d10, d11, [sp, 224]
             ; ldp d12, d13, [sp, 240]
             ; ldp d14, d15, [sp, 256]
+            ; ldr x27, [sp, 280]
             ; ldr x26, [sp, 200]
             ; ldr x25, [sp, 64 + 128]
             ; ldp x23, x24, [sp, 48]

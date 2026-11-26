@@ -76,6 +76,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             (format!("frozen {name}"), source)
         })
         .collect();
+    // the same blocks as the shelf's native Rust implementations
+    for (name, body) in BLOCKS {
+        let module = match *name {
+            "contour" | "slew" => "std/modulation",
+            "filter steady" | "filter modulated" | "filter stepped" => "std/filters",
+            "frequency shifter" => "std/spectral",
+            "reverse" | "tap delay 4" | "tap delay 16" => "std/delays",
+            _ => "std/granular",
+        };
+        cases.push((
+            format!("native {name}"),
+            format!("use {module}\ninstr a() {{ {body} }}"),
+        ));
+    }
+    // the same block with each read path inside its own `if` arm, so only the one in use runs
+    let old_arms = "  _edge = (_phase.min(_len - 1 - _phase) / _f).max(0).min(1)\n  _backwards = _buf.at(_anchor - 1 - _phase) * _edge\n  _join = ((_phase - (_len - _f)) / _f).max(0).min(1)\n  _forwards = _buf.at(_anchor - _len + _phase) * (1 - _join) + _buf.at(_anchor - 2 * _len + _phase) * _join\n  _wet = if _have == 2 { _forwards } else { _backwards }\n";
+    let new_arms = "  _wet = if _have == 2 {\n    _join = ((_phase - (_len - _f)) / _f).max(0).min(1)\n    _buf.at(_anchor - _len + _phase) * (1 - _join) + _buf.at(_anchor - 2 * _len + _phase) * _join\n  } else {\n    _edge = (_phase.min(_len - 1 - _phase) / _f).max(0).min(1)\n    _buf.at(_anchor - 1 - _phase) * _edge\n  }\n";
+    assert!(REFERENCE.contains(old_arms), "the reference block changed");
+    cases.push((
+        "frozen reverse arms inside if".into(),
+        format!(
+            "{}\ninstr a() {{ osc(saw, 220hz).freeze_reverse(length: 100ms, reverse: 1) }}",
+            REFERENCE.replace(old_arms, new_arms)
+        ),
+    ));
+    cases.push((
+        "frozen reverse small buffer".into(),
+        format!("{REFERENCE}\ninstr a() {{ osc(saw, 220hz).freeze_reverse(length: 100ms, reverse: 1, size: 24000) }}"),
+    ));
     cases.push(("scalar cascade".into(), "fn cascade(x) { state a = 0\na = x * 0.01 + a * 0.99\nfor i in 0..<32 { x = x * 0.98 + a * 0.02 }\nx }\ninstr a() { cascade(osc(saw, 220hz)) }".into()));
     for (name, body) in [
         ("electric piano", "use std/instruments.{electric_piano}"),

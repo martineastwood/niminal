@@ -11,7 +11,7 @@
 
 use dynasmrt::ExecutableBuffer;
 
-use super::{ArraySource, BinOp, Fn1, Instr, Kernel, MemoMath};
+use super::{ArraySource, BinOp, Fn1, Instr, Kernel, MemoMath, NativeInput};
 
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
@@ -40,6 +40,27 @@ fn bin_id(op: BinOp) -> u32 {
 
 fn fn_id(f: Fn1) -> u32 {
     Fn1::ALL.iter().position(|&g| g == f).unwrap_or(0) as u32
+}
+
+/// What a generated function needs to call a built-in opcode: the voice it belongs to and the
+/// block's context. Built on the stack for each call of `JitVoice::render`.
+pub(super) struct NativeState {
+    custom: *mut super::Custom,
+    ctx: crate::opcode::ProcessCtx,
+}
+
+/// The generated code's call into a built-in opcode: sample `index`'s result goes to `dst` onwards
+/// in the voice's registers.
+///
+/// # Safety
+/// `state` is the live [`NativeState`] of the `render` call that is running the generated code.
+unsafe fn native_call(state: *mut NativeState, dst: u32, index: u32) {
+    // SAFETY: the caller's contract; the generated code only calls this while `render` is running
+    // it, and `render` does not touch the voice until the generated code returns.
+    let state = unsafe { &mut *state };
+    // SAFETY: as above; `custom` points to the voice being rendered.
+    let custom = unsafe { &mut *state.custom };
+    custom.exec_native_sample(dst as usize, index as usize, &state.ctx);
 }
 
 /// What a backend hands back.
@@ -91,7 +112,8 @@ unsafe impl Send for JitKernel {}
 unsafe impl Sync for JitKernel {}
 
 /// What an instruction reads and writes, as virtual registers (registers, then state slots).
-fn touches(instr: &Instr, r: usize) -> (Vec<usize>, Vec<usize>) {
+fn touches(kernel: &Kernel, instr: &Instr) -> (Vec<usize>, Vec<usize>) {
+    let r = kernel.registers;
     match *instr {
         Instr::Const { dst, .. } | Instr::SampleRate { dst } | Instr::Input { dst, .. } => {
             (vec![], vec![dst])
@@ -117,6 +139,24 @@ fn touches(instr: &Instr, r: usize) -> (Vec<usize>, Vec<usize>) {
             let mut reads = vec![idx, src];
             reads.extend(cond);
             (reads, vec![])
+        }
+        Instr::Native { dst, index, guard } => {
+            let call = &kernel.natives[index];
+            let mut reads: Vec<usize> = call
+                .inputs
+                .iter()
+                .filter_map(|input| match *input {
+                    NativeInput::Reg(r) => Some(r),
+                    NativeInput::Const(_) => None,
+                })
+                .collect();
+            let writes: Vec<usize> = (dst..dst + call.op.outputs()).collect();
+            if let Some(g) = guard {
+                // skipped when the guard is zero, which leaves the results as they were
+                reads.push(g);
+                reads.extend(&writes);
+            }
+            (reads, writes)
         }
         Instr::Memo { dst, a, math, .. } => {
             let mut reads = vec![a];
@@ -144,6 +184,8 @@ fn allocate(kernel: &Kernel, registers: &[u8]) -> Analysis {
     let mut first_write: Vec<Option<usize>> = vec![None; n];
     let mut first_read: Vec<Option<usize>> = vec![None; n];
     let mut last: Vec<usize> = vec![0; n];
+    let mut write_at: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut read_at: Vec<Vec<usize>> = vec![Vec::new(); n];
     // skip regions: instruction i skips to i + 1 + count
     let region_end: Vec<usize> = kernel
         .code
@@ -155,14 +197,16 @@ fn allocate(kernel: &Kernel, registers: &[u8]) -> Analysis {
         })
         .collect();
     for (index, instr) in kernel.code.iter().enumerate() {
-        let (reads, writes) = touches(instr, r);
+        let (reads, writes) = touches(kernel, instr);
         for v in reads {
             uses[v] += 1;
+            read_at[v].push(index);
             first_read[v].get_or_insert(index);
             last[v] = index;
         }
         for v in writes {
             uses[v] += 1;
+            write_at[v].push(index);
             let conditional = region_end[..index].iter().any(|&end| end > index);
             if first_write[v].is_none() && !conditional {
                 first_write[v] = Some(index);
@@ -175,14 +219,27 @@ fn allocate(kernel: &Kernel, registers: &[u8]) -> Analysis {
     }
     for (_, reg) in &kernel.outputs {
         uses[*reg] += 1;
+        read_at[*reg].push(len);
         first_read[*reg].get_or_insert(len);
         last[*reg] = len;
     }
+    // The first instruction that cannot run once the one at `w` has: the nearest end of a skip that
+    // covers `w`. A read before that point runs only if `w` did, so it sees this sample's write.
+    let covered_until: Vec<usize> = (0..len)
+        .map(|w| {
+            region_end[..w]
+                .iter()
+                .filter(|&&end| end > w)
+                .copied()
+                .min()
+                .unwrap_or(usize::MAX)
+        })
+        .collect();
     // a constant written once, unconditionally, before any read is the same every sample: it is
     // put in its register once, before the loop
     let mut writes = vec![0usize; n];
     for instr in &kernel.code {
-        for v in touches(instr, r).1 {
+        for v in touches(kernel, instr).1 {
             writes[v] += 1;
         }
     }
@@ -202,15 +259,21 @@ fn allocate(kernel: &Kernel, registers: &[u8]) -> Analysis {
         if uses[v] == 0 {
             continue;
         }
+        // a temporary: every read is of a value this sample wrote, whichever branch ran
         let is_temp = v < r
             && hoist[v].is_none()
-            && match (first_write[v], first_read[v]) {
-                (Some(w), Some(rd)) => w < rd,
-                (Some(_), None) => true,
-                _ => false,
-            };
+            && !write_at[v].is_empty()
+            && read_at[v].iter().all(|&rd| {
+                write_at[v]
+                    .iter()
+                    .any(|&w| w < rd && rd < covered_until[w])
+            });
         temp[v] = is_temp;
-        let (start, end) = if is_temp { (first_write[v].unwrap_or(0), last[v]) } else { (0, len) };
+        let (start, end) = if is_temp {
+            (write_at[v].iter().copied().min().unwrap_or(0), last[v])
+        } else {
+            (0, len)
+        };
         intervals.push((start, end, v));
     }
     intervals.sort_by_key(|&(start, end, v)| (start, std::cmp::Reverse(uses[v] * 1000 / (end - start + 1)), v));
@@ -279,16 +342,26 @@ impl JitKernel {
                 | Instr::Select { .. }
                 | Instr::Call { .. }
                 | Instr::Memo { .. }
+                | Instr::Native { .. }
                 | Instr::Read { .. }
                 | Instr::ReadAt { .. }
                 | Instr::Write { .. }
                 | Instr::SkipIfZero { .. }
                 | Instr::CmpSkip { .. } => {}
-                _ => return Err("an instruction the code generator does not handle".into()),
+                other => {
+                    let name = format!("{other:?}");
+                    let name = name.split([' ', '{', '(']).next().unwrap_or("an instruction");
+                    return Err(format!("{name} is not generated"));
+                }
             }
         }
         if kernel.registers + kernel.state_init.len() > 4000 {
             return Err("too many registers for the generated code's immediate offsets".into());
+        }
+        if std::env::var("NIMINAL_JIT_DUMP").as_deref() == Ok(&kernel.name) {
+            for (i, instr) in kernel.code.iter().enumerate() {
+                eprintln!("{i:3} {instr:?}");
+            }
         }
         let analysis = allocate(kernel, arch::ALLOCATABLE);
         let allocated = analysis.alloc.iter().flatten().count();
@@ -311,7 +384,8 @@ impl JitKernel {
     /// `regs` and `state` must hold the kernel's registers and state slots, `inputs` one pointer
     /// per port to `frames` samples, `outputs` one pointer per output to room for `frames`
     /// samples, `memo` four words per memo slot, and `lists` the base address of each state list
-    /// followed by each shared table, each as long as the kernel says.
+    /// followed by each shared table, each as long as the kernel says, and `native` a live
+    /// [`NativeState`] for the voice being rendered.
     #[allow(clippy::too_many_arguments)] // mirrors the generated function's C signature
     pub unsafe fn run(
         &self,
@@ -322,10 +396,15 @@ impl JitKernel {
         memo: *mut u64,
         frames: usize,
         lists: *const *mut f64,
+        native: *mut NativeState,
         sample_rate: f64,
     ) {
         // SAFETY: forwarded from the caller's contract.
-        unsafe { (self.entry)(regs, state, inputs, outputs, memo, frames, lists, sample_rate) }
+        unsafe {
+            (self.entry)(
+                regs, state, inputs, outputs, memo, frames, lists, native, sample_rate,
+            )
+        }
     }
 }
 
@@ -380,6 +459,7 @@ impl JitVoice {
     pub fn render(
         &mut self,
         custom: &mut super::Custom,
+        ctx: &crate::opcode::ProcessCtx,
         input: &impl Fn(usize, usize) -> f32,
         outs: &mut [Vec<f32>],
         frames: usize,
@@ -399,6 +479,7 @@ impl JitVoice {
         for (k, out) in outs.iter_mut().enumerate().take(self.out_ptrs.len()) {
             self.out_ptrs[k] = out.as_mut_ptr() as usize;
         }
+        let sample_rate = custom.sample_rate;
         let buffers = custom.buffers.len();
         for (l, list) in custom.buffers.iter_mut().enumerate() {
             self.list_ptrs[l] = list.as_mut_ptr() as usize;
@@ -406,20 +487,28 @@ impl JitVoice {
         for (t, table) in custom.kernel.tables_f64.iter().enumerate() {
             self.list_ptrs[buffers + t] = table.as_ptr() as usize;
         }
+        // every pointer the generated code gets comes from this one, so none of them is invalidated
+        // by another being made
+        let raw = std::ptr::from_mut(custom);
+        let mut native = NativeState {
+            custom: raw,
+            ctx: *ctx,
+        };
         // SAFETY: the pointer tables hold one valid pointer per port and output, each to at
         // least `frames` samples (the inputs were just written; `outs` are block-sized); the
         // register and state vectors are the kernel's own, and the memo has four words per slot.
         // `usize` and pointers have the same layout.
         unsafe {
             self.kernel.run(
-                custom.regs.as_mut_ptr(),
-                custom.state.as_mut_ptr(),
+                (*raw).regs.as_mut_ptr(),
+                (*raw).state.as_mut_ptr(),
                 self.in_ptrs.as_ptr().cast::<*const f32>(),
                 self.out_ptrs.as_ptr().cast::<*mut f32>(),
                 self.memo.as_mut_ptr(),
                 frames,
                 self.list_ptrs.as_ptr().cast::<*mut f64>(),
-                custom.sample_rate,
+                &mut native,
+                sample_rate,
             );
         }
         true
