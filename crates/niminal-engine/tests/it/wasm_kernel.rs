@@ -2,7 +2,7 @@
 //!
 //! Random kernels over a pool of awkward values (NaN, infinities, signed zeros, huge and tiny
 //! numbers) run through both, block after block, and every register is compared.
-#![cfg(any(feature = "wasm-kernel", all(feature = "jit-dynasm", any(target_arch = "aarch64", target_arch = "x86_64"))))]
+#![cfg(any(feature = "wasm-kernel", target_arch = "aarch64", target_arch = "x86_64"))]
 #![allow(dead_code)]
 
 use niminal_engine::ops::{
@@ -381,7 +381,7 @@ fn dump_for_node() {
     std::fs::write(path, format!("[{}]", cases.join(",\n"))).expect("writes");
 }
 
-#[cfg(all(feature = "jit-dynasm", any(target_arch = "aarch64", target_arch = "x86_64")))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[test]
 fn random_scalar_kernels_match_the_interpreter_on_the_jit() {
     for seed in 1..=400 {
@@ -389,7 +389,7 @@ fn random_scalar_kernels_match_the_interpreter_on_the_jit() {
     }
 }
 
-#[cfg(all(feature = "jit-dynasm", any(target_arch = "aarch64", target_arch = "x86_64")))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[test]
 fn every_operation_matches_on_edge_values_on_the_jit() {
     let mut bad = Vec::new();
@@ -435,7 +435,7 @@ fn every_operation_matches_on_edge_values_on_the_jit() {
     assert!(bad.is_empty(), "{} mismatches:\n{}", bad.len(), bad.join("\n"));
 }
 
-#[cfg(all(feature = "jit-dynasm", any(target_arch = "aarch64", target_arch = "x86_64")))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[test]
 fn the_jit_hands_back_to_the_interpreter_for_buffers_it_cannot_use() {
     // two outputs, but `process` renders into a single buffer

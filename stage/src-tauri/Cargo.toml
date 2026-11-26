@@ -10,10 +10,6 @@ description = "A live stage for niminal: clip lanes that light up as they play"
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
-# Native code for kernels (see crates/niminal-cli): `npm run tauri -- build --bundles app --features jit`.
-[features]
-jit = ["niminal-engine/jit-dynasm"]
-
 [dependencies]
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }

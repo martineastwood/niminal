@@ -690,7 +690,7 @@ impl Custom {
         }
         self.block_frames = frames;
         self.run(Section::Block, ctx, &input, 0);
-        #[cfg(all(feature = "jit-dynasm", any(target_arch = "aarch64", target_arch = "x86_64")))]
+        #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
         if let Some(mut jit) = self.jit.take() {
             let done = jit.render(self, &input, outs, frames);
             self.jit = Some(jit);

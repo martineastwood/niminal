@@ -1,5 +1,5 @@
-//! Compare this executable with NIMINAL_JIT=0/1 (aarch64 `jit-dynasm`) or NIMINAL_WASM=0/1 (`wasm-kernel`).
-//! cargo build --release -p niminal-lang --example bench_wasm --features jit-dynasm,wasm-kernel
+//! Compare this executable with NIMINAL_JIT=0/1 (the native code generator, on by default) or NIMINAL_WASM=0/1 (`wasm-kernel`).
+//! cargo build --release -p niminal-lang --example bench_wasm --features wasm-kernel
 use niminal_engine::{Buses, Voice, block_size};
 use niminal_lang::{compile, expand};
 use std::{hint::black_box, io::Write, path::Path, time::Instant};

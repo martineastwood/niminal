@@ -6,7 +6,7 @@ to the interpreter and all checked against it with the same random differential 
 
 | Backend | Where | Status |
 | --- | --- | --- |
-| dynasm code generators (`custom/jit/`, feature `jit-dynasm`) | native: aarch64 and x86-64 | the native tier; on unless `NIMINAL_JIT=0` |
+| dynasm code generators (`custom/jit/`) | native: aarch64 and x86-64 | the native tier, always built there; on unless `NIMINAL_JIT=0` |
 | wasm emitter (`custom/wasm.rs`, feature `wasm-kernel`) | the web playground, in the browser's own engine | emitter works; the browser loader and the wasm32 engine build are not written |
 | wasmtime runner (`custom/wasm_run.rs`, feature `wasm-kernel`) | tests and benchmarks only | runs the emitted wasm natively, `NIMINAL_WASM=1` |
 
@@ -24,8 +24,8 @@ Wasmtime is kept only as a test and benchmark harness for the emitter. The rest 
 evidence: wasmi (an interpreter) and Winch (wasmtime's baseline compiler) were tried and removed.
 
 Every kernel backend must keep bit-identical output: `cargo test -p niminal-engine --features
-jit-dynasm,wasm-kernel` runs the differential tests, and the audio baselines pass with the JIT on
-(`cargo test --workspace --features niminal-engine/jit-dynasm`).
+wasm-kernel` runs the differential tests, and every audio baseline passes with the JIT on, which is
+the default (`NIMINAL_JIT=0` is the kill switch).
 
 ## What it is
 
@@ -153,7 +153,7 @@ except the cascade.
 
 ### A hand-written aarch64 code generator (dynasm), spike
 
-`--features niminal-engine/jit-dynasm` (aarch64 only; `NIMINAL_JIT=1`) generates machine code
+The native code generator (`NIMINAL_JIT=1`, the default) generates machine code
 straight from the register IR with `dynasm`, no wasm in between (`custom/jit.rs`). It has a
 linear-scan register allocator over live ranges (temporaries reuse FP registers; state and
 loop-carried registers stay resident for the block), hoists constants out of the loop, writes
