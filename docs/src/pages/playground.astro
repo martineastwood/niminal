@@ -4,13 +4,15 @@ import '../styles/playground.css';
 
 const REPO = 'https://github.com/martineastwood/niminal';
 // What the page offers to start from; the files are copied to /playground/examples by scripts/build-playground.sh.
-const examples = [
-  ['functions', 'Instruments built from functions'],
-  ['kernels', 'A piece made of hand-written functions'],
-  ['acid', 'An acid bassline'],
-  ['physical_models', 'Physical models'],
-  ['modal', 'Modal resonators'],
-  ['array_bank', 'A bank of arrays'],
+// [file, title, bars to render by default]. Pieces built from hand-written functions run on the interpreter in
+// a browser (there is no native-code generator in WebAssembly), so they render slower and start with fewer bars.
+const examples: [string, string, number][] = [
+  ['functions', 'Instruments built from functions', 8],
+  ['kernels', 'A piece made of hand-written functions', 4],
+  ['acid', 'An acid bassline', 8],
+  ['physical_models', 'Physical models', 8],
+  ['modal', 'Modal resonators', 8],
+  ['array_bank', 'A bank of arrays', 8],
 ];
 ---
 <!doctype html>
@@ -70,7 +72,7 @@ const examples = [
         <label>bars <input type="number" id="bars" value="8" min="1" max="64" /></label>
         <label>start from
           <select id="example">
-            {examples.map(([file, title]) => <option value={file}>{title}</option>)}
+            {examples.map(([file, title, bars]) => <option value={file} data-bars={bars}>{title}</option>)}
           </select>
         </label>
         <span class="spacer"></span>
@@ -291,9 +293,14 @@ const examples = [
         play.disabled = true;
         download.disabled = true;
         const text = code.value;
-        setStatus('Rendering…');
+        // the render happens in a worker, so the page can keep counting while it waits
+        const waitingSince = performance.now();
+        const say = () => setStatus(`Rendering… ${Math.floor((performance.now() - waitingSince) / 1000)} s`);
+        say();
+        const waiting = setInterval(say, 250);
         errors.replaceChildren();
         const result = await ask({ kind: 'render', source: text, bars: Number(bars.value) || 8 });
+        clearInterval(waiting);
         play.disabled = false;
         if (!result.ok) {
           setStatus(result.internal ? 'The engine stopped unexpectedly.' : 'There is a mistake in the piece.');
@@ -368,7 +375,7 @@ const examples = [
       share.addEventListener('click', async () => {
         let url: string;
         try {
-          url = `${location.origin}${location.pathname}#c=${await encode(code.value)}`;
+          url = `${location.origin}${location.pathname}#c=${await encode(code.value)}&b=${Number(bars.value) || 8}`;
         } catch { setStatus('Could not make a link in this browser.'); return; }
         history.replaceState(null, '', url);
         try {
@@ -379,6 +386,8 @@ const examples = [
 
       // ---- starting points
       async function loadExample(name: string) {
+        const wanted = exampleSelect.querySelector<HTMLOptionElement>(`option[value="${name}"]`)?.dataset.bars;
+        if (wanted) bars.value = wanted;
         const response = await fetch(`/playground/examples/${name}.nml`);
         code.value = response.ok ? await response.text() : '// could not load the example';
         errors.replaceChildren();
@@ -386,7 +395,9 @@ const examples = [
       exampleSelect.addEventListener('change', () => { stopPlaying(); history.replaceState(null, '', location.pathname); void loadExample(exampleSelect.value); });
 
       (async () => {
-        const hash = new URLSearchParams(location.hash.slice(1)).get('c');
+        const shared = new URLSearchParams(location.hash.slice(1));
+        const hash = shared.get('c');
+        if (Number(shared.get('b')) > 0) bars.value = String(Math.min(64, Number(shared.get('b'))));
         if (hash) {
           try { code.value = await decode(hash); } catch { await loadExample(exampleSelect.value); }
         } else {
