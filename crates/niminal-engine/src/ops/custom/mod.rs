@@ -8,7 +8,7 @@ mod ir;
 mod math;
 #[cfg(feature = "wasm-kernel")]
 pub mod wasm;
-#[cfg(all(feature = "jit-dynasm", target_arch = "aarch64"))]
+#[cfg(all(feature = "jit-dynasm", any(target_arch = "aarch64", target_arch = "x86_64")))]
 mod jit;
 #[cfg(feature = "wasm-kernel")]
 mod wasm_run;
@@ -138,7 +138,7 @@ pub struct Custom {
     native_indices: Vec<usize>,
     #[cfg(feature = "wasm-kernel")]
     wasm: Option<wasm_run::WasmVoice>,
-    #[cfg(all(feature = "jit-dynasm", target_arch = "aarch64"))]
+    #[cfg(all(feature = "jit-dynasm", any(target_arch = "aarch64", target_arch = "x86_64")))]
     jit: Option<jit::JitVoice>,
 }
 
@@ -158,12 +158,12 @@ impl Custom {
             .unwrap_or(1);
         #[cfg(feature = "wasm-kernel")]
         let wasm = wasm_run::WasmVoice::new(&kernel);
-        #[cfg(all(feature = "jit-dynasm", target_arch = "aarch64"))]
+        #[cfg(all(feature = "jit-dynasm", any(target_arch = "aarch64", target_arch = "x86_64")))]
         let jit = jit::JitVoice::new(&kernel);
         Custom {
             #[cfg(feature = "wasm-kernel")]
             wasm,
-            #[cfg(all(feature = "jit-dynasm", target_arch = "aarch64"))]
+            #[cfg(all(feature = "jit-dynasm", any(target_arch = "aarch64", target_arch = "x86_64")))]
             jit,
             native_inputs: blocks(inputs),
             native_outputs: blocks(outputs),
@@ -205,7 +205,7 @@ impl Custom {
 
 }
 
-#[cfg(any(feature = "wasm-kernel", all(feature = "jit-dynasm", target_arch = "aarch64")))]
+#[cfg(any(feature = "wasm-kernel", all(feature = "jit-dynasm", any(target_arch = "aarch64", target_arch = "x86_64"))))]
 impl Custom {
     /// A copy that renders through the interpreter whatever `NIMINAL_WASM` or `NIMINAL_JIT` say.
     pub fn new_interpreted(kernel: Arc<Kernel>) -> Self {
@@ -214,7 +214,7 @@ impl Custom {
         {
             custom.wasm = None;
         }
-        #[cfg(all(feature = "jit-dynasm", target_arch = "aarch64"))]
+        #[cfg(all(feature = "jit-dynasm", any(target_arch = "aarch64", target_arch = "x86_64")))]
         {
             custom.jit = None;
         }
@@ -222,7 +222,7 @@ impl Custom {
     }
 }
 
-#[cfg(all(feature = "jit-dynasm", target_arch = "aarch64"))]
+#[cfg(all(feature = "jit-dynasm", any(target_arch = "aarch64", target_arch = "x86_64")))]
 impl Custom {
     /// A copy that runs on the dynasm code generator whatever `NIMINAL_JIT` says, for tests.
     pub fn new_jit(kernel: Arc<Kernel>) -> Result<Self, String> {

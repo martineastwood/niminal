@@ -19,5 +19,5 @@ mod pitch_glides;
 mod scalar_fusion;
 mod time_effects;
 mod voice;
-#[cfg(any(feature = "wasm-kernel", all(feature = "jit-dynasm", target_arch = "aarch64")))]
+#[cfg(any(feature = "wasm-kernel", all(feature = "jit-dynasm", any(target_arch = "aarch64", target_arch = "x86_64"))))]
 mod wasm_kernel;

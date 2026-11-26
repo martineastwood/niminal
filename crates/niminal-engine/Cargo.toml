@@ -14,7 +14,7 @@ kernel-profile = []
 # runs) and execute them natively through wasmtime, which exists to test and benchmark the emitter.
 # Native code generation for the app is `jit-dynasm`.
 wasm-kernel = ["dep:wasm-encoder", "dep:wasmtime"]
-# Native code for kernels on aarch64, hand-generated with dynasm (`custom/jit.rs`). On unless the
+# Native code for kernels on aarch64 and x86-64, generated with dynasm (`custom/jit/`). On unless the
 # environment says `NIMINAL_JIT=0`; kernels it cannot generate run on the interpreter.
 jit-dynasm = ["dep:dynasm", "dep:dynasmrt"]
 

@@ -6,7 +6,7 @@ to the interpreter and all checked against it with the same random differential 
 
 | Backend | Where | Status |
 | --- | --- | --- |
-| dynasm code generator (`custom/jit.rs`, feature `jit-dynasm`) | native, aarch64 today, x86-64 next | the native tier; on unless `NIMINAL_JIT=0` |
+| dynasm code generators (`custom/jit/`, feature `jit-dynasm`) | native: aarch64 and x86-64 | the native tier; on unless `NIMINAL_JIT=0` |
 | wasm emitter (`custom/wasm.rs`, feature `wasm-kernel`) | the web playground, in the browser's own engine | emitter works; the browser loader and the wasm32 engine build are not written |
 | wasmtime runner (`custom/wasm_run.rs`, feature `wasm-kernel`) | tests and benchmarks only | runs the emitted wasm natively, `NIMINAL_WASM=1` |
 
@@ -182,8 +182,24 @@ large ones), and the binary grows by about 110 KB (wasmtime: about 8 MB stripped
 the same 400-kernel random differential test, an exhaustive operation-by-edge-value test
 (`every_operation_matches_on_edge_values_on_the_jit`) and `cargo clippy`.
 
-Not done: x86-64, a Windows/Linux build, calling it from the audio thread safely under
+Not done: a Windows/Linux build, calling it from the audio thread safely under
 concurrent recompilation, executable-memory permissions for signed builds.
+
+### x86-64 backend
+
+`custom/jit/x64.rs` generates the same kernels for x86-64 (SSE2 plus SSE4.1; a CPU without SSE4.1
+keeps the interpreter), always with the System V calling convention so Linux, macOS and Windows
+share one code path. The allocator has 10 registers (`xmm6`-`xmm15`; `xmm0`-`xmm5` are scratch).
+`jit/mod.rs` holds what both backends share: the live-range allocator, constant hoisting and the
+kernel and voice types.
+
+Only checked under Rosetta on an Apple Silicon Mac (`RUSTFLAGS="" cargo test --target
+x86_64-apple-darwin ...`; the repository's `target-cpu=native` does not apply to another
+architecture): the 400-kernel fuzz test, the edge-value test, and the engine, language and server
+test suites (362 language tests) pass, and all 16 benchmark workloads render identical audio.
+Rosetta translates both the interpreter and the generated code, so its timings (2.3-9.5x over the
+interpreter on the covered kernels, but 1.4x on the cascade and slower on kernels that never reach
+the JIT) say nothing reliable about real hardware. Not tested: real x86-64 hardware, Windows, Linux.
 
 ## What this shows, and what it does not
 

@@ -102,11 +102,11 @@ Methods of one struct (`Lower`, `Kb`, `Parser`, `Perform`, `Live`, `Schedule`) a
 
 ## Things that surprise people
 
-- Kernels (`fn` with `state`) run on the interpreter, on the aarch64 code generator (`custom/jit.rs`,
+- Kernels (`fn` with `state`) run on the interpreter, on a code generator per CPU (`custom/jit/`: aarch64, x86-64;
   Cargo feature `jit-dynasm`, switched off at run time by `NIMINAL_JIT=0`), or as wasm for the web
   (`custom/wasm.rs`, feature `wasm-kernel`). All must give the interpreter's output bit for bit:
   `tests/it/wasm_kernel.rs` fuzzes them against it, so a change to the IR, to an instruction's meaning
-  or to a backend needs that test to pass. See `docs/wasm-kernel.md`. The JIT is not in the default
+  or to a backend needs that test to pass (for x86-64 on a Mac: `RUSTFLAGS="" cargo test --target x86_64-apple-darwin -p niminal-engine --features jit-dynasm`, run under Rosetta). See `docs/wasm-kernel.md`. The JIT is not in the default
   build yet; a piece made of built-in opcodes (most of the shelf) never reaches it.
 - Stage is not part of `cargo ... --workspace`: it has its own manifest (`stage/src-tauri`) and needs the Tauri prerequisites. Use `scripts/check.sh --apps`.
 - On this machine every build prints a `rust-objcopy ... libLLVM.dylib ... SIGABRT` warning. It is harmless noise from the toolchain; look past it for real errors.
