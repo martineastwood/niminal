@@ -49,7 +49,9 @@ impl LiveSession {
             offline: Offline::new(sample_rate, layout),
             out: Vec::new(),
         };
-        let landed = session.eval(source, true)?;
+        // the session is given the text with its `use` lines expanded, as the render path does; the piece has
+        // just compiled, so a mistake found here is rare and its position is in the expanded text
+        let landed = session.eval(&expanded.text, true)?;
         Ok((session, landed))
     }
 

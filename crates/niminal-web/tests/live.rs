@@ -70,3 +70,24 @@ fn a_piece_with_a_mistake_does_not_start() {
     };
     assert!(!errors.is_empty());
 }
+
+#[test]
+fn a_piece_that_uses_the_standard_library_starts() {
+    let source = "use std/instruments.{bowed_string}\n\ntempo 96bpm\n\nbowed_string(freq: a3) for 2beats\n";
+    let (mut session, _) = LiveSession::start(source, 48_000.0).ok().expect("a piece with a `use` line starts");
+    session.process(4800);
+    assert!(loudest(&session) > 0.0);
+}
+
+/// Every example the playground offers must start as a live session, not only render.
+#[test]
+fn the_playground_examples_start() {
+    for name in ["functions", "kernels", "acid", "physical_models", "modal", "array_bank"] {
+        let path = format!("{}/../../examples/{name}.nml", env!("CARGO_MANIFEST_DIR"));
+        let source = std::fs::read_to_string(&path).unwrap();
+        if let Err(failure) = LiveSession::start(&source, 48_000.0) {
+            let LiveFailure::Source(d) = &failure else { panic!("{name} did not start") };
+            panic!("{name} did not start: {:?}", d.first().map(|d| d.message.clone()));
+        }
+    }
+}
