@@ -96,10 +96,14 @@ const examples = [
       import { keymap } from '@codemirror/view';
       import { indentWithTab } from '@codemirror/commands';
       import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
-      import { lintGutter, setDiagnostics } from '@codemirror/lint';
+      import { lintGutter } from '@codemirror/lint';
+      import { acceptCompletion } from '@codemirror/autocomplete';
       import { tags } from '@lezer/highlight';
-      // the same lexer and ink palette the Stage editor uses
+      import DOMPurify from 'dompurify';
+      // the same lexer, palette and language-server client the Stage editor uses
       import { colours, niminal } from '../../../editors/codemirror/language';
+      import { connectLanguageServer, languageClient } from '../../../editors/codemirror/lsp';
+      import { semanticHighlighting } from '../../../editors/codemirror/semantic';
 
       const root = document.documentElement;
       document.querySelectorAll<HTMLButtonElement>('[data-ground]').forEach((b) =>
@@ -138,11 +142,24 @@ const examples = [
         '.cm-cursor': { borderLeftColor: 'var(--accent)' },
         '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: 'color-mix(in srgb, var(--accent) 28%, transparent)' },
         '.cm-matchingBracket': { outline: '1px solid var(--accent)', backgroundColor: 'transparent' },
+        '.cm-tooltip': { backgroundColor: 'var(--bg-elevated)', color: 'var(--ink)', border: '1px solid var(--line-strong)', borderRadius: '4px', maxWidth: '36rem' },
+        '.cm-tooltip pre': { whiteSpace: 'pre-wrap', fontFamily: 'var(--mono)' },
+        '.cm-tooltip-autocomplete > ul > li[aria-selected]': { backgroundColor: 'var(--accent)', color: 'var(--accent-ink)' },
       }, { dark });
+      // the compiler's colours for what it has resolved: Stage's are for the ink ground, so paper gets its own
+      const paperSemantic = Prec.high(EditorView.theme({
+        '.cm-sem-function': { color: '#0550ae' },
+        '.cm-sem-class, .cm-sem-namespace': { color: '#0a7e7e' },
+        '.cm-sem-variable': { color: '#9a6700' },
+        '.cm-sem-parameter': { color: '#a5303d' },
+        '.cm-sem-enumMember': { color: '#b35900' },
+        '.cm-sem-enum': { color: '#1a7f37' },
+      }));
+      const lsp = languageClient((html) => DOMPurify.sanitize(html));
       const ground = new Compartment();
       const groundExtensions = () => {
         const dark = root.dataset.mode !== 'paper';
-        return [editorTheme(dark), dark ? colours : paperColours];
+        return [editorTheme(dark), dark ? colours : [paperColours, paperSemantic]];
       };
       const view = new EditorView({
         parent: $('editor'),
@@ -151,18 +168,17 @@ const examples = [
           extensions: [
             Prec.highest(keymap.of([{ key: 'Mod-Enter', run: () => { void run(); return true; } }])),
             basicSetup,
-            keymap.of([indentWithTab]),
+            // Tab takes the suggestion when the list is open, and indents otherwise
+            keymap.of([{ key: 'Tab', run: acceptCompletion }, indentWithTab]),
             niminal,
+            semanticHighlighting,
+            // mistakes, completion and hovers come from the language server, running in a worker
+            lsp.plugin('file:///playground.nml', 'niminal'),
             lintGutter(),
             ground.of(groundExtensions()),
-            // a mistake is marked where it was; editing the piece clears the marks, which would no longer line up
-            EditorView.updateListener.of((update) => {
-              if (update.docChanged && marked) { marked = false; view.dispatch(setDiagnostics(view.state, [])); }
-            }),
           ],
         }),
       });
-      let marked = false;
       const applyGround = () => view.dispatch({ effects: ground.reconfigure(groundExtensions()) });
       const code = {
         get value() { return view.state.doc.toString(); },
@@ -195,6 +211,16 @@ const examples = [
         pending.set(id, resolve);
         worker.postMessage({ id, ...message });
       });
+      // the language server runs in a worker of its own, so typing is not held up by a render
+      const lspWorker = new Worker('/playground/worker.js', { type: 'module' });
+      const lspPending = new Map<number, (replies: Record<string, unknown>[]) => void>();
+      lspWorker.onmessage = (e) => { lspPending.get(e.data.id)?.(e.data.replies ?? []); lspPending.delete(e.data.id); };
+      const exchange = (message: Record<string, unknown>) => new Promise<Record<string, unknown>[]>((resolve) => {
+        const id = nextId++;
+        lspPending.set(id, resolve);
+        lspWorker.postMessage({ id, kind: 'lsp', message });
+      });
+      void connectLanguageServer(lsp, exchange, (message) => console.info(message));
 
       // ---- helpers
       const setStatus = (text: string) => { status.textContent = text; };
@@ -216,11 +242,6 @@ const examples = [
 
       function showErrors(source: string, diagnostics: Diagnostic[], message: string, warnings: string[] = []) {
         errors.replaceChildren();
-        marked = diagnostics.length > 0;
-        view.dispatch(setDiagnostics(view.state, diagnostics.map((d) => {
-          const from = byteToIndex(source, d.start);
-          return { from, to: Math.max(byteToIndex(source, d.end), Math.min(from + 1, source.length)), severity: 'error' as const, message: d.message };
-        })));
         for (const d of diagnostics) {
           const from = byteToIndex(source, d.start);
           const to = byteToIndex(source, d.end);

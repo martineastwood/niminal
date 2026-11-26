@@ -4,6 +4,7 @@
 //   const niminal = await load("niminal_web.wasm");     // a URL, or the bytes
 //   const result = niminal.render(source, 8);          // 8 bars
 //   result.ok ? result.channels /* Float32Array per channel */ : result.diagnostics
+//   niminal.lsp({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })   // the language server, in answers
 //
 // The module imports one function, `env.niminal_now_ms`, because WebAssembly has no clock of its own.
 
@@ -33,6 +34,23 @@ class Niminal {
 
   #text(pointer, length) {
     return new TextDecoder().decode(new Uint8Array(this.#wasm.memory.buffer, pointer, length));
+  }
+
+  /** Give the language server one LSP message (an object) and get back the messages it sends in answer. */
+  lsp(message) {
+    const wasm = this.#wasm;
+    const encoded = new TextEncoder().encode(JSON.stringify(message));
+    const pointer = wasm.niminal_alloc(encoded.length);
+    new Uint8Array(wasm.memory.buffer, pointer, encoded.length).set(encoded);
+    let length;
+    try {
+      length = wasm.niminal_lsp(pointer, encoded.length);
+    } catch (error) {
+      this.#start();
+      throw error;
+    }
+    wasm.niminal_free(pointer, encoded.length);
+    return JSON.parse(this.#text(wasm.niminal_lsp_reply(), length));
   }
 
   /** Render `source` for `bars` bars (0 or less: until it ends by itself).

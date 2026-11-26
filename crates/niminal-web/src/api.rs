@@ -1,6 +1,6 @@
 //! The C interface: what a host calls on the loaded module. One render's result is kept until the next.
 
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use crate::{Failure, Rendered, render_piece};
 
@@ -147,4 +147,36 @@ pub extern "C" fn niminal_panic_message() -> *const u8 {
 #[unsafe(no_mangle)]
 pub extern "C" fn niminal_panic_length() -> usize {
     lock_state().panic.len()
+}
+
+/// The language server: one per module, with the last reply it gave.
+fn lsp() -> std::sync::MutexGuard<'static, (niminal_lsp::Server, String)> {
+    static LSP: OnceLock<Mutex<(niminal_lsp::Server, String)>> = OnceLock::new();
+    LSP.get_or_init(|| Mutex::new((niminal_lsp::Server::new(), String::new())))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+/// Hand the language server one LSP message (JSON, `length` bytes at `message`) and get the number of bytes of
+/// its answer: a JSON array of the messages to send back (a response, and any notifications), at
+/// [`niminal_lsp_reply`]. A message that is not JSON gets `[]`.
+///
+/// # Safety
+/// `message` points to `length` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn niminal_lsp(message: *const u8, length: usize) -> usize {
+    // SAFETY: the caller's contract.
+    let bytes = unsafe { std::slice::from_raw_parts(message, length) };
+    let replies = serde_json::from_slice::<serde_json::Value>(bytes)
+        .map(|value| lsp().0.handle(&value))
+        .unwrap_or_default();
+    let mut guard = lsp();
+    guard.1 = serde_json::Value::Array(replies).to_string();
+    guard.1.len()
+}
+
+/// The last answer from [`niminal_lsp`]: a pointer to its bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn niminal_lsp_reply() -> *const u8 {
+    lsp().1.as_ptr()
 }

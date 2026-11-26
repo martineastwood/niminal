@@ -1336,6 +1336,7 @@ dependencies = [
  "niminal-compose",
  "niminal-engine",
  "niminal-lang",
+ "niminal-lsp",
  "niminal-sequencer",
  "serde_json",
 ]

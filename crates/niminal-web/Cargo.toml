@@ -15,5 +15,6 @@ crate-type = ["cdylib", "rlib"]
 niminal-engine = { path = "../niminal-engine" }
 niminal-lang = { path = "../niminal-lang" }
 niminal-compose = { path = "../niminal-compose" }
+niminal-lsp = { path = "../niminal-lsp" }
 niminal-sequencer = { path = "../niminal-sequencer", default-features = false }
 serde_json = "1"

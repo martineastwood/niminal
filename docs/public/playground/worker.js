@@ -1,4 +1,4 @@
-// Renders pieces off the page's thread. The module is fetched on the first message (or on `warm`).
+// Renders pieces and answers language-server requests off the page's thread (the page runs one worker for each, so typing is not held up by a render). The module is fetched on the first message (or on `warm`).
 import { load } from "./niminal.js";
 
 let niminal;
@@ -9,6 +9,10 @@ self.onmessage = async (event) => {
     niminal ??= await load(new URL("./niminal_web.wasm", import.meta.url));
     if (kind === "warm") {
       self.postMessage({ id, result: { ok: true, warmed: true } });
+      return;
+    }
+    if (kind === "lsp") {
+      self.postMessage({ id, replies: niminal.lsp(event.data.message) });
       return;
     }
     const started = performance.now();

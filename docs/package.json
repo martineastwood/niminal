@@ -14,14 +14,17 @@
   },
   "dependencies": {
     "@astrojs/starlight": "^0.42.6",
+    "@codemirror/autocomplete": "^6.20.4",
     "@codemirror/commands": "^6.11.2",
     "@codemirror/language": "^6.13.1",
     "@codemirror/lint": "^6.9.8",
+    "@codemirror/lsp-client": "^6.3.1",
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.44.2",
     "@lezer/highlight": "^1.2.5",
     "astro": "^7.3.8",
     "codemirror": "^6.0.2",
+    "dompurify": "^3.5.0",
     "sharp": "^0.35.5"
   }
 }

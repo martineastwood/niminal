@@ -12,7 +12,7 @@ const niminal = JSON.parse(
 // copies of the editor libraries (two copies of @codemirror/state break the editor).
 const modules = (name) => fileURLToPath(new URL(`./node_modules/${name}`, import.meta.url));
 const sharedEditorLibraries = Object.fromEntries(
-  ['@codemirror/language', '@codemirror/state', '@codemirror/view', '@lezer/highlight'].map((name) => [name, modules(name)]),
+  ['@codemirror/language', '@codemirror/state', '@codemirror/view', '@codemirror/lsp-client', '@lezer/highlight'].map((name) => [name, modules(name)]),
 );
 
 export default defineConfig({
