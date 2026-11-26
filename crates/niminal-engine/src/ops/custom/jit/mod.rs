@@ -338,6 +338,8 @@ pub struct JitVoice {
     in_ptrs: Vec<usize>,
     out_ptrs: Vec<usize>,
     list_ptrs: Vec<usize>,
+    /// The most samples one call may render: what the input buffers hold.
+    capacity: usize,
 }
 
 type Cache = std::sync::Mutex<Vec<(std::sync::Weak<Kernel>, Option<std::sync::Arc<JitKernel>>)>>;
@@ -366,17 +368,28 @@ impl JitVoice {
             in_ptrs: vec![0; kernel.n_ports],
             out_ptrs: vec![0; kernel.n_outputs],
             list_ptrs: vec![0; kernel.n_lists],
+            capacity: block,
             kernel,
         })
     }
 
+    /// Renders `frames` samples, or returns `false` without touching anything when the buffers
+    /// are not what the generated code assumes (more samples than the block size this voice was
+    /// made for, or fewer output buffers than outputs): the caller then runs the interpreter,
+    /// which works on the same registers, state and lists.
     pub fn render(
         &mut self,
         custom: &mut super::Custom,
         input: &impl Fn(usize, usize) -> f32,
         outs: &mut [Vec<f32>],
         frames: usize,
-    ) {
+    ) -> bool {
+        if frames > self.capacity
+            || outs.len() < self.out_ptrs.len()
+            || outs.iter().take(self.out_ptrs.len()).any(|o| o.len() < frames)
+        {
+            return false;
+        }
         for (port, samples) in self.inputs.iter_mut().enumerate() {
             for (i, sample) in samples.iter_mut().enumerate().take(frames) {
                 *sample = input(port, i);
@@ -409,6 +422,7 @@ impl JitVoice {
                 custom.sample_rate,
             );
         }
+        true
     }
 }
 

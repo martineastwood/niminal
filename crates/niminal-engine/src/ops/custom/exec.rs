@@ -692,9 +692,11 @@ impl Custom {
         self.run(Section::Block, ctx, &input, 0);
         #[cfg(all(feature = "jit-dynasm", any(target_arch = "aarch64", target_arch = "x86_64")))]
         if let Some(mut jit) = self.jit.take() {
-            jit.render(self, &input, outs, frames);
+            let done = jit.render(self, &input, outs, frames);
             self.jit = Some(jit);
-            return;
+            if done {
+                return;
+            }
         }
         #[cfg(feature = "wasm-kernel")]
         if let Some(mut wasm) = self.wasm.take() {

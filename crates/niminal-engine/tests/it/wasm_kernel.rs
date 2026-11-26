@@ -434,3 +434,35 @@ fn every_operation_matches_on_edge_values_on_the_jit() {
     bad.truncate(25);
     assert!(bad.is_empty(), "{} mismatches:\n{}", bad.len(), bad.join("\n"));
 }
+
+#[cfg(all(feature = "jit-dynasm", any(target_arch = "aarch64", target_arch = "x86_64")))]
+#[test]
+fn the_jit_hands_back_to_the_interpreter_for_buffers_it_cannot_use() {
+    // two outputs, but `process` renders into a single buffer
+    let kernel = Arc::new(Kernel {
+        registers: 4,
+        state_init: vec![0.0],
+        init: vec![Instr::Const { dst: 0, value: 0.25 }],
+        code: vec![
+            Instr::LoadState { dst: 1, slot: 0 },
+            Instr::Bin { dst: 2, op: BinOp::Add, a: 1, b: 0 },
+            Instr::StoreState { slot: 0, src: 2 },
+            Instr::Neg { dst: 3, a: 2 },
+        ],
+        outputs: vec![("a".into(), 2), ("b".into(), 3)],
+        ..Kernel::default()
+    });
+    let ctx = ProcessCtx::new(48_000.0, true);
+    let mut want = [0.0f32; 8];
+    let mut got = [0.0f32; 8];
+    Custom::new_interpreted(kernel.clone()).process(&ctx, &[], &mut want);
+    Custom::new_jit(kernel.clone()).expect("generates").process(&ctx, &[], &mut got);
+    assert_eq!(want.map(f32::to_bits), got.map(f32::to_bits));
+    // more samples than the block size the voice was made for
+    let frames = niminal_engine::block_size() + 5;
+    let mut out_i = vec![vec![0.0f32; frames]; 2];
+    let mut out_j = vec![vec![0.0f32; frames]; 2];
+    Custom::new_interpreted(kernel.clone()).process_outputs(&ctx, &[], &mut out_i, frames);
+    Custom::new_jit(kernel).expect("generates").process_outputs(&ctx, &[], &mut out_j, frames);
+    assert_eq!(out_i, out_j);
+}
