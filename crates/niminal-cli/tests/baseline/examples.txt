@@ -18,6 +18,7 @@ grain_cello.nml: 2x739197
 granular.nml: 2x1403992
 groove.nml: 2x570512
 instrument_scopes.nml: 1x100813
+kernels.nml: 2x536639
 library.nml: 1x327199
 live_controls.nml: 2x369682
 loop_performance.nml: 2x1418086

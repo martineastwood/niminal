@@ -1,0 +1,248 @@
+// A workout for the kernel compiler: every sound here is built from small `fn`s with `state`,
+// written by hand (ramp accumulators, filters, delay lines, a random source) instead of the built-in
+// opcodes, so each one is a kernel that runs once per sample. Nothing inside them calls `osc`, `noise`
+// or a built-in filter, which is what lets the native code generator take them all.
+// Render with:  niminal render examples/kernels.nml --out kernels.wav --bars 8
+// Check what the generator took:  NIMINAL_JIT_VERBOSE=1 niminal render examples/kernels.nml --out k.wav --bars 2
+// Compare:  NIMINAL_JIT=0 niminal render ...   renders the same file on the interpreter; the audio is identical.
+config { channels: stereo }
+tempo 118bpm
+meter 4/4
+
+bus space: stereo
+fx hall {
+  out = space.reverb(room: 0.75, damp: 0.5)
+}
+
+// ---- sources -------------------------------------------------------------------------------
+
+/// A 0..1 ramp that wraps: the phase of everything below.
+fn cycle(freq: hz) {
+  state p = 0
+  p = (p + freq / sample_rate).mod(1)
+  p
+}
+
+/// A sawtooth made from the ramp (it aliases a little, which is part of the sound).
+fn saw(freq: hz) {
+  cycle(freq) * 2 - 1
+}
+
+/// White noise from a linear congruential generator: exact in double precision, so it is the same
+/// on every machine and every backend.
+fn rand() {
+  state seed = 12345
+  seed = (seed * 1664525 + 1013904223).mod(4294967296)
+  seed / 2147483648 - 1
+}
+
+/// A new random value each time the ramp wraps, held in between.
+fn wander(rate: hz) {
+  state last = 0
+  state held = 0
+  p = cycle(rate)
+  held = if p < last { rand() } else { held }
+  last = p
+  held
+}
+
+/// Two-operator FM: the modulator's ramp is added to the carrier's.
+fn fm(freq: hz, ratio: 0.25..16 = 2, index: 0..12 = 2) {
+  m = sin(cycle(freq * ratio) * 2 * pi) * index
+  sin(cycle(freq) * 2 * pi + m)
+}
+
+// ---- filters and shapers -------------------------------------------------------------------
+
+/// One pole, for smoothing a control or darkening a sound.
+fn follow_smooth(x, time: sec = 5ms) {
+  state y = 0
+  a = 1 - exp(-1 / (time.num * sample_rate.num))
+  y = y + (x - y) * a
+  y
+}
+
+/// A state-variable filter with all three outputs.
+fn svf(x, cutoff: hz, res: 0..1 = 0.5) -> (low, band, high) {
+  state low = 0
+  state band = 0
+  f = 2 * sin(pi * cutoff.clamp(20hz..12khz) / sample_rate)
+  high = x - low - 2 * (1 - res) * band
+  band = band + f * high
+  low = low + f * band
+}
+
+/// A soft clipper with a DC blocker after it.
+fn drive(x, amount: 0..1 = 0.5) {
+  state prev_in = 0
+  state prev_out = 0
+  y = tanh(x * (1 + amount * 8))
+  result = y - prev_in + 0.995 * prev_out
+  prev_in = y
+  prev_out = result
+  result
+}
+
+/// Sample-rate and bit-depth reduction.
+fn crush(x, every: const int = 4, bits: 2..16 = 6) {
+  state held = 0
+  state count = 0
+  levels = exp(bits * 0.6931471805599453)
+  held = if count == 0 { floor(x * levels + 0.5) / levels } else { held }
+  count = (count + 1).mod(every)
+  held
+}
+
+/// How loud a signal is, with a fast attack and a slow release.
+fn follower(x, attack: sec = 3ms, release: sec = 150ms) {
+  state level = 0
+  loud = x.abs
+  rate = if loud > level { 1 - exp(-1 / (attack.num * sample_rate.num)) } else { 1 - exp(-1 / (release.num * sample_rate.num)) }
+  level = level + (loud - level) * rate
+  level
+}
+
+// ---- delays and space ----------------------------------------------------------------------
+
+/// A plucked string: a delay line fed back through an averaging low-pass (Karplus-Strong).
+fn string(x, freq: init hz, decay: 0..1 = 0.996, size: const int = 4096) {
+  state buf = zeros(size)
+  state pos = 0
+  len = sample_rate / freq
+  delayed = buf.at(pos - len, interp: linear)
+  y = x + (delayed + prev(delayed)) * 0.5 * decay
+  buf[pos] = y
+  pos = (pos + 1).mod(size)
+  y
+}
+
+/// A wobble: a delay line read at a moving position, with cubic interpolation.
+fn wobble(x, rate: hz = 0.6hz, depth: sec = 3ms, base: sec = 14ms, size: const int = 4096) {
+  state buf = zeros(size)
+  state pos = 0
+  lfo = sin(cycle(rate) * 2 * pi)
+  wait = (base + lfo * depth).num * sample_rate.num
+  wet = buf.at(pos - wait, interp: cubic)
+  buf[pos] = x
+  pos = (pos + 1).mod(size)
+  (x + wet) * 0.5
+}
+
+/// A damped_comb filter with the feedback darkened, the building block of a small room.
+fn damped_comb(x, samples: const int, feedback: 0..1 = 0.8, damp: 0..1 = 0.3) {
+  state buf = zeros(samples)
+  state pos = 0
+  state lp = 0
+  delayed = buf[pos]
+  lp = delayed * (1 - damp) + lp * damp
+  buf[pos] = x + lp * feedback
+  pos = (pos + 1).mod(samples)
+  delayed
+}
+
+fn diffuse(x, samples: const int, gain: 0..1 = 0.5) {
+  state buf = zeros(samples)
+  state pos = 0
+  delayed = buf[pos]
+  buf[pos] = x + delayed * gain
+  pos = (pos + 1).mod(samples)
+  delayed - x * gain
+}
+
+/// Four combs in parallel and two all-passes in series: a Schroeder room.
+fn room(x, size: 0..1 = 0.7) {
+  wet = (x.damped_comb(1557, feedback: 0.7 + size * 0.2) + x.damped_comb(1617, feedback: 0.7 + size * 0.2) + x.damped_comb(1491, feedback: 0.7 + size * 0.2) + x.damped_comb(1422, feedback: 0.7 + size * 0.2)) * 0.25
+  wet.diffuse(225).diffuse(556)
+}
+
+// ---- instruments ---------------------------------------------------------------------------
+
+/// A plucked string whose noise burst comes from the generator above.
+instr pluck(freq: init hz, decay: 0..1 = 0.996, bright: hz = 3khz) {
+  tail = 3sec
+  burst = rand() * env[1 3ms 0]
+  body = burst.string(freq, decay: decay)
+  tone = body.svf(cutoff: bright, res: 0.2).low
+  dry = tone.drive(amount: 0.15).gain(-8db)
+  space += dry.gain(-12db)
+  out = dry * 0.8
+}
+
+/// A resonant bass: a saw, a filter that a hand-made envelope and a drifting random value move, then drive.
+instr bass(freq: hz, cutoff: hz = 300hz, sweep: hz = 2500hz, res: 0..1 = 0.75) {
+  amp = env[0 3ms 1 | 120ms 0]
+  open = cutoff + env[0 1ms 1 180ms 0] * sweep + wander(5hz) * 150hz
+  voice = saw(freq).svf(cutoff: open, res: res).low
+  out = (voice.drive(amount: 0.5).follow_smooth(time: 0.4ms) * amp).gain(-9db)
+}
+
+/// A bell: FM with a slow decay and a touch of the wobble.
+instr bell(freq: hz, index: 0..12 = 3.5) {
+  tail = 2sec
+  amp = env[0 1ms 1 1.6sec 0]
+  voice = fm(freq, ratio: 3.5, index: index * env[0 1ms 1 900ms 0.2]) * amp
+  dry = voice.wobble(rate: 0.4hz).gain(-14db)
+  space += dry.gain(-6db)
+  out = dry
+}
+
+/// A pad: three detuned saws, a wobble and a small room.
+instr pad(freq: hz, detune: 0..1 = 0.35) {
+  amp = env[0 400ms 1 | 900ms 0]
+  rich = (saw(freq) + saw(freq * (1 + detune * 0.006)) + saw(freq * (1 - detune * 0.006))) / 3
+  soft = rich.svf(cutoff: 1800hz + wander(0.3hz) * 600hz, res: 0.15).low
+  wet = soft.wobble(rate: 0.5hz, depth: 4ms).room(size: 0.6) * amp
+  space += wet.gain(-10db)
+  out = wet.gain(-14db)
+}
+
+/// A hat: noise through a high-pass, chopped by an envelope, crushed and ducked by its own follower.
+instr hat(freq: hz = c4, open: 0..1 = 0) {
+  tail = 600ms
+  burst = rand() * env[1 1ms 0.35 (30ms + open * 250ms) 0]
+  top = burst.svf(cutoff: 7khz, res: 0.3).high
+  out = (top.crush(every: 3, bits: 7) * (1 - follower(top) * 0.3)).gain(-16db)
+}
+
+// ---- the piece -----------------------------------------------------------------------------
+
+clip groove {
+  instrument: bass
+  length: 2bars
+  notes: [a1  ~  a1  ~    c2  ~  a1  ~    e2  ~  a1  g1    a1  ~  c2  ~
+          a1  ~  a1  ~    d2  ~  a1  ~    e2  ~  g2  e2    a1  ~  a1  ~]
+  cutoff: [250hz 400hz 300hz 600hz]
+}
+
+clip chords {
+  instrument: pad
+  length: 2bars
+  notes: [a3 ~ ~ ~  ~ ~ ~ ~    f3 ~ ~ ~  ~ ~ ~ ~    c4 ~ ~ ~  ~ ~ ~ ~    g3 ~ ~ ~  ~ ~ ~ ~]
+}
+
+clip arp {
+  instrument: pluck
+  length: 2bars
+  notes: [a4 e5 c5 e5  a4 e5 d5 e5   f4 c5 a4 c5  f4 c5 g4 c5
+          c5 g5 e5 g5  c5 g5 f5 g5   g4 d5 b4 d5  g4 d5 a4 d5]
+  decay: [0.996 0.99 0.994]
+}
+
+clip chimes {
+  instrument: bell
+  length: 2bars
+  notes: [e5 ~ ~ ~  ~ ~ ~ ~    ~ ~ ~ ~  b4 ~ ~ ~    c5 ~ ~ ~  ~ ~ ~ ~    ~ ~ ~ ~  g5 ~ ~ ~]
+}
+
+clip hats {
+  instrument: hat
+  length: 2bars
+  notes: [c4 ~ c4 ~  c4 ~ c4 c4    c4 ~ c4 ~  c4 ~ c4 c4    c4 ~ c4 ~  c4 ~ c4 c4    c4 ~ c4 ~  c4 c4 c4 c4]
+  open: [0 0 0 1 0 0 0 0]
+}
+
+groove.start
+chords.start
+arp.start
+chimes.start
+hats.start

@@ -185,6 +185,15 @@ the same 400-kernel random differential test, an exhaustive operation-by-edge-va
 Not done: a Windows/Linux build, calling it from the audio thread safely under
 concurrent recompilation, executable-memory permissions for signed builds.
 
+### A piece that leans on it
+
+`examples/kernels.nml` builds every sound from hand-written stateful `fn`s (phase accumulators, a
+state-variable filter, Karplus-Strong, a chorus and a Schroeder room made of delay lines, a
+congruential noise source, a clipper, a bit crusher, an envelope follower), so nearly all of its
+per-sample work is kernels. The code generator takes 15 of the 16 kernels (`NIMINAL_JIT_VERBOSE=1`
+lists them). Rendering 32 bars takes 13.9 s on the interpreter and 6.1 s with the JIT (2.3x), and the
+two WAV files are byte-identical.
+
 ### x86-64 backend
 
 `custom/jit/x64.rs` generates the same kernels for x86-64 (SSE2 plus SSE4.1; a CPU without SSE4.1
