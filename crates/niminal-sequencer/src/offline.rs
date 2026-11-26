@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use niminal_lang::Layout;
 use niminal_server::{EngineServer, Session};
-use niminal_ws::lock;
+use niminal_server::lock;
 
 use crate::link::InProcess;
 use crate::live::Live;

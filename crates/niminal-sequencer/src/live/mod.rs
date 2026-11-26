@@ -11,7 +11,9 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use niminal_engine::time::Instant;
 
 use niminal_compose::{
     Action, Clip, CommandAction, Composition, Finish, InputSource, LanePreview, PlayInfo, Quantize,

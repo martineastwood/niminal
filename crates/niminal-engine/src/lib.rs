@@ -10,6 +10,7 @@ mod array;
 pub use activity::{Activity, WAITING_SAMPLE};
 pub mod denormals;
 mod graph;
+pub mod time;
 mod mapping;
 mod master;
 pub use mapping::ParamMapping;

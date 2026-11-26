@@ -80,3 +80,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p niminal-engine -p niminal-lang
+
+  # The web playground runs the engine, the language and the offline sequencer as WebAssembly, so the crates it
+  # needs must keep building for `wasm32-unknown-unknown` (no threads, no sound card, no sockets; the sequencer
+  # without its `native` feature). A probe renders the examples in a browser engine and matches the native bytes.
+  wasm:
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --target wasm32-unknown-unknown -p niminal-engine -p niminal-score -p niminal-pattern -p niminal-lang -p niminal-compose -p niminal-server -p niminal-lsp
+      - run: cargo check --target wasm32-unknown-unknown -p niminal-sequencer --no-default-features
+

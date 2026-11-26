@@ -4,7 +4,9 @@
 //! A [`Live`] knows nothing of the engine's insides. It reads the engine's clock through an
 //! [`InProcess`] connection, and a little ahead of it sends the notes, parameter changes, definitions that its project says are due.
 
+#[cfg(feature = "native")]
 pub mod clock;
+#[cfg(feature = "native")]
 pub mod input;
 mod keyboard;
 mod link;
@@ -13,6 +15,8 @@ mod log;
 mod offline;
 mod protocol;
 mod quantize;
+pub mod render;
+#[cfg(feature = "native")]
 mod service;
 mod sync;
 

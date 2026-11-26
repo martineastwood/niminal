@@ -171,7 +171,7 @@ impl Mixer {
             let job = |i: usize| {
                 // each thread has its own idea of how to treat tiny numbers
                 let _flush = crate::denormals::FlushToZero::new();
-                let started = std::time::Instant::now();
+                let started = crate::time::Instant::now();
                 // SAFETY: see `LaneCell`
                 let Lane {
                     summed,
@@ -301,7 +301,7 @@ impl Mixer {
                     });
                 }
 
-                let chain_started = std::time::Instant::now();
+                let chain_started = crate::time::Instant::now();
                 let result: &[Vec<f32>] = match &mut node.chain {
                     None => &node.summed[..n],
                     Some(chain) => {

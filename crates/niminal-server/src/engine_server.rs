@@ -381,7 +381,7 @@ impl EngineServer {
             None | Some(Value::Null) => json!({}),
             Some(p) => p.clone(),
         };
-        let started = std::time::Instant::now();
+        let started = niminal_engine::time::Instant::now();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let parsed: EngineRequest = serde_json::from_value(
                 json!({ "method": method, "params": params }),

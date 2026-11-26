@@ -36,3 +36,8 @@ pub use session::{ClockInfo, EngineState, Session};
 pub use status::status_json;
 
 pub use session::realtime::{RealtimeConfig, RealtimeRenderer, RenderMetrics};
+
+/// Lock a mutex, carrying on if another thread panicked while holding it.
+pub fn lock<S>(service: &std::sync::Mutex<S>) -> std::sync::MutexGuard<'_, S> {
+    service.lock().unwrap_or_else(|e| e.into_inner())
+}

@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use niminal_server::{
     ClientId, EngineError, EngineReply, EngineRequest, EngineServer, PROTOCOL_VERSION,
 };
-use niminal_ws::lock;
+use niminal_server::lock;
 use serde_json::Value;
 
 /// An engine in this process, which the link talks to without any text in between.

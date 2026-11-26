@@ -185,10 +185,7 @@ impl Service for EngineServer {
     }
 }
 
-/// Lock a service, carrying on if another thread panicked while holding it.
-pub fn lock<S>(service: &Mutex<S>) -> std::sync::MutexGuard<'_, S> {
-    service.lock().unwrap_or_else(|e| e.into_inner())
-}
+pub use niminal_server::lock;
 
 pub struct Server {
     port: u16,

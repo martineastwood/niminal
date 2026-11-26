@@ -2,7 +2,6 @@
 //! can line a sample up with the wall clock.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Written by the audio callback, read by anything that answers `clock`. All values are for the
 /// start of the buffer the callback was handed.
@@ -16,9 +15,7 @@ pub struct ClockProbe {
 impl ClockProbe {
     /// The callback is handing the device the buffer that starts at `sample`. Allocates nothing.
     pub fn record(&self, sample: u64) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_micros() as u64);
+        let now = niminal_engine::time::wall_micros();
         self.wall_micros.store(now, Ordering::Release);
         self.sample.store(sample, Ordering::Release);
     }

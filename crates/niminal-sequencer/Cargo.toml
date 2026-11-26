@@ -8,8 +8,14 @@ description = "The niminal live sequencer: clips, scenes, quantized changes and 
 [lints]
 workspace = true
 
+# `native` is everything that needs an operating system: MIDI in and out, the WebSocket service and the
+# threads they run on. Without it the sequencer is `Live` and `Offline` only, which is what builds for the web.
+[features]
+default = ["native"]
+native = ["dep:niminal-ws", "dep:midir"]
+
 [dependencies]
-niminal-ws = { path = "../niminal-ws" }
+niminal-ws = { path = "../niminal-ws", optional = true }
 niminal-pattern = { path = "../niminal-pattern" }
 niminal-engine = { path = "../niminal-engine" }
 niminal-lang = { path = "../niminal-lang" }
@@ -18,7 +24,7 @@ niminal-score = { path = "../niminal-score" }
 niminal-server = { path = "../niminal-server" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-midir = "0.11"
+midir = { version = "0.11", optional = true }
 
 [dev-dependencies]
 hound = "3"
