@@ -53,6 +53,89 @@ class Niminal {
     return JSON.parse(this.#text(wasm.niminal_lsp_reply(), length));
   }
 
+  // ---- live: a session that runs for as long as there is sound, stepped a chunk at a time
+
+  /** Run `call(pointer, length)` on `text` written into the module's memory. */
+  #withText(text, call) {
+    const wasm = this.#wasm;
+    const encoded = new TextEncoder().encode(text);
+    const pointer = wasm.niminal_alloc(encoded.length);
+    new Uint8Array(wasm.memory.buffer, pointer, encoded.length).set(encoded);
+    try {
+      return call(pointer, encoded.length);
+    } finally {
+      wasm.niminal_free(pointer, encoded.length);
+    }
+  }
+
+  #liveResult(status) {
+    const text = JSON.parse(this.#text(this.#wasm.niminal_live_text(), this.#wasm.niminal_live_text_length()));
+    return status === 0
+      ? { ok: true, landed: text }
+      : { ok: false, diagnostics: text.diagnostics, message: text.message, internal: false };
+  }
+
+  #trapped(error) {
+    // a trap leaves the instance in an unknown state, and the session with it: start fresh
+    const wasm = this.#wasm;
+    const message = this.#text(wasm.niminal_panic_message(), wasm.niminal_panic_length()) || String(error);
+    this.#start();
+    return { ok: false, diagnostics: [], message, internal: true };
+  }
+
+  /** Start a session at `sampleRate` for `source` and run all of it now, replacing any session there was.
+   *  `{ ok: true, landed: { bar, beat, changes } }` or `{ ok: false, diagnostics, message, internal }`. */
+  liveStart(source, sampleRate) {
+    try {
+      return this.#liveResult(this.#withText(source, (p, n) => this.#wasm.niminal_live_start(p, n, sampleRate)));
+    } catch (error) {
+      return this.#trapped(error);
+    }
+  }
+
+  /** Run `source` (a snippet) in the session, at once if `now`. Offsets in `diagnostics` are within the snippet. */
+  liveEval(source, now = false) {
+    try {
+      return this.#liveResult(this.#withText(source, (p, n) => this.#wasm.niminal_live_eval(p, n, now ? 1 : 0)));
+    } catch (error) {
+      return this.#trapped(error);
+    }
+  }
+
+  /** The next `frames` samples: a Float32Array per channel (copies), or null with no session. */
+  liveProcess(frames) {
+    const wasm = this.#wasm;
+    try {
+      const channels = wasm.niminal_live_process(frames);
+      if (channels === 0) return null;
+      const out = [];
+      for (let c = 0; c < channels; c++) {
+        out.push(new Float32Array(wasm.memory.buffer, wasm.niminal_live_channel(c), frames).slice());
+      }
+      return out;
+    } catch (error) {
+      this.#trapped(error);
+      return null;
+    }
+  }
+
+  /** Where the music is and what is playing: `{ bar, beat, bpm, voices, pending, seconds, clips: [...] }`, or null. */
+  liveStatus() {
+    const wasm = this.#wasm;
+    const length = wasm.niminal_live_status();
+    return length === 0 ? null : JSON.parse(this.#text(wasm.niminal_live_text(), length));
+  }
+
+  /** Stop every sound and clip now, keeping the session. */
+  liveHush() {
+    this.#wasm.niminal_live_hush();
+  }
+
+  /** End the session. */
+  liveStop() {
+    this.#wasm.niminal_live_stop();
+  }
+
   /** Render `source` for `bars` bars (0 or less: until it ends by itself).
    *  Returns `{ ok: true, sampleRate, channels, warnings }` or
    *  `{ ok: false, diagnostics: [{ start, end, message, help }], message, internal }`; offsets are in UTF-8 bytes. */

@@ -62,40 +62,52 @@ const examples: [string, string, number][] = [
       <h1>Playground</h1>
       <p class="lede">
         Write niminal and hear it. The engine runs in your browser as WebAssembly, so there is nothing to install.
-        A piece renders in the background and plays when it is ready; the same file gives the same audio from
-        <code>niminal render</code>.
+        Press <b>Run all</b> to start a piece, then change it while it plays: select some code and press
+        <code>Ctrl</code>/<code>Cmd</code> + <code>Enter</code>.
       </p>
 
       <div class="pg-bar">
-        <button class="btn btn-solid" id="play" disabled>Play</button>
-        <button class="btn" id="stop" disabled>Stop</button>
-        <label>bars <input type="number" id="bars" value="8" min="1" max="64" /></label>
+        <button class="btn btn-solid" id="run" disabled title="Run the selection, or the block the cursor is in (Ctrl/Cmd + Enter)">▶ Run</button>
+        <button class="btn" id="runall" disabled title="Start the whole piece again from the top (Ctrl/Cmd + Shift + Enter)">Run all</button>
+        <button class="btn" id="stop" disabled title="Silence everything; Run plays again">■ Stop</button>
+        <button class="btn" id="reset" disabled title="Back to the example as it was, and stop">↺ Reset</button>
         <label>start from
           <select id="example">
             {examples.map(([file, title, bars]) => <option value={file} data-bars={bars}>{title}</option>)}
           </select>
         </label>
         <span class="spacer"></span>
-        <button class="btn" id="download" disabled>Download WAV</button>
+        <details class="pg-export">
+          <summary class="btn">Export</summary>
+          <div class="pg-export-body">
+            <label>bars <input type="number" id="bars" value="8" min="1" max="64" /></label>
+            <button class="btn" id="play" disabled>Render &amp; play</button>
+            <button class="btn" id="download" disabled>Download WAV</button>
+          </div>
+        </details>
         <button class="btn" id="share">Copy link</button>
       </div>
 
       <div id="editor" class="pg-editor" aria-label="niminal source"></div>
       <div class="pg-progress"><div id="progress"></div></div>
+      <p class="pg-now" id="now" aria-live="off"></p>
       <p class="pg-status" id="status" role="status">Loading the engine…</p>
       <ul class="pg-errors" id="errors"></ul>
 
       <p class="pg-note">
-        This renders a whole piece and then plays it, so there is no live editing yet; the full
-        <a href="/reference/stage/"><u>Stage</u></a> app does that. Pieces that read sample files need a
-        folder next to them, so they do not run here. Press <code>Ctrl</code>/<code>Cmd</code> + <code>Enter</code> to play.
+        <b>Run</b> plays the code you have selected, or the block the cursor is in, and it joins in at the next bar.
+        <b>Run all</b> starts the whole piece again from the top. <b>Stop</b> silences everything, and <b>Reset</b>
+        puts the example back as it was. Nothing is saved on a server: <b>Copy link</b> puts your piece in the address.
+        Pieces that read sample files need a folder next to them, so they do not run here, and heavy pieces
+        built from hand-written functions run slower in a browser than in the <a href="/reference/stage/"><u>Stage</u></a> app.
       </p>
     </main>
 
     <script>
       import { basicSetup, EditorView } from 'codemirror';
       import { Compartment, EditorState, Prec } from '@codemirror/state';
-      import { keymap } from '@codemirror/view';
+      import { Decoration, type DecorationSet, keymap } from '@codemirror/view';
+      import { StateEffect, StateField } from '@codemirror/state';
       import { indentWithTab } from '@codemirror/commands';
       import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
       import { lintGutter } from '@codemirror/lint';
@@ -106,6 +118,7 @@ const examples: [string, string, number][] = [
       import { colours, niminal } from '../../../editors/codemirror/language';
       import { connectLanguageServer, languageClient } from '../../../editors/codemirror/lsp';
       import { semanticHighlighting } from '../../../editors/codemirror/semantic';
+      import { blockAround } from '../../../editors/codemirror/blocks';
 
       const root = document.documentElement;
       document.querySelectorAll<HTMLButtonElement>('[data-ground]').forEach((b) =>
@@ -157,6 +170,21 @@ const examples: [string, string, number][] = [
         '.cm-sem-enumMember': { color: '#b35900' },
         '.cm-sem-enum': { color: '#1a7f37' },
       }));
+      // the code that has just been run flashes, so it is clear what was sent
+      const flashOn = StateEffect.define<{ from: number; to: number }>();
+      const flashOff = StateEffect.define<null>();
+      const flashField = StateField.define<DecorationSet>({
+        create: () => Decoration.none,
+        update(value, tr) {
+          value = value.map(tr.changes);
+          for (const e of tr.effects) {
+            if (e.is(flashOn)) value = Decoration.set([Decoration.mark({ class: 'cm-flash' }).range(e.value.from, e.value.to)]);
+            if (e.is(flashOff)) value = Decoration.none;
+          }
+          return value;
+        },
+        provide: (f) => EditorView.decorations.from(f),
+      });
       const lsp = languageClient((html) => DOMPurify.sanitize(html));
       const ground = new Compartment();
       const groundExtensions = () => {
@@ -168,7 +196,11 @@ const examples: [string, string, number][] = [
         state: EditorState.create({
           doc: '',
           extensions: [
-            Prec.highest(keymap.of([{ key: 'Mod-Enter', run: () => { void run(); return true; } }])),
+            Prec.highest(keymap.of([
+              { key: 'Mod-Shift-Enter', run: () => { void runAll(); return true; } },
+              { key: 'Mod-Enter', run: () => { void runPart(); return true; } },
+            ])),
+            flashField,
             basicSetup,
             // Tab takes the suggestion when the list is open, and indents otherwise
             keymap.of([{ key: 'Tab', run: acceptCompletion }, indentWithTab]),
@@ -187,6 +219,10 @@ const examples: [string, string, number][] = [
         set value(text: string) { view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } }); },
         select(from: number, to: number) { view.focus(); view.dispatch({ selection: { anchor: from, head: to }, scrollIntoView: true }); },
       };
+      const runButton = $<HTMLButtonElement>('run');
+      const runAllButton = $<HTMLButtonElement>('runall');
+      const resetButton = $<HTMLButtonElement>('reset');
+      const now = $('now');
       const play = $<HTMLButtonElement>('play');
       const stop = $<HTMLButtonElement>('stop');
       const download = $<HTMLButtonElement>('download');
@@ -205,13 +241,19 @@ const examples: [string, string, number][] = [
       // ---- rendering, in a worker so the page stays responsive
       const worker = new Worker('/playground/worker.js', { type: 'module' });
       let nextId = 1;
-      const pending = new Map<number, (r: Result) => void>();
-      worker.onmessage = (e) => { pending.get(e.data.id)?.(e.data.result); pending.delete(e.data.id); };
+      const pending = new Map<number, (r: any) => void>();
+      worker.onmessage = (e) => {
+        // the live session talks without being asked: how it is doing, and if it was lost
+        if (e.data.kind === 'live-status') return showNow(e.data);
+        if (e.data.kind === 'live-lost') { sessionOn = false; setStatus('The engine stopped unexpectedly. Run all starts it again.'); now.textContent = ''; return; }
+        pending.get(e.data.id)?.(e.data.result);
+        pending.delete(e.data.id);
+      };
       worker.onerror = () => setStatus('The engine could not be loaded in this browser.');
-      const ask = (message: object) => new Promise<Result>((resolve) => {
+      const ask = <T = Result>(message: object, transfer: Transferable[] = []) => new Promise<T>((resolve) => {
         const id = nextId++;
         pending.set(id, resolve);
-        worker.postMessage({ id, ...message });
+        worker.postMessage({ id, ...message }, transfer);
       });
       // the language server runs in a worker of its own, so typing is not held up by a render
       const lspWorker = new Worker('/playground/worker.js', { type: 'module' });
@@ -270,7 +312,132 @@ const examples: [string, string, number][] = [
         }
       }
 
-      // ---- playback
+      // ---- the live session: the engine runs in the worker, a little ahead of an audio worklet that plays it
+      type Landed = { bar: number; beat: number; changes: string[] };
+      type LiveReply = { ok: true; landed: Landed } | { ok: false; diagnostics: Diagnostic[]; message: string; internal: boolean };
+      type Status = { buffered: number; status: { bar: number; beat: number; bpm: number; voices: number; clips: { name: string; running: boolean; muted: boolean }[] } | null; load: number; underruns: number };
+      let sessionOn = false;
+      let busy = false;
+      let node: AudioWorkletNode | undefined;
+      let audioReady: Promise<void> | undefined;
+
+      // the audio context is made inside the click (a browser only allows it there); the rest can wait
+      function ensureAudio() {
+        ctx ??= new AudioContext();
+        void ctx.resume();
+        audioReady ??= (async () => {
+          await ctx!.audioWorklet.addModule('/playground/playback-worklet.js');
+          node = new AudioWorkletNode(ctx!, 'niminal-player', { outputChannelCount: [2] });
+          node.connect(ctx!.destination);
+          const channel = new MessageChannel();
+          node.port.postMessage({ link: channel.port1 }, [channel.port1]);
+          await ask({ kind: 'live-link', link: channel.port2 }, [channel.port2]);
+        })().catch((error) => { audioReady = undefined; throw error; });
+        return audioReady;
+      }
+
+      let flashTimer: number | undefined;
+      function flash(from: number, to: number) {
+        view.dispatch({ effects: flashOn.of({ from, to }) });
+        clearTimeout(flashTimer);
+        flashTimer = window.setTimeout(() => view.dispatch({ effects: flashOff.of(null) }), 450);
+      }
+
+      function showNow(m: Status) {
+        const s = m.status;
+        if (!s) { now.textContent = ''; return; }
+        const playing = s.clips.filter((c) => c.running && !c.muted).map((c) => c.name);
+        let text = `bar ${s.bar} · beat ${Math.floor(s.beat)} · ${Math.round(s.bpm)} bpm · ${playing.length ? playing.join(', ') : s.voices > 0 ? `${s.voices} voices` : 'silent'}`;
+        if (m.underruns > 0 || m.load > 0.85) text += ' · this piece is heavy for this device and the sound may break up (try fewer parts, or Export)';
+        now.textContent = text;
+        now.title = `engine load ${(m.load * 100).toFixed(0)}%, ${m.buffered.toFixed(2)} s ahead, ${m.underruns} gaps`;
+      }
+
+      // where the cursor is, or the selection: the code Run sends
+      function target() {
+        const selection = view.state.selection.main;
+        if (!selection.empty) return { from: selection.from, to: selection.to };
+        const line = view.state.doc.lineAt(selection.head);
+        const hit = blockAround(view.state.doc.toString().split('\n'), line.number - 1);
+        if (!hit) return null;
+        return { from: view.state.doc.line(hit.start + 1).from, to: view.state.doc.line(hit.end + 1).to };
+      }
+
+      const setButtons = (ready: boolean) => {
+        for (const b of [runButton, runAllButton, resetButton, play]) b.disabled = !ready;
+        stop.disabled = !ready;
+      };
+
+      async function runAll() {
+        if (busy || runButton.disabled) return;
+        busy = true;
+        stopPlaying();
+        try {
+          await ensureAudio();
+          setStatus('Starting…');
+          const text = code.value;
+          const reply = await ask<LiveReply>({ kind: 'live-start', source: text, sampleRate: ctx!.sampleRate });
+          if (!reply.ok) {
+            setStatus(reply.internal ? 'The engine stopped unexpectedly.' : 'There is a mistake in the piece, so it did not start.');
+            showErrors(text, reply.diagnostics, reply.message);
+            return;
+          }
+          sessionOn = true;
+          showErrors(text, [], '');
+          flash(0, view.state.doc.length);
+          setStatus('Playing the whole piece. Select some code and press Run to change it while it plays.');
+        } catch {
+          setStatus('Audio could not be started in this browser.');
+        } finally { busy = false; }
+      }
+
+      async function runPart() {
+        if (busy || runButton.disabled) return;
+        // nothing is playing yet, so there is nothing to change: start the piece
+        if (!sessionOn) return runAll();
+        const part = target();
+        if (!part) { setStatus('Put the cursor in some code, or select some, and press Run.'); return; }
+        busy = true;
+        stopPlaying();
+        try {
+          void ctx?.resume();
+          const text = code.value;
+          const piece = text.slice(part.from, part.to);
+          const reply = await ask<LiveReply>({ kind: 'live-eval', source: piece, now: false });
+          if (!reply.ok) {
+            // the engine located the mistakes within the piece it was given: move them into the whole text
+            const base = new TextEncoder().encode(text.slice(0, part.from)).length;
+            const moved = reply.diagnostics.map((d) => ({ ...d, start: d.start + base, end: d.end + base }));
+            setStatus(reply.internal ? 'The engine stopped unexpectedly.' : 'There is a mistake in that code, so it was not run.');
+            showErrors(text, moved, reply.message);
+            return;
+          }
+          showErrors(text, [], '');
+          flash(part.from, part.to);
+          const what = reply.landed.changes.length ? reply.landed.changes.join(', ') : 'nothing changed';
+          setStatus(`Sent: ${what}. It lands at bar ${reply.landed.bar}.`);
+        } finally { busy = false; }
+      }
+
+      async function stopAll() {
+        stopPlaying();
+        if (!sessionOn) return;
+        await ask({ kind: 'live-hush' });
+        setStatus('Stopped. Run plays again, and Run all starts the piece from the top.');
+      }
+
+      async function reset() {
+        if (code.value !== pristine && !confirm('Put the example back as it was? Your changes will be lost.')) return;
+        stopPlaying();
+        await ask({ kind: 'live-stop' });
+        sessionOn = false;
+        now.textContent = '';
+        code.value = pristine;
+        errors.replaceChildren();
+        setStatus('Back to the start. Run all plays it.');
+      }
+
+      // ---- playback of a finished render (Export)
       let ctx: AudioContext | undefined;
       let source: AudioBufferSourceNode | undefined;
       let last: { channels: Float32Array[]; sampleRate: number } | undefined;
@@ -281,15 +448,16 @@ const examples: [string, string, number][] = [
         progress.style.width = '0';
         try { source?.stop(); } catch {}
         source = undefined;
-        stop.disabled = true;
       }
 
-      async function run() {
+      async function renderAndPlay() {
         if (play.disabled) return;
         stopPlaying();
         // an AudioContext must be made or resumed inside the click, before anything is awaited
         ctx ??= new AudioContext();
         void ctx.resume();
+        // the live session and a render would play over each other
+        if (sessionOn) { await ask({ kind: 'live-stop' }); sessionOn = false; now.textContent = ''; }
         play.disabled = true;
         download.disabled = true;
         const text = code.value;
@@ -320,7 +488,6 @@ const examples: [string, string, number][] = [
         const started = ctx.currentTime;
         source.onended = () => { stopPlaying(); setStatus(`Played ${seconds.toFixed(1)} s (rendered in ${(result.renderMs / 1000).toFixed(2)} s).`); };
         source.start();
-        stop.disabled = false;
         setStatus(`Playing ${seconds.toFixed(1)} s (rendered in ${(result.renderMs / 1000).toFixed(2)} s).`);
         const tick = () => {
           progress.style.width = `${Math.min(100, ((ctx!.currentTime - started) / seconds) * 100)}%`;
@@ -329,8 +496,11 @@ const examples: [string, string, number][] = [
         tick();
       }
 
-      play.addEventListener('click', run);
-      stop.addEventListener('click', () => { stopPlaying(); setStatus('Stopped.'); });
+      play.addEventListener('click', renderAndPlay);
+      runButton.addEventListener('click', () => void runPart());
+      runAllButton.addEventListener('click', () => void runAll());
+      stop.addEventListener('click', () => void stopAll());
+      resetButton.addEventListener('click', () => void reset());
 
       // ---- WAV
       download.addEventListener('click', () => {
@@ -385,27 +555,36 @@ const examples: [string, string, number][] = [
       });
 
       // ---- starting points
+      let pristine = '';
       async function loadExample(name: string) {
         const wanted = exampleSelect.querySelector<HTMLOptionElement>(`option[value="${name}"]`)?.dataset.bars;
         if (wanted) bars.value = wanted;
         const response = await fetch(`/playground/examples/${name}.nml`);
-        code.value = response.ok ? await response.text() : '// could not load the example';
+        pristine = response.ok ? await response.text() : '// could not load the example';
+        code.value = pristine;
         errors.replaceChildren();
       }
-      exampleSelect.addEventListener('change', () => { stopPlaying(); history.replaceState(null, '', location.pathname); void loadExample(exampleSelect.value); });
+      exampleSelect.addEventListener('change', async () => {
+        stopPlaying();
+        if (sessionOn) { await ask({ kind: 'live-stop' }); sessionOn = false; now.textContent = ''; }
+        history.replaceState(null, '', location.pathname);
+        await loadExample(exampleSelect.value);
+        setStatus('Run all plays it.');
+      });
 
       (async () => {
         const shared = new URLSearchParams(location.hash.slice(1));
         const hash = shared.get('c');
         if (Number(shared.get('b')) > 0) bars.value = String(Math.min(64, Number(shared.get('b'))));
         if (hash) {
-          try { code.value = await decode(hash); } catch { await loadExample(exampleSelect.value); }
+          try { pristine = await decode(hash); code.value = pristine; } catch { await loadExample(exampleSelect.value); }
         } else {
           await loadExample(exampleSelect.value);
         }
         await ask({ kind: 'warm' });
-        play.disabled = false;
-        setStatus('Ready. Press Play, or Ctrl/Cmd + Enter.');
+        setButtons(true);
+        download.disabled = true;
+        setStatus('Ready. Press Run all to start the piece.');
       })();
     </script>
   </body>

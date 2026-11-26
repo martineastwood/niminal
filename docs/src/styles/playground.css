@@ -24,3 +24,11 @@
 .pg-errors .help { color: var(--muted); display: block; margin-top: 0.2rem; }
 .pg-errors li.warn { border-left-color: var(--accent); cursor: default; }
 .pg-note { margin-top: 2.5rem; color: var(--muted); font-size: 0.9rem; max-width: 44rem; }
+
+.pg-now { margin: 0.4rem 0 0; min-height: 1.3rem; font: 500 0.8rem var(--mono); color: var(--accent); }
+.pg-export { position: relative; }
+.pg-export summary { cursor: pointer; list-style: none; display: inline-block; }
+.pg-export summary::-webkit-details-marker { display: none; }
+.pg-export-body { position: absolute; right: 0; z-index: 5; margin-top: 0.3rem; padding: 0.8rem; display: grid; gap: 0.6rem; min-width: 12rem;
+  background: var(--bg-elevated); border: 1px solid var(--line-strong); border-radius: 4px; }
+.pg .cm-flash { background: color-mix(in srgb, var(--accent) 35%, transparent); transition: background 0.4s; }
