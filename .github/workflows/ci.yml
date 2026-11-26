@@ -16,7 +16,9 @@ env:
 
 jobs:
   # One workspace: the engine, the language, the sequencer, the command line. Stage and the extension are
-  # checked by the macOS package workflow, which has the desktop toolchain.
+  # checked by the macOS package workflow, which has the desktop toolchain. This job runs on x86-64 Linux and
+  # the `apps` job on Apple Silicon, so both CPUs the kernel JIT generates code for already run every test
+  # through generated code; the `jit` job below adds the other operating systems and CPUs.
   rust:
     runs-on: ubuntu-latest
     steps:
@@ -57,3 +59,24 @@ jobs:
             (cd "$app" && npm ci)
           done
       - run: scripts/check.sh --test --apps
+
+  # The kernel JIT writes machine code for aarch64 and x86-64, so a mistake in it only shows on the CPU and
+  # operating system it was made for (calling convention, executable memory, instruction support). Run the engine
+  # and language suites, which fuzz it against the interpreter and run every std instrument through generated code,
+  # on the combinations the jobs above do not cover. The JIT tests fail if the generator cannot produce code
+  # here, so a machine that quietly fell back to the interpreter cannot pass.
+  jit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04-arm, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      # none of the repo's build-for-this-machine flags: these runners are different CPUs from the ones above
+      RUSTFLAGS: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p niminal-engine -p niminal-lang
