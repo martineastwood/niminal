@@ -10,8 +10,19 @@ workspace = true
 
 [features]
 kernel-profile = []
+# Compile kernels to WebAssembly (`custom/wasm.rs`, wasm-encoder only; this is what a browser build
+# runs) and execute them natively through wasmtime, which exists to test and benchmark the emitter.
+# Native code generation for the app is `jit-dynasm`.
+wasm-kernel = ["dep:wasm-encoder", "dep:wasmtime"]
+# Native code for kernels on aarch64, hand-generated with dynasm (`custom/jit.rs`). On unless the
+# environment says `NIMINAL_JIT=0`; kernels it cannot generate run on the interpreter.
+jit-dynasm = ["dep:dynasm", "dep:dynasmrt"]
 
 [dependencies]
+wasm-encoder = { version = "0.263", optional = true }
+dynasm = { version = "5", optional = true }
+dynasmrt = { version = "5", optional = true }
+wasmtime = { version = "51", optional = true, default-features = false, features = ["runtime", "cranelift", "std"] }
 realfft = "3.4"
 hound = "3"
 symphonia = { version = "0.5", default-features = false, features = ["aac", "aiff", "alac", "flac", "isomp4", "mp3", "ogg", "pcm", "vorbis"] }

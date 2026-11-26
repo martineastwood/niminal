@@ -6,6 +6,12 @@
 mod exec;
 mod ir;
 mod math;
+#[cfg(feature = "wasm-kernel")]
+pub mod wasm;
+#[cfg(all(feature = "jit-dynasm", target_arch = "aarch64"))]
+mod jit;
+#[cfg(feature = "wasm-kernel")]
+mod wasm_run;
 #[cfg(feature = "kernel-profile")]
 pub mod profile;
 
@@ -130,6 +136,10 @@ pub struct Custom {
     /// The one-result block `process` renders into.
     single: Vec<Vec<f32>>,
     native_indices: Vec<usize>,
+    #[cfg(feature = "wasm-kernel")]
+    wasm: Option<wasm_run::WasmVoice>,
+    #[cfg(all(feature = "jit-dynasm", target_arch = "aarch64"))]
+    jit: Option<jit::JitVoice>,
 }
 
 impl Custom {
@@ -146,7 +156,15 @@ impl Custom {
             .map(|n| n.op.outputs())
             .max()
             .unwrap_or(1);
+        #[cfg(feature = "wasm-kernel")]
+        let wasm = wasm_run::WasmVoice::new(&kernel);
+        #[cfg(all(feature = "jit-dynasm", target_arch = "aarch64"))]
+        let jit = jit::JitVoice::new(&kernel);
         Custom {
+            #[cfg(feature = "wasm-kernel")]
+            wasm,
+            #[cfg(all(feature = "jit-dynasm", target_arch = "aarch64"))]
+            jit,
             native_inputs: blocks(inputs),
             native_outputs: blocks(outputs),
             single: blocks(1),
@@ -173,6 +191,44 @@ impl Custom {
             carried: false,
             block_frames: 1,
         }
+    }
+}
+
+#[cfg(feature = "wasm-kernel")]
+impl Custom {
+    /// A copy that renders through wasm whatever `NIMINAL_WASM` says, for tests and benchmarks.
+    pub fn new_wasm(kernel: Arc<Kernel>) -> Result<Self, String> {
+        let mut custom = Custom::new(kernel.clone());
+        custom.wasm = Some(wasm_run::WasmVoice::forced(&kernel)?);
+        Ok(custom)
+    }
+
+}
+
+#[cfg(any(feature = "wasm-kernel", all(feature = "jit-dynasm", target_arch = "aarch64")))]
+impl Custom {
+    /// A copy that renders through the interpreter whatever `NIMINAL_WASM` or `NIMINAL_JIT` say.
+    pub fn new_interpreted(kernel: Arc<Kernel>) -> Self {
+        let mut custom = Custom::new(kernel);
+        #[cfg(feature = "wasm-kernel")]
+        {
+            custom.wasm = None;
+        }
+        #[cfg(all(feature = "jit-dynasm", target_arch = "aarch64"))]
+        {
+            custom.jit = None;
+        }
+        custom
+    }
+}
+
+#[cfg(all(feature = "jit-dynasm", target_arch = "aarch64"))]
+impl Custom {
+    /// A copy that runs on the dynasm code generator whatever `NIMINAL_JIT` says, for tests.
+    pub fn new_jit(kernel: Arc<Kernel>) -> Result<Self, String> {
+        let mut custom = Custom::new_interpreted(kernel.clone());
+        custom.jit = Some(jit::JitVoice::forced(&kernel)?);
+        Ok(custom)
     }
 }
 
@@ -288,6 +344,10 @@ impl Opcode for Custom {
             buffer.copy_from_slice(initial);
         }
         self.regs.fill(0.0);
+        #[cfg(feature = "wasm-kernel")]
+        if let Some(w) = &mut self.wasm {
+            w.dirty = true;
+        }
         self.frame_runs.iter_mut().for_each(FrameRun::reset);
         self.started = false;
         self.carried = false;
@@ -327,6 +387,15 @@ impl Opcode for Custom {
         if let Some(old) = (old as &mut dyn std::any::Any).downcast_mut::<Self>()
             && self.kernel == old.kernel
         {
+            #[cfg(feature = "wasm-kernel")]
+            {
+                if let Some(w) = old.wasm.as_ref() {
+                    w.pull_buffers(&mut old.buffers);
+                }
+                if let Some(w) = &mut self.wasm {
+                    w.dirty = true;
+                }
+            }
             self.state.copy_from_slice(&old.state);
             for (new, old) in self.buffers.iter_mut().zip(&old.buffers) {
                 new.copy_from_slice(old);

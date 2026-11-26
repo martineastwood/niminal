@@ -690,6 +690,18 @@ impl Custom {
         }
         self.block_frames = frames;
         self.run(Section::Block, ctx, &input, 0);
+        #[cfg(all(feature = "jit-dynasm", target_arch = "aarch64"))]
+        if let Some(mut jit) = self.jit.take() {
+            jit.render(self, &input, outs, frames);
+            self.jit = Some(jit);
+            return;
+        }
+        #[cfg(feature = "wasm-kernel")]
+        if let Some(mut wasm) = self.wasm.take() {
+            wasm.render(self, &input, outs, frames);
+            self.wasm = Some(wasm);
+            return;
+        }
         let kernel = self.kernel.clone();
         if kernel.resets.is_empty() {
             for i in 0..frames {

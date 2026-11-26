@@ -10,6 +10,8 @@ workspace = true
 
 [features]
 kernel-profile = ["niminal-engine/kernel-profile"]
+wasm-kernel = ["niminal-engine/wasm-kernel"]
+jit-dynasm = ["niminal-engine/jit-dynasm"]
 
 [dependencies]
 niminal-engine = { path = "../niminal-engine" }

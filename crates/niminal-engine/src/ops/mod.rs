@@ -66,6 +66,8 @@ pub use compress::Compressor;
 pub use control::Control;
 pub use convolve::{Convolve, IrSpectrum};
 pub use custom::MemoMath;
+#[cfg(feature = "wasm-kernel")]
+pub use custom::wasm;
 #[cfg(feature = "kernel-profile")]
 pub use custom::profile as kernel_profile;
 pub use custom::{

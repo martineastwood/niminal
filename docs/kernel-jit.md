@@ -1,5 +1,8 @@
 # Machine code for .nml kernels
 
+> This note is the estimate made before building anything. The measured outcome, and the decision
+> that followed from it, is in [wasm-kernel.md](wasm-kernel.md).
+
 Keep the interpreter as the default. If a representative user patch is limited
 by scalar kernel work, prototype one optional JIT path for that patch and compare
 it with the interpreter at the same voice count. Use AOT for the same experiment
