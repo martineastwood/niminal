@@ -1,0 +1,3 @@
+# The language tools read source text split on "\n", so keep LF on every platform: a Windows checkout would
+# otherwise turn the std library into "\r\n" files and the preset and module code would stop finding its lines.
+* text=auto eol=lf
