@@ -12,6 +12,11 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+# Native code for kernels (aarch64 and x86-64; elsewhere it builds and does nothing). Off by default:
+# `scripts/dogfood.sh` turns it on, and `NIMINAL_JIT=0` switches it off again at run time.
+[features]
+jit = ["niminal-engine/jit-dynasm"]
+
 [dependencies]
 niminal-sequencer = { path = "../niminal-sequencer" }
 niminal-host = { path = "../niminal-host" }
