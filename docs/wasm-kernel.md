@@ -27,6 +27,43 @@ Every kernel backend must keep bit-identical output: `cargo test -p niminal-engi
 wasm-kernel` runs the differential tests, and every audio baseline passes with the JIT on, which is
 the default (`NIMINAL_JIT=0` is the kill switch).
 
+## Where it stands
+
+The native JIT is merged, built in and on by default on aarch64 and x86-64. CI runs the engine and
+language suites through it on Linux x86-64, Apple Silicon, Windows, Linux ARM and Intel macOS (all green);
+`cargo test -p niminal-cli --test jit_identical` renders every example with `NIMINAL_JIT=0` and `=1` and
+requires the same bytes. `NIMINAL_JIT_VERBOSE=1` lists what was generated and why anything was not, and
+`NIMINAL_JIT_DUMP=<kernel name>` prints a kernel's instructions.
+
+- **Coverage.** Kernels that call built-in opcodes are generated (the code calls the interpreter's own
+  opcode code through a trampoline). Across the examples 396 kernels are generated; the 27 that are not
+  run a frame scope (the spectral functions). Vector instructions (`fir`, `taps`, FFT) are not generated.
+- **Against native Rust** (M1 Pro, one mono voice, ns per frame; only contour is bit-identical, the
+  others behave the same but are not the same algorithm): contour 20 / 19, slew 14 / 15, the three
+  filters 34-43 / 33-40, reverse 19 / 14, tap delay 4 and 16 116 / 191 and 239 / 593, splice reel 269 / 342
+  (JIT-compiled `.nml` / Rust). The frequency shifter is still interpreted (about 2.8x slower).
+- **List access.** An index is wrapped with one floor conversion and integer compares, and a register
+  written and read inside one branch is a temporary that can share an FP register; together they took the
+  splice reel kernel from 665 to 269 ns.
+- **Write the work inside the `if` arm.** A value computed before an `if` and only chosen by it is
+  computed every sample. Moving the expensive part (a list read, `sin`, `exp`) into the arm that uses it
+  lets the compiler skip the other arm: the reverse block went from 19 to 17 ns with identical audio.
+  The std shelf and the examples have no case of this worth changing.
+
+### Web: what a probe showed
+
+`niminal-engine`, `-lang`, `-compose`, `-pattern`, `-score`, `-server` and `-lsp` all pass
+`cargo check --target wasm32-unknown-unknown` unchanged (the JIT is not built there). `-ws`, `-host` and
+`-sequencer` do not: `getrandom` needs its `wasm_js` feature (it comes in through the WebSocket stack
+and the sound card), and the sequencer depends on both. A probe crate (outside the repository) compiled
+the engine and language to a 5.3 MB wasm module and rendered six pieces in Node's V8, 64 blocks each:
+five rendered the same audio bytes as the native build, and the sixth (the harmonic drone, which leans on
+`sin`, `exp` and `pow`) differed in the last bits (the sum of the samples agrees to 5e-10), the maths
+library gap noted above. The engine ran 1.0-1.9x slower than native for opcode-heavy pieces (the wasm side
+runs the interpreter, since the JIT does not exist there). Known run-time traps that `cargo check` does
+not find: `Instant::now` in `mixer/render.rs` panics on `wasm32-unknown-unknown`, and the sample, module
+and preset loaders use the file system and `SystemTime`.
+
 ## What it is
 
 - [`custom/wasm.rs`](../crates/niminal-engine/src/ops/custom/wasm.rs) turns a kernel's per-sample

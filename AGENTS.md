@@ -48,7 +48,7 @@ Run the smallest thing that covers your change, then the whole check once before
 | `niminal-compose` / `-pattern` / `-lsp` | `cargo test -p niminal-compose` etc. | ~5 s |
 | `niminal-sequencer` | `cargo test -p niminal-sequencer` | ~20 s |
 | `niminal-cli` (renders every example) | `cargo test -p niminal-cli` | ~30 s |
-| a kernel backend (`custom/jit.rs`, `wasm.rs`) | `cargo test -p niminal-engine --features wasm-kernel` (the JIT is always in the build) | ~1 min |
+| a kernel backend (`custom/jit.rs`, `wasm.rs`) | `cargo test -p niminal-engine --features wasm-kernel` (the JIT is always in the build), and `cargo test -p niminal-cli --test jit_identical` (every example renders the same with `NIMINAL_JIT=0` and `=1`) | ~1 min |
 | Stage or the extension | `scripts/check.sh --apps --test` (adds Stage's clippy, cargo test, tsc, vitest, and the extension's tests) | ~1 min |
 | before finishing | `scripts/check.sh --test` (or `--test --apps`) | ~2-3 min |
 
