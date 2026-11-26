@@ -1330,6 +1330,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "niminal-web"
+version = "0.0.1"
+dependencies = [
+ "niminal-compose",
+ "niminal-engine",
+ "niminal-lang",
+ "niminal-sequencer",
+ "serde_json",
+]
+
+[[package]]
 name = "niminal-ws"
 version = "0.0.1"
 dependencies = [

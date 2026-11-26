@@ -1,0 +1,16 @@
+#!/bin/sh
+# Builds what the playground page loads: the engine as WebAssembly, its loader and the examples.
+# Needs the wasm32 target: `rustup target add wasm32-unknown-unknown`.
+set -e
+cd "$(dirname "$0")/../.."
+# the repository builds for the machine it is on (.cargo/config.toml); WebAssembly has no such CPU
+RUSTFLAGS="" cargo build -p niminal-web --profile web --target wasm32-unknown-unknown
+out=docs/public/playground
+mkdir -p "$out/examples"
+cp target/wasm32-unknown-unknown/web/niminal_web.wasm "$out/"
+cp crates/niminal-web/js/niminal.js "$out/"
+# examples that need no sample files
+for name in functions kernels acid physical_models modal array_bank; do
+  cp "examples/$name.nml" "$out/examples/"
+done
+echo "playground: $(wc -c < "$out/niminal_web.wasm" | tr -d ' ') bytes of wasm, $(ls "$out/examples" | wc -l | tr -d ' ') examples"

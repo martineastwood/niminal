@@ -96,4 +96,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --target wasm32-unknown-unknown -p niminal-engine -p niminal-score -p niminal-pattern -p niminal-lang -p niminal-compose -p niminal-server -p niminal-lsp
       - run: cargo check --target wasm32-unknown-unknown -p niminal-sequencer --no-default-features
+      # the playground's module, run for real: it loads, renders a piece and reports a mistake where it is
+      - run: cargo build --profile web --target wasm32-unknown-unknown -p niminal-web
+      - run: node crates/niminal-web/js/smoke.mjs target/wasm32-unknown-unknown/web/niminal_web.wasm
 

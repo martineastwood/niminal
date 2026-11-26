@@ -7,13 +7,21 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
+    "playground": "sh scripts/build-playground.sh",
     "opcodes": "niminal docs > src/content/docs/reference/opcodes.md.tmp && mv src/content/docs/reference/opcodes.md.tmp src/content/docs/reference/opcodes.md",
-    "predev": "npm run opcodes",
-    "prebuild": "npm run opcodes"
+    "predev": "npm run opcodes && npm run playground",
+    "prebuild": "npm run opcodes && npm run playground"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.42.6",
+    "@codemirror/commands": "^6.11.2",
+    "@codemirror/language": "^6.13.1",
+    "@codemirror/lint": "^6.9.8",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.44.2",
+    "@lezer/highlight": "^1.2.5",
     "astro": "^7.3.8",
+    "codemirror": "^6.0.2",
     "sharp": "^0.35.5"
   }
 }

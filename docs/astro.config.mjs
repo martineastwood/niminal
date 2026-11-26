@@ -1,13 +1,22 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 // One grammar for the editor extension and the docs.
 const niminal = JSON.parse(
   readFileSync(new URL('../editors/vscode/syntaxes/niminal.tmLanguage.json', import.meta.url), 'utf8'),
 );
 
+// The playground reuses the editor's language support from ../editors/codemirror, which must use this site's
+// copies of the editor libraries (two copies of @codemirror/state break the editor).
+const modules = (name) => fileURLToPath(new URL(`./node_modules/${name}`, import.meta.url));
+const sharedEditorLibraries = Object.fromEntries(
+  ['@codemirror/language', '@codemirror/state', '@codemirror/view', '@lezer/highlight'].map((name) => [name, modules(name)]),
+);
+
 export default defineConfig({
+  vite: { resolve: { alias: sharedEditorLibraries }, server: { fs: { allow: ['..'] } } },
   site: 'https://niminal.dev',
   integrations: [
     starlight({

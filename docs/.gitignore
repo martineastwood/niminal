@@ -3,3 +3,6 @@ dist
 .astro
 public/audio
 src/content/docs/reference/opcodes.md
+public/playground/niminal_web.wasm
+public/playground/niminal.js
+public/playground/examples

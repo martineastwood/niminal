@@ -1,0 +1,380 @@
+---
+import '../styles/landing.css';
+import '../styles/playground.css';
+
+const REPO = 'https://github.com/martineastwood/niminal';
+// What the page offers to start from; the files are copied to /playground/examples by scripts/build-playground.sh.
+const examples = [
+  ['functions', 'Instruments built from functions'],
+  ['kernels', 'A piece made of hand-written functions'],
+  ['acid', 'An acid bassline'],
+  ['physical_models', 'Physical models'],
+  ['modal', 'Modal resonators'],
+  ['array_bank', 'A bank of arrays'],
+];
+---
+<!doctype html>
+<html lang="en" data-mode="ink" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>niminal playground</title>
+    <meta name="description" content="Write niminal in the browser and hear it. The engine runs in your browser as WebAssembly: nothing to install." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;800;900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+    <script is:inline>
+      (function () {
+        var light = false;
+        try {
+          var saved = localStorage.getItem('starlight-theme');
+          light = saved === 'light';
+          if (!saved) localStorage.setItem('starlight-theme', 'dark');
+        } catch (e) {}
+        var root = document.documentElement;
+        root.setAttribute('data-mode', light ? 'paper' : 'ink');
+        root.setAttribute('data-theme', light ? 'light' : 'dark');
+      })();
+    </script>
+  </head>
+  <body>
+    <header class="nav">
+      <a class="brand" href="/"><span class="mark" aria-hidden="true"></span>niminal</a>
+      <nav>
+        <a href="/guide/getting-started/">Docs</a>
+        <a href="/reference/opcodes/">Opcodes</a>
+        <a href="/guide/live-coding/">Live coding</a>
+        <a href="/playground/">Playground</a>
+        <a href={REPO}>GitHub</a>
+      </nav>
+      <div class="nav-end">
+        <div class="ground" role="group" aria-label="Colour scheme">
+          <button data-ground="ink">ink</button><button data-ground="paper">paper</button>
+        </div>
+        <a class="btn btn-solid btn-sm" href="/guide/getting-started/">Install</a>
+      </div>
+    </header>
+
+    <main class="pg">
+      <h1>Playground</h1>
+      <p class="lede">
+        Write niminal and hear it. The engine runs in your browser as WebAssembly, so there is nothing to install.
+        A piece renders in the background and plays when it is ready; the same file gives the same audio from
+        <code>niminal render</code>.
+      </p>
+
+      <div class="pg-bar">
+        <button class="btn btn-solid" id="play" disabled>Play</button>
+        <button class="btn" id="stop" disabled>Stop</button>
+        <label>bars <input type="number" id="bars" value="8" min="1" max="64" /></label>
+        <label>start from
+          <select id="example">
+            {examples.map(([file, title]) => <option value={file}>{title}</option>)}
+          </select>
+        </label>
+        <span class="spacer"></span>
+        <button class="btn" id="download" disabled>Download WAV</button>
+        <button class="btn" id="share">Copy link</button>
+      </div>
+
+      <div id="editor" class="pg-editor" aria-label="niminal source"></div>
+      <div class="pg-progress"><div id="progress"></div></div>
+      <p class="pg-status" id="status" role="status">Loading the engine…</p>
+      <ul class="pg-errors" id="errors"></ul>
+
+      <p class="pg-note">
+        This renders a whole piece and then plays it, so there is no live editing yet; the full
+        <a href="/reference/stage/"><u>Stage</u></a> app does that. Pieces that read sample files need a
+        folder next to them, so they do not run here. Press <code>Ctrl</code>/<code>Cmd</code> + <code>Enter</code> to play.
+      </p>
+    </main>
+
+    <script>
+      import { basicSetup, EditorView } from 'codemirror';
+      import { Compartment, EditorState, Prec } from '@codemirror/state';
+      import { keymap } from '@codemirror/view';
+      import { indentWithTab } from '@codemirror/commands';
+      import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+      import { lintGutter, setDiagnostics } from '@codemirror/lint';
+      import { tags } from '@lezer/highlight';
+      // the same lexer and ink palette the Stage editor uses
+      import { colours, niminal } from '../../../editors/codemirror/language';
+
+      const root = document.documentElement;
+      document.querySelectorAll<HTMLButtonElement>('[data-ground]').forEach((b) =>
+        b.addEventListener('click', () => {
+          const mode = b.dataset.ground as 'ink' | 'paper';
+          root.setAttribute('data-mode', mode);
+          root.setAttribute('data-theme', mode === 'paper' ? 'light' : 'dark');
+          try { localStorage.setItem('starlight-theme', mode === 'paper' ? 'light' : 'dark'); } catch {}
+          applyGround();
+        }));
+
+      const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+
+      // ---- the editor: the language's own highlighting, in the page's two grounds
+      const paperColours = syntaxHighlighting(HighlightStyle.define([
+        { tag: tags.keyword, color: '#8250df' },
+        { tag: tags.comment, color: '#6e7781' },
+        { tag: tags.string, color: '#1a7f37' },
+        { tag: [tags.number, tags.atom], color: '#b35900' },
+        { tag: tags.typeName, color: '#0a7e7e' },
+        { tag: tags.className, color: '#1a7f37' },
+        { tag: tags.function(tags.variableName), color: '#0550ae' },
+        { tag: tags.propertyName, color: '#a5303d' },
+        { tag: tags.local(tags.variableName), color: '#a5303d' },
+        { tag: tags.definition(tags.variableName), color: '#9a6700' },
+        { tag: tags.special(tags.variableName), color: '#953800' },
+        { tag: tags.operator, color: '#57606a' },
+        { tag: [tags.punctuation, tags.bracket], color: '#57606a' },
+      ]));
+      const editorTheme = (dark: boolean) => EditorView.theme({
+        '&': { backgroundColor: 'var(--panel)', color: 'var(--panel-ink)', fontSize: '0.9rem' },
+        '.cm-content': { fontFamily: 'var(--mono)', caretColor: 'var(--accent)', padding: '0.6rem 0' },
+        '.cm-gutters': { backgroundColor: 'var(--panel-bar)', color: 'var(--panel-muted)', border: 'none', borderRight: '1px solid var(--panel-line)', fontFamily: 'var(--mono)' },
+        '.cm-activeLine': { backgroundColor: 'color-mix(in srgb, var(--accent) 7%, transparent)' },
+        '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--panel-ink)' },
+        '.cm-cursor': { borderLeftColor: 'var(--accent)' },
+        '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: 'color-mix(in srgb, var(--accent) 28%, transparent)' },
+        '.cm-matchingBracket': { outline: '1px solid var(--accent)', backgroundColor: 'transparent' },
+      }, { dark });
+      const ground = new Compartment();
+      const groundExtensions = () => {
+        const dark = root.dataset.mode !== 'paper';
+        return [editorTheme(dark), dark ? colours : paperColours];
+      };
+      const view = new EditorView({
+        parent: $('editor'),
+        state: EditorState.create({
+          doc: '',
+          extensions: [
+            Prec.highest(keymap.of([{ key: 'Mod-Enter', run: () => { void run(); return true; } }])),
+            basicSetup,
+            keymap.of([indentWithTab]),
+            niminal,
+            lintGutter(),
+            ground.of(groundExtensions()),
+            // a mistake is marked where it was; editing the piece clears the marks, which would no longer line up
+            EditorView.updateListener.of((update) => {
+              if (update.docChanged && marked) { marked = false; view.dispatch(setDiagnostics(view.state, [])); }
+            }),
+          ],
+        }),
+      });
+      let marked = false;
+      const applyGround = () => view.dispatch({ effects: ground.reconfigure(groundExtensions()) });
+      const code = {
+        get value() { return view.state.doc.toString(); },
+        set value(text: string) { view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } }); },
+        select(from: number, to: number) { view.focus(); view.dispatch({ selection: { anchor: from, head: to }, scrollIntoView: true }); },
+      };
+      const play = $<HTMLButtonElement>('play');
+      const stop = $<HTMLButtonElement>('stop');
+      const download = $<HTMLButtonElement>('download');
+      const share = $<HTMLButtonElement>('share');
+      const exampleSelect = $<HTMLSelectElement>('example');
+      const bars = $<HTMLInputElement>('bars');
+      const status = $('status');
+      const errors = $('errors');
+      const progress = $('progress');
+
+      type Diagnostic = { start: number; end: number; message: string; help?: string | null };
+      type Result =
+        | { ok: true; sampleRate: number; channels: Float32Array[]; warnings: string[]; renderMs: number }
+        | { ok: false; diagnostics: Diagnostic[]; message: string; internal: boolean };
+
+      // ---- rendering, in a worker so the page stays responsive
+      const worker = new Worker('/playground/worker.js', { type: 'module' });
+      let nextId = 1;
+      const pending = new Map<number, (r: Result) => void>();
+      worker.onmessage = (e) => { pending.get(e.data.id)?.(e.data.result); pending.delete(e.data.id); };
+      worker.onerror = () => setStatus('The engine could not be loaded in this browser.');
+      const ask = (message: object) => new Promise<Result>((resolve) => {
+        const id = nextId++;
+        pending.set(id, resolve);
+        worker.postMessage({ id, ...message });
+      });
+
+      // ---- helpers
+      const setStatus = (text: string) => { status.textContent = text; };
+      // the engine reports positions in UTF-8 bytes; the textarea counts UTF-16 units
+      const byteToIndex = (text: string, byte: number) => {
+        let bytes = 0;
+        for (let i = 0; i < text.length; ) {
+          if (bytes >= byte) return i;
+          const point = text.codePointAt(i)!;
+          bytes += point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
+          i += point > 0xffff ? 2 : 1;
+        }
+        return text.length;
+      };
+      const lineColumn = (text: string, index: number) => {
+        const before = text.slice(0, index);
+        return { line: before.split('\n').length, column: index - before.lastIndexOf('\n') };
+      };
+
+      function showErrors(source: string, diagnostics: Diagnostic[], message: string, warnings: string[] = []) {
+        errors.replaceChildren();
+        marked = diagnostics.length > 0;
+        view.dispatch(setDiagnostics(view.state, diagnostics.map((d) => {
+          const from = byteToIndex(source, d.start);
+          return { from, to: Math.max(byteToIndex(source, d.end), Math.min(from + 1, source.length)), severity: 'error' as const, message: d.message };
+        })));
+        for (const d of diagnostics) {
+          const from = byteToIndex(source, d.start);
+          const to = byteToIndex(source, d.end);
+          const { line, column } = lineColumn(source, from);
+          const item = document.createElement('li');
+          const where = document.createElement('span');
+          where.className = 'where';
+          where.textContent = `line ${line}, column ${column}: `;
+          item.append(where, d.message);
+          if (d.help) {
+            const help = document.createElement('span');
+            help.className = 'help';
+            help.textContent = d.help;
+            item.append(help);
+          }
+          item.addEventListener('click', () => code.select(from, Math.max(to, from + 1)));
+          errors.append(item);
+        }
+        for (const text of [message, ...warnings].filter(Boolean)) {
+          const item = document.createElement('li');
+          if (text !== message) item.className = 'warn';
+          item.textContent = text;
+          errors.append(item);
+        }
+      }
+
+      // ---- playback
+      let ctx: AudioContext | undefined;
+      let source: AudioBufferSourceNode | undefined;
+      let last: { channels: Float32Array[]; sampleRate: number } | undefined;
+      let frame = 0;
+
+      function stopPlaying() {
+        cancelAnimationFrame(frame);
+        progress.style.width = '0';
+        try { source?.stop(); } catch {}
+        source = undefined;
+        stop.disabled = true;
+      }
+
+      async function run() {
+        if (play.disabled) return;
+        stopPlaying();
+        // an AudioContext must be made or resumed inside the click, before anything is awaited
+        ctx ??= new AudioContext();
+        void ctx.resume();
+        play.disabled = true;
+        download.disabled = true;
+        const text = code.value;
+        setStatus('Rendering…');
+        errors.replaceChildren();
+        const result = await ask({ kind: 'render', source: text, bars: Number(bars.value) || 8 });
+        play.disabled = false;
+        if (!result.ok) {
+          setStatus(result.internal ? 'The engine stopped unexpectedly.' : 'There is a mistake in the piece.');
+          showErrors(text, result.diagnostics, result.message);
+          return;
+        }
+        showErrors(text, [], '', result.warnings);
+        last = { channels: result.channels, sampleRate: result.sampleRate };
+        download.disabled = false;
+        const frames = result.channels[0].length;
+        const buffer = ctx.createBuffer(result.channels.length, frames, result.sampleRate);
+        result.channels.forEach((c, i) => buffer.copyToChannel(c, i));
+        source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        const seconds = frames / result.sampleRate;
+        const started = ctx.currentTime;
+        source.onended = () => { stopPlaying(); setStatus(`Played ${seconds.toFixed(1)} s (rendered in ${(result.renderMs / 1000).toFixed(2)} s).`); };
+        source.start();
+        stop.disabled = false;
+        setStatus(`Playing ${seconds.toFixed(1)} s (rendered in ${(result.renderMs / 1000).toFixed(2)} s).`);
+        const tick = () => {
+          progress.style.width = `${Math.min(100, ((ctx!.currentTime - started) / seconds) * 100)}%`;
+          frame = requestAnimationFrame(tick);
+        };
+        tick();
+      }
+
+      play.addEventListener('click', run);
+      stop.addEventListener('click', () => { stopPlaying(); setStatus('Stopped.'); });
+
+      // ---- WAV
+      download.addEventListener('click', () => {
+        if (!last) return;
+        const { channels, sampleRate } = last;
+        const frames = channels[0].length;
+        const data = new DataView(new ArrayBuffer(44 + frames * channels.length * 2));
+        const text = (at: number, s: string) => [...s].forEach((c, i) => data.setUint8(at + i, c.charCodeAt(0)));
+        text(0, 'RIFF'); data.setUint32(4, 36 + frames * channels.length * 2, true); text(8, 'WAVEfmt ');
+        data.setUint32(16, 16, true); data.setUint16(20, 1, true); data.setUint16(22, channels.length, true);
+        data.setUint32(24, sampleRate, true); data.setUint32(28, sampleRate * channels.length * 2, true);
+        data.setUint16(32, channels.length * 2, true); data.setUint16(34, 16, true);
+        text(36, 'data'); data.setUint32(40, frames * channels.length * 2, true);
+        let at = 44;
+        for (let i = 0; i < frames; i++) {
+          for (const c of channels) {
+            data.setInt16(at, Math.round(Math.max(-1, Math.min(1, c[i])) * 32767), true);
+            at += 2;
+          }
+        }
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(new Blob([data], { type: 'audio/wav' }));
+        link.download = 'niminal.wav';
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
+      });
+
+      // ---- sharing: the piece, compressed, in the address
+      const toBase64Url = (bytes: Uint8Array) =>
+        btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      const fromBase64Url = (s: string) =>
+        Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+      async function pipe(bytes: Uint8Array, stream: CompressionStream | DecompressionStream) {
+        const writer = stream.writable.getWriter();
+        void writer.write(bytes as BufferSource);
+        void writer.close();
+        return new Uint8Array(await new Response(stream.readable).arrayBuffer());
+      }
+      const encode = async (text: string) => toBase64Url(await pipe(new TextEncoder().encode(text), new CompressionStream('deflate-raw')));
+      const decode = async (s: string) => new TextDecoder().decode(await pipe(fromBase64Url(s), new DecompressionStream('deflate-raw')));
+
+      share.addEventListener('click', async () => {
+        let url: string;
+        try {
+          url = `${location.origin}${location.pathname}#c=${await encode(code.value)}`;
+        } catch { setStatus('Could not make a link in this browser.'); return; }
+        history.replaceState(null, '', url);
+        try {
+          await navigator.clipboard.writeText(url);
+          setStatus('The link, with your piece in it, is copied.');
+        } catch { setStatus('The link, with your piece in it, is in the address bar.'); }
+      });
+
+      // ---- starting points
+      async function loadExample(name: string) {
+        const response = await fetch(`/playground/examples/${name}.nml`);
+        code.value = response.ok ? await response.text() : '// could not load the example';
+        errors.replaceChildren();
+      }
+      exampleSelect.addEventListener('change', () => { stopPlaying(); history.replaceState(null, '', location.pathname); void loadExample(exampleSelect.value); });
+
+      (async () => {
+        const hash = new URLSearchParams(location.hash.slice(1)).get('c');
+        if (hash) {
+          try { code.value = await decode(hash); } catch { await loadExample(exampleSelect.value); }
+        } else {
+          await loadExample(exampleSelect.value);
+        }
+        await ask({ kind: 'warm' });
+        play.disabled = false;
+        setStatus('Ready. Press Play, or Ctrl/Cmd + Enter.');
+      })();
+    </script>
+  </body>
+</html>

@@ -17,6 +17,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev ffmpeg
       - run: cargo install --path crates/niminal-cli --locked
       # The audio on the page comes from the code on the page; a broken example fails the build.
@@ -25,6 +27,7 @@ jobs:
         with: { node-version: 22, cache: npm, cache-dependency-path: docs/package-lock.json }
       - run: npm ci
         working-directory: docs
+      # the build also compiles the engine to WebAssembly for the playground page (docs/scripts/build-playground.sh)
       - run: npm run build
         working-directory: docs
         env:

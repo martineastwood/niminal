@@ -1,0 +1,19 @@
+[package]
+name = "niminal-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "niminal as WebAssembly: a piece of source in, audio out, for the playground in a browser"
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+niminal-engine = { path = "../niminal-engine" }
+niminal-lang = { path = "../niminal-lang" }
+niminal-compose = { path = "../niminal-compose" }
+niminal-sequencer = { path = "../niminal-sequencer", default-features = false }
+serde_json = "1"
