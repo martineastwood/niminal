@@ -4,8 +4,27 @@
     {
       "name": "stage-window",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "stage", "run", "dev"],
+      "runtimeArgs": [
+        "--prefix",
+        "stage",
+        "run",
+        "dev"
+      ],
       "port": 1421
+    },
+    {
+      "name": "docs-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "docs",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "4321"
+      ],
+      "port": 4321
     }
   ]
 }
