@@ -97,6 +97,7 @@ const examples: [string, string, number][] = [
                 <label>bars <input type="number" id="bars" value="8" min="1" max="64" /></label>
                 <button class="btn" id="play" disabled>Render &amp; play</button>
                 <button class="btn" id="download" disabled>Download WAV</button>
+                <button class="btn" id="export-zip">Download project (.zip)</button>
               </div>
             </details>
             <button class="btn" id="share">Copy link</button>
@@ -150,7 +151,7 @@ const examples: [string, string, number][] = [
             definition (a clip, instrument, effect or control; <code>use</code> and <code>config</code> are read by Run all): if the piece is playing it changes at the next bar, and if not you hear nothing until
             something uses it. <b>Run block</b> does the same for the selection or the block the cursor is in. <b>Run all</b> starts the whole piece
             again from the top. <b>Stop</b> silences everything, and <b>Reset</b> puts the piece back as it was. Nothing is saved on a server: <b>Copy link</b>
-            puts your piece in the address. Pieces that read sample files do not run here yet, and heavy pieces built from hand-written
+            puts your piece in the address. The Studio runs one piece at a time (one <code>.nml</code> file), plus the audio and data files you add with <b>Files…</b>. Heavy pieces built from hand-written
             functions run slower in a browser than in <a href="/reference/stage/"><u>Stage</u></a>.
           </p>
         </div>
@@ -159,13 +160,16 @@ const examples: [string, string, number][] = [
     <div class="st-files" id="files" role="dialog" aria-label="Files" hidden>
       <div class="st-files-head"><h2>Files</h2><button class="btn" id="files-close">Done</button></div>
       <p class="st-files-help">
-        Add audio (WAV, MP3, FLAC, Ogg, AIFF, M4A), <code>.nml</code> modules, <code>.sfz</code> instruments and <code>.scl</code> scales.
+        Add audio (WAV, MP3, FLAC, Ogg, AIFF, M4A), <code>.sfz</code> instruments, <code>.scl</code> scales and number tables (<code>.csv</code>).
         A piece names a file by its path: <code>sample("kick.wav")</code>, or <code>kit("drums")</code> for a folder. They stay in this browser, not on a server.
+        The Studio runs one piece at a time, so there are no code modules here: <code>use</code> takes only the library that comes with niminal, such as <code>use std/samples</code>.
       </p>
       <div class="st-files-add">
         <label>in folder <input id="files-folder" type="text" placeholder="(top level)" autocapitalize="none" autocorrect="off" spellcheck="false" /></label>
         <button class="btn btn-solid" id="files-add">Add files</button>
-        <input id="files-input" type="file" multiple hidden accept="audio/*,.wav,.mp3,.flac,.ogg,.oga,.aif,.aiff,.m4a,.aac,.nml,.sfz,.scl,.csv" />
+        <button class="btn" id="files-import">Import a zip…</button>
+        <input id="files-zip" type="file" accept=".zip,application/zip" hidden />
+        <input id="files-input" type="file" multiple hidden accept="audio/*,.wav,.mp3,.flac,.ogg,.oga,.aif,.aiff,.m4a,.aac,.sfz,.scl,.csv" />
       </div>
       <ul class="st-files-list" id="files-list"></ul>
       <p class="st-empty" id="files-empty">No files yet. Anything you add shows up here.</p>
@@ -177,6 +181,7 @@ const examples: [string, string, number][] = [
       import { createEditor } from '../web/editor';
       import { setupKeyRow } from '../web/keys';
       import { openStore, type Store } from '../web/storage';
+      import { makeZip, readZip } from '../web/zip';
       import { annotatedRanges, clipCode, describe, format, positionOf, valueAt, type ControlSpec, type PerformCommand, type PerformState, type Range } from '../web/perform';
       import {
         byteToIndex, createEngine, decodePiece, encodePiece, lineColumn, shiftDiagnostics, wavFile,
@@ -683,8 +688,12 @@ const examples: [string, string, number][] = [
           + (store && !store.lasting ? 'This browser is not keeping files between visits (a private window?), so these will be gone when you close the page.' : '')
           + (total > 200e6 ? ' That is a lot for a tablet: the page may run out of memory.' : '');
       }
-      async function addFiles(files: File[], folder: string) {
+      async function addFiles(all: File[], folder: string) {
         const prefix = folder.trim().replace(/^\/+|\/+$/g, '');
+        // code is not a file here: a piece is one .nml, and it is the one in the editor
+        const files = all.filter((f) => !/\.nml$/i.test(f.name));
+        const refused = all.length - files.length;
+        if (!files.length) { setStatus(`The Studio runs one piece at a time, so ${refused === 1 ? 'that .nml file was' : 'those .nml files were'} not added. Paste the code into your piece, or use Stage for projects with several files.`); return; }
         const put = [];
         for (const file of files) {
           const path = (prefix ? `${prefix}/` : '') + file.name;
@@ -696,7 +705,7 @@ const examples: [string, string, number][] = [
         // the engine takes the bytes; the store has its own copy
         await engine.setFiles({ put: put.map((p) => ({ path: p.path, bytes: p.bytes.slice(0) })) });
         showFiles();
-        setStatus(put.length === 1 ? `Added ${put[0].path}. Use it as sample("${put[0].path}").` : `Added ${put.length} files.`);
+        setStatus((put.length === 1 ? `Added ${put[0].path}. Use it as sample("${put[0].path}").` : `Added ${put.length} files.`) + (refused ? ` ${refused} .nml file${refused === 1 ? ' was' : 's were'} not added: the Studio runs one piece at a time.` : ''));
       }
       async function removeFile(path: string) {
         await store?.remove(path);
@@ -720,15 +729,88 @@ const examples: [string, string, number][] = [
       codeBox.addEventListener('drop', (e) => {
         if (!e.dataTransfer?.files.length) return;
         e.preventDefault();
-        void addFiles([...e.dataTransfer.files], $<HTMLInputElement>('files-folder').value);
+        const dropped = [...e.dataTransfer.files];
+        // a zip is a project to open; anything else is a file to add
+        if (dropped.length === 1 && /\.zip$/i.test(dropped[0].name)) void importZip(dropped[0]);
+        else void addFiles(dropped, $<HTMLInputElement>('files-folder').value);
       });
       async function restoreFiles() {
         store = await openStore();
+        // an earlier version of the page kept code modules here; there are none now
+        for (const f of await store.all()) if (/\.nml$/i.test(f.path)) await store.remove(f.path);
         const saved = await store.all();
         for (const f of saved) known.set(f.path, f.bytes.byteLength);
         if (saved.length) await engine.setFiles({ all: true, put: saved.map((f) => ({ path: f.path, bytes: f.bytes.slice(0) })) });
         showFiles();
       }
+
+      // ---- a project as a zip: the piece and its files, ready for Stage (or to bring back here)
+      const slug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'piece';
+      const saveBlob = (blob: Blob, name: string) => {
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = name;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
+      };
+      async function exportProject() {
+        const title = current.name || (exampleSelect.selectedOptions[0]?.textContent ?? 'piece').replace(/^A live set: /, '');
+        const base = slug(title);
+        const encoder = new TextEncoder();
+        const files = ((await store?.all()) ?? []).filter((f) => f.path !== `${base}.nml`);
+        const readme = `${title}\n\nMade in the niminal Studio. Open ${base}.nml in Stage (this folder, as it is, keeps the sample paths working),\nor play it from a terminal:\n\n    niminal play ${base}.nml\n`;
+        saveBlob(makeZip([
+          { path: `${base}.nml`, bytes: encoder.encode(code.value) },
+          ...files.map((f) => ({ path: f.path, bytes: new Uint8Array(f.bytes) })),
+          { path: 'README.txt', bytes: encoder.encode(readme) },
+        ]), `${base}.zip`);
+        setStatus(`${base}.zip has the piece${files.length ? ` and ${files.length} file${files.length === 1 ? '' : 's'}` : ''}.`);
+      }
+      $('export-zip').addEventListener('click', () => void exportProject());
+
+      async function importZip(file: File) {
+        let entries;
+        try { entries = await readZip(await file.arrayBuffer()); } catch (error) { setStatus((error as Error).message); return; }
+        // the Studio runs one piece: a project with more code than that is for Stage, and nothing of it is taken
+        const code = entries.filter((e) => /\.nml$/i.test(e.path));
+        if (code.length > 1) {
+          const names = code.slice(0, 4).map((e) => e.path).join(', ') + (code.length > 4 ? ', …' : '');
+          setStatus(`That project has ${code.length} .nml files (${names}). The Studio runs one piece at a time: open it in Stage, or unzip it and add just the piece.`);
+          setDrawer(true);
+          return;
+        }
+        const main = code[0];
+        // the folder the piece is in is the project: paths in the piece are relative to it
+        const root = main && main.path.includes('/') ? main.path.slice(0, main.path.lastIndexOf('/') + 1) : '';
+        const inside = entries.filter((e) => e !== main && e.path.startsWith(root) && !/^readme(\.txt|\.md)?$/i.test(e.path.slice(root.length)));
+        const left = entries.filter((e) => e !== main && !e.path.startsWith(root)).length;
+        const put = [];
+        for (const e of inside) {
+          const path = e.path.slice(root.length);
+          const bytes = e.bytes.buffer.slice(e.bytes.byteOffset, e.bytes.byteOffset + e.bytes.byteLength) as ArrayBuffer;
+          await store?.put({ path, bytes, added: Date.now() });
+          put.push({ path, bytes });
+          known.set(path, bytes.byteLength);
+        }
+        if (put.length) await engine.setFiles({ put: put.map((p) => ({ path: p.path, bytes: p.bytes.slice(0) })) });
+        showFiles();
+        const count = `${put.length} file${put.length === 1 ? '' : 's'}`;
+        const outside = left ? ` ${left} file${left === 1 ? '' : 's'} outside the piece's folder ${left === 1 ? 'was' : 'were'} left out.` : '';
+        if (!main) { setStatus(`Added ${count}. There was no .nml piece in the zip.${outside}`); return; }
+        await saveNow();
+        const key = `piece:${crypto.randomUUID()}`;
+        const name = main.path.slice(root.length).replace(/\.nml$/i, '');
+        await store?.pieces.put({ key, name, text: new TextDecoder().decode(main.bytes), updated: Date.now() });
+        await openPiece(key);
+        setStatus(`Opened “${name}” from the zip${put.length ? ` and added ${count}` : ''}.${outside}`);
+      }
+      $('files-import').addEventListener('click', () => $('files-zip').click());
+      $<HTMLInputElement>('files-zip').addEventListener('change', async (e) => {
+        const input = e.target as HTMLInputElement;
+        const picked = input.files?.[0];
+        input.value = '';
+        if (picked) { openFiles(false); await importZip(picked); }
+      });
 
       // ---- opening, saving and naming pieces
       const mine = document.createElement('optgroup');

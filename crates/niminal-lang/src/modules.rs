@@ -310,6 +310,11 @@ impl Walk<'_> {
                 select,
             } = parse_use(rest, span)?;
             let path = self.find(name, dir).ok_or_else(|| {
+                if cfg!(target_arch = "wasm32") {
+                    return Diagnostic::new(format!("no module `{name}`"), used_at).with_help(
+                        "this page runs one piece, so `use` takes only the library that comes with niminal: `use std/samples`, `std/instruments`, `std/drums`, `std/fx`, `std/physical`, `std/delays` or `std/spectral`; to use your own modules, open the project in Stage",
+                    );
+                }
                 Diagnostic::new(format!("no module `{name}`"), used_at).with_help(format!(
                     "looked for {name}.nml next to the file, in lib/ and in the installed packages; the library that comes with niminal is `use std/physical`, `std/delays`, `std/spectral`, `std/samples`, `std/instruments`, `std/drums` and `std/fx`; the last three are shelves of presets, taken by name: `use std/fx.{{echo}}`"
                 ))
