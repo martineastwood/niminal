@@ -7,7 +7,7 @@ to the interpreter and all checked against it with the same random differential 
 | Backend | Where | Status |
 | --- | --- | --- |
 | dynasm code generators (`custom/jit/`) | native: aarch64 and x86-64 | the native tier, always built there; on unless `NIMINAL_JIT=0` |
-| wasm emitter (`custom/wasm.rs`, feature `wasm-kernel`) | the web playground, in the browser's own engine | emitter works; the browser loader and the wasm32 engine build are not written |
+| wasm emitter (`custom/wasm.rs`, feature `wasm-kernel`) | the web pages, in the browser's own engine | emitter works; the browser loader and the wasm32 engine build are not written |
 | wasmtime runner (`custom/wasm_run.rs`, feature `wasm-kernel`) | tests and benchmarks only | runs the emitted wasm natively, `NIMINAL_WASM=1` |
 
 The interpreter stays: it runs everything the other backends do not cover (kernels that call a
@@ -272,6 +272,6 @@ the JIT) say nothing reliable about real hardware. Not tested: real x86-64 hardw
 - Compiled code is cached by kernel identity in a global list; there is no eviction beyond the
   kernel being dropped.
 - Not run: x86-64, a signed Stage bundle (wasmtime's JIT memory), a wasm32 build of the engine, the
-  playground itself, or concurrent compile-and-playback load.
+  web page itself, or concurrent compile-and-playback load.
 - `scripts/check.sh --test` was run for the default build only. The feature is covered by its own
   tests (`cargo test -p niminal-engine --features wasm-kernel`).

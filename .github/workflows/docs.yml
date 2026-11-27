@@ -27,7 +27,7 @@ jobs:
         with: { node-version: 22, cache: npm, cache-dependency-path: docs/package-lock.json }
       - run: npm ci
         working-directory: docs
-      # the build also compiles the engine to WebAssembly for the playground page (docs/scripts/build-playground.sh)
+      # the build also compiles the engine to WebAssembly for the web pages (docs/scripts/build-web.sh)
       - run: npm run build
         working-directory: docs
         env:

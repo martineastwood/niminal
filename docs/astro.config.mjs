@@ -8,7 +8,7 @@ const niminal = JSON.parse(
   readFileSync(new URL('../editors/vscode/syntaxes/niminal.tmLanguage.json', import.meta.url), 'utf8'),
 );
 
-// The playground reuses the editor's language support from ../editors/codemirror, which must use this site's
+// The web pages (Try it, Studio) reuse the editor's language support from ../editors/codemirror, which must use this site's
 // copies of the editor libraries (two copies of @codemirror/state break the editor).
 const modules = (name) => fileURLToPath(new URL(`./node_modules/${name}`, import.meta.url));
 const sharedEditorLibraries = Object.fromEntries(

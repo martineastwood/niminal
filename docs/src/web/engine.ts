@@ -1,4 +1,4 @@
-// The engine as the playground pages use it: the workers, the audio path and the live session. No page
+// The engine as the web pages use it: the workers, the audio path and the live session. No page
 // markup in here, so the examples page and the workbench build on the same thing.
 
 export type Diagnostic = { start: number; end: number; message: string; help?: string | null };
@@ -34,7 +34,7 @@ export function createEngine(hooks: {
   let audioReady: Promise<void> | undefined;
 
   // the engine runs in a worker, so the page stays responsive
-  const worker = new Worker('/playground/worker.js', { type: 'module' });
+  const worker = new Worker('/web/worker.js', { type: 'module' });
   const pending = new Map<number, (r: any) => void>();
   worker.onmessage = (e) => {
     // the live session talks without being asked: how it is doing, and if it was lost
@@ -51,7 +51,7 @@ export function createEngine(hooks: {
   });
 
   // the language server runs in a worker of its own, so typing is not held up by a render or a running piece
-  const lspWorker = new Worker('/playground/worker.js', { type: 'module' });
+  const lspWorker = new Worker('/web/worker.js', { type: 'module' });
   const lspPending = new Map<number, (replies: Record<string, unknown>[]) => void>();
   lspWorker.onmessage = (e) => { lspPending.get(e.data.id)?.(e.data.replies ?? []); lspPending.delete(e.data.id); };
   const exchange = (message: Record<string, unknown>) => new Promise<Record<string, unknown>[]>((resolve) => {
@@ -71,7 +71,7 @@ export function createEngine(hooks: {
   function ensureAudio() {
     const c = context();
     audioReady ??= (async () => {
-      await c.audioWorklet.addModule('/playground/playback-worklet.js');
+      await c.audioWorklet.addModule('/web/playback-worklet.js');
       const node = new AudioWorkletNode(c, 'niminal-player', { outputChannelCount: [2] });
       node.connect(c.destination);
       const channel = new MessageChannel();

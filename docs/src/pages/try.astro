@@ -1,6 +1,6 @@
 ---
 import '../styles/landing.css';
-import '../styles/playground.css';
+import '../styles/web.css';
 
 const REPO = 'https://github.com/martineastwood/niminal';
 ---
@@ -80,10 +80,10 @@ const REPO = 'https://github.com/martineastwood/niminal';
     </main>
 
     <script>
-      import { createEditor } from '../playground/editor';
+      import { createEditor } from '../web/editor';
       import {
         byteToIndex, createEngine, lineColumn, shiftDiagnostics, type Diagnostic, type Status,
-      } from '../playground/engine';
+      } from '../web/engine';
 
       type Slider = { name: string; label: string; min: number; max: number; value: number; unit: string; log?: boolean };
       type Piece = { file: string; title: string; blurb: string; sliders: Slider[] };
@@ -210,7 +210,7 @@ const REPO = 'https://github.com/martineastwood/niminal';
         piecesBox.querySelectorAll('button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.file === file)));
         blurb.textContent = piece.blurb;
         buildSliders(piece);
-        const response = await fetch(`/playground/try/${file}.nml`);
+        const response = await fetch(`/web/try/${file}.nml`);
         pristine = response.ok ? await response.text() : '// could not load this piece';
         code.value = pristine;
         errors.replaceChildren();
@@ -274,7 +274,7 @@ const REPO = 'https://github.com/martineastwood/niminal';
       });
 
       (async () => {
-        pieces = await (await fetch('/playground/try/manifest.json')).json();
+        pieces = await (await fetch('/web/try/manifest.json')).json();
         // ?embed=name shows just that piece
         const wanted = new URLSearchParams(location.search).get('embed');
         const shown = wanted ? pieces.filter((p) => p.file === wanted) : pieces;

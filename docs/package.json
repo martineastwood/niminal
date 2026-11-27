@@ -7,10 +7,10 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "playground": "sh scripts/build-playground.sh",
+    "web": "sh scripts/build-web.sh",
     "opcodes": "niminal docs > src/content/docs/reference/opcodes.md.tmp && mv src/content/docs/reference/opcodes.md.tmp src/content/docs/reference/opcodes.md",
-    "predev": "npm run opcodes && npm run playground",
-    "prebuild": "npm run opcodes && npm run playground"
+    "predev": "npm run opcodes && npm run web",
+    "prebuild": "npm run opcodes && npm run web"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.42.6",

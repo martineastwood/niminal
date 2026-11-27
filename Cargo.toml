@@ -35,7 +35,7 @@ opt-level = 2
 [profile.dev.package.niminal-engine]
 opt-level = 3
 
-# The web build trades compile time for size: the module is downloaded by every visitor to the playground.
+# The web build trades compile time for size: the module is downloaded by every visitor to the web pages.
 [profile.web]
 inherits = "release"
 opt-level = "s"

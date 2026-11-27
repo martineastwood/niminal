@@ -3,7 +3,7 @@ name = "niminal-web"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "niminal as WebAssembly: a piece of source in, audio out, for the playground in a browser"
+description = "niminal as WebAssembly: a piece of source in, audio out, for the pages of the docs site that run in a browser"
 
 [lints]
 workspace = true

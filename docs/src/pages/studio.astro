@@ -1,9 +1,9 @@
 ---
 import '../styles/landing.css';
-import '../styles/playground.css';
+import '../styles/web.css';
 
 const REPO = 'https://github.com/martineastwood/niminal';
-// What the page offers to start from; the files are copied to /playground/examples by scripts/build-playground.sh.
+// What the page offers to start from; the files are copied to /web/examples by scripts/build-web.sh.
 // [file, title, bars to render by default]. Pieces built from hand-written functions run on the interpreter in
 // a browser (there is no native-code generator in WebAssembly), so they render slower and start with fewer bars.
 const examples: [string, string, number][] = [
@@ -105,11 +105,11 @@ const examples: [string, string, number][] = [
     </main>
 
     <script>
-      import { createEditor } from '../playground/editor';
+      import { createEditor } from '../web/editor';
       import {
         byteToIndex, createEngine, decodePiece, encodePiece, lineColumn, shiftDiagnostics, wavFile,
         type Diagnostic, type Status,
-      } from '../playground/engine';
+      } from '../web/engine';
 
       const root = document.documentElement;
       const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -343,7 +343,7 @@ const examples: [string, string, number][] = [
       async function loadExample(name: string) {
         const wanted = exampleSelect.querySelector<HTMLOptionElement>(`option[value="${name}"]`)?.dataset.bars;
         if (wanted) bars.value = wanted;
-        const response = await fetch(`/playground/examples/${name}.nml`);
+        const response = await fetch(`/web/examples/${name}.nml`);
         pristine = response.ok ? await response.text() : '// could not load the example';
         code.value = pristine;
         errors.replaceChildren();

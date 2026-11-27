@@ -30,7 +30,7 @@ if (!again.ok || again.channels[0].length !== good.channels[0].length) fail("a s
 const init = niminal.lsp({ jsonrpc: "2.0", id: 1, method: "initialize", params: { capabilities: {} } });
 if (!init.some((m) => m.id === 1 && m.result?.capabilities)) fail(`initialize: ${JSON.stringify(init)}`);
 niminal.lsp({ jsonrpc: "2.0", method: "initialized", params: {} });
-const uri = "file:///playground.nml";
+const uri = "file:///studio.nml";
 const text = "instr a() { out = nonsense(1) }\ninstr b() { out = os }\ninstr c() { out = osc(sine, 220hz) }\n";
 const opened = niminal.lsp({ jsonrpc: "2.0", method: "textDocument/didOpen", params: { textDocument: { uri, languageId: "niminal", version: 1, text } } });
 const published = opened.find((m) => m.method === "textDocument/publishDiagnostics");

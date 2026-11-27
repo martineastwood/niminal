@@ -79,9 +79,9 @@ fn a_piece_that_uses_the_standard_library_starts() {
     assert!(loudest(&session) > 0.0);
 }
 
-/// Every example the playground offers must start as a live session, not only render.
+/// Every example the Studio offers must start as a live session, not only render.
 #[test]
-fn the_playground_examples_start() {
+fn the_studio_examples_start() {
     for name in ["functions", "kernels", "acid", "physical_models", "modal", "array_bank"] {
         let path = format!("{}/../../examples/{name}.nml", env!("CARGO_MANIFEST_DIR"));
         let source = std::fs::read_to_string(&path).unwrap();

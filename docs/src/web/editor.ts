@@ -1,4 +1,4 @@
-// The code editor the playground pages share: the language's own highlighting in the site's two grounds, the
+// The code editor the web pages share: the language's own highlighting in the site's two grounds, the
 // language server's help, Run keys, and a flash over the code that has just been run.
 import { basicSetup, EditorView } from 'codemirror';
 import { Compartment, EditorState, Prec, StateEffect, StateField } from '@codemirror/state';
@@ -103,7 +103,7 @@ export function createEditor(options: {
         niminal,
         semanticHighlighting,
         // mistakes, completion and hovers come from the language server, running in a worker
-        lsp.plugin(options.uri ?? 'file:///playground.nml', 'niminal'),
+        lsp.plugin(options.uri ?? 'file:///studio.nml', 'niminal'),
         lintGutter(),
         ground.of(groundExtensions()),
       ],
