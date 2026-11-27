@@ -168,3 +168,8 @@ button, summary, select, .cm-run-gutter { touch-action: manipulation; }
   .st-now { display: none; }
   .st-transport { gap: 0; }
 }
+
+/* audio that has stopped */
+.st-paused { flex: none; margin: 0 0 0.5rem; padding: 0.7rem 1rem; border-radius: 6px; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--ink); font: 600 0.9rem var(--mono); cursor: pointer; text-align: left; min-height: 2.75rem; }
+.st-paused[hidden] { display: none; }

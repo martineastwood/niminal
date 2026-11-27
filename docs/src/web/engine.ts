@@ -36,6 +36,8 @@ export function createEngine(hooks: {
   onLost: () => void;
   /** the engine could not be loaded at all */
   onBroken: () => void;
+  /** the audio started or stopped running: a phone call, a dialog or the screen locking can stop it */
+  onAudioState?: (state: string) => void;
 }) {
   let nextId = 1;
   let sessionOn = false;
@@ -71,7 +73,11 @@ export function createEngine(hooks: {
 
   /** The audio context. Make it inside a click: a browser only allows it there. */
   function context() {
-    ctx ??= new AudioContext();
+    if (!ctx) {
+      ctx = new AudioContext();
+      // iOS says `interrupted` where other browsers say `suspended`
+      ctx.addEventListener('statechange', () => hooks.onAudioState?.(ctx!.state));
+    }
     void ctx.resume();
     return ctx;
   }
@@ -106,6 +112,10 @@ export function createEngine(hooks: {
     setFiles,
     exchange,
     context,
+    /** `running` when sound is coming out; anything else (or no context yet) when it is not */
+    get audioState(): string { return ctx?.state ?? 'closed'; },
+    /** Ask for the audio back. Browsers only agree inside a tap, so call this from one. */
+    resume: async () => { try { await ctx?.resume(); } catch {} },
     ensureAudio,
     get sessionOn() { return sessionOn; },
     /** Load the engine in the background so the first run is quick. */

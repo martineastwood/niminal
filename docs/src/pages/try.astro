@@ -79,6 +79,16 @@ const REPO = 'https://github.com/martineastwood/niminal';
       </p>
     </main>
 
+    <dialog class="st-dialog" id="modal">
+      <form method="dialog">
+        <p>Put the piece back as it was? Your changes will be lost.</p>
+        <div class="st-dialog-buttons">
+          <button class="btn" type="button" id="modal-cancel">Cancel</button>
+          <button class="btn btn-solid" type="submit" id="modal-ok">Put it back</button>
+        </div>
+      </form>
+    </dialog>
+
     <script>
       import { createEditor } from '../web/editor';
       import {
@@ -154,6 +164,18 @@ const REPO = 'https://github.com/martineastwood/niminal';
           errors.append(item);
         }
       }
+
+      // a question on the page, not the browser's: a browser dialog freezes the page and stops the audio on an iPad
+      const modal = document.getElementById('modal') as HTMLDialogElement;
+      const askToPutBack = () => new Promise<boolean>((resolve) => {
+        const finish = (answer: boolean) => { modal.onclose = null; if (modal.open) modal.close(); resolve(answer); };
+        document.getElementById('modal-cancel')!.onclick = () => finish(false);
+        modal.onclose = () => finish(false);
+        modal.querySelector('form')!.onsubmit = (event) => { event.preventDefault(); finish(true); };
+        modal.showModal();
+      });
+      // audio that stopped (a call, a lock) comes back at the next tap
+      document.addEventListener('pointerdown', () => { if (engine.sessionOn && engine.audioState !== 'running') void engine.resume(); }, true);
 
       // ---- the pieces
       let pieces: Piece[] = [];
@@ -269,7 +291,7 @@ const REPO = 'https://github.com/martineastwood/niminal';
         setStatus('Stopped. Play starts the piece from the top.');
       });
       resetButton.addEventListener('click', async () => {
-        if (code.value !== pristine && !confirm('Put the piece back as it was? Your changes will be lost.')) return;
+        if (code.value !== pristine && !(await askToPutBack())) return;
         if (current) await choose(current.file);
       });
 

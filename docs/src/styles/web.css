@@ -46,3 +46,13 @@
 [data-embed] .pg-chrome { display: none; }
 [data-embed] .pg { padding: 0.8rem; }
 [data-embed] .pg-editor-short .cm-editor { height: 14rem; }
+
+/* questions asked on the page */
+.st-dialog { border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg-elevated); color: var(--ink); padding: 1.2rem; width: min(24rem, calc(100vw - 2rem)); }
+.st-dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+.st-dialog p { margin: 0 0 0.8rem; font: 500 0.95rem var(--mono); }
+.st-dialog input { width: 100%; box-sizing: border-box; background: var(--panel); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0.6rem; font: 400 1rem var(--mono); margin-bottom: 0.9rem; }
+.st-dialog input[hidden] { display: none; }
+.st-dialog-buttons { display: flex; justify-content: flex-end; gap: 0.6rem; }
+.st-dialog-buttons .btn { cursor: pointer; background: transparent; color: var(--ink); min-height: 2.75rem; min-width: 5rem; }
+.st-dialog-buttons .btn-solid { background: var(--accent); color: var(--accent-ink); }

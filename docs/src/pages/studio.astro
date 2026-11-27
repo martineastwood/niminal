@@ -112,6 +112,7 @@ const examples: [string, string, number][] = [
           </div>
         </div>
       </div>
+      <button class="st-paused" id="paused" hidden>Audio paused. Tap here to bring it back.</button>
       <div class="pg-progress st-progress"><div id="progress"></div></div>
 
       <div class="st-tabs" role="tablist" aria-label="Show">
@@ -184,6 +185,16 @@ const examples: [string, string, number][] = [
       <p class="st-empty" id="files-empty">No files yet. Anything you add shows up here.</p>
       <p class="st-files-note" id="files-note"></p>
     </div>
+    <dialog class="st-dialog" id="modal">
+      <form method="dialog">
+        <p id="modal-text"></p>
+        <input id="modal-input" type="text" autocapitalize="sentences" autocomplete="off" spellcheck="false" />
+        <div class="st-dialog-buttons">
+          <button class="btn" type="button" id="modal-cancel">Cancel</button>
+          <button class="btn btn-solid" type="submit" id="modal-ok">OK</button>
+        </div>
+      </form>
+    </dialog>
     <div class="st-keys" id="keys" role="toolbar" aria-label="Code keys"></div>
 
     <script>
@@ -300,13 +311,22 @@ const examples: [string, string, number][] = [
         const elapsed = (performance.now() - clock.at) / 1000;
         return (clock.bar - 1) * clock.perBar + (clock.beat - 1) + (elapsed - clock.behind) * (clock.bpm / 60);
       };
+      // audio that has stopped (a call, a lock, a dialog) is said so, and comes back at a tap: the dots must not run on without it
+      const pausedBanner = $('paused');
+      function showAudio() {
+        const stopped = engine.sessionOn && engine.audioState !== 'running';
+        pausedBanner.hidden = !stopped;
+      }
+      pausedBanner.addEventListener('click', () => { void engine.resume().then(showAudio); });
+      document.addEventListener('pointerdown', () => { if (engine.sessionOn && engine.audioState !== 'running') void engine.resume().then(showAudio); }, true);
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { void engine.resume().then(showAudio); } });
       let shownBeat = -1;
       function showBeats() {
         const box = $('beats');
         if (box.childElementCount !== clock.perBar) {
           box.replaceChildren(...Array.from({ length: clock.perBar }, () => document.createElement('i')));
         }
-        const at = clock.on ? Math.floor(((heard() % clock.perBar) + clock.perBar) % clock.perBar) : -1;
+        const at = clock.on && engine.audioState === 'running' ? Math.floor(((heard() % clock.perBar) + clock.perBar) % clock.perBar) : -1;
         if (at === shownBeat) return;
         shownBeat = at;
         [...box.children].forEach((dot, i) => dot.toggleAttribute('data-now', i === at));
@@ -427,6 +447,7 @@ const examples: [string, string, number][] = [
         now.textContent = `bar ${s.bar} · ${Math.round(s.bpm)} bpm`;
         now.title = `engine load ${(m.load * 100).toFixed(0)}%, ${m.buffered.toFixed(2)} s ahead, ${m.underruns} gaps`;
         now.toggleAttribute('data-warn', m.underruns > 0 || m.load > 0.85);
+        showAudio();
         // the clock the page keeps follows what the engine says, and what it has buffered ahead of the speakers
         clock.bar = s.bar; clock.beat = s.beat; clock.bpm = s.bpm; clock.at = performance.now(); clock.behind = m.buffered; clock.on = true;
         clock.perBar = Number.isFinite(s.beats_per_bar) ? Math.max(1, Math.round(s.beats_per_bar)) : 4;
@@ -453,7 +474,31 @@ const examples: [string, string, number][] = [
         saveTimer = window.setTimeout(() => void saveNow(), 700);
       }
 
+      // ---- questions asked on the page, not by the browser: a browser dialog freezes the page and stops the audio on an iPad
+      const modal = $<HTMLDialogElement>('modal');
+      function dialog(text: string, options: { input?: string; ok?: string } = {}): Promise<string | null> {
+        return new Promise((resolve) => {
+          const input = $<HTMLInputElement>('modal-input');
+          $('modal-text').textContent = text;
+          input.hidden = options.input === undefined;
+          input.value = options.input ?? '';
+          $('modal-ok').textContent = options.ok ?? 'OK';
+          const finish = (answer: string | null) => {
+            modal.onclose = null;
+            if (modal.open) modal.close();
+            resolve(answer);
+          };
+          $('modal-cancel').onclick = () => finish(null);
+          modal.onclose = () => finish(null);
+          modal.querySelector('form')!.onsubmit = (event) => { event.preventDefault(); finish(input.hidden ? 'ok' : input.value.trim()); };
+          modal.showModal();
+          if (!input.hidden) input.select();
+        });
+      }
+      const confirmed = async (text: string, ok: string) => (await dialog(text, { ok })) !== null;
+
       const engine = createEngine({
+        onAudioState: () => showAudio(),
         onStatus: showSession,
         onLost: () => { setStatus('The engine stopped unexpectedly. Run all starts it again.'); now.textContent = ''; clock.on = false; },
         onBroken: () => setStatus('The engine could not be loaded in this browser.'),
@@ -575,7 +620,7 @@ const examples: [string, string, number][] = [
       }
 
       async function reset() {
-        if (code.value !== pristine && !confirm('Put the piece back as it was? Your changes will be lost.')) return;
+        if (code.value !== pristine && !(await confirmed('Put the piece back as it was? Your changes will be lost.', 'Put it back'))) return;
         stopPlaying();
         await engine.stop();
         now.textContent = ''; clock.on = false;
@@ -908,7 +953,7 @@ const examples: [string, string, number][] = [
       $('save-as').addEventListener('click', async () => {
         more.removeAttribute('data-open');
         const suggestion = isMine(current.key) ? current.name : (exampleSelect.selectedOptions[0]?.textContent ?? 'My piece').replace(/^A live set: /, '');
-        const name = prompt('Name this piece', suggestion)?.trim();
+        const name = (await dialog('Name this piece', { input: suggestion, ok: 'Save' }))?.trim();
         if (!name) return;
         // what was edited from an example is now the new piece, and the example goes back to how it was
         if (!isMine(current.key) && current.key) await store?.pieces.remove(`draft:${current.key}`);
@@ -921,7 +966,7 @@ const examples: [string, string, number][] = [
       });
       deleteButton.addEventListener('click', async () => {
         more.removeAttribute('data-open');
-        if (!isMine(current.key) || !confirm(`Delete “${current.name}”? It cannot be brought back.`)) return;
+        if (!isMine(current.key) || !(await confirmed(`Delete “${current.name}”? It cannot be brought back.`, 'Delete'))) return;
         await store?.pieces.remove(current.key);
         current = { key: '', name: '' };
         await openPiece(DEFAULT_PIECE);
