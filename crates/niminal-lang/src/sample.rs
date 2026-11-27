@@ -139,9 +139,10 @@ impl Samples {
     }
 
     fn load_file(&self, path: &Path) -> Result<Vec<Arc<Table>>, String> {
-        // a file in memory is told apart by the number it was put with; one on disk by when it changed
+        // a file in memory is told apart by the number it was put with; one on disk by when it changed. The number is
+        // counted in whole seconds: some clocks (Windows') cannot tell nanoseconds apart, and two puts must differ
         let modified = match niminal_engine::vfs::get(path) {
-            Some((_, generation)) => Some(std::time::UNIX_EPOCH + std::time::Duration::from_nanos(generation)),
+            Some((_, generation)) => Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(generation)),
             None => std::fs::metadata(path).and_then(|m| m.modified()).ok(),
         };
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
