@@ -1,0 +1,54 @@
+// A live set built from the starter kit that comes with niminal: recorded drum hits and a few tuned sounds, no
+// synthesis. Press Run all: a kick and a hat pattern start. Bring in the snare, the claps and the keys from the
+// Clips panel, then move the sliders. The comment after a `ctl` says how far its slider goes.
+use std/samples.{drums, electric_piano, metal_bar}
+
+config { channels: stereo }
+tempo 98bpm
+
+ctl brightness = 10khz.smooth(40ms)   // range 400hz..14khz
+ctl volume = -3db.smooth(40ms)        // range -30db..0db
+
+// an effect on everything that is playing
+fx master {
+  out = in.lpf(cutoff: brightness).gain(volume)
+}
+
+clip beat {
+  instrument: drums
+  length: 1bar
+  notes: grid {
+    kick:  x... .... x.x. ....
+    hat:   x.x. x.x. x.x. x.x.
+  }
+}
+clip backbeat {
+  instrument: drums
+  length: 1bar
+  notes: grid {
+    snare: .... x... .... x...
+    clap:  .... .... .... ..x.
+  }
+}
+clip rolls {
+  instrument: drums
+  length: 1bar
+  notes: grid {
+    tom:  .... .... .x.x ..x.
+    open: .... ..x. .... ..x.
+  }
+}
+clip chords {
+  instrument: electric_piano
+  length: 2bars
+  notes: [a3 ~ ~ e4  ~ ~ c4 ~  ~ ~ e4 ~  ~ ~ ~ ~
+          f3 ~ ~ c4  ~ ~ a3 ~  ~ ~ c4 ~  ~ ~ ~ ~]
+}
+clip chime {
+  instrument: metal_bar
+  length: 2bars
+  notes: [e5 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  b4 ~ ~ ~
+          c5 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  g5 ~ ~ ~]
+}
+
+beat.start
