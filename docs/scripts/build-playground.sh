@@ -13,4 +13,11 @@ cp crates/niminal-web/js/niminal.js "$out/"
 for name in functions kernels acid physical_models modal array_bank; do
   cp "examples/$name.nml" "$out/examples/"
 done
+# the pieces of the "Try it" page, and what its sliders move
+mkdir -p "$out/try"
+cp docs/try/*.nml docs/try/manifest.json "$out/try/"
+# pieces in the list that are also repository examples are used as they are, so there is one copy of each
+for name in $(sed -n 's/.*"file": "\([a-z_]*\)".*/\1/p' docs/try/manifest.json); do
+  [ -f "$out/try/$name.nml" ] || cp "examples/$name.nml" "$out/try/"
+done
 echo "playground: $(wc -c < "$out/niminal_web.wasm" | tr -d ' ') bytes of wasm, $(ls "$out/examples" | wc -l | tr -d ' ') examples"

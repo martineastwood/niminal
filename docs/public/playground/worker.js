@@ -22,6 +22,7 @@ function pump() {
     if (!chunk) { stopLive(); self.postMessage({ kind: "live-lost" }); return; }
     const cost = performance.now() - stepped;
     live.load = 0.9 * live.load + 0.1 * (cost / ((CHUNK / live.sampleRate) * 1000));
+    for (const channel of chunk) for (let i = 0; i < channel.length; i += 8) live.peak = Math.max(live.peak, Math.abs(channel[i]));
     live.produced += CHUNK;
     link.postMessage({ chunk }, chunk.map((c) => c.buffer));
   }
@@ -29,7 +30,7 @@ function pump() {
 
 function startLive(sampleRate) {
   if (live) return;
-  live = { sampleRate, produced: 0, played: 0, load: 0, underruns: 0 };
+  live = { sampleRate, produced: 0, played: 0, load: 0, underruns: 0, peak: 0 };
   link.postMessage({ running: true });
   pumpTimer = setInterval(pump, 5);
   statusTimer = setInterval(() => {
@@ -38,6 +39,7 @@ function startLive(sampleRate) {
       kind: "live-status",
       status: niminal.liveStatus(),
       load: live.load,
+      peak: (() => { const p = live.peak; live.peak = 0; return p; })(),
       underruns: live.underruns,
       buffered: (live.produced - live.played) / live.sampleRate,
     });
@@ -82,6 +84,10 @@ self.onmessage = async (event) => {
     }
     if (kind === "live-eval") {
       self.postMessage({ id, result: niminal.liveEval(source, event.data.now) });
+      return;
+    }
+    if (kind === "live-control") {
+      self.postMessage({ id, result: niminal.liveControl(event.data.name, event.data.value, event.data.unit) });
       return;
     }
     if (kind === "live-hush") {

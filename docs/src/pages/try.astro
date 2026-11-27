@@ -1,0 +1,298 @@
+---
+import '../styles/landing.css';
+import '../styles/playground.css';
+
+const REPO = 'https://github.com/martineastwood/niminal';
+---
+<!doctype html>
+<html lang="en" data-mode="ink" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Try niminal</title>
+    <meta name="description" content="Hear niminal in your browser: pick a piece, press play, move the sliders, change the code. Nothing to install." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;800;900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+    <script is:inline>
+      (function () {
+        var light = false;
+        try {
+          var saved = localStorage.getItem('starlight-theme');
+          light = saved === 'light';
+          if (!saved) localStorage.setItem('starlight-theme', 'dark');
+        } catch (e) {}
+        var root = document.documentElement;
+        root.setAttribute('data-mode', light ? 'paper' : 'ink');
+        root.setAttribute('data-theme', light ? 'light' : 'dark');
+        // ?embed=name shows one piece with nothing around it, for a frame in another page
+        if (new URLSearchParams(location.search).has('embed')) root.setAttribute('data-embed', '');
+      })();
+    </script>
+  </head>
+  <body>
+    <header class="nav pg-chrome">
+      <a class="brand" href="/"><span class="mark" aria-hidden="true"></span>niminal</a>
+      <nav>
+        <a href="/guide/getting-started/">Docs</a>
+        <a href="/reference/opcodes/">Opcodes</a>
+        <a href="/guide/live-coding/">Live coding</a>
+        <a href="/try/">Try it</a>
+        <a href="/playground/">Playground</a>
+        <a href={REPO}>GitHub</a>
+      </nav>
+      <div class="nav-end">
+        <div class="ground" role="group" aria-label="Colour scheme">
+          <button data-ground="ink">ink</button><button data-ground="paper">paper</button>
+        </div>
+        <a class="btn btn-solid btn-sm" href="/guide/getting-started/">Install</a>
+      </div>
+    </header>
+
+    <main class="pg">
+      <div class="pg-chrome">
+        <h1>Try niminal</h1>
+        <p class="lede">
+          Pick a piece, press <b>Play</b>, and move the sliders. Then change the code: select a line and press
+          <b>Run</b> to hear it join in. Nothing to install.
+        </p>
+        <div class="pg-pieces" id="pieces" role="tablist" aria-label="Pieces"></div>
+      </div>
+
+      <p class="pg-blurb" id="blurb"></p>
+      <div class="pg-bar">
+        <button class="btn btn-solid" id="play" disabled>▶ Play</button>
+        <button class="btn" id="stop" disabled>■ Stop</button>
+        <button class="btn" id="run" disabled title="Play the selected code, or the block the cursor is in">Run selection</button>
+        <button class="btn" id="reset" disabled title="Back to the piece as it was">↺ Reset</button>
+      </div>
+      <div class="pg-sliders" id="sliders"></div>
+      <div id="editor" class="pg-editor pg-editor-short" aria-label="niminal source"></div>
+      <p class="pg-now" id="now"></p>
+      <p class="pg-status" id="status" role="status">Loading the engine…</p>
+      <ul class="pg-errors" id="errors"></ul>
+      <p class="pg-note pg-chrome">
+        Want your own samples, or more room? The <a href="/playground/"><u>playground</u></a> is the same engine with an
+        editor for a whole piece, and <a href="/guide/getting-started/"><u>installing niminal</u></a> gives you
+        <a href="/reference/stage/"><u>Stage</u></a>.
+      </p>
+    </main>
+
+    <script>
+      import { createEditor } from '../playground/editor';
+      import {
+        byteToIndex, createEngine, lineColumn, shiftDiagnostics, type Diagnostic, type Status,
+      } from '../playground/engine';
+
+      type Slider = { name: string; label: string; min: number; max: number; value: number; unit: string; log?: boolean };
+      type Piece = { file: string; title: string; blurb: string; sliders: Slider[] };
+
+      const root = document.documentElement;
+      const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+      const playButton = $<HTMLButtonElement>('play');
+      const stopButton = $<HTMLButtonElement>('stop');
+      const runButton = $<HTMLButtonElement>('run');
+      const resetButton = $<HTMLButtonElement>('reset');
+      const piecesBox = $('pieces');
+      const blurb = $('blurb');
+      const slidersBox = $('sliders');
+      const status = $('status');
+      const errors = $('errors');
+      const now = $('now');
+      const setStatus = (text: string) => { status.textContent = text; };
+
+      document.querySelectorAll<HTMLButtonElement>('[data-ground]').forEach((b) =>
+        b.addEventListener('click', () => {
+          const mode = b.dataset.ground as 'ink' | 'paper';
+          root.setAttribute('data-mode', mode);
+          root.setAttribute('data-theme', mode === 'paper' ? 'light' : 'dark');
+          try { localStorage.setItem('starlight-theme', mode === 'paper' ? 'light' : 'dark'); } catch {}
+          code.applyGround();
+        }));
+
+      const engine = createEngine({
+        onStatus: (m: Status) => {
+          const s = m.status;
+          if (!s) { now.textContent = ''; return; }
+          now.textContent = `bar ${s.bar} · beat ${Math.floor(s.beat)}` +
+            (m.underruns > 0 || m.load > 0.85 ? ' · this device is struggling with this piece' : '');
+        },
+        onLost: () => { setStatus('The engine stopped unexpectedly. Play starts it again.'); now.textContent = ''; },
+        onBroken: () => setStatus('The engine could not be loaded in this browser.'),
+      });
+      const code = createEditor({
+        parent: $('editor'),
+        exchange: engine.exchange,
+        onRun: () => void runPart(),
+        onRunAll: () => void play(),
+      });
+
+      function showErrors(source: string, diagnostics: Diagnostic[], message: string) {
+        errors.replaceChildren();
+        for (const d of diagnostics) {
+          const from = byteToIndex(source, d.start);
+          const to = byteToIndex(source, d.end);
+          const { line, column } = lineColumn(source, from);
+          const item = document.createElement('li');
+          const where = document.createElement('span');
+          where.className = 'where';
+          where.textContent = `line ${line}, column ${column}: `;
+          item.append(where, d.message);
+          if (d.help) {
+            const help = document.createElement('span');
+            help.className = 'help';
+            help.textContent = d.help;
+            item.append(help);
+          }
+          item.addEventListener('click', () => code.select(from, Math.max(to, from + 1)));
+          errors.append(item);
+        }
+        if (message) {
+          const item = document.createElement('li');
+          item.textContent = message;
+          errors.append(item);
+        }
+      }
+
+      // ---- the pieces
+      let pieces: Piece[] = [];
+      let current: Piece | undefined;
+      let pristine = '';
+      let busy = false;
+
+      // a slider's position (0..1) and the value it stands for: even steps, or even ratios for frequencies
+      const valueAt = (s: Slider, t: number) => (s.log ? s.min * (s.max / s.min) ** t : s.min + (s.max - s.min) * t);
+      const positionOf = (s: Slider, v: number) => (s.log ? Math.log(v / s.min) / Math.log(s.max / s.min) : (v - s.min) / (s.max - s.min));
+      const show = (s: Slider, v: number) => {
+        const text = s.unit === 'hz' ? (v >= 1000 ? `${(v / 1000).toFixed(1)} kHz` : `${Math.round(v)} Hz`)
+          : s.unit === 'db' ? `${v.toFixed(0)} dB` : v.toFixed(2);
+        return text;
+      };
+      const levels = new Map<string, number>();
+
+      function buildSliders(piece: Piece) {
+        slidersBox.replaceChildren();
+        levels.clear();
+        for (const s of piece.sliders) {
+          levels.set(s.name, s.value);
+          const label = document.createElement('label');
+          const name = document.createElement('span');
+          name.textContent = s.label;
+          const input = document.createElement('input');
+          input.type = 'range';
+          input.min = '0'; input.max = '1000'; input.step = '1';
+          input.value = String(Math.round(positionOf(s, s.value) * 1000));
+          input.setAttribute('aria-label', s.label);
+          const readout = document.createElement('output');
+          readout.textContent = show(s, s.value);
+          let queued = false;
+          input.addEventListener('input', () => {
+            const v = valueAt(s, Number(input.value) / 1000);
+            levels.set(s.name, v);
+            readout.textContent = show(s, v);
+            // one message per frame at most, however fast the finger moves
+            if (queued || !engine.sessionOn) return;
+            queued = true;
+            requestAnimationFrame(() => { queued = false; void engine.control(s.name, levels.get(s.name)!, s.unit); });
+          });
+          label.append(name, input, readout);
+          slidersBox.append(label);
+        }
+      }
+
+      async function choose(file: string) {
+        const piece = pieces.find((p) => p.file === file);
+        if (!piece) return;
+        current = piece;
+        await engine.stop();
+        now.textContent = '';
+        piecesBox.querySelectorAll('button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.file === file)));
+        blurb.textContent = piece.blurb;
+        buildSliders(piece);
+        const response = await fetch(`/playground/try/${file}.nml`);
+        pristine = response.ok ? await response.text() : '// could not load this piece';
+        code.value = pristine;
+        errors.replaceChildren();
+        setStatus('Press Play.');
+      }
+
+      async function play() {
+        if (busy || playButton.disabled) return;
+        busy = true;
+        try {
+          setStatus('Starting…');
+          const text = code.value;
+          const reply = await engine.start(text);
+          if (!reply.ok) {
+            setStatus(reply.internal ? 'The engine stopped unexpectedly.' : 'There is a mistake in the code, so it did not start.');
+            showErrors(text, reply.diagnostics, reply.message);
+            return;
+          }
+          showErrors(text, [], '');
+          // a slider moved before Play is heard from the start
+          for (const s of current?.sliders ?? []) {
+            const v = levels.get(s.name);
+            if (v !== undefined && v !== s.value) await engine.control(s.name, v, s.unit);
+          }
+          code.flash(0, code.view.state.doc.length);
+          setStatus('Playing. Move a slider, or change the code, select it and press Run.');
+        } catch {
+          setStatus('Audio could not be started in this browser.');
+        } finally { busy = false; }
+      }
+
+      async function runPart() {
+        if (busy || runButton.disabled) return;
+        if (!engine.sessionOn) return play();
+        const part = code.target();
+        if (!part) { setStatus('Put the cursor in some code, or select some, then press Run.'); return; }
+        busy = true;
+        try {
+          const text = code.value;
+          const reply = await engine.run(text.slice(part.from, part.to));
+          if (!reply.ok) {
+            setStatus(reply.internal ? 'The engine stopped unexpectedly.' : 'There is a mistake in that code, so it was not run.');
+            showErrors(text, shiftDiagnostics(text, part.from, reply.diagnostics), reply.message);
+            return;
+          }
+          showErrors(text, [], '');
+          code.flash(part.from, part.to);
+          setStatus(`Sent. It joins in at bar ${reply.landed.bar}.`);
+        } finally { busy = false; }
+      }
+
+      playButton.addEventListener('click', () => void play());
+      runButton.addEventListener('click', () => void runPart());
+      stopButton.addEventListener('click', async () => {
+        await engine.hush();
+        setStatus('Stopped. Play starts the piece from the top.');
+      });
+      resetButton.addEventListener('click', async () => {
+        if (code.value !== pristine && !confirm('Put the piece back as it was? Your changes will be lost.')) return;
+        if (current) await choose(current.file);
+      });
+
+      (async () => {
+        pieces = await (await fetch('/playground/try/manifest.json')).json();
+        // ?embed=name shows just that piece
+        const wanted = new URLSearchParams(location.search).get('embed');
+        const shown = wanted ? pieces.filter((p) => p.file === wanted) : pieces;
+        if (shown.length) pieces = shown;
+        for (const piece of pieces) {
+          const b = document.createElement('button');
+          b.className = 'btn';
+          b.textContent = piece.title;
+          b.dataset.file = piece.file;
+          b.setAttribute('role', 'tab');
+          b.addEventListener('click', () => void choose(piece.file));
+          piecesBox.append(b);
+        }
+        await choose(pieces[0].file);
+        await engine.warm();
+        for (const b of [playButton, stopButton, runButton, resetButton]) b.disabled = false;
+        setStatus('Press Play.');
+      })();
+    </script>
+  </body>
+</html>

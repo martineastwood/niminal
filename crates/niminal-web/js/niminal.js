@@ -131,6 +131,17 @@ class Niminal {
     this.#wasm.niminal_live_hush();
   }
 
+  /** Move a control of the session now: `unit` is what the value is in ("hz", "db", ...), if it has one.
+   *  `{ ok: true }` or `{ ok: false, message }`. */
+  liveControl(name, value, unit = "") {
+    try {
+      const failed = this.#withText(`${name}|${unit}`, (p, n) => this.#wasm.niminal_live_control(p, n, value));
+      return failed === 0 ? { ok: true } : { ok: false, message: this.#text(this.#wasm.niminal_live_text(), this.#wasm.niminal_live_text_length()) };
+    } catch (error) {
+      return this.#trapped(error);
+    }
+  }
+
   /** End the session. */
   liveStop() {
     this.#wasm.niminal_live_stop();

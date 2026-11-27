@@ -91,3 +91,16 @@ fn the_playground_examples_start() {
         }
     }
 }
+
+#[test]
+fn a_control_moves_while_the_piece_plays() {
+    let source = "tempo 120bpm\nctl volume = -40db\ninstr tone(freq: hz) { out = osc(sine, freq) * 0.5 * volume }\nclip c {\n  instrument: tone\n  length: 1bar\n  notes: [a3 a3 a3 a3]\n}\nc.start\n";
+    let (mut session, _) = LiveSession::start(source, 48_000.0).ok().expect("starts");
+    session.process(4800);
+    let quiet = loudest(&session);
+    session.set_control("volume", -6.0, Some("db")).expect("the control moves");
+    session.process(24_000);
+    session.process(4800);
+    assert!(loudest(&session) > quiet * 4.0, "the control did not change the level");
+    assert!(session.set_control("nonsense", 1.0, None).is_err());
+}

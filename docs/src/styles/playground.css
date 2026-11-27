@@ -32,3 +32,17 @@
 .pg-export-body { position: absolute; right: 0; z-index: 5; margin-top: 0.3rem; padding: 0.8rem; display: grid; gap: 0.6rem; min-width: 12rem;
   background: var(--bg-elevated); border: 1px solid var(--line-strong); border-radius: 4px; }
 .pg .cm-flash { background: color-mix(in srgb, var(--accent) 35%, transparent); transition: background 0.4s; }
+
+/* the "Try it" page */
+.pg-pieces { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
+.pg-pieces button[aria-selected='true'] { background: var(--accent); color: var(--accent-ink); }
+.pg-blurb { margin: 0 0 0.8rem; color: var(--muted); min-height: 1.4rem; }
+.pg-sliders { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 0.6rem 1.5rem; margin: 0.2rem 0 0.9rem; }
+.pg-sliders label { display: grid; grid-template-columns: 7rem 1fr 4.5rem; align-items: center; gap: 0.6rem; font: 500 0.8rem var(--mono); color: var(--muted); }
+.pg-sliders input[type='range'] { width: 100%; accent-color: var(--accent); min-height: 2rem; }
+.pg-sliders output { color: var(--ink); text-align: right; }
+.pg-editor-short .cm-editor { height: 20rem; }
+/* embedded in another page: nothing but the piece */
+[data-embed] .pg-chrome { display: none; }
+[data-embed] .pg { padding: 0.8rem; }
+[data-embed] .pg-editor-short .cm-editor { height: 14rem; }

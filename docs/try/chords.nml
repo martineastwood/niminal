@@ -1,0 +1,35 @@
+// Slow chords in a room. The sliders open and close the filter and turn the room up and down.
+use std/instruments.{pad}
+
+config { channels: stereo }
+tempo 80bpm
+
+ctl brightness = 2500hz.smooth(30ms)
+ctl room_amount = 0.35.smooth(30ms)
+
+bus room: stereo
+fx hall {
+  out = room.crossfade(room.reverb(room: 0.8, damp: 0.5), room_amount)
+}
+
+instr chord_voice(freq: hz) { room += pad(freq: freq, attack: 600ms, release: 2sec).lpf(cutoff: brightness).gain(18db) }
+
+clip chords {
+  instrument: chord_voice
+  length: 4bars
+  notes: [a3 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~
+          f3 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~
+          c4 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~
+          g3 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~]
+}
+clip upper {
+  instrument: chord_voice
+  length: 4bars
+  notes: [e4 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~
+          c4 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~
+          g4 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~
+          d4 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~]
+}
+
+chords.start
+upper.start

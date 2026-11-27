@@ -74,6 +74,13 @@ impl LiveSession {
         self.out = self.offline.process(frames);
     }
 
+    /// Move a control now, in `unit` if given (`hz`, `db`, ...), over the control's own smoothing.
+    pub fn set_control(&mut self, name: &str, value: f64, unit: Option<&str>) -> Result<(), String> {
+        self.offline
+            .set_control(name, value, unit, None, None)
+            .map_err(|problems| problems.first().map_or_else(|| "the control could not be set".to_owned(), |p| p.message.clone()))
+    }
+
     /// Stop every sound and clip at once, keeping what has been defined.
     pub fn hush(&mut self) {
         // nothing sensible to report if there was nothing playing

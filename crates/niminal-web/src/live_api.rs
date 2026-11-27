@@ -161,6 +161,36 @@ pub extern "C" fn niminal_live_hush() {
     });
 }
 
+/// Move a control of the session now. The UTF-8 text at `name` is the control's name, then (optionally) a `|` and
+/// the unit its value is in. Returns 0, or 1 with the reason as the text.
+///
+/// # Safety
+/// `name` points to `length` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn niminal_live_control(name: *const u8, length: usize, value: f64) -> i32 {
+    // SAFETY: the caller's contract.
+    let bytes = unsafe { std::slice::from_raw_parts(name, length) };
+    let text = String::from_utf8_lossy(bytes).into_owned();
+    let (name, unit) = match text.split_once('|') {
+        Some((name, unit)) if !unit.is_empty() => (name, Some(unit)),
+        Some((name, _)) => (name, None),
+        None => (text.as_str(), None),
+    };
+    with(|s| {
+        let Some(session) = s.session.as_mut() else {
+            s.text = "the engine is not running: run the piece first".into();
+            return 1;
+        };
+        match session.set_control(name, value, unit) {
+            Ok(()) => 0,
+            Err(message) => {
+                s.text = message;
+                1
+            }
+        }
+    })
+}
+
 /// End the session and free what it held.
 #[unsafe(no_mangle)]
 pub extern "C" fn niminal_live_stop() {

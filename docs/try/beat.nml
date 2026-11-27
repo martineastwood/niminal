@@ -1,0 +1,46 @@
+// A first beat: drums and a bass. Move the sliders, or change a note and press Run.
+use std/drums.{kick_808, snare_tight, hat_closed}
+use std/instruments.{bass}
+
+config { channels: stereo }
+tempo 104bpm
+
+ctl brightness = 8khz.smooth(30ms)
+ctl volume = 0db.smooth(30ms)
+
+bus mix: stereo
+fx master {
+  out = mix.lpf(cutoff: brightness).gain(volume)
+}
+
+instr kick(freq: hz = c3) { mix += kick_808(freq: freq) }
+instr snare(freq: hz = c3) { mix += snare_tight(freq: freq) }
+instr hat(freq: hz = c3) { mix += hat_closed(freq: freq) }
+instr sub(freq: hz) { mix += bass(freq: freq, cutoff: 500hz) }
+
+clip kicks {
+  instrument: kick
+  length: 1bar
+  notes: [c3 ~ ~ ~  ~ ~ c3 ~  c3 ~ ~ ~  ~ ~ ~ ~]
+}
+clip snares {
+  instrument: snare
+  length: 1bar
+  notes: [~ ~ ~ ~  c3 ~ ~ ~  ~ ~ ~ ~  c3 ~ ~ c3]
+}
+clip hats {
+  instrument: hat
+  length: 1bar
+  notes: [c3 ~ c3 ~  c3 ~ c3 ~  c3 ~ c3 ~  c3 ~ c3 c3]
+}
+clip line {
+  instrument: sub
+  length: 2bars
+  notes: [a1 ~ ~ a1  ~ ~ c2 ~  a1 ~ ~ ~  e2 ~ d2 ~
+          a1 ~ ~ a1  ~ ~ c2 ~  g1 ~ ~ ~  a1 ~ ~ ~]
+}
+
+kicks.start
+snares.start
+hats.start
+line.start

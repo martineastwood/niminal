@@ -1,0 +1,25 @@
+[
+  {
+    "file": "beat", "title": "A first beat", "blurb": "Drums and a bass. Try the sliders, then change a note.", "bars": 8,
+    "sliders": [
+      { "name": "brightness", "label": "brightness", "min": 400, "max": 12000, "value": 8000, "unit": "hz", "log": true },
+      { "name": "volume", "label": "volume", "min": -30, "max": 0, "value": 0, "unit": "db" }
+    ]
+  },
+  {
+    "file": "chords", "title": "Slow chords", "blurb": "A pad in a room. Open the filter, then fill the room.", "bars": 8,
+    "sliders": [
+      { "name": "brightness", "label": "brightness", "min": 300, "max": 8000, "value": 2500, "unit": "hz", "log": true },
+      { "name": "room_amount", "label": "room", "min": 0, "max": 1, "value": 0.35, "unit": "" }
+    ]
+  },
+  {
+    "file": "arp", "title": "An arpeggio", "blurb": "Plucked notes with an echo.", "bars": 8,
+    "sliders": [
+      { "name": "brightness", "label": "brightness", "min": 300, "max": 8000, "value": 3000, "unit": "hz", "log": true },
+      { "name": "feedback", "label": "echo", "min": 0, "max": 0.9, "value": 0.4, "unit": "" }
+    ]
+  },
+  { "file": "acid", "title": "An acid bassline", "blurb": "A squelchy bass that slides.", "bars": 8, "sliders": [] },
+  { "file": "physical_models", "title": "Physical models", "blurb": "A bowed string and a reed, simulated.", "bars": 8, "sliders": [] }
+]

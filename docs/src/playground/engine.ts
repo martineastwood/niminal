@@ -11,6 +11,8 @@ export type LiveReply =
   | { ok: false; diagnostics: Diagnostic[]; message: string; internal: boolean };
 export type Status = {
   buffered: number;
+  /** the loudest sample made since the last status */
+  peak: number;
   load: number;
   underruns: number;
   status: { bar: number; beat: number; bpm: number; voices: number; clips: { name: string; running: boolean; muted: boolean }[] } | null;
@@ -100,6 +102,9 @@ export function createEngine(hooks: {
       void ctx?.resume();
       return ask<LiveReply>({ kind: 'live-eval', source, now });
     },
+    /** Move a control of the piece now. `unit` is what the value is in (`hz`, `db`), if anything. */
+    control: (name: string, value: number, unit = '') =>
+      ask<{ ok: true } | { ok: false; message: string }>({ kind: 'live-control', name, value, unit }),
     /** Silence everything, keeping the session. */
     async hush() { if (sessionOn) await ask({ kind: 'live-hush' }); },
     /** End the session. */

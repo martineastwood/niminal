@@ -1,0 +1,28 @@
+// An arpeggio with an echo. The sliders open and close the filter and make the echo ring longer.
+use std/instruments.{pluck}
+
+config { channels: stereo }
+tempo 112bpm
+
+ctl brightness = 3khz.smooth(30ms)
+ctl feedback = 0.4.smooth(20ms)
+
+bus echoes: stereo
+fx repeat {
+  out = echoes.delay(time: 3/16beat, feedback: feedback).lpf(cutoff: 3khz).gain(-3db)
+}
+
+instr plucked(freq: hz) {
+  dry = pluck(freq: freq, tone: 0.7, decay: 900ms).lpf(cutoff: brightness).gain(-6db)
+  echoes += dry
+  out = dry
+}
+
+clip arp {
+  instrument: plucked
+  length: 2bars
+  notes: [a3 e4 a4 c5  e5 c5 a4 e4  f3 c4 f4 a4  c5 a4 f4 c4
+          c4 g4 c5 e5  g5 e5 c5 g4  g3 d4 g4 b4  d5 b4 g4 d4]
+}
+
+arp.start
