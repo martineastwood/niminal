@@ -42,3 +42,38 @@ fn every_try_piece_plays_and_its_sliders_work() {
         }
     }
 }
+
+/// A slider is for playing with, so it must be heard soon after it moves, not when the next note starts.
+#[test]
+fn every_slider_is_heard_within_a_moment() {
+    let dir = format!("{}/../../docs/try", env!("CARGO_MANIFEST_DIR"));
+    let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!("{dir}/manifest.json")).unwrap()).unwrap();
+    for entry in manifest.as_array().unwrap() {
+        let file = entry["file"].as_str().unwrap();
+        let Ok(source) = std::fs::read_to_string(format!("{dir}/{file}.nml")) else { continue };
+        for slider in entry["sliders"].as_array().unwrap() {
+            let name = slider["name"].as_str().unwrap();
+            let unit = slider["unit"].as_str().filter(|u| !u.is_empty());
+            // the same piece twice, the slider sent to each end at the same moment
+            let heard: Vec<f32> = ["min", "max"]
+                .iter()
+                .map(|end| {
+                    let (mut s, _) = LiveSession::start(&source, 48_000.0).ok().unwrap();
+                    for _ in 0..20 {
+                        s.process(4800); // two seconds in
+                    }
+                    s.set_control(name, slider[end].as_f64().unwrap(), unit).unwrap();
+                    let mut energy = 0.0f32;
+                    for _ in 0..5 {
+                        s.process(4800); // the half second after
+                        // the change from one sample to the next: filters and echoes show in it, however low the notes
+                        energy += s.out.iter().map(|c| c.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum::<f32>()).sum::<f32>();
+                    }
+                    energy
+                })
+                .collect();
+            let (low, high) = (heard[0].min(heard[1]), heard[0].max(heard[1]));
+            assert!(high > low * 1.05, "{file}: {name} is not heard within half a second ({:?})", heard);
+        }
+    }
+}

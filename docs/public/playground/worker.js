@@ -5,15 +5,21 @@ let niminal;
 
 // ---- live: a session that this worker steps a little ahead of what the player has played
 const CHUNK = 1024; // frames per step
-const TARGET_SECONDS = 0.3; // how far ahead of the player to stay
+// How far ahead of the player to stay. A change (a slider, code that was run) is heard that much later, so it is
+// as little as the device allows: it starts small, grows when the player runs dry or the engine is busy.
+const MIN_AHEAD = 0.12;
+const MAX_AHEAD = 0.5;
 let link; // the port to the player
+// bumped each time what is queued for the player is dropped; the player counts frames played from zero in each epoch,
+// and what it reports from an earlier one is ignored
+let epoch = 0;
 let live; // { sampleRate, produced, played, load, underruns } while a session runs
 let pumpTimer;
 let statusTimer;
 
 function pump() {
   if (!live) return;
-  const target = TARGET_SECONDS * live.sampleRate;
+  const target = live.ahead * live.sampleRate;
   const began = performance.now();
   // a few steps at a time, so that a message (code to run) is never kept waiting long
   while (live.produced - live.played < target && performance.now() - began < 6) {
@@ -30,15 +36,18 @@ function pump() {
 
 function startLive(sampleRate) {
   if (live) return;
-  live = { sampleRate, produced: 0, played: 0, load: 0, underruns: 0, peak: 0 };
+  live = { sampleRate, produced: 0, played: 0, load: 0, underruns: 0, peak: 0, ahead: MIN_AHEAD };
   link.postMessage({ running: true });
   pumpTimer = setInterval(pump, 5);
   statusTimer = setInterval(() => {
     if (!live) return;
+    // a busy engine needs more room: its steps vary in cost, and a slow one must not run the player dry
+    if (live.load > 0.35) live.ahead = Math.max(live.ahead, Math.min(MAX_AHEAD, 0.12 + live.load));
     self.postMessage({
       kind: "live-status",
       status: niminal.liveStatus(),
       load: live.load,
+      ahead: live.ahead,
       peak: (() => { const p = live.peak; live.peak = 0; return p; })(),
       underruns: live.underruns,
       buffered: (live.produced - live.played) / live.sampleRate,
@@ -55,7 +64,9 @@ function stopLive() {
 
 /** What is queued for the player is dropped, so a restart or a stop is heard at once. */
 function clearQueue() {
-  link?.postMessage({ clear: true });
+  epoch++;
+  if (live) { live.produced = 0; live.played = 0; }
+  link?.postMessage({ clear: true, epoch });
 }
 
 self.onmessage = async (event) => {
@@ -65,9 +76,9 @@ self.onmessage = async (event) => {
     if (kind === "live-link") {
       link = event.data.link;
       link.onmessage = (message) => {
-        if (!live) return;
+        if (!live || message.data.epoch !== epoch) return;
         live.played = message.data.played;
-        if (message.data.underrun) live.underruns++;
+        if (message.data.underrun) { live.underruns++; live.ahead = Math.min(MAX_AHEAD, live.ahead + 0.1); }
       };
       self.postMessage({ id, result: { ok: true } });
       return;

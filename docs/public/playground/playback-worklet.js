@@ -6,10 +6,11 @@ class Player extends AudioWorkletProcessor {
     super();
     this.queue = [];
     this.offset = 0; // frames of queue[0] already played
-    this.played = 0; // frames played or dropped since the start
+    this.played = 0; // frames played since the start or the last clear
     this.sinceReport = 0;
     this.dry = false;
     this.running = false;
+    this.epoch = 0;
     this.waiting = true; // nothing has arrived since the start or a restart, so a dry queue is expected
     this.port.onmessage = (event) => {
       if (!event.data.link) return;
@@ -17,13 +18,13 @@ class Player extends AudioWorkletProcessor {
       this.link.onmessage = (message) => {
         if ('running' in message.data) this.running = message.data.running;
         if (message.data.chunk) { this.queue.push(message.data.chunk); this.waiting = false; }
-        // a restart or a stop: what is queued is dropped, and counted as played so the worker's books balance
         if (message.data.clear) {
-          for (const chunk of this.queue) this.played += chunk[0].length;
-          this.played -= this.offset;
+          // a restart or a stop: what is queued is dropped, and the count starts again
           this.queue = [];
-          this.waiting = true;
           this.offset = 0;
+          this.played = 0;
+          this.waiting = true;
+          this.epoch = message.data.epoch;
           this.report();
         }
       };
@@ -31,7 +32,7 @@ class Player extends AudioWorkletProcessor {
   }
 
   report(underrun = false) {
-    this.link?.postMessage({ played: this.played, underrun });
+    this.link?.postMessage({ played: this.played, underrun, epoch: this.epoch });
     this.sinceReport = 0;
   }
 
