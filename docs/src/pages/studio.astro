@@ -1,0 +1,375 @@
+---
+import '../styles/landing.css';
+import '../styles/playground.css';
+
+const REPO = 'https://github.com/martineastwood/niminal';
+// What the page offers to start from; the files are copied to /playground/examples by scripts/build-playground.sh.
+// [file, title, bars to render by default]. Pieces built from hand-written functions run on the interpreter in
+// a browser (there is no native-code generator in WebAssembly), so they render slower and start with fewer bars.
+const examples: [string, string, number][] = [
+  ['functions', 'Instruments built from functions', 8],
+  ['kernels', 'A piece made of hand-written functions', 4],
+  ['acid', 'An acid bassline', 8],
+  ['physical_models', 'Physical models', 8],
+  ['modal', 'Modal resonators', 8],
+  ['array_bank', 'A bank of arrays', 8],
+];
+---
+<!doctype html>
+<html lang="en" data-mode="ink" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>niminal studio</title>
+    <meta name="description" content="Write niminal in the browser and hear it. The engine runs in your browser as WebAssembly: nothing to install." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;800;900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+    <script is:inline>
+      (function () {
+        var light = false;
+        try {
+          var saved = localStorage.getItem('starlight-theme');
+          light = saved === 'light';
+          if (!saved) localStorage.setItem('starlight-theme', 'dark');
+        } catch (e) {}
+        var root = document.documentElement;
+        root.setAttribute('data-mode', light ? 'paper' : 'ink');
+        root.setAttribute('data-theme', light ? 'light' : 'dark');
+      })();
+    </script>
+  </head>
+  <body>
+    <header class="nav">
+      <a class="brand" href="/"><span class="mark" aria-hidden="true"></span>niminal</a>
+      <nav>
+        <a href="/guide/getting-started/">Docs</a>
+        <a href="/reference/opcodes/">Opcodes</a>
+        <a href="/guide/live-coding/">Live coding</a>
+        <a href="/try/">Try it</a>
+        <a href="/studio/">Studio</a>
+        <a href={REPO}>GitHub</a>
+      </nav>
+      <div class="nav-end">
+        <div class="ground" role="group" aria-label="Colour scheme">
+          <button data-ground="ink">ink</button><button data-ground="paper">paper</button>
+        </div>
+        <a class="btn btn-solid btn-sm" href="/guide/getting-started/">Install</a>
+      </div>
+    </header>
+
+    <main class="pg">
+      <h1>Studio</h1>
+      <p class="lede">
+        Write niminal and hear it. The engine runs in your browser as WebAssembly, so there is nothing to install.
+        Press <b>Run all</b> to start a piece, then change it while it plays: select some code and press
+        <code>Ctrl</code>/<code>Cmd</code> + <code>Enter</code>.
+      </p>
+
+      <div class="pg-bar">
+        <button class="btn btn-solid" id="run" disabled title="Run the selection, or the block the cursor is in (Ctrl/Cmd + Enter)">▶ Run</button>
+        <button class="btn" id="runall" disabled title="Start the whole piece again from the top (Ctrl/Cmd + Shift + Enter)">Run all</button>
+        <button class="btn" id="stop" disabled title="Silence everything; Run plays again">■ Stop</button>
+        <button class="btn" id="reset" disabled title="Back to the example as it was, and stop">↺ Reset</button>
+        <label>start from
+          <select id="example">
+            {examples.map(([file, title, bars]) => <option value={file} data-bars={bars}>{title}</option>)}
+          </select>
+        </label>
+        <span class="spacer"></span>
+        <details class="pg-export">
+          <summary class="btn">Export</summary>
+          <div class="pg-export-body">
+            <label>bars <input type="number" id="bars" value="8" min="1" max="64" /></label>
+            <button class="btn" id="play" disabled>Render &amp; play</button>
+            <button class="btn" id="download" disabled>Download WAV</button>
+          </div>
+        </details>
+        <button class="btn" id="share">Copy link</button>
+      </div>
+
+      <div id="editor" class="pg-editor" aria-label="niminal source"></div>
+      <div class="pg-progress"><div id="progress"></div></div>
+      <p class="pg-now" id="now" aria-live="off"></p>
+      <p class="pg-status" id="status" role="status">Loading the engine…</p>
+      <ul class="pg-errors" id="errors"></ul>
+
+      <p class="pg-note">
+        <b>Run</b> plays the code you have selected, or the block the cursor is in, and it joins in at the next bar.
+        <b>Run all</b> starts the whole piece again from the top. <b>Stop</b> silences everything, and <b>Reset</b>
+        puts the example back as it was. Nothing is saved on a server: <b>Copy link</b> puts your piece in the address.
+        Pieces that read sample files need a folder next to them, so they do not run here, and heavy pieces
+        built from hand-written functions run slower in a browser than in the <a href="/reference/stage/"><u>Stage</u></a> app.
+      </p>
+    </main>
+
+    <script>
+      import { createEditor } from '../playground/editor';
+      import {
+        byteToIndex, createEngine, decodePiece, encodePiece, lineColumn, shiftDiagnostics, wavFile,
+        type Diagnostic, type Status,
+      } from '../playground/engine';
+
+      const root = document.documentElement;
+      const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+      const runButton = $<HTMLButtonElement>('run');
+      const runAllButton = $<HTMLButtonElement>('runall');
+      const stop = $<HTMLButtonElement>('stop');
+      const resetButton = $<HTMLButtonElement>('reset');
+      const play = $<HTMLButtonElement>('play');
+      const download = $<HTMLButtonElement>('download');
+      const share = $<HTMLButtonElement>('share');
+      const exampleSelect = $<HTMLSelectElement>('example');
+      const bars = $<HTMLInputElement>('bars');
+      const status = $('status');
+      const errors = $('errors');
+      const progress = $('progress');
+      const now = $('now');
+      const setStatus = (text: string) => { status.textContent = text; };
+
+      document.querySelectorAll<HTMLButtonElement>('[data-ground]').forEach((b) =>
+        b.addEventListener('click', () => {
+          const mode = b.dataset.ground as 'ink' | 'paper';
+          root.setAttribute('data-mode', mode);
+          root.setAttribute('data-theme', mode === 'paper' ? 'light' : 'dark');
+          try { localStorage.setItem('starlight-theme', mode === 'paper' ? 'light' : 'dark'); } catch {}
+          code.applyGround();
+        }));
+
+      // ---- what the running session says about itself
+      function showNow(m: Status) {
+        const s = m.status;
+        if (!s) { now.textContent = ''; return; }
+        const playing = s.clips.filter((c) => c.running && !c.muted).map((c) => c.name);
+        let text = `bar ${s.bar} · beat ${Math.floor(s.beat)} · ${Math.round(s.bpm)} bpm · ${playing.length ? playing.join(', ') : s.voices > 0 ? `${s.voices} voices` : 'silent'}`;
+        if (m.underruns > 0 || m.load > 0.85) text += ' · this piece is heavy for this device and the sound may break up (try fewer parts, or Export)';
+        now.textContent = text;
+        now.title = `engine load ${(m.load * 100).toFixed(0)}%, ${m.buffered.toFixed(2)} s ahead, ${m.underruns} gaps`;
+      }
+      const engine = createEngine({
+        onStatus: showNow,
+        onLost: () => { setStatus('The engine stopped unexpectedly. Run all starts it again.'); now.textContent = ''; },
+        onBroken: () => setStatus('The engine could not be loaded in this browser.'),
+      });
+      const code = createEditor({
+        parent: $('editor'),
+        exchange: engine.exchange,
+        onRun: () => void runPart(),
+        onRunAll: () => void runAll(),
+      });
+
+      function showErrors(source: string, diagnostics: Diagnostic[], message: string, warnings: string[] = []) {
+        errors.replaceChildren();
+        for (const d of diagnostics) {
+          const from = byteToIndex(source, d.start);
+          const to = byteToIndex(source, d.end);
+          const { line, column } = lineColumn(source, from);
+          const item = document.createElement('li');
+          const where = document.createElement('span');
+          where.className = 'where';
+          where.textContent = `line ${line}, column ${column}: `;
+          item.append(where, d.message);
+          if (d.help) {
+            const help = document.createElement('span');
+            help.className = 'help';
+            help.textContent = d.help;
+            item.append(help);
+          }
+          item.addEventListener('click', () => code.select(from, Math.max(to, from + 1)));
+          errors.append(item);
+        }
+        for (const text of [message, ...warnings].filter(Boolean)) {
+          const item = document.createElement('li');
+          if (text !== message) item.className = 'warn';
+          item.textContent = text;
+          errors.append(item);
+        }
+      }
+
+      // ---- the live session
+      let busy = false;
+      let pristine = '';
+
+      async function runAll() {
+        if (busy || runButton.disabled) return;
+        busy = true;
+        stopPlaying();
+        try {
+          setStatus('Starting…');
+          const text = code.value;
+          const reply = await engine.start(text);
+          if (!reply.ok) {
+            setStatus(reply.internal ? 'The engine stopped unexpectedly.' : 'There is a mistake in the piece, so it did not start.');
+            showErrors(text, reply.diagnostics, reply.message);
+            return;
+          }
+          showErrors(text, [], '');
+          code.flash(0, code.view.state.doc.length);
+          setStatus('Playing the whole piece. Select some code and press Run to change it while it plays.');
+        } catch {
+          setStatus('Audio could not be started in this browser.');
+        } finally { busy = false; }
+      }
+
+      async function runPart() {
+        if (busy || runButton.disabled) return;
+        // nothing is playing yet, so there is nothing to change: start the piece
+        if (!engine.sessionOn) return runAll();
+        const part = code.target();
+        if (!part) { setStatus('Put the cursor in some code, or select some, and press Run.'); return; }
+        busy = true;
+        stopPlaying();
+        try {
+          const text = code.value;
+          const reply = await engine.run(text.slice(part.from, part.to));
+          if (!reply.ok) {
+            // the engine located the mistakes within the piece it was given: move them into the whole text
+            setStatus(reply.internal ? 'The engine stopped unexpectedly.' : 'There is a mistake in that code, so it was not run.');
+            showErrors(text, shiftDiagnostics(text, part.from, reply.diagnostics), reply.message);
+            return;
+          }
+          showErrors(text, [], '');
+          code.flash(part.from, part.to);
+          const what = reply.landed.changes.length ? reply.landed.changes.join(', ') : 'nothing changed';
+          setStatus(`Sent: ${what}. It lands at bar ${reply.landed.bar}.`);
+        } finally { busy = false; }
+      }
+
+      async function stopAll() {
+        stopPlaying();
+        if (!engine.sessionOn) return;
+        await engine.hush();
+        setStatus('Stopped. Run plays again, and Run all starts the piece from the top.');
+      }
+
+      async function reset() {
+        if (code.value !== pristine && !confirm('Put the example back as it was? Your changes will be lost.')) return;
+        stopPlaying();
+        await engine.stop();
+        now.textContent = '';
+        code.value = pristine;
+        errors.replaceChildren();
+        setStatus('Back to the start. Run all plays it.');
+      }
+
+      // ---- Export: render the whole piece, then play it
+      let source: AudioBufferSourceNode | undefined;
+      let last: { channels: Float32Array[]; sampleRate: number } | undefined;
+      let frame = 0;
+
+      function stopPlaying() {
+        cancelAnimationFrame(frame);
+        progress.style.width = '0';
+        try { source?.stop(); } catch {}
+        source = undefined;
+      }
+
+      async function renderAndPlay() {
+        if (play.disabled) return;
+        stopPlaying();
+        // the context must be made or resumed inside the click, before anything is awaited
+        const ctx = engine.context();
+        // the live session and a render would play over each other
+        await engine.stop();
+        now.textContent = '';
+        play.disabled = true;
+        download.disabled = true;
+        const text = code.value;
+        // the render happens in a worker, so the page can keep counting while it waits
+        const waitingSince = performance.now();
+        const say = () => setStatus(`Rendering… ${Math.floor((performance.now() - waitingSince) / 1000)} s`);
+        say();
+        const waiting = setInterval(say, 250);
+        errors.replaceChildren();
+        const result = await engine.render(text, Number(bars.value) || 8);
+        clearInterval(waiting);
+        play.disabled = false;
+        if (!result.ok) {
+          setStatus(result.internal ? 'The engine stopped unexpectedly.' : 'There is a mistake in the piece.');
+          showErrors(text, result.diagnostics, result.message);
+          return;
+        }
+        showErrors(text, [], '', result.warnings);
+        last = { channels: result.channels, sampleRate: result.sampleRate };
+        download.disabled = false;
+        const frames = result.channels[0].length;
+        const buffer = ctx.createBuffer(result.channels.length, frames, result.sampleRate);
+        result.channels.forEach((c, i) => buffer.copyToChannel(c, i));
+        source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        const seconds = frames / result.sampleRate;
+        const started = ctx.currentTime;
+        source.onended = () => { stopPlaying(); setStatus(`Played ${seconds.toFixed(1)} s (rendered in ${(result.renderMs / 1000).toFixed(2)} s).`); };
+        source.start();
+        setStatus(`Playing ${seconds.toFixed(1)} s (rendered in ${(result.renderMs / 1000).toFixed(2)} s).`);
+        const tick = () => {
+          progress.style.width = `${Math.min(100, ((ctx.currentTime - started) / seconds) * 100)}%`;
+          frame = requestAnimationFrame(tick);
+        };
+        tick();
+      }
+
+      play.addEventListener('click', renderAndPlay);
+      runButton.addEventListener('click', () => void runPart());
+      runAllButton.addEventListener('click', () => void runAll());
+      stop.addEventListener('click', () => void stopAll());
+      resetButton.addEventListener('click', () => void reset());
+
+      download.addEventListener('click', () => {
+        if (!last) return;
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(wavFile(last.channels, last.sampleRate));
+        link.download = 'niminal.wav';
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
+      });
+
+      // ---- sharing: the piece, compressed, in the address
+      share.addEventListener('click', async () => {
+        let url: string;
+        try {
+          url = `${location.origin}${location.pathname}#c=${await encodePiece(code.value)}&b=${Number(bars.value) || 8}`;
+        } catch { setStatus('Could not make a link in this browser.'); return; }
+        history.replaceState(null, '', url);
+        try {
+          await navigator.clipboard.writeText(url);
+          setStatus('The link, with your piece in it, is copied.');
+        } catch { setStatus('The link, with your piece in it, is in the address bar.'); }
+      });
+
+      // ---- starting points
+      async function loadExample(name: string) {
+        const wanted = exampleSelect.querySelector<HTMLOptionElement>(`option[value="${name}"]`)?.dataset.bars;
+        if (wanted) bars.value = wanted;
+        const response = await fetch(`/playground/examples/${name}.nml`);
+        pristine = response.ok ? await response.text() : '// could not load the example';
+        code.value = pristine;
+        errors.replaceChildren();
+      }
+      exampleSelect.addEventListener('change', async () => {
+        stopPlaying();
+        await engine.stop();
+        now.textContent = '';
+        history.replaceState(null, '', location.pathname);
+        await loadExample(exampleSelect.value);
+        setStatus('Run all plays it.');
+      });
+
+      (async () => {
+        const shared = new URLSearchParams(location.hash.slice(1));
+        const hash = shared.get('c');
+        if (Number(shared.get('b')) > 0) bars.value = String(Math.min(64, Number(shared.get('b'))));
+        if (hash) {
+          try { pristine = await decodePiece(hash); code.value = pristine; } catch { await loadExample(exampleSelect.value); }
+        } else {
+          await loadExample(exampleSelect.value);
+        }
+        await engine.warm();
+        for (const b of [runButton, runAllButton, resetButton, play, stop]) b.disabled = false;
+        setStatus('Ready. Press Run all to start the piece.');
+      })();
+    </script>
+  </body>
+</html>
