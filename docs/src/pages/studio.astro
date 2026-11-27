@@ -101,6 +101,8 @@ const examples: [string, string, number][] = [
             </details>
             <button class="btn" id="share">Copy link</button>
             <button class="btn" id="files-open">Files…</button>
+            <button class="btn" id="save-as">Save as…</button>
+            <button class="btn" id="delete-piece" hidden>Delete this piece</button>
           </div>
         </div>
       </div>
@@ -415,6 +417,22 @@ const examples: [string, string, number][] = [
         showSliders(state);
       }
 
+      // ---- your pieces: what you write is kept in this browser, so a reload or a slip of the finger loses nothing.
+      // A piece you named is `piece:<id>`; the edits you make to an example are kept as a draft of that example.
+      type Open = { key: string; name: string };
+      const DEFAULT_PIECE = 'studio/house';
+      let current: Open = { key: DEFAULT_PIECE, name: '' };
+      let pristine = '';
+      let loading = true; // the page is setting the text, which is not an edit
+      let opened = false; // a piece has been opened, so what is in the editor is somebody's work
+      let saveTimer: number | undefined;
+      const isMine = (key: string) => key.startsWith('piece:');
+      function saveSoon() {
+        if (loading) return;
+        clearTimeout(saveTimer);
+        saveTimer = window.setTimeout(() => void saveNow(), 700);
+      }
+
       const engine = createEngine({
         onStatus: showSession,
         onLost: () => { setStatus('The engine stopped unexpectedly. Run all starts it again.'); now.textContent = ''; clock.on = false; },
@@ -425,6 +443,7 @@ const examples: [string, string, number][] = [
         exchange: engine.exchange,
         onRun: () => void runPart(),
         onRunAll: () => void runAll(),
+        onChange: saveSoon,
       });
       setupKeyRow($('keys'), code, () => void runPart());
 
@@ -483,7 +502,6 @@ const examples: [string, string, number][] = [
 
       // ---- the live session
       let busy = false;
-      let pristine = '';
 
       async function runAll() {
         if (busy || runButton.disabled) return;
@@ -712,37 +730,112 @@ const examples: [string, string, number][] = [
         showFiles();
       }
 
-      // ---- starting points
-      async function loadExample(name: string) {
-        const wanted = exampleSelect.querySelector<HTMLOptionElement>(`option[value="${name}"]`)?.dataset.bars;
-        if (wanted) bars.value = wanted;
-        const response = await fetch(`/web/${name}.nml`);
-        pristine = response.ok ? await response.text() : '// could not load the example';
-        code.value = pristine;
-        showErrors(pristine, [], '');
+      // ---- opening, saving and naming pieces
+      const mine = document.createElement('optgroup');
+      mine.label = 'My pieces';
+      const deleteButton = $<HTMLButtonElement>('delete-piece');
+      const setText = (text: string) => { loading = true; code.value = text; loading = false; };
+
+      async function saveNow() {
+        clearTimeout(saveTimer);
+        if (!store || !current.key || !opened) return;
+        const text = code.value;
+        if (isMine(current.key)) await store.pieces.put({ key: current.key, name: current.name, text, updated: Date.now() });
+        // an example that is as it came needs no draft
+        else if (text === pristine) await store.pieces.remove(`draft:${current.key}`);
+        else await store.pieces.put({ key: `draft:${current.key}`, name: current.key, text, updated: Date.now() });
       }
-      exampleSelect.addEventListener('change', async () => {
+      // leaving the page saves what is waiting to be saved
+      addEventListener('pagehide', () => void saveNow());
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') void saveNow(); });
+
+      async function refreshMine() {
+        const records = ((await store?.pieces.all()) ?? []).filter((r) => isMine(r.key)).sort((a, b) => b.updated - a.updated);
+        mine.replaceChildren(...records.map((r) => Object.assign(document.createElement('option'), { value: r.key, textContent: r.name })));
+        if (records.length) exampleSelect.prepend(mine); else mine.remove();
+        exampleSelect.value = current.key;
+        deleteButton.hidden = !isMine(current.key);
+      }
+
+      async function openPiece(key: string) {
+        await saveNow();
         stopPlaying();
         await engine.stop();
         now.textContent = ''; clock.on = false;
+        waiting.clear();
         history.replaceState(null, '', location.pathname);
-        await loadExample(exampleSelect.value);
-        setStatus('Run all plays it.');
+        const record = isMine(key) ? await store?.pieces.get(key) : undefined;
+        if (isMine(key) && !record) return openPiece(DEFAULT_PIECE);
+        let note = 'Run all plays it.';
+        if (record) {
+          current = { key, name: record.name };
+          pristine = record.text;
+          setText(record.text);
+        } else {
+          const wanted = exampleSelect.querySelector<HTMLOptionElement>(`option[value="${key}"]`)?.dataset.bars;
+          if (wanted) bars.value = wanted;
+          const response = await fetch(`/web/${key}.nml`);
+          pristine = response.ok ? await response.text() : '// could not load the example';
+          const draft = await store?.pieces.get(`draft:${key}`);
+          current = { key, name: '' };
+          setText(draft ? draft.text : pristine);
+          if (draft) note = 'Your earlier changes to this piece are back. Reset puts the original back.';
+        }
+        opened = true;
+        try { localStorage.setItem('niminal-studio-last', key); } catch {}
+        await refreshMine();
+        showErrors(code.value, [], '');
+        setStatus(note);
+      }
+      exampleSelect.addEventListener('change', () => void openPiece(exampleSelect.value));
+
+      $('save-as').addEventListener('click', async () => {
+        more.removeAttribute('data-open');
+        const suggestion = isMine(current.key) ? current.name : (exampleSelect.selectedOptions[0]?.textContent ?? 'My piece').replace(/^A live set: /, '');
+        const name = prompt('Name this piece', suggestion)?.trim();
+        if (!name) return;
+        // what was edited from an example is now the new piece, and the example goes back to how it was
+        if (!isMine(current.key) && current.key) await store?.pieces.remove(`draft:${current.key}`);
+        const key = `piece:${crypto.randomUUID()}`;
+        current = { key, name };
+        pristine = code.value;
+        await saveNow();
+        await refreshMine();
+        setStatus(`Saved as “${name}”. It is in the list under My pieces, and your changes are kept as you make them.`);
+      });
+      deleteButton.addEventListener('click', async () => {
+        more.removeAttribute('data-open');
+        if (!isMine(current.key) || !confirm(`Delete “${current.name}”? It cannot be brought back.`)) return;
+        await store?.pieces.remove(current.key);
+        current = { key: '', name: '' };
+        await openPiece(DEFAULT_PIECE);
       });
 
       (async () => {
         const shared = new URLSearchParams(location.hash.slice(1));
         const hash = shared.get('c');
         if (Number(shared.get('b')) > 0) bars.value = String(Math.min(64, Number(shared.get('b'))));
-        if (hash) {
-          try { pristine = await decodePiece(hash); code.value = pristine; } catch { await loadExample(exampleSelect.value); }
-        } else {
-          await loadExample(exampleSelect.value);
-        }
         await restoreFiles();
+        let last = DEFAULT_PIECE;
+        try { last = localStorage.getItem('niminal-studio-last') ?? DEFAULT_PIECE; } catch {}
+        await refreshMine();
+        if (!exampleSelect.querySelector(`option[value="${last}"]`)) last = DEFAULT_PIECE;
+        let openedShared = false;
+        if (hash) {
+          try {
+            // a piece from a link is not saved until you save it: it has no name yet
+            const text = await decodePiece(hash);
+            current = { key: '', name: '' };
+            pristine = text;
+            setText(text);
+            openedShared = true;
+            setStatus('This piece came from a link. Save as… keeps it in your list.');
+          } catch {}
+        }
+        if (!openedShared) await openPiece(last);
         await engine.warm();
         for (const b of [runButton, runAllButton, resetButton, play, stop]) b.disabled = false;
-        setStatus('Ready. Press Run all to start the piece.');
+        if (!openedShared && !status.textContent?.startsWith('Your earlier')) setStatus('Ready. Press Run all to start the piece.');
       })();
     </script>
   </body>

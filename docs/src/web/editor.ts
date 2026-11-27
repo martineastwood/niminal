@@ -119,6 +119,8 @@ export function createEditor(options: {
   onRun: () => void;
   /** Mod-Shift-Enter */
   onRunAll: () => void;
+  /** the text changed (by typing, or by being set) */
+  onChange?: () => void;
 }) {
   const root = document.documentElement;
   const lsp = languageClient((html) => DOMPurify.sanitize(html));
@@ -147,6 +149,7 @@ export function createEditor(options: {
         // mistakes, completion and hovers come from the language server, running in a worker
         lsp.plugin(options.uri ?? 'file:///studio.nml', 'niminal'),
         lintGutter(),
+        EditorView.updateListener.of((update) => { if (update.docChanged) options.onChange?.(); }),
         ground.of(groundExtensions()),
       ],
     }),
