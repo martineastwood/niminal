@@ -1,6 +1,7 @@
 ---
 import '../styles/landing.css';
 import '../styles/web.css';
+import '../styles/studio.css';
 
 const REPO = 'https://github.com/martineastwood/niminal';
 // What the page offers to start from; the files are copied to /web/examples by scripts/build-web.sh.
@@ -19,7 +20,8 @@ const examples: [string, string, number][] = [
 <html lang="en" data-mode="ink" data-theme="dark">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0b0b" />
     <title>niminal studio</title>
     <meta name="description" content="Write niminal in the browser and hear it. The engine runs in your browser as WebAssembly: nothing to install." />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
@@ -40,7 +42,7 @@ const examples: [string, string, number][] = [
       })();
     </script>
   </head>
-  <body>
+  <body class="studio">
     <header class="nav">
       <a class="brand" href="/"><span class="mark" aria-hidden="true"></span>niminal</a>
       <nav>
@@ -59,53 +61,76 @@ const examples: [string, string, number][] = [
       </div>
     </header>
 
-    <main class="pg">
-      <h1>Studio</h1>
-      <p class="lede">
-        Write niminal and hear it. The engine runs in your browser as WebAssembly, so there is nothing to install.
-        Press <b>Run all</b> to start a piece, then change it while it plays: select some code and press
-        <code>Ctrl</code>/<code>Cmd</code> + <code>Enter</code>.
-      </p>
-
-      <div class="pg-bar">
-        <button class="btn btn-solid" id="run" disabled title="Run the selection, or the block the cursor is in (Ctrl/Cmd + Enter)">▶ Run</button>
-        <button class="btn" id="runall" disabled title="Start the whole piece again from the top (Ctrl/Cmd + Shift + Enter)">Run all</button>
+    <div class="st" id="st" data-pane="code">
+      <div class="st-bar">
+        <button class="btn btn-solid" id="runall" disabled title="Start the whole piece from the top (Ctrl/Cmd + Shift + Enter)">▶ Run all</button>
         <button class="btn" id="stop" disabled title="Silence everything; Run plays again">■ Stop</button>
-        <button class="btn" id="reset" disabled title="Back to the example as it was, and stop">↺ Reset</button>
-        <label>start from
-          <select id="example">
-            {examples.map(([file, title, bars]) => <option value={file} data-bars={bars}>{title}</option>)}
-          </select>
-        </label>
+        <span class="st-now" id="now" aria-live="off"></span>
         <span class="spacer"></span>
-        <details class="pg-export">
-          <summary class="btn">Export</summary>
-          <div class="pg-export-body">
-            <label>bars <input type="number" id="bars" value="8" min="1" max="64" /></label>
-            <button class="btn" id="play" disabled>Render &amp; play</button>
-            <button class="btn" id="download" disabled>Download WAV</button>
+        <div class="st-more" id="more">
+          <button class="btn st-more-toggle" id="more-toggle" aria-expanded="false" aria-controls="more-body">More ▾</button>
+          <div class="st-more-body" id="more-body">
+            <button class="btn" id="run" disabled title="Run the selection, or the block the cursor is in (Ctrl/Cmd + Enter)">Run block</button>
+            <button class="btn" id="reset" disabled title="Back to the piece as it was, and stop">↺ Reset</button>
+            <label class="st-piece">
+              <span class="sr-only">Piece</span>
+              <select id="example" aria-label="Piece">
+                {examples.map(([file, title, bars]) => <option value={file} data-bars={bars}>{title}</option>)}
+              </select>
+            </label>
+            <details class="pg-export">
+              <summary class="btn">Export</summary>
+              <div class="pg-export-body">
+                <label>bars <input type="number" id="bars" value="8" min="1" max="64" /></label>
+                <button class="btn" id="play" disabled>Render &amp; play</button>
+                <button class="btn" id="download" disabled>Download WAV</button>
+              </div>
+            </details>
+            <button class="btn" id="share">Copy link</button>
           </div>
-        </details>
-        <button class="btn" id="share">Copy link</button>
+        </div>
+      </div>
+      <div class="pg-progress st-progress"><div id="progress"></div></div>
+
+      <div class="st-tabs" role="tablist" aria-label="Show">
+        <button role="tab" data-pane="code" aria-selected="true">Code</button>
+        <button role="tab" data-pane="perform" aria-selected="false">Perform</button>
       </div>
 
-      <div id="editor" class="pg-editor" aria-label="niminal source"></div>
-      <div class="pg-progress"><div id="progress"></div></div>
-      <p class="pg-now" id="now" aria-live="off"></p>
-      <p class="pg-status" id="status" role="status">Loading the engine…</p>
-      <ul class="pg-errors" id="errors"></ul>
+      <div class="st-main">
+        <section class="st-code" aria-label="Code">
+          <div id="editor" class="pg-editor" aria-label="niminal source"></div>
+        </section>
+        <aside class="st-perform" aria-label="Perform">
+          <h2>Pads</h2>
+          <div class="st-pads" id="pads"></div>
+          <p class="st-empty" id="pads-empty">Press <b>Run all</b>. Each clip in the piece appears here as a pad you can tap to start or stop at the next bar.</p>
+        </aside>
+      </div>
 
-      <p class="pg-note">
-        <b>Run</b> plays the code you have selected, or the block the cursor is in, and it joins in at the next bar.
-        <b>Run all</b> starts the whole piece again from the top. <b>Stop</b> silences everything, and <b>Reset</b>
-        puts the example back as it was. Nothing is saved on a server: <b>Copy link</b> puts your piece in the address.
-        Pieces that read sample files need a folder next to them, so they do not run here, and heavy pieces
-        built from hand-written functions run slower in a browser than in the <a href="/reference/stage/"><u>Stage</u></a> app.
-      </p>
-    </main>
+      <div class="st-drawer" id="drawer">
+        <button class="st-drawer-bar" id="drawer-toggle" aria-expanded="false" aria-controls="drawer-body">
+          <span class="chevron" aria-hidden="true">▴</span>
+          <span id="status" role="status">Loading the engine…</span>
+          <span class="count" id="count"></span>
+        </button>
+        <div class="st-drawer-body" id="drawer-body">
+          <ul class="pg-errors" id="errors"></ul>
+          <p class="st-help">
+            <b>Run block</b> (or the ▶ in the margin) plays the code you have selected, or the block the cursor is in, and it joins in at
+            the next bar. <b>Run all</b> starts the whole piece again from the top. <b>Stop</b> silences everything, and <b>Reset</b>
+            puts the piece back as it was. Nothing is saved on a server: <b>Copy link</b> puts your piece in the address. Pieces that read
+            sample files do not run here yet, and heavy pieces built from hand-written functions run slower in a browser than in
+            <a href="/reference/stage/"><u>Stage</u></a>.
+          </p>
+        </div>
+      </div>
+    </div>
+    <div class="st-keys" id="keys" role="toolbar" aria-label="Code keys"></div>
 
     <script>
       import { createEditor } from '../web/editor';
+      import { setupKeyRow } from '../web/keys';
       import {
         byteToIndex, createEngine, decodePiece, encodePiece, lineColumn, shiftDiagnostics, wavFile,
         type Diagnostic, type Status,
@@ -113,6 +138,7 @@ const examples: [string, string, number][] = [
 
       const root = document.documentElement;
       const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+      const shell = $('st');
       const runButton = $<HTMLButtonElement>('run');
       const runAllButton = $<HTMLButtonElement>('runall');
       const stop = $<HTMLButtonElement>('stop');
@@ -126,7 +152,42 @@ const examples: [string, string, number][] = [
       const errors = $('errors');
       const progress = $('progress');
       const now = $('now');
+      const pads = $('pads');
+      const padsEmpty = $('pads-empty');
+      const drawer = $('drawer');
+      const drawerToggle = $('drawer-toggle');
+      const more = $('more');
+      const moreToggle = $('more-toggle');
+      const count = $('count');
       const setStatus = (text: string) => { status.textContent = text; };
+
+      // ---- the page fits what is visible: on a touch screen the keyboard takes half of it
+      const viewport = window.visualViewport;
+      const fit = () => {
+        if (!viewport) return;
+        root.style.setProperty('--vvh', `${viewport.height}px`);
+        // the page itself must not scroll: everything fits above the keyboard
+        if (window.scrollY !== 0) window.scrollTo(0, 0);
+      };
+      viewport?.addEventListener('resize', fit);
+      viewport?.addEventListener('scroll', fit);
+      fit();
+
+      // ---- Code or Perform, when there is room for only one
+      const showPane = (pane: string) => {
+        shell.dataset.pane = pane;
+        document.querySelectorAll<HTMLButtonElement>('.st-tabs button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.pane === pane)));
+      };
+      document.querySelectorAll<HTMLButtonElement>('.st-tabs button').forEach((b) => b.addEventListener('click', () => showPane(b.dataset.pane!)));
+
+      // ---- the less used buttons: always shown when there is room, behind "More" when there is not
+      moreToggle.addEventListener('click', () => { const open = !more.hasAttribute('data-open'); more.toggleAttribute('data-open', open); moreToggle.setAttribute('aria-expanded', String(open)); });
+      // a tap outside the menu closes it
+      document.addEventListener('pointerdown', (e) => { if (!more.contains(e.target as Node)) { more.removeAttribute('data-open'); moreToggle.setAttribute('aria-expanded', 'false'); } });
+
+      // ---- messages: closed unless something needs saying
+      const setDrawer = (open: boolean) => { drawer.toggleAttribute('data-open', open); drawerToggle.setAttribute('aria-expanded', String(open)); };
+      drawerToggle.addEventListener('click', () => setDrawer(!drawer.hasAttribute('data-open')));
 
       document.querySelectorAll<HTMLButtonElement>('[data-ground]').forEach((b) =>
         b.addEventListener('click', () => {
@@ -138,17 +199,45 @@ const examples: [string, string, number][] = [
         }));
 
       // ---- what the running session says about itself
-      function showNow(m: Status) {
+      let clipNames = '';
+      const padButtons = new Map<string, HTMLButtonElement>();
+      function showSession(m: Status) {
         const s = m.status;
         if (!s) { now.textContent = ''; return; }
-        const playing = s.clips.filter((c) => c.running && !c.muted).map((c) => c.name);
-        let text = `bar ${s.bar} · beat ${Math.floor(s.beat)} · ${Math.round(s.bpm)} bpm · ${playing.length ? playing.join(', ') : s.voices > 0 ? `${s.voices} voices` : 'silent'}`;
-        if (m.underruns > 0 || m.load > 0.85) text += ' · this piece is heavy for this device and the sound may break up (try fewer parts, or Export)';
-        now.textContent = text;
+        now.textContent = `bar ${s.bar} · beat ${Math.floor(s.beat)} · ${Math.round(s.bpm)} bpm`;
         now.title = `engine load ${(m.load * 100).toFixed(0)}%, ${m.buffered.toFixed(2)} s ahead, ${m.underruns} gaps`;
+        now.toggleAttribute('data-warn', m.underruns > 0 || m.load > 0.85);
+        // the clips of the piece are pads
+        const names = s.clips.map((c) => c.name).join('|');
+        if (names !== clipNames) {
+          clipNames = names;
+          pads.replaceChildren();
+          padButtons.clear();
+          for (const clip of s.clips) {
+            const pad = document.createElement('button');
+            pad.className = 'st-pad';
+            pad.textContent = clip.name;
+            pad.addEventListener('click', () => void tapPad(clip.name));
+            pads.append(pad);
+            padButtons.set(clip.name, pad);
+          }
+          padsEmpty.hidden = s.clips.length > 0;
+        }
+        for (const clip of s.clips) {
+          const pad = padButtons.get(clip.name);
+          if (!pad) continue;
+          pad.toggleAttribute('data-on', clip.running && !clip.muted);
+          pad.toggleAttribute('data-muted', clip.muted);
+        }
       }
+      async function tapPad(name: string) {
+        const on = padButtons.get(name)?.hasAttribute('data-on');
+        const reply = await engine.run(`${name}.${on ? 'stop' : 'start'}`);
+        setStatus(reply.ok ? `${name} ${on ? 'stops' : 'starts'} at bar ${reply.landed.bar}.` : (reply.message || `Could not ${on ? 'stop' : 'start'} ${name}.`));
+      }
+
       const engine = createEngine({
-        onStatus: showNow,
+        onStatus: showSession,
         onLost: () => { setStatus('The engine stopped unexpectedly. Run all starts it again.'); now.textContent = ''; },
         onBroken: () => setStatus('The engine could not be loaded in this browser.'),
       });
@@ -158,6 +247,7 @@ const examples: [string, string, number][] = [
         onRun: () => void runPart(),
         onRunAll: () => void runAll(),
       });
+      setupKeyRow($('keys'), code, () => void runPart());
 
       function showErrors(source: string, diagnostics: Diagnostic[], message: string, warnings: string[] = []) {
         errors.replaceChildren();
@@ -176,7 +266,7 @@ const examples: [string, string, number][] = [
             help.textContent = d.help;
             item.append(help);
           }
-          item.addEventListener('click', () => code.select(from, Math.max(to, from + 1)));
+          item.addEventListener('click', () => { showPane('code'); code.select(from, Math.max(to, from + 1)); });
           errors.append(item);
         }
         for (const text of [message, ...warnings].filter(Boolean)) {
@@ -185,6 +275,9 @@ const examples: [string, string, number][] = [
           item.textContent = text;
           errors.append(item);
         }
+        count.textContent = errors.childElementCount ? String(errors.childElementCount) : '';
+        // a mistake opens the messages; a clean run closes what a mistake opened
+        setDrawer(errors.childElementCount > 0);
       }
 
       // ---- the live session
@@ -206,7 +299,7 @@ const examples: [string, string, number][] = [
           }
           showErrors(text, [], '');
           code.flash(0, code.view.state.doc.length);
-          setStatus('Playing the whole piece. Select some code and press Run to change it while it plays.');
+          setStatus('Playing. Tap ▶ in the margin to run a block, or a pad to start or stop a clip.');
         } catch {
           setStatus('Audio could not be started in this browser.');
         } finally { busy = false; }
@@ -217,7 +310,7 @@ const examples: [string, string, number][] = [
         // nothing is playing yet, so there is nothing to change: start the piece
         if (!engine.sessionOn) return runAll();
         const part = code.target();
-        if (!part) { setStatus('Put the cursor in some code, or select some, and press Run.'); return; }
+        if (!part) { setStatus('Put the cursor in some code, or select some, and press Run block.'); return; }
         busy = true;
         stopPlaying();
         try {
@@ -240,16 +333,16 @@ const examples: [string, string, number][] = [
         stopPlaying();
         if (!engine.sessionOn) return;
         await engine.hush();
-        setStatus('Stopped. Run plays again, and Run all starts the piece from the top.');
+        setStatus('Stopped. Run block plays again, and Run all starts the piece from the top.');
       }
 
       async function reset() {
-        if (code.value !== pristine && !confirm('Put the example back as it was? Your changes will be lost.')) return;
+        if (code.value !== pristine && !confirm('Put the piece back as it was? Your changes will be lost.')) return;
         stopPlaying();
         await engine.stop();
         now.textContent = '';
         code.value = pristine;
-        errors.replaceChildren();
+        showErrors(pristine, [], '');
         setStatus('Back to the start. Run all plays it.');
       }
 
@@ -281,7 +374,7 @@ const examples: [string, string, number][] = [
         const say = () => setStatus(`Rendering… ${Math.floor((performance.now() - waitingSince) / 1000)} s`);
         say();
         const waiting = setInterval(say, 250);
-        errors.replaceChildren();
+        showErrors(text, [], '');
         const result = await engine.render(text, Number(bars.value) || 8);
         clearInterval(waiting);
         play.disabled = false;
@@ -346,7 +439,7 @@ const examples: [string, string, number][] = [
         const response = await fetch(`/web/examples/${name}.nml`);
         pristine = response.ok ? await response.text() : '// could not load the example';
         code.value = pristine;
-        errors.replaceChildren();
+        showErrors(pristine, [], '');
       }
       exampleSelect.addEventListener('change', async () => {
         stopPlaying();

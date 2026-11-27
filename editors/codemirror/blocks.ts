@@ -46,6 +46,11 @@ export function blockAround(lines: string[], line: number) {
   return hit ? { start: hit.start, end: hit.end } : null;
 }
 
+/** The first line (0-based) of every statement in the file, in order. */
+export function statementStarts(lines: string[]) {
+  return statements(lines).map(s => s.start);
+}
+
 /** The first line of the first statement that starts after `line`, or null at the end of the file. */
 export function nextStatement(lines: string[], line: number) {
   return statements(lines).find(s => s.start > line)?.start ?? null;

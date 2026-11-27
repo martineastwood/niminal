@@ -1,8 +1,8 @@
 // The code editor the web pages share: the language's own highlighting in the site's two grounds, the
 // language server's help, Run keys, and a flash over the code that has just been run.
 import { basicSetup, EditorView } from 'codemirror';
-import { Compartment, EditorState, Prec, StateEffect, StateField } from '@codemirror/state';
-import { Decoration, type DecorationSet, keymap } from '@codemirror/view';
+import { Compartment, EditorState, Prec, RangeSet, StateEffect, StateField } from '@codemirror/state';
+import { Decoration, type DecorationSet, GutterMarker, gutter, keymap } from '@codemirror/view';
 import { indentWithTab } from '@codemirror/commands';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { lintGutter } from '@codemirror/lint';
@@ -13,7 +13,7 @@ import DOMPurify from 'dompurify';
 import { colours, niminal } from '../../../editors/codemirror/language';
 import { connectLanguageServer, languageClient } from '../../../editors/codemirror/lsp';
 import { semanticHighlighting } from '../../../editors/codemirror/semantic';
-import { blockAround } from '../../../editors/codemirror/blocks';
+import { blockAround, statementStarts } from '../../../editors/codemirror/blocks';
 
 const paperColours = syntaxHighlighting(HighlightStyle.define([
   { tag: tags.keyword, color: '#8250df' },
@@ -68,6 +68,37 @@ const flashField = StateField.define<DecorationSet>({
   provide: (f) => EditorView.decorations.from(f),
 });
 
+// a run button in the margin beside the first line of every statement: one tap runs that block, no keyboard needed
+class RunMarker extends GutterMarker {
+  toDOM() {
+    const el = document.createElement('span');
+    el.className = 'cm-run';
+    el.textContent = '▶';
+    el.setAttribute('role', 'button');
+    el.setAttribute('aria-label', 'Run this block');
+    return el;
+  }
+}
+const runMarker = new RunMarker();
+const runGutter = (onRun: () => void) => gutter({
+  class: 'cm-run-gutter',
+  markers(view) {
+    const doc = view.state.doc;
+    const lines = doc.toString().split('\n');
+    return RangeSet.of(statementStarts(lines).map((i) => runMarker.range(doc.line(i + 1).from)));
+  },
+  initialSpacer: () => runMarker,
+  domEventHandlers: {
+    mousedown(view, line, event) {
+      // keep the editor's focus (and the on-screen keyboard) where it is
+      event.preventDefault();
+      view.dispatch({ selection: { anchor: line.from } });
+      onRun();
+      return true;
+    },
+  },
+});
+
 export type CodeEditor = ReturnType<typeof createEditor>;
 
 export function createEditor(options: {
@@ -97,6 +128,8 @@ export function createEditor(options: {
           { key: 'Mod-Enter', run: () => { options.onRun(); return true; } },
         ])),
         flashField,
+        // left of the line numbers
+        runGutter(options.onRun),
         basicSetup,
         // Tab takes the suggestion when the list is open, and indents otherwise
         keymap.of([{ key: 'Tab', run: acceptCompletion }, indentWithTab]),
