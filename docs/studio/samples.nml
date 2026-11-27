@@ -1,0 +1,52 @@
+// Start here with your own samples. Press Run all: it plays the starter kit that comes with niminal.
+//
+// To play your own sound:
+//   1. Open More, then Files…, and add a WAV or MP3. Say it is called kick.wav.
+//   2. Tap Use beside it. A line like  kick = sample("kick.wav").root(c3)  goes in at the cursor.
+//   3. Make a clip that plays it (see "Your turn" at the bottom) and press its ↻, then start it from the Clips panel.
+// The comment after a `ctl` says how far its slider goes.
+use std/samples.{drums, electric_piano}
+
+config { channels: stereo }
+tempo 96bpm
+
+ctl brightness = 10khz.smooth(40ms)   // range 400hz..14khz
+ctl volume = -3db.smooth(40ms)        // range -30db..0db
+
+fx master {
+  out = in.lpf(cutoff: brightness).gain(volume)
+}
+
+// A kit is a set of named sounds; a grid writes a pattern for each (x is a hit, . is a rest).
+clip groove {
+  instrument: drums
+  length: 1bar
+  notes: grid {
+    kick:  x... .... x.x. ....
+    snare: .... x... .... x...
+    hat:   x.x. x.x. x.x. x.x.
+  }
+}
+
+// One recording played at different pitches is a melody. .root(c3) says the note it was recorded at.
+clip melody {
+  instrument: electric_piano
+  length: 2bars
+  notes: [c3 ~ ~ e3  ~ ~ g3 ~  ~ ~ a3 ~  ~ ~ ~ ~
+          f3 ~ ~ a3  ~ ~ c4 ~  ~ ~ g3 ~  ~ ~ ~ ~]
+}
+
+groove.start
+
+// ---- Your turn: take away the // from these lines once you have added a file and named it in the first line.
+// kick = sample("kick.wav").root(c3)
+// clip mine {
+//   instrument: kick
+//   length: 1bar
+//   notes: [c3 ~ ~ ~  c3 ~ ~ ~  c3 ~ ~ ~  c3 ~ c3 ~]
+// }
+//
+// A folder of hits becomes a kit:   drums2 = kit("my drums")      (files named kick.wav, snare.wav, hat.wav...)
+// A loop that repeats:              loop = sample("loop.wav").root(c3).loop(forward)
+// A break cut into 16 slices:       amen = sample("break.wav")
+//                                   chops = amen.slices(16)

@@ -171,6 +171,17 @@ export function createEditor(options: {
       clearTimeout(flashTimer);
       flashTimer = window.setTimeout(() => view.dispatch({ effects: flashOff.of(null) }), 900);
     },
+    /** Put a line of code in above the line the cursor is on, and show it. For the things that are tedious to type. */
+    insertLine(text: string) {
+      const line = view.state.doc.lineAt(view.state.selection.main.head);
+      view.dispatch({
+        changes: { from: line.from, insert: `${text}\n` },
+        selection: { anchor: line.from + text.length },
+        scrollIntoView: true,
+      });
+      view.focus();
+      return { from: line.from, to: line.from + text.length };
+    },
     /** The selection, or the block the cursor is in: the code Run sends. Null between blocks. */
     target() {
       const selection = view.state.selection.main;

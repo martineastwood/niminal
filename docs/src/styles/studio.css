@@ -5,21 +5,36 @@ body.studio { height: var(--vvh, 100dvh); display: flex; flex-direction: column;
 body.studio .nav { flex: none; }
 
 .st { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 0.8rem; padding-left: max(0.8rem, env(safe-area-inset-left)); padding-right: max(0.8rem, env(safe-area-inset-right)); }
-.st-bar { flex: none; position: relative; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; padding: 0.6rem 0; }
-/* room enough: the less used buttons sit in the bar; otherwise they hang from a More button */
-.st-more { display: contents; }
-.st-more-toggle { display: none; }
-.st-more-body { display: contents; }
-.st-bar .spacer { flex: 1; }
-.st-bar button.btn { cursor: pointer; background: transparent; color: var(--ink); }
+.st-bar { flex: none; position: relative; display: flex; flex-wrap: nowrap; gap: 0.5rem; align-items: center; padding: 0.6rem 0; }
+.st-bar .spacer { flex: 1; min-width: 0; }
+.st-bar button.btn, .st-bar summary.btn { cursor: pointer; background: transparent; color: var(--ink); white-space: nowrap; flex: none; }
 .st-bar button.btn-solid { background: var(--accent); color: var(--accent-ink); }
 .st-bar button.btn:disabled { opacity: 0.45; cursor: default; }
 .st-bar select, .st-bar input[type='number'] { background: var(--bg-elevated); color: var(--ink); border: 1px solid var(--line-strong);
-  border-radius: 4px; padding: 0.4rem 0.6rem; font: 400 0.85rem var(--mono); max-width: 16rem; }
+  border-radius: 4px; padding: 0.4rem 0.6rem; font: 400 0.85rem var(--mono); }
 .st-bar label { display: flex; align-items: center; gap: 0.4rem; font: 500 0.8rem var(--mono); color: var(--muted); }
 .st-bar input[type='number'] { width: 4.5rem; }
+/* the transport keeps its room whether or not anything is playing, so nothing moves when it fills in */
+.st-transport { display: flex; align-items: center; gap: 0.6rem; min-width: 14rem; flex: none; }
 .st-now { font: 500 0.8rem var(--mono); color: var(--accent); white-space: nowrap; }
 .st-now[data-warn] { color: #e5484d; }
+.st-slot { min-width: 0; flex: 0 1 18rem; }
+.st-slot:empty { display: none; }
+.st-piece { min-width: 0; }
+.st-label { margin-left: 0.4rem; }
+.st-piece select { width: 100%; min-width: 0; text-overflow: ellipsis; }
+/* the menu: everything that is not needed while playing */
+.st-more { position: relative; flex: none; }
+.st-more-body { display: none; position: absolute; right: 0; top: calc(100% + 0.4rem); z-index: 30; width: min(21rem, calc(100vw - 1.6rem)); padding: 0.8rem; gap: 0.5rem;
+  grid-template-columns: 1fr 1fr; background: var(--bg-elevated); border: 1px solid var(--line-strong); border-radius: 6px; }
+.st-more[data-open] .st-more-body { display: grid; }
+.st-more-body [hidden] { display: none !important; }
+.st-more-body h3 { grid-column: 1 / -1; margin: 0.4rem 0 0; font: 600 0.75rem var(--mono); color: var(--muted); }
+.st-more-body .st-slot, .st-more-body .pg-export, .st-more-body #share, .st-more-body #export-zip { grid-column: 1 / -1; }
+.st-more-body .st-slot { flex: none; }
+.st-more-body select { width: 100%; max-width: none; }
+.st-more-body .pg-export-body { position: static; margin-top: 0.4rem; }
+.st-more-body button.btn, .st-more-body summary.btn { width: 100%; text-align: left; }
 .st-progress { flex: none; margin: 0 0 0.5rem; }
 
 body.studio[data-keys] .st { padding-bottom: 3.7rem; }
@@ -37,11 +52,15 @@ body.studio[data-keys] .st { padding-bottom: 3.7rem; }
 .st-code .pg-editor .cm-editor { flex: 1; height: auto; min-height: 0; resize: none; }
 .st-code .pg-editor .cm-scroller { overflow: auto; }
 
-.st-perform { overflow: auto; border: 1px solid var(--line-strong); border-radius: 4px; padding: 0.8rem; background: var(--bg-elevated); }
+.st-perform { display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--bg-elevated); }
+/* the clips scroll on their own, however many there are; the sliders stay at the bottom where a finger can find them */
+.st-section { padding: 0.8rem; }
+.st-section-clips { flex: 1 1 0; min-height: 8rem; overflow: auto; overscroll-behavior: contain; }
+.st-section-sliders { flex: 0 0 auto; max-height: 45%; overflow: auto; overscroll-behavior: contain; border-top: 1px solid var(--line-strong); }
+.st-section-sliders .st-perform-head:first-child { margin-top: 0; }
 .st-perform h2 { margin: 0 0 0.6rem; font: 600 0.8rem var(--mono); color: var(--muted); text-transform: none; letter-spacing: 0; }
 .st-perform-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; margin: 0 0 0.6rem; }
 .st-perform-head h2 { margin: 0; }
-.st-perform-head:not(:first-child) { margin-top: 1.2rem; }
 .st-lands { display: flex; align-items: center; gap: 0.4rem; font: 500 0.75rem var(--mono); color: var(--muted); }
 .st-lands select { background: var(--panel); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0.3rem 0.5rem; font: 400 0.8rem var(--mono); }
 .st-clips { display: grid; grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr)); gap: 0.6rem; }
@@ -50,6 +69,19 @@ body.studio[data-keys] .st { padding-bottom: 3.7rem; }
   font: 600 0.9rem var(--mono); padding: 0.6rem;  text-align: left; touch-action: manipulation; word-break: break-word; }
 .st-clip[data-on] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .st-clip[data-muted] { border-style: dashed; opacity: 0.6; }
+.st-clip { display: flex; flex-direction: column; justify-content: space-between; gap: 0.3rem; }
+.st-clip small { font: 500 0.7rem var(--mono); min-height: 1em; opacity: 0.9; }
+/* tapped, and waiting for the next boundary: it answers at once, and keeps moving until it lands */
+.st-clip[data-waiting] { animation: st-wait 0.8s ease-in-out infinite; border-style: dashed; border-color: var(--accent); }
+.st-clip[data-waiting='stop'] { animation-name: st-wait-off; }
+@keyframes st-wait { 0%, 100% { background: var(--panel); color: var(--panel-muted); } 50% { background: color-mix(in srgb, var(--accent) 45%, var(--panel)); color: var(--ink); } }
+@keyframes st-wait-off { 0%, 100% { background: var(--accent); color: var(--accent-ink); } 50% { background: color-mix(in srgb, var(--accent) 45%, var(--panel)); color: var(--ink); } }
+@media (prefers-reduced-motion: reduce) { .st-clip[data-waiting] { animation: none; background: color-mix(in srgb, var(--accent) 35%, var(--panel)); } }
+/* where you are in the bar: one dot a beat, the first (the downbeat) larger */
+.st-beats { display: inline-flex; gap: 0.3rem; align-items: center; min-width: 3.4rem; }
+.st-beats i { width: 0.6rem; height: 0.6rem; border-radius: 50%; border: 1px solid var(--line-strong); background: transparent; }
+.st-beats i[data-now] { background: var(--accent); border-color: var(--accent); }
+.st-beats i:first-child { width: 0.75rem; height: 0.75rem; }
 .st-empty { margin: 0; color: var(--muted); font-size: 0.85rem; }
 .st-empty[hidden] { display: none; }
 .st-sliders { display: grid; gap: 0.5rem; }
@@ -84,14 +116,7 @@ body.studio[data-keys] .st { padding-bottom: 3.7rem; }
 
 /* narrow or upright: one pane at a time, with a switch between them */
 @media (max-width: 860px), (orientation: portrait) {
-  .st-more { display: block; }
-  .st-more-toggle { display: inline-flex; }
-  .st-more-body { display: none; position: absolute; right: 0; top: 100%; z-index: 30; width: min(22rem, 100%); padding: 0.8rem; gap: 0.6rem;
-    grid-template-columns: 1fr 1fr; background: var(--bg-elevated); border: 1px solid var(--line-strong); border-radius: 6px; }
-  .st-more[data-open] .st-more-body { display: grid; }
-  .st-more-body .st-piece, .st-more-body .pg-export, .st-more-body #share { grid-column: 1 / -1; }
-  .st-more-body select { width: 100%; max-width: none; }
-  .st-more-body .pg-export-body { position: static; margin-top: 0.4rem; }
+  .st-transport { min-width: 0; }
   .st-tabs { display: flex; }
   .st-main { grid-template-columns: minmax(0, 1fr); }
   .st[data-pane='code'] .st-perform { display: none; }
@@ -136,3 +161,10 @@ button, summary, select, .cm-run-gutter { touch-action: manipulation; }
 .st-files-list .btn { cursor: pointer; background: transparent; color: var(--ink); min-width: 2.5rem; min-height: 2.5rem; }
 .st-files-note { margin: 0; color: var(--muted); font-size: 0.8rem; }
 @media (max-width: 860px), (orientation: portrait) { .st-files { top: 3.5rem; left: 0.8rem; width: auto; } }
+
+/* a phone: the row is Run all, a Stop that is only the square, the dots, and the menu */
+@media (max-width: 520px) {
+  .st-label { display: none; }
+  .st-now { display: none; }
+  .st-transport { gap: 0; }
+}

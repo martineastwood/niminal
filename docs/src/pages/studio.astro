@@ -12,6 +12,7 @@ const live: [string, string, number][] = [
   ['studio/house', 'A live set: house', 8],
   ['studio/ambient', 'A live set: ambient', 8],
   ['studio/kit', 'A live set: the starter kit (recorded samples)', 8],
+  ['studio/samples', 'Start here with your own samples', 6],
   ['studio/blank', 'A blank page to build on', 4],
 ];
 const examples: [string, string, number][] = [
@@ -71,39 +72,43 @@ const examples: [string, string, number][] = [
     <div class="st" id="st" data-pane="code">
       <div class="st-bar">
         <button class="btn btn-solid" id="runall" disabled title="Start the whole piece from the top (Ctrl/Cmd + Shift + Enter)">▶ Run all</button>
-        <button class="btn" id="stop" disabled title="Silence everything; Run plays again">■ Stop</button>
-        <span class="st-now" id="now" aria-live="off"></span>
-        <span class="st-beats" id="beats" aria-hidden="true"></span>
+        <button class="btn" id="stop" disabled title="Silence everything; Run plays again" aria-label="Stop"><span aria-hidden="true">■</span><span class="st-label"> Stop</span></button>
+        <div class="st-transport" aria-hidden="true"><span class="st-beats" id="beats"></span><span class="st-now" id="now"></span></div>
         <span class="spacer"></span>
+        <div class="st-slot" id="slot-bar">
+          <label class="st-piece" id="piece-label">
+            <span class="sr-only">Piece</span>
+            <select id="example" aria-label="Piece">
+              <optgroup label="Live sets">
+                {live.map(([file, title, bars]) => <option value={file} data-bars={bars}>{title}</option>)}
+              </optgroup>
+              <optgroup label="Examples">
+                {examples.map(([file, title, bars]) => <option value={file} data-bars={bars}>{title}</option>)}
+              </optgroup>
+            </select>
+          </label>
+        </div>
         <div class="st-more" id="more">
-          <button class="btn st-more-toggle" id="more-toggle" aria-expanded="false" aria-controls="more-body">More ▾</button>
+          <button class="btn st-more-toggle" id="more-toggle" aria-expanded="false" aria-controls="more-body" aria-label="More">⋯<span class="st-label"> More</span></button>
           <div class="st-more-body" id="more-body">
+            <div class="st-slot" id="slot-menu"></div>
+            <h3>Piece</h3>
             <button class="btn" id="run" disabled title="Run the selection, or the block the cursor is in (Ctrl/Cmd + Enter)">Run block</button>
             <button class="btn" id="reset" disabled title="Back to the piece as it was, and stop">↺ Reset</button>
-            <label class="st-piece">
-              <span class="sr-only">Piece</span>
-              <select id="example" aria-label="Piece">
-                <optgroup label="Live sets">
-                  {live.map(([file, title, bars]) => <option value={file} data-bars={bars}>{title}</option>)}
-                </optgroup>
-                <optgroup label="Examples">
-                  {examples.map(([file, title, bars]) => <option value={file} data-bars={bars}>{title}</option>)}
-                </optgroup>
-              </select>
-            </label>
+            <button class="btn" id="save-as">Save as…</button>
+            <button class="btn" id="delete-piece" hidden>Delete this piece</button>
+            <button class="btn" id="files-open">Files…</button>
+            <h3>Share and export</h3>
+            <button class="btn" id="share">Copy link</button>
+            <button class="btn" id="export-zip">Download project (.zip)</button>
             <details class="pg-export">
-              <summary class="btn">Export</summary>
+              <summary class="btn">Render a WAV…</summary>
               <div class="pg-export-body">
                 <label>bars <input type="number" id="bars" value="8" min="1" max="64" /></label>
                 <button class="btn" id="play" disabled>Render &amp; play</button>
                 <button class="btn" id="download" disabled>Download WAV</button>
-                <button class="btn" id="export-zip">Download project (.zip)</button>
               </div>
             </details>
-            <button class="btn" id="share">Copy link</button>
-            <button class="btn" id="files-open">Files…</button>
-            <button class="btn" id="save-as">Save as…</button>
-            <button class="btn" id="delete-piece" hidden>Delete this piece</button>
           </div>
         </div>
       </div>
@@ -120,6 +125,7 @@ const examples: [string, string, number][] = [
           <div class="st-toast" id="toast" role="status" aria-live="polite"></div>
         </section>
         <aside class="st-perform" aria-label="Perform">
+          <section class="st-section st-section-clips">
           <div class="st-perform-head">
             <h2>Clips</h2>
             <label class="st-lands">lands
@@ -132,9 +138,12 @@ const examples: [string, string, number][] = [
           </div>
           <div class="st-clips" id="clips"></div>
           <p class="st-empty" id="clips-empty">Press <b>Run all</b>. Each clip in the piece appears here: tap one to start or stop it.</p>
+          </section>
+          <section class="st-section st-section-sliders">
           <div class="st-perform-head"><h2>Sliders</h2></div>
           <div class="st-sliders" id="sliders"></div>
           <p class="st-empty" id="sliders-empty">A <code>ctl</code> line in the piece becomes a slider here. Add <code>// range 300hz..12khz</code> after it to say how far it goes.</p>
+          </section>
         </aside>
       </div>
 
@@ -239,6 +248,12 @@ const examples: [string, string, number][] = [
       moreToggle.addEventListener('click', () => { const open = !more.hasAttribute('data-open'); more.toggleAttribute('data-open', open); moreToggle.setAttribute('aria-expanded', String(open)); });
       // a tap outside the menu closes it
       document.addEventListener('pointerdown', (e) => { if (!more.contains(e.target as Node)) { more.removeAttribute('data-open'); moreToggle.setAttribute('aria-expanded', 'false'); } });
+
+      // ---- the piece picker sits in the bar when there is room, and at the top of the menu when there is not
+      const narrow = window.matchMedia('(max-width: 860px), (orientation: portrait)');
+      const placePicker = () => ($(narrow.matches ? 'slot-menu' : 'slot-bar')).append($('piece-label'));
+      narrow.addEventListener('change', placePicker);
+      placePicker();
 
       // ---- messages: closed unless something needs saying
       const setDrawer = (open: boolean) => { drawer.toggleAttribute('data-open', open); drawerToggle.setAttribute('aria-expanded', String(open)); };
@@ -409,7 +424,7 @@ const examples: [string, string, number][] = [
       function showSession(m: Status) {
         const s = m.status;
         if (!s) { now.textContent = ''; clock.on = false; return; }
-        now.textContent = `bar ${s.bar} · beat ${Math.floor(s.beat)} · ${Math.round(s.bpm)} bpm`;
+        now.textContent = `bar ${s.bar} · ${Math.round(s.bpm)} bpm`;
         now.title = `engine load ${(m.load * 100).toFixed(0)}%, ${m.buffered.toFixed(2)} s ahead, ${m.underruns} gaps`;
         now.toggleAttribute('data-warn', m.underruns > 0 || m.load > 0.85);
         // the clock the page keeps follows what the engine says, and what it has buffered ahead of the speakers
@@ -679,7 +694,15 @@ const examples: [string, string, number][] = [
           remove.textContent = '✕';
           remove.setAttribute('aria-label', `Remove ${path}`);
           remove.addEventListener('click', () => void removeFile(path));
-          item.append(name, info, remove);
+          // an audio file can be named in the piece with one tap
+          if (/\.(wav|mp3|flac|ogg|oga|aif|aiff|aifc|m4a|aac|caf)$/i.test(path)) {
+            const use = document.createElement('button');
+            use.className = 'btn';
+            use.textContent = 'Use';
+            use.setAttribute('aria-label', `Use ${path} in the piece`);
+            use.addEventListener('click', () => useSample(path));
+            item.append(name, info, use, remove);
+          } else item.append(name, info, remove);
           filesList.append(item);
         }
         filesEmpty.hidden = known.size > 0;
@@ -687,6 +710,17 @@ const examples: [string, string, number][] = [
         filesNote.textContent = (known.size ? `${known.size} file${known.size === 1 ? '' : 's'}, ${size(total)}. ` : '')
           + (store && !store.lasting ? 'This browser is not keeping files between visits (a private window?), so these will be gone when you close the page.' : '')
           + (total > 200e6 ? ' That is a lot for a tablet: the page may run out of memory.' : '');
+      }
+      /** A line that names the sample, put in at the cursor: `kick = sample("kick.wav").root(c3)`. */
+      function useSample(path: string) {
+        const stem = (path.split('/').pop() ?? 'sound').replace(/\.[^.]*$/, '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'sound';
+        // a name cannot start with a digit, and must not be one the language keeps
+        const name = /^[a-z]/.test(stem) ? stem : `s_${stem}`;
+        const range = code.insertLine(`${name} = sample("${path}").root(c3)`);
+        openFiles(false);
+        showPane('code');
+        code.flash(range.from, range.to);
+        say(`Added the line ${name} = sample("${path}"). Use ${name} as a clip's instrument, then tap ↻ on that clip.`);
       }
       async function addFiles(all: File[], folder: string) {
         const prefix = folder.trim().replace(/^\/+|\/+$/g, '');
