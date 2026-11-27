@@ -94,7 +94,7 @@ self.onmessage = async (event) => {
       return;
     }
     if (kind === "live-eval") {
-      self.postMessage({ id, result: niminal.liveEval(source, event.data.now) });
+      self.postMessage({ id, result: niminal.liveEval(source, event.data.when) });
       return;
     }
     if (kind === "live-control") {

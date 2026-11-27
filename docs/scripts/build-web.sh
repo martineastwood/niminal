@@ -13,6 +13,9 @@ cp crates/niminal-web/js/niminal.js "$out/"
 for name in functions kernels acid physical_models modal array_bank; do
   cp "examples/$name.nml" "$out/examples/"
 done
+# the live sets of the Studio
+mkdir -p "$out/studio"
+cp docs/studio/*.nml "$out/studio/"
 # the pieces of the "Try it" page, and what its sliders move
 mkdir -p "$out/try"
 cp docs/try/*.nml docs/try/manifest.json "$out/try/"

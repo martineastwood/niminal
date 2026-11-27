@@ -50,7 +50,7 @@ const block = niminal.liveProcess(4800);
 if (!block || block[0].length !== 4800) fail("live process gave no audio");
 const peak = Math.max(...block[0].map(Math.abs));
 if (!(peak > 0)) fail("a live session started with the piece played nothing");
-const sent = niminal.liveEval("instr extra() { out = osc(sine, 440hz) * 0.1 }\n", true);
+const sent = niminal.liveEval("instr extra() { out = osc(sine, 440hz) * 0.1 }\n", "now");
 if (!sent.ok) fail(`live eval: ${JSON.stringify(sent)}`);
 const wrong = niminal.liveEval("nonsense(1)\n");
 if (wrong.ok || wrong.diagnostics.length === 0) fail("a bad snippet was accepted");

@@ -15,7 +15,16 @@ export type Status = {
   peak: number;
   load: number;
   underruns: number;
-  status: { bar: number; beat: number; bpm: number; voices: number; clips: { name: string; running: boolean; muted: boolean }[] } | null;
+  status: {
+    bar: number;
+    beat: number;
+    bpm: number;
+    /** how many beats a bar has */
+    beats_per_bar: number;
+    voices: number;
+    clips: { name: string; running: boolean; muted: boolean }[];
+    controls: { name: string; value: number; target: number; unit: string | null }[];
+  } | null;
 };
 
 export type Engine = ReturnType<typeof createEngine>;
@@ -97,10 +106,11 @@ export function createEngine(hooks: {
       if (reply.ok) sessionOn = true;
       return reply;
     },
-    /** Run a piece of code in the session. Positions in a failure are within `source`. */
-    run(source: string, now = false) {
+    /** Run a piece of code in the session. `when` says when it lands (`now`, `beat`, `bar`, `next 4bars`...);
+     *  without it each change lands where it asks. Positions in a failure are within `source`. */
+    run(source: string, when = '') {
       void ctx?.resume();
-      return ask<LiveReply>({ kind: 'live-eval', source, now });
+      return ask<LiveReply>({ kind: 'live-eval', source, when });
     },
     /** Move a control of the piece now. `unit` is what the value is in (`hz`, `db`), if anything. */
     control: (name: string, value: number, unit = '') =>

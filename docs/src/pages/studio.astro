@@ -4,16 +4,22 @@ import '../styles/web.css';
 import '../styles/studio.css';
 
 const REPO = 'https://github.com/martineastwood/niminal';
-// What the page offers to start from; the files are copied to /web/examples by scripts/build-web.sh.
-// [file, title, bars to render by default]. Pieces built from hand-written functions run on the interpreter in
-// a browser (there is no native-code generator in WebAssembly), so they render slower and start with fewer bars.
+// What the page offers to start from, as [path under /web, title, bars to render when exporting]. The live sets (docs/studio)
+// are made to be played: they have clips for the Clips panel and controls for the sliders. The examples are the repository's,
+// copied by scripts/build-web.sh; pieces built from hand-written functions run on the interpreter in a browser (there
+// is no native-code generator in WebAssembly), so they render slower and start with fewer bars.
+const live: [string, string, number][] = [
+  ['studio/house', 'A live set: house', 8],
+  ['studio/ambient', 'A live set: ambient', 8],
+  ['studio/blank', 'A blank page to build on', 4],
+];
 const examples: [string, string, number][] = [
-  ['functions', 'Instruments built from functions', 8],
-  ['kernels', 'A piece made of hand-written functions', 4],
-  ['acid', 'An acid bassline', 8],
-  ['physical_models', 'Physical models', 8],
-  ['modal', 'Modal resonators', 8],
-  ['array_bank', 'A bank of arrays', 8],
+  ['examples/functions', 'Instruments built from functions', 8],
+  ['examples/kernels', 'A piece made of hand-written functions', 4],
+  ['examples/acid', 'An acid bassline', 8],
+  ['examples/physical_models', 'Physical models', 8],
+  ['examples/modal', 'Modal resonators', 8],
+  ['examples/array_bank', 'A bank of arrays', 8],
 ];
 ---
 <!doctype html>
@@ -66,6 +72,7 @@ const examples: [string, string, number][] = [
         <button class="btn btn-solid" id="runall" disabled title="Start the whole piece from the top (Ctrl/Cmd + Shift + Enter)">▶ Run all</button>
         <button class="btn" id="stop" disabled title="Silence everything; Run plays again">■ Stop</button>
         <span class="st-now" id="now" aria-live="off"></span>
+        <span class="st-beats" id="beats" aria-hidden="true"></span>
         <span class="spacer"></span>
         <div class="st-more" id="more">
           <button class="btn st-more-toggle" id="more-toggle" aria-expanded="false" aria-controls="more-body">More ▾</button>
@@ -75,7 +82,12 @@ const examples: [string, string, number][] = [
             <label class="st-piece">
               <span class="sr-only">Piece</span>
               <select id="example" aria-label="Piece">
-                {examples.map(([file, title, bars]) => <option value={file} data-bars={bars}>{title}</option>)}
+                <optgroup label="Live sets">
+                  {live.map(([file, title, bars]) => <option value={file} data-bars={bars}>{title}</option>)}
+                </optgroup>
+                <optgroup label="Examples">
+                  {examples.map(([file, title, bars]) => <option value={file} data-bars={bars}>{title}</option>)}
+                </optgroup>
               </select>
             </label>
             <details class="pg-export">
@@ -100,11 +112,24 @@ const examples: [string, string, number][] = [
       <div class="st-main">
         <section class="st-code" aria-label="Code">
           <div id="editor" class="pg-editor" aria-label="niminal source"></div>
+          <div class="st-toast" id="toast" role="status" aria-live="polite"></div>
         </section>
         <aside class="st-perform" aria-label="Perform">
-          <h2>Pads</h2>
-          <div class="st-pads" id="pads"></div>
-          <p class="st-empty" id="pads-empty">Press <b>Run all</b>. Each clip in the piece appears here as a pad you can tap to start or stop at the next bar.</p>
+          <div class="st-perform-head">
+            <h2>Clips</h2>
+            <label class="st-lands">lands
+              <select id="lands" aria-label="When a clip change lands">
+                <option value="">next bar</option>
+                <option value="beat">next beat</option>
+                <option value="now">at once</option>
+              </select>
+            </label>
+          </div>
+          <div class="st-clips" id="clips"></div>
+          <p class="st-empty" id="clips-empty">Press <b>Run all</b>. Each clip in the piece appears here: tap one to start or stop it.</p>
+          <div class="st-perform-head"><h2>Sliders</h2></div>
+          <div class="st-sliders" id="sliders"></div>
+          <p class="st-empty" id="sliders-empty">A <code>ctl</code> line in the piece becomes a slider here. Add <code>// range 300hz..12khz</code> after it to say how far it goes.</p>
         </aside>
       </div>
 
@@ -117,11 +142,12 @@ const examples: [string, string, number][] = [
         <div class="st-drawer-body" id="drawer-body">
           <ul class="pg-errors" id="errors"></ul>
           <p class="st-help">
-            <b>Run block</b> (or the ▶ in the margin) plays the code you have selected, or the block the cursor is in, and it joins in at
-            the next bar. <b>Run all</b> starts the whole piece again from the top. <b>Stop</b> silences everything, and <b>Reset</b>
-            puts the piece back as it was. Nothing is saved on a server: <b>Copy link</b> puts your piece in the address. Pieces that read
-            sample files do not run here yet, and heavy pieces built from hand-written functions run slower in a browser than in
-            <a href="/reference/stage/"><u>Stage</u></a>.
+            The <b>▶</b> in the margin runs that line of code: <code>hook.start</code> or a note that sounds. The <b>↻</b> updates a
+            definition (a clip, instrument, effect or control; <code>use</code> and <code>config</code> are read by Run all): if the piece is playing it changes at the next bar, and if not you hear nothing until
+            something uses it. <b>Run block</b> does the same for the selection or the block the cursor is in. <b>Run all</b> starts the whole piece
+            again from the top. <b>Stop</b> silences everything, and <b>Reset</b> puts the piece back as it was. Nothing is saved on a server: <b>Copy link</b>
+            puts your piece in the address. Pieces that read sample files do not run here yet, and heavy pieces built from hand-written
+            functions run slower in a browser than in <a href="/reference/stage/"><u>Stage</u></a>.
           </p>
         </div>
       </div>
@@ -131,6 +157,7 @@ const examples: [string, string, number][] = [
     <script>
       import { createEditor } from '../web/editor';
       import { setupKeyRow } from '../web/keys';
+      import { annotatedRanges, clipCode, describe, format, positionOf, valueAt, type ControlSpec, type PerformCommand, type PerformState, type Range } from '../web/perform';
       import {
         byteToIndex, createEngine, decodePiece, encodePiece, lineColumn, shiftDiagnostics, wavFile,
         type Diagnostic, type Status,
@@ -152,8 +179,11 @@ const examples: [string, string, number][] = [
       const errors = $('errors');
       const progress = $('progress');
       const now = $('now');
-      const pads = $('pads');
-      const padsEmpty = $('pads-empty');
+      const clipList = $('clips');
+      const clipsEmpty = $('clips-empty');
+      const slidersBox = $('sliders');
+      const slidersEmpty = $('sliders-empty');
+      const lands = $<HTMLSelectElement>('lands');
       const drawer = $('drawer');
       const drawerToggle = $('drawer-toggle');
       const more = $('more');
@@ -198,47 +228,178 @@ const examples: [string, string, number][] = [
           code.applyGround();
         }));
 
-      // ---- what the running session says about itself
+      // ---- Perform: the clips and sliders of the running piece, from its description
+      let ranges = new Map<string, Range>();
+      let rangesFor: unknown;
+      const clipBoxes = new Map<string, { button: HTMLButtonElement; caption: HTMLElement }>();
       let clipNames = '';
-      const padButtons = new Map<string, HTMLButtonElement>();
+      const sliderRows = new Map<string, { input: HTMLInputElement; readout: HTMLOutputElement; spec: ControlSpec; held: boolean; moved: number }>();
+      let sliderKey = '';
+
+      /** What a clip button or a slider asks for. The same commands could come from another device. */
+      async function perform(command: PerformCommand) {
+        if (command.kind === 'control') { await engine.control(command.name, command.value, command.unit); return; }
+        // the clip answers at once: it is waiting, and says for how long, until the change lands
+        const wait: Waiting = { action: command.action, landed: null, since: performance.now() };
+        waiting.set(command.name, wait);
+        showWaiting();
+        const reply = await engine.run(clipCode(command), command.when ?? '');
+        const verb = { start: 'starts', stop: 'stops' }[command.action];
+        if (reply.ok) wait.landed = { bar: reply.landed.bar, beat: reply.landed.beat };
+        else waiting.delete(command.name);
+        setStatus(reply.ok ? `${command.name} ${verb} at bar ${reply.landed.bar}.` : (reply.message || `Could not ${command.action} ${command.name}.`));
+        showWaiting();
+      }
+
+      // ---- the clock the page keeps, between the engine's reports: where the music is that you can hear now
+      const clock = { bar: 1, beat: 1, bpm: 120, at: 0, behind: 0, perBar: 4, on: false };
+      type Waiting = { action: string; landed: { bar: number; beat: number } | null; since: number; doneAt?: number };
+      const waiting = new Map<string, Waiting>();
+      const heard = () => {
+        // beats since the start, as they are being heard: the engine's report, moved on by the time since, less what is still buffered
+        const elapsed = (performance.now() - clock.at) / 1000;
+        return (clock.bar - 1) * clock.perBar + (clock.beat - 1) + (elapsed - clock.behind) * (clock.bpm / 60);
+      };
+      let shownBeat = -1;
+      function showBeats() {
+        const box = $('beats');
+        if (box.childElementCount !== clock.perBar) {
+          box.replaceChildren(...Array.from({ length: clock.perBar }, () => document.createElement('i')));
+        }
+        const at = clock.on ? Math.floor(((heard() % clock.perBar) + clock.perBar) % clock.perBar) : -1;
+        if (at === shownBeat) return;
+        shownBeat = at;
+        [...box.children].forEach((dot, i) => dot.toggleAttribute('data-now', i === at));
+      }
+      /** The caption of every clip that is waiting for a boundary: what it will do, and in how many beats. */
+      function showWaiting() {
+        for (const [name, wait] of waiting) {
+          const box = clipBoxes.get(name);
+          if (!box) { waiting.delete(name); continue; }
+          const verb = { start: 'starts', stop: 'stops' }[wait.action];
+          let text = `${verb}…`;
+          if (wait.landed) {
+            const left = (wait.landed.bar - 1) * clock.perBar + (wait.landed.beat - 1) - heard();
+            // the change has landed in the engine's books, so the clip is only waiting for the sound
+            text = left > 1.5 ? `${verb} in ${Math.round(left)} beats` : left > 0.5 ? `${verb} next beat` : `${verb} now`;
+          }
+          box.button.dataset.waiting = wait.action;
+          box.caption.textContent = text;
+          // give up on a change that never shows
+          if (performance.now() - wait.since > 30_000) waiting.delete(name);
+        }
+        for (const [name, box] of clipBoxes) if (!waiting.has(name)) { delete box.button.dataset.waiting; box.caption.textContent = ''; }
+      }
+      const animate = () => { showBeats(); showWaiting(); requestAnimationFrame(animate); };
+      requestAnimationFrame(animate);
+
+      function showClips(state: PerformState) {
+        const names = state.clips.map((c) => c.name).join('|');
+        if (names !== clipNames) {
+          clipNames = names;
+          clipList.replaceChildren();
+          clipBoxes.clear();
+          for (const clip of state.clips) {
+            const box = document.createElement('div');
+            box.className = 'st-clipbox';
+            const button = document.createElement('button');
+            button.className = 'st-clip';
+            const label = document.createElement('span');
+            label.textContent = clip.name;
+            const caption = document.createElement('small');
+            button.append(label, caption);
+            button.addEventListener('click', () => {
+              const on = button.hasAttribute('data-on');
+              void perform({ kind: 'clip', name: clip.name, action: on ? 'stop' : 'start', when: lands.value });
+            });
+            box.append(button);
+            clipList.append(box);
+            clipBoxes.set(clip.name, { button, caption });
+          }
+          clipsEmpty.hidden = state.clips.length > 0;
+        }
+        for (const clip of state.clips) {
+          const box = clipBoxes.get(clip.name);
+          if (!box) continue;
+          box.button.toggleAttribute('data-on', clip.running && !clip.muted);
+          box.button.toggleAttribute('data-muted', clip.muted);
+          // the wait is over when the clip shows what was asked, a moment after the sound should have started, and
+          // never later than that: a caption must not outlive the change
+          const wait = waiting.get(clip.name);
+          if (wait) {
+            const done = { start: clip.running && !clip.muted, stop: !clip.running }[wait.action];
+            const left = wait.landed ? (wait.landed.bar - 1) * clock.perBar + (wait.landed.beat - 1) - heard() : Infinity;
+            if (done) wait.doneAt ??= performance.now();
+            if ((done && (left < 0.2 || performance.now() - (wait.doneAt ?? 0) > 700)) || left < -2) waiting.delete(clip.name);
+          }
+        }
+      }
+
+      function showSliders(state: PerformState) {
+        const key = state.controls.map((c) => `${c.name}:${c.range.min}:${c.range.max}:${c.range.unit}`).join('|');
+        if (key !== sliderKey) {
+          sliderKey = key;
+          slidersBox.replaceChildren();
+          sliderRows.clear();
+          for (const spec of state.controls) {
+            const label = document.createElement('label');
+            const name = document.createElement('span');
+            name.textContent = spec.label;
+            const input = document.createElement('input');
+            input.type = 'range';
+            input.min = '0'; input.max = '1000'; input.step = '1';
+            input.setAttribute('aria-label', spec.label);
+            const readout = document.createElement('output');
+            const row = { input, readout, spec, held: false, moved: 0 };
+            let queued = false;
+            input.addEventListener('pointerdown', () => { row.held = true; });
+            for (const end of ['pointerup', 'pointercancel', 'blur']) input.addEventListener(end, () => { row.held = false; });
+            input.addEventListener('input', () => {
+              const v = valueAt(spec.range, Number(input.value) / 1000);
+              readout.textContent = format(spec.range, v);
+              row.moved = performance.now();
+              // one message per frame at most, however fast the finger moves
+              if (queued) return;
+              queued = true;
+              requestAnimationFrame(() => {
+                queued = false;
+                void perform({ kind: 'control', name: spec.name, value: valueAt(spec.range, Number(input.value) / 1000), unit: spec.range.unit });
+              });
+            });
+            label.append(name, input, readout);
+            slidersBox.append(label);
+            sliderRows.set(spec.name, row);
+          }
+          slidersEmpty.hidden = state.controls.length > 0;
+        }
+        // a slider follows its control unless a finger is on it, or has just been
+        for (const spec of state.controls) {
+          const row = sliderRows.get(spec.name);
+          if (!row || row.held || performance.now() - row.moved < 700) continue;
+          row.input.value = String(Math.round(positionOf(spec.range, spec.value) * 1000));
+          row.readout.textContent = format(spec.range, spec.value);
+        }
+      }
+
       function showSession(m: Status) {
         const s = m.status;
-        if (!s) { now.textContent = ''; return; }
+        if (!s) { now.textContent = ''; clock.on = false; return; }
         now.textContent = `bar ${s.bar} · beat ${Math.floor(s.beat)} · ${Math.round(s.bpm)} bpm`;
         now.title = `engine load ${(m.load * 100).toFixed(0)}%, ${m.buffered.toFixed(2)} s ahead, ${m.underruns} gaps`;
         now.toggleAttribute('data-warn', m.underruns > 0 || m.load > 0.85);
-        // the clips of the piece are pads
-        const names = s.clips.map((c) => c.name).join('|');
-        if (names !== clipNames) {
-          clipNames = names;
-          pads.replaceChildren();
-          padButtons.clear();
-          for (const clip of s.clips) {
-            const pad = document.createElement('button');
-            pad.className = 'st-pad';
-            pad.textContent = clip.name;
-            pad.addEventListener('click', () => void tapPad(clip.name));
-            pads.append(pad);
-            padButtons.set(clip.name, pad);
-          }
-          padsEmpty.hidden = s.clips.length > 0;
-        }
-        for (const clip of s.clips) {
-          const pad = padButtons.get(clip.name);
-          if (!pad) continue;
-          pad.toggleAttribute('data-on', clip.running && !clip.muted);
-          pad.toggleAttribute('data-muted', clip.muted);
-        }
-      }
-      async function tapPad(name: string) {
-        const on = padButtons.get(name)?.hasAttribute('data-on');
-        const reply = await engine.run(`${name}.${on ? 'stop' : 'start'}`);
-        setStatus(reply.ok ? `${name} ${on ? 'stops' : 'starts'} at bar ${reply.landed.bar}.` : (reply.message || `Could not ${on ? 'stop' : 'start'} ${name}.`));
+        // the clock the page keeps follows what the engine says, and what it has buffered ahead of the speakers
+        clock.bar = s.bar; clock.beat = s.beat; clock.bpm = s.bpm; clock.at = performance.now(); clock.behind = m.buffered; clock.on = true;
+        clock.perBar = Number.isFinite(s.beats_per_bar) ? Math.max(1, Math.round(s.beats_per_bar)) : 4;
+        // the ranges are read again when the text has changed
+        if (rangesFor !== code.view.state.doc) { rangesFor = code.view.state.doc; ranges = annotatedRanges(code.value); }
+        const state = describe(s, ranges);
+        showClips(state);
+        showSliders(state);
       }
 
       const engine = createEngine({
         onStatus: showSession,
-        onLost: () => { setStatus('The engine stopped unexpectedly. Run all starts it again.'); now.textContent = ''; },
+        onLost: () => { setStatus('The engine stopped unexpectedly. Run all starts it again.'); now.textContent = ''; clock.on = false; },
         onBroken: () => setStatus('The engine could not be loaded in this browser.'),
       });
       const code = createEditor({
@@ -280,6 +441,28 @@ const examples: [string, string, number][] = [
         setDrawer(errors.childElementCount > 0);
       }
 
+      // ---- saying what a Run did: in the drawer, and for a moment over the editor, where the eyes already are
+      const toast = $('toast');
+      let toastTimer: number | undefined;
+      const say = (text: string) => {
+        setStatus(text);
+        toast.textContent = text;
+        toast.toggleAttribute('data-show', true);
+        clearTimeout(toastTimer);
+        toastTimer = window.setTimeout(() => toast.removeAttribute('data-show'), 3500);
+      };
+      /** What a run changed, in words: "Updated clip hats" rather than the engine's own wording. */
+      function describeChanges(changes: string[]) {
+        const words = changes.map((c) => {
+          const m = /^\s*(instr|mono|fx|clip|bus|ctl|scene)\s+([A-Za-z_]\w*)/.exec(c);
+          if (m) return `Updated ${m[1] === 'mono' ? 'instrument' : m[1] === 'instr' ? 'instrument' : m[1]} ${m[2]}`;
+          const t = c.trim().replace(/\s+/g, ' ');
+          return t.length > 48 ? `${t.slice(0, 45)}…` : t;
+        });
+        if (words.length === 0) return 'Nothing changed';
+        return words.length > 3 ? `${words.slice(0, 3).join(', ')} and ${words.length - 3} more` : words.join(', ');
+      }
+
       // ---- the live session
       let busy = false;
       let pristine = '';
@@ -299,7 +482,7 @@ const examples: [string, string, number][] = [
           }
           showErrors(text, [], '');
           code.flash(0, code.view.state.doc.length);
-          setStatus('Playing. Tap ▶ in the margin to run a block, or a pad to start or stop a clip.');
+          setStatus('Playing. Tap a clip to start or stop it, or ▶ in the margin to run a line of code (↻ updates a definition).');
         } catch {
           setStatus('Audio could not be started in this browser.');
         } finally { busy = false; }
@@ -324,8 +507,7 @@ const examples: [string, string, number][] = [
           }
           showErrors(text, [], '');
           code.flash(part.from, part.to);
-          const what = reply.landed.changes.length ? reply.landed.changes.join(', ') : 'nothing changed';
-          setStatus(`Sent: ${what}. It lands at bar ${reply.landed.bar}.`);
+          say(`${describeChanges(reply.landed.changes)}. Heard from bar ${reply.landed.bar}.`);
         } finally { busy = false; }
       }
 
@@ -340,7 +522,8 @@ const examples: [string, string, number][] = [
         if (code.value !== pristine && !confirm('Put the piece back as it was? Your changes will be lost.')) return;
         stopPlaying();
         await engine.stop();
-        now.textContent = '';
+        now.textContent = ''; clock.on = false;
+        waiting.clear();
         code.value = pristine;
         showErrors(pristine, [], '');
         setStatus('Back to the start. Run all plays it.');
@@ -365,7 +548,7 @@ const examples: [string, string, number][] = [
         const ctx = engine.context();
         // the live session and a render would play over each other
         await engine.stop();
-        now.textContent = '';
+        now.textContent = ''; clock.on = false;
         play.disabled = true;
         download.disabled = true;
         const text = code.value;
@@ -436,7 +619,7 @@ const examples: [string, string, number][] = [
       async function loadExample(name: string) {
         const wanted = exampleSelect.querySelector<HTMLOptionElement>(`option[value="${name}"]`)?.dataset.bars;
         if (wanted) bars.value = wanted;
-        const response = await fetch(`/web/examples/${name}.nml`);
+        const response = await fetch(`/web/${name}.nml`);
         pristine = response.ok ? await response.text() : '// could not load the example';
         code.value = pristine;
         showErrors(pristine, [], '');
@@ -444,7 +627,7 @@ const examples: [string, string, number][] = [
       exampleSelect.addEventListener('change', async () => {
         stopPlaying();
         await engine.stop();
-        now.textContent = '';
+        now.textContent = ''; clock.on = false;
         history.replaceState(null, '', location.pathname);
         await loadExample(exampleSelect.value);
         setStatus('Run all plays it.');

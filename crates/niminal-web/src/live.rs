@@ -51,16 +51,16 @@ impl LiveSession {
         };
         // the session is given the text with its `use` lines expanded, as the render path does; the piece has
         // just compiled, so a mistake found here is rare and its position is in the expanded text
-        let landed = session.eval(&expanded.text, true)?;
+        let landed = session.eval(&expanded.text, Some("now"))?;
         Ok((session, landed))
     }
 
-    /// Run `source` (a selection, a block, or everything). `now` lands it at once; otherwise each change lands
-    /// where it asks, or on its kind's default boundary.
-    pub fn eval(&mut self, source: &str, now: bool) -> Result<Landed, LiveFailure> {
+    /// Run `source` (a selection, a block, or everything). `quantize` says when it lands (`now`, `beat`, `bar`,
+    /// `next 4bars`, `in 2beats`, ...); with none, each change lands where it asks, or on its kind's default boundary.
+    pub fn eval(&mut self, source: &str, quantize: Option<&str>) -> Result<Landed, LiveFailure> {
         let accepted = self
             .offline
-            .eval(source, now.then_some("now"))
+            .eval(source, quantize)
             .map_err(LiveFailure::Snippet)?;
         Ok(Landed {
             bar: accepted.position.0,
@@ -104,7 +104,16 @@ impl LiveSession {
                 })
             })
             .collect();
+        // the controls the piece declares, and where each one is now
+        let controls: Vec<_> = self
+            .offline
+            .control_values()
+            .into_iter()
+            .map(|(name, value, target, unit)| serde_json::json!({ "name": name, "value": value, "target": target, "unit": unit }))
+            .collect();
         serde_json::json!({
+            "controls": controls,
+            "beats_per_bar": self.offline.beats_per_bar(),
             "bar": t.bar,
             "beat": t.beat,
             "bpm": t.bpm,

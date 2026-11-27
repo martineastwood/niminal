@@ -1,0 +1,51 @@
+// A slow live set. Press Run all: the pad starts. Bring in the bells and the plucks from the Clips panel, then open the
+// filter and fill the room with the sliders. The comment after a `ctl` says how far its slider goes.
+use std/instruments.{pad, fm_bell, pluck}
+
+config { channels: stereo }
+tempo 70bpm
+
+ctl brightness = 2500hz.smooth(60ms)   // range 300hz..8khz
+ctl room_amount = 0.45.smooth(60ms)    // range 0..1
+ctl volume = 0db.smooth(60ms)           // range -30db..0db
+
+bus room: stereo
+fx hall {
+  out = room.lpf(cutoff: brightness).crossfade(room.lpf(cutoff: brightness).reverb(room: 0.85, damp: 0.5), room_amount).gain(volume)
+}
+
+instr drift(freq: hz) { room += pad(freq: freq, attack: 900ms, release: 2500ms).gain(19db) }
+instr chime(freq: hz) { room += fm_bell(freq: freq, decay: 3sec).gain(-2db) }
+instr plucked(freq: hz) { room += pluck(freq: freq, tone: 0.6, decay: 1500ms).gain(-4db) }
+
+clip floor {
+  instrument: drift
+  length: 4bars
+  notes: [a2 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~
+          f2 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~
+          c3 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~
+          g2 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~]
+}
+clip top {
+  instrument: drift
+  length: 4bars
+  notes: [e4 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~
+          c4 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~
+          g4 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~
+          d4 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~]
+}
+clip bells {
+  instrument: chime
+  length: 2bars
+  notes: [e5 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  b4 ~ ~ ~
+          c5 ~ ~ ~  ~ ~ ~ ~  ~ ~ ~ ~  g5 ~ ~ ~]
+}
+clip plucks {
+  instrument: plucked
+  length: 2bars
+  notes: [a4 ~ e5 ~  c5 ~ e5 ~  a4 ~ e5 ~  d5 ~ e5 ~
+          f4 ~ c5 ~  a4 ~ c5 ~  f4 ~ c5 ~  g4 ~ c5 ~]
+}
+
+floor.start
+top.start

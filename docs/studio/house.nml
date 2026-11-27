@@ -1,0 +1,87 @@
+// A live set. Press Run all: the kick, hats and bass start. Then bring the other clips in and out from the
+// Clips panel (or with the ▶ in the margin), and move the sliders. The comment after a `ctl` says how far its slider goes.
+use std/drums.{kick_808, clap, hat_closed, hat_open}
+use std/instruments.{bass, electric_piano, lead}
+
+config { channels: stereo }
+tempo 122bpm
+
+ctl sweep = 9khz.smooth(40ms)     // range 300hz..12khz
+ctl volume = 0db.smooth(40ms)      // range -30db..0db
+ctl echo_mix = 0.2.smooth(40ms)   // range 0..0.8
+
+bus mix: stereo
+bus wash: stereo
+fx master {
+  out = mix.lpf(cutoff: sweep).gain(volume)
+}
+fx echoes {
+  out = wash.delay(time: 3/16beat, feedback: 0.5).lpf(cutoff: 3khz) * echo_mix
+}
+
+instr kick(freq: hz = c3) { mix += kick_808(freq: freq, decay: 380ms) }
+instr clap_hit(freq: hz = c3) {
+  v = clap(freq: freq)
+  mix += v.gain(-3db)
+  wash += v.gain(-9db)
+}
+instr hat(freq: hz = c3) { mix += hat_closed(freq: freq).gain(-7db) }
+instr open_hat(freq: hz = c3) { mix += hat_open(freq: freq).gain(-9db) }
+instr sub(freq: hz) { mix += bass(freq: freq, cutoff: 420hz, res: 0.35).gain(-2db) }
+instr keys(freq: hz) {
+  v = electric_piano(freq: freq).gain(-9db)
+  mix += v
+  wash += v.gain(-6db)
+}
+instr stab(freq: hz) {
+  v = lead(freq: freq, cutoff: 3khz).gain(-11db)
+  mix += v
+  wash += v
+}
+
+clip kick_clip {
+  instrument: kick
+  length: 1bar
+  notes: [c3 ~ ~ ~  c3 ~ ~ ~  c3 ~ ~ ~  c3 ~ ~ ~]
+}
+clip claps {
+  instrument: clap_hit
+  length: 1bar
+  notes: [~ ~ ~ ~  c3 ~ ~ ~  ~ ~ ~ ~  c3 ~ ~ c3]
+}
+clip hats {
+  instrument: hat
+  length: 1bar
+  notes: [c3 c3 c3 c3  c3 c3 c3 c3  c3 c3 c3 c3  c3 c3 c3 c3]
+}
+clip offbeats {
+  instrument: open_hat
+  length: 1bar
+  notes: [~ ~ c3 ~  ~ ~ c3 ~  ~ ~ c3 ~  ~ ~ c3 ~]
+}
+clip line {
+  instrument: sub
+  length: 2bars
+  notes: [a1 ~ a1 ~  ~ a1 ~ ~  c2 ~ a1 ~  ~ ~ e2 ~
+          a1 ~ a1 ~  ~ a1 ~ ~  g1 ~ a1 ~  ~ ~ d2 ~]
+}
+clip chords {
+  instrument: keys
+  length: 4bars
+  notes: [a3 ~ ~ e4  ~ ~ c4 ~  ~ ~ e4 ~  ~ ~ ~ ~
+          f3 ~ ~ c4  ~ ~ a3 ~  ~ ~ c4 ~  ~ ~ ~ ~
+          c4 ~ ~ g4  ~ ~ e4 ~  ~ ~ g4 ~  ~ ~ ~ ~
+          g3 ~ ~ d4  ~ ~ b3 ~  ~ ~ d4 ~  ~ ~ ~ ~]
+}
+clip hook {
+  instrument: stab
+  length: 4bars
+  notes: [e5 ~ ~ ~  ~ ~ c5 ~  ~ ~ ~ ~  a4 ~ ~ ~
+          ~ ~ ~ ~  ~ ~ ~ ~  c5 ~ a4 ~  ~ ~ ~ ~
+          g5 ~ ~ ~  ~ ~ e5 ~  ~ ~ ~ ~  c5 ~ ~ ~
+          ~ ~ ~ ~  ~ ~ ~ ~  d5 ~ b4 ~  ~ ~ ~ ~]
+}
+
+kick_clip.start
+hats.start
+line.start

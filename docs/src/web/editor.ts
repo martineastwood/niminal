@@ -68,26 +68,35 @@ const flashField = StateField.define<DecorationSet>({
   provide: (f) => EditorView.decorations.from(f),
 });
 
-// a run button in the margin beside the first line of every statement: one tap runs that block, no keyboard needed
+// a button in the margin beside the first line of every statement: one tap runs that block, no keyboard needed.
+// ▶ is for code that makes sound when it runs (`hook.start`, `at +2bars ...`), ↻ for code that only defines something
+// (`clip`, `instr`, `fx`, `ctl`, `use`, `tempo`, ...): running it updates the piece, and what is playing changes
+const DEFINES = /^\s*(use|config|tempo|meter|bus|fx|instr|mono|clip|ctl|fn|const|scene|arrangement)\b|^\s*[A-Za-z_]\w*\s*=(?!=)/;
+
 class RunMarker extends GutterMarker {
+  constructor(readonly defines: boolean) { super(); }
+  eq(other: RunMarker) { return other.defines === this.defines; }
   toDOM() {
     const el = document.createElement('span');
-    el.className = 'cm-run';
-    el.textContent = '▶';
+    el.className = this.defines ? 'cm-run cm-update' : 'cm-run';
+    el.textContent = this.defines ? '↻' : '▶';
     el.setAttribute('role', 'button');
-    el.setAttribute('aria-label', 'Run this block');
+    el.setAttribute('aria-label', this.defines ? 'Update this definition' : 'Run this line');
     return el;
   }
 }
-const runMarker = new RunMarker();
+// `use` and `config` are read when the whole piece starts; run on their own they would be an error, so they get no button
+const WHOLE_PIECE_ONLY = /^\s*(use|config)\b/;
+const playMarker = new RunMarker(false);
+const updateMarker = new RunMarker(true);
 const runGutter = (onRun: () => void) => gutter({
   class: 'cm-run-gutter',
   markers(view) {
     const doc = view.state.doc;
     const lines = doc.toString().split('\n');
-    return RangeSet.of(statementStarts(lines).map((i) => runMarker.range(doc.line(i + 1).from)));
+    return RangeSet.of(statementStarts(lines).filter((i) => !WHOLE_PIECE_ONLY.test(lines[i])).map((i) => (DEFINES.test(lines[i]) ? updateMarker : playMarker).range(doc.line(i + 1).from)));
   },
-  initialSpacer: () => runMarker,
+  initialSpacer: () => playMarker,
   domEventHandlers: {
     mousedown(view, line, event) {
       // keep the editor's focus (and the on-screen keyboard) where it is
@@ -157,7 +166,7 @@ export function createEditor(options: {
       if (to <= from) return;
       view.dispatch({ effects: flashOn.of({ from, to }) });
       clearTimeout(flashTimer);
-      flashTimer = window.setTimeout(() => view.dispatch({ effects: flashOff.of(null) }), 450);
+      flashTimer = window.setTimeout(() => view.dispatch({ effects: flashOff.of(null) }), 900);
     },
     /** The selection, or the block the cursor is in: the code Run sends. Null between blocks. */
     target() {

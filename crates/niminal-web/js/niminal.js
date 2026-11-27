@@ -93,10 +93,11 @@ class Niminal {
     }
   }
 
-  /** Run `source` (a snippet) in the session, at once if `now`. Offsets in `diagnostics` are within the snippet. */
-  liveEval(source, now = false) {
+  /** Run `source` (a snippet) in the session. `when` says when it lands: "now", "beat", "bar", "next 4bars"...;
+   *  without it each change lands where it asks. Offsets in `diagnostics` are within the snippet. */
+  liveEval(source, when = "") {
     try {
-      return this.#liveResult(this.#withText(source, (p, n) => this.#wasm.niminal_live_eval(p, n, now ? 1 : 0)));
+      return this.#liveResult(this.#withText(source, (p, n) => this.#withText(when, (q, m) => this.#wasm.niminal_live_eval(p, n, q, m))));
     } catch (error) {
       return this.#trapped(error);
     }

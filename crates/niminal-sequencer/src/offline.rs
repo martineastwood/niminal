@@ -75,6 +75,11 @@ impl Offline {
         self.engine().session_mut().take_midi()
     }
 
+    /// How many beats a bar has in the piece's meter.
+    pub fn beats_per_bar(&self) -> f64 {
+        self.live.program().tempo.beats_per_bar
+    }
+
     /// Each control's name, value, where it is going, and unit.
     pub fn control_values(&self) -> Vec<(String, f32, f32, Option<&'static str>)> {
         self.engine()

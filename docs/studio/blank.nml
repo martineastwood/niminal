@@ -1,0 +1,32 @@
+// A small page to build on. Press Run all, then change a note and tap ▶ in the margin to hear it at the next bar.
+// Add a clip like this one, give it an instrument, and it will appear under Clips. A `ctl` line becomes a slider:
+// the comment after it says how far the slider goes.
+use std/drums.{kick_808}
+use std/instruments.{pluck}
+
+config { channels: stereo }
+tempo 110bpm
+
+ctl volume = -6db.smooth(30ms)   // range -30db..0db
+
+bus mix: stereo
+fx master {
+  out = mix.gain(volume)
+}
+
+instr kick(freq: hz = c3) { mix += kick_808(freq: freq) }
+instr tone(freq: hz) { mix += pluck(freq: freq, decay: 900ms).gain(-4db) }
+
+clip drums {
+  instrument: kick
+  length: 1bar
+  notes: [c3 ~ ~ ~  c3 ~ ~ ~  c3 ~ ~ ~  c3 ~ ~ ~]
+}
+clip melody {
+  instrument: tone
+  length: 2bars
+  notes: [a3 ~ c4 ~  e4 ~ c4 ~  a3 ~ c4 ~  g4 ~ e4 ~
+          f3 ~ a3 ~  c4 ~ a3 ~  f3 ~ a3 ~  e4 ~ c4 ~]
+}
+
+drums.start

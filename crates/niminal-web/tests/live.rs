@@ -44,7 +44,7 @@ fn code_run_in_a_live_session_changes_it() {
         session.process(1024);
     }
     // a new clip on the same instrument, started now
-    let landed = session.eval("clip d {\n  instrument: tone\n  length: 1bar\n  notes: [e4]\n}\nd.start\n", true).ok().unwrap();
+    let landed = session.eval("clip d {\n  instrument: tone\n  length: 1bar\n  notes: [e4]\n}\nd.start\n", Some("now")).ok().unwrap();
     assert!(!landed.changes.is_empty());
     let status: serde_json::Value = serde_json::from_str(&session.status()).unwrap();
     assert_eq!(status["clips"].as_array().unwrap().len(), 2);
@@ -55,7 +55,7 @@ fn mistakes_are_reported_and_change_nothing() {
     let Ok((mut session, _)) = LiveSession::start(PIECE, 48_000.0) else {
         panic!("the piece should start");
     };
-    let Err(LiveFailure::Snippet(problems)) = session.eval("instr bad() { out = nonsense(1) }\n", true) else {
+    let Err(LiveFailure::Snippet(problems)) = session.eval("instr bad() { out = nonsense(1) }\n", Some("now")) else {
         panic!("expected a problem in the snippet");
     };
     assert!(problems[0].span.is_some());

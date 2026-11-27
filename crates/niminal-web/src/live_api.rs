@@ -92,22 +92,26 @@ pub unsafe extern "C" fn niminal_live_start(source: *const u8, length: usize, sa
     })
 }
 
-/// Run the UTF-8 source at `source` in the session, at once if `now` is not 0. Returns 0 (what lands) or 1 (the
-/// mistakes, located in the snippet; a session that is not started is a mistake).
+/// Run the UTF-8 source at `source` in the session. The text at `when` (`when_length` bytes, may be empty) says when
+/// it lands: `now`, `beat`, `bar`, `next 4bars`...; empty leaves each change to land where it asks. Returns 0 (what
+/// lands) or 1 (the mistakes, located in the snippet; a session that is not started is a mistake).
 ///
 /// # Safety
-/// `source` points to `length` readable bytes.
+/// `source` points to `length` readable bytes and `when` to `when_length`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn niminal_live_eval(source: *const u8, length: usize, now: i32) -> i32 {
+pub unsafe extern "C" fn niminal_live_eval(source: *const u8, length: usize, when: *const u8, when_length: usize) -> i32 {
     // SAFETY: the caller's contract.
     let bytes = unsafe { std::slice::from_raw_parts(source, length) };
     let text = String::from_utf8_lossy(bytes).into_owned();
+    // SAFETY: the caller's contract.
+    let quantize = String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(when, when_length) }).into_owned();
+    let quantize = (!quantize.is_empty()).then_some(quantize);
     with(|s| {
         let Some(session) = s.session.as_mut() else {
             s.text = failure_json(&LiveFailure::Other("the engine is not running: run the piece first".into()));
             return 1;
         };
-        match session.eval(&text, now != 0) {
+        match session.eval(&text, quantize.as_deref()) {
             Ok(landed) => {
                 s.text = landed_json(&landed);
                 0

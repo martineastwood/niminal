@@ -29,18 +29,33 @@ body.studio[data-keys] .st { padding-bottom: 3.7rem; }
 
 .st-main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 3fr) minmax(15rem, 2fr); gap: 0.8rem; }
 .st-code, .st-perform { min-height: 0; min-width: 0; }
+.st-code { position: relative; }
+.st-toast { position: absolute; left: 3.4rem; right: 0.8rem; bottom: 0.8rem; max-width: 30rem; padding: 0.6rem 0.8rem; border-radius: 6px; background: var(--accent); color: var(--accent-ink);
+  font: 600 0.85rem var(--mono); opacity: 0; transform: translateY(6px); transition: opacity 0.2s, transform 0.2s; pointer-events: none; }
+.st-toast[data-show] { opacity: 1; transform: none; }
 .st-code .pg-editor { height: 100%; display: flex; }
 .st-code .pg-editor .cm-editor { flex: 1; height: auto; min-height: 0; resize: none; }
 .st-code .pg-editor .cm-scroller { overflow: auto; }
 
 .st-perform { overflow: auto; border: 1px solid var(--line-strong); border-radius: 4px; padding: 0.8rem; background: var(--bg-elevated); }
 .st-perform h2 { margin: 0 0 0.6rem; font: 600 0.8rem var(--mono); color: var(--muted); text-transform: none; letter-spacing: 0; }
-.st-pads { display: grid; grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr)); gap: 0.6rem; }
-.st-pad { min-height: 4.5rem; cursor: pointer; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--panel); color: var(--panel-muted);
-  font: 600 0.9rem var(--mono); padding: 0.6rem; text-align: left; touch-action: manipulation; }
-.st-pad[data-on] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-.st-pad[data-muted] { opacity: 0.55; }
-.st-empty { margin: 0; color: var(--muted); font-size: 0.9rem; }
+.st-perform-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; margin: 0 0 0.6rem; }
+.st-perform-head h2 { margin: 0; }
+.st-perform-head:not(:first-child) { margin-top: 1.2rem; }
+.st-lands { display: flex; align-items: center; gap: 0.4rem; font: 500 0.75rem var(--mono); color: var(--muted); }
+.st-lands select { background: var(--panel); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0.3rem 0.5rem; font: 400 0.8rem var(--mono); }
+.st-clips { display: grid; grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr)); gap: 0.6rem; }
+.st-clipbox { position: relative; }
+.st-clip { width: 100%; min-height: 4.5rem; cursor: pointer; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--panel); color: var(--panel-muted);
+  font: 600 0.9rem var(--mono); padding: 0.6rem;  text-align: left; touch-action: manipulation; word-break: break-word; }
+.st-clip[data-on] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.st-clip[data-muted] { border-style: dashed; opacity: 0.6; }
+.st-empty { margin: 0; color: var(--muted); font-size: 0.85rem; }
+.st-empty[hidden] { display: none; }
+.st-sliders { display: grid; gap: 0.5rem; }
+.st-sliders label { display: grid; grid-template-columns: 6rem 1fr 4.5rem; align-items: center; gap: 0.6rem; font: 500 0.8rem var(--mono); color: var(--muted); }
+.st-sliders input[type='range'] { width: 100%; accent-color: var(--accent); min-height: 2.25rem; touch-action: pan-y; }
+.st-sliders output { color: var(--ink); text-align: right; }
 
 .st-drawer { flex: none; border-top: 1px solid var(--line-strong); padding-bottom: env(safe-area-inset-bottom); }
 .st-drawer-bar { width: 100%; display: flex; gap: 0.6rem; align-items: center; padding: 0.6rem 0.2rem; background: none; border: 0; color: var(--muted);
@@ -57,6 +72,7 @@ body.studio[data-keys] .st { padding-bottom: 3.7rem; }
 .cm-run-gutter { cursor: pointer; }
 .cm-run-gutter .cm-gutterElement { display: flex; align-items: center; justify-content: center; width: 1.9rem; }
 .cm-run { color: var(--accent); font-size: 0.8rem; line-height: 1; }
+.cm-update { color: var(--muted); font-size: 0.95rem; }
 .cm-run-gutter .cm-gutterElement:hover .cm-run { transform: scale(1.3); }
 
 /* the row of keys above the on-screen keyboard (touch screens only; the script moves it above the keyboard) */
@@ -86,8 +102,10 @@ body.studio[data-keys] .st { padding-bottom: 3.7rem; }
 @media (pointer: coarse) {
   .st-bar button.btn, .st-bar summary.btn { min-height: 2.75rem; padding-left: 1rem; padding-right: 1rem; }
   .st-bar select, .st-bar input[type='number'] { font-size: 1rem; min-height: 2.75rem; }
-  .st-pad { min-height: 5.5rem; }
-  .st-pad:active { transform: scale(0.97); }
+  .st-clip { min-height: 5.5rem; }
+  .st-sliders input[type='range'] { min-height: 2.75rem; }
+  .st-lands select { font-size: 1rem; min-height: 2.5rem; }
+  .st-clip:active { transform: scale(0.97); }
   .cm-run-gutter .cm-gutterElement { width: 2.75rem; }
   .cm-run { font-size: 1.1rem; }
   .pg-editor .cm-content { font-size: 1rem; line-height: 1.7; }
@@ -95,3 +113,6 @@ body.studio[data-keys] .st { padding-bottom: 3.7rem; }
   .st-drawer-bar { min-height: 3rem; }
 }
 button, summary, select, .cm-run-gutter { touch-action: manipulation; }
+
+/* the code that has just been run: bright enough to see from across the screen */
+.cm-flash { background: color-mix(in srgb, var(--accent) 55%, transparent) !important; outline: 2px solid var(--accent); }
