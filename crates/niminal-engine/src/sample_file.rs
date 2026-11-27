@@ -5,6 +5,14 @@ use std::path::Path;
 
 /// Decode a sample file to one table per channel, preserving its sample rate.
 pub fn read_sample_file(path: &Path) -> Result<Vec<Table>, String> {
+    // a file the program has put in memory wins over one on disk
+    if let Some((bytes, _)) = crate::vfs::get(path) {
+        return read_sample_bytes(path, &bytes);
+    }
+    // WebAssembly has no file system: a file that is not in memory is not anywhere
+    if cfg!(target_arch = "wasm32") {
+        return Err(missing_file(path));
+    }
     let is_text = path
         .extension()
         .and_then(|e| e.to_str())
@@ -26,6 +34,39 @@ pub fn read_sample_file(path: &Path) -> Result<Vec<Table>, String> {
     }
 }
 
+/// What to say of a file that is not in the project held in memory (a browser has nowhere else to look).
+fn missing_file(path: &Path) -> String {
+    let shown = path.strip_prefix(".").unwrap_or(path);
+    format!("there is no file {} in this project", shown.display())
+}
+
+/// Decode a sample file that is already in memory; `path` says what kind it is, by its extension.
+fn read_sample_bytes(path: &Path, bytes: &[u8]) -> Result<Vec<Table>, String> {
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let label = path.display().to_string();
+    match extension.as_str() {
+        "scl" => scala_from_text(&text_of(bytes, &label)?, &label).map(|t| vec![t]),
+        "csv" | "txt" | "dat" => text_columns(&text_of(bytes, &label)?, &label),
+        "wav" => decode_wav(
+            hound::WavReader::new(std::io::Cursor::new(bytes)).map_err(|e| format!("can't read {label}: {e}"))?,
+            &label,
+        ),
+        _ => compressed_from(
+            Box::new(std::io::Cursor::new(bytes.to_vec())),
+            path.extension().and_then(|e| e.to_str()),
+            &label,
+        ),
+    }
+}
+
+fn text_of(bytes: &[u8], label: &str) -> Result<String, String> {
+    String::from_utf8(bytes.to_vec()).map_err(|_| format!("can't read {label}: it is not text"))
+}
+
 /// The kinds of audio file a sample can be, by extension: WAV, and what the decoder reads besides.
 pub const AUDIO_EXTENSIONS: &[&str] = &[
     "wav", "flac", "mp3", "ogg", "oga", "aif", "aiff", "aifc", "m4a", "mp4", "aac", "caf",
@@ -41,8 +82,13 @@ pub fn is_audio(path: &Path) -> bool {
 /// A text file of numbers, a row per line and a column per channel, split by commas, tabs or
 /// spaces. `#` starts a comment, and a first line that isn't numbers is a header.
 fn read_text(path: &Path) -> Result<Vec<Table>, String> {
-    let fail = |e: &dyn std::fmt::Display| format!("can't read {}: {e}", path.display());
-    let text = std::fs::read_to_string(path).map_err(|e| fail(&e))?;
+    let label = path.display().to_string();
+    let text = std::fs::read_to_string(path).map_err(|e| format!("can't read {label}: {e}"))?;
+    text_columns(&text, &label)
+}
+
+fn text_columns(text: &str, label: &str) -> Result<Vec<Table>, String> {
+    let fail = |e: &dyn std::fmt::Display| format!("can't read {label}: {e}");
     let mut columns: Vec<Vec<f32>> = Vec::new();
     let mut seen_row = false;
     for (n, line) in text.lines().enumerate() {
@@ -78,7 +124,7 @@ fn read_text(path: &Path) -> Result<Vec<Table>, String> {
         }
     }
     if columns.is_empty() {
-        return Err(format!("{} has no numbers in it", path.display()));
+        return Err(format!("{label} has no numbers in it"));
     }
     Ok(columns
         .into_iter()
@@ -89,8 +135,13 @@ fn read_text(path: &Path) -> Result<Vec<Table>, String> {
 /// A Scala tuning file as one table of the scale's degrees in semitones above the root: 0 first, then every
 /// pitch the file lists, so the last entry is the period (12 for an ordinary octave).
 fn read_scala(path: &Path) -> Result<Table, String> {
-    let fail = |e: &dyn std::fmt::Display| format!("can't read {}: {e}", path.display());
-    let text = std::fs::read_to_string(path).map_err(|e| fail(&e))?;
+    let label = path.display().to_string();
+    let text = std::fs::read_to_string(path).map_err(|e| format!("can't read {label}: {e}"))?;
+    scala_from_text(&text, &label)
+}
+
+fn scala_from_text(text: &str, label: &str) -> Result<Table, String> {
+    let fail = |e: &dyn std::fmt::Display| format!("can't read {label}: {e}");
     let mut lines = text.lines().filter(|l| !l.trim_start().starts_with('!'));
     lines.next(); // the description, which may be empty
     let count: usize = lines
@@ -121,6 +172,17 @@ fn read_scala(path: &Path) -> Result<Table, String> {
 
 /// FLAC, MP3, Ogg Vorbis, AIFF, AAC and the like, decoded to one table per channel.
 fn read_compressed(path: &Path) -> Result<Vec<Table>, String> {
+    let label = path.display().to_string();
+    let file = std::fs::File::open(path).map_err(|e| format!("can't read {label}: {e}"))?;
+    compressed_from(Box::new(file), path.extension().and_then(|e| e.to_str()), &label)
+}
+
+/// Decode any audio the decoder knows from a stream; `extension` is a hint for which format it is.
+fn compressed_from(
+    source: Box<dyn symphonia::core::io::MediaSource>,
+    extension: Option<&str>,
+    label: &str,
+) -> Result<Vec<Table>, String> {
     use symphonia::core::audio::SampleBuffer;
     use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
     use symphonia::core::errors::Error;
@@ -129,16 +191,15 @@ fn read_compressed(path: &Path) -> Result<Vec<Table>, String> {
     use symphonia::core::meta::MetadataOptions;
     use symphonia::core::probe::Hint;
 
-    let fail = |e: &dyn std::fmt::Display| format!("can't read {}: {e}", path.display());
-    let file = std::fs::File::open(path).map_err(|e| fail(&e))?;
+    let fail = |e: &dyn std::fmt::Display| format!("can't read {label}: {e}");
     let mut hint = Hint::new();
-    if let Some(extension) = path.extension().and_then(|e| e.to_str()) {
+    if let Some(extension) = extension {
         hint.with_extension(extension);
     }
     let probed = symphonia::default::get_probe()
         .format(
             &hint,
-            MediaSourceStream::new(Box::new(file), Default::default()),
+            MediaSourceStream::new(source, Default::default()),
             &FormatOptions::default(),
             &MetadataOptions::default(),
         )
@@ -196,7 +257,7 @@ fn read_compressed(path: &Path) -> Result<Vec<Table>, String> {
         }
     }
     if buffers.iter().all(Vec::is_empty) {
-        return Err(format!("{} has no audio in it", path.display()));
+        return Err(format!("{label} has no audio in it"));
     }
     let rate = rate.map(|r| r as f32);
     Ok(buffers
@@ -216,11 +277,17 @@ pub struct WavInfo {
 
 /// The playing notes a WAV file carries, or `None` if it isn't a WAV file or says nothing.
 pub fn read_wav_info(path: &Path) -> Option<WavInfo> {
-    use std::io::{Read, Seek, SeekFrom};
     if !path.extension()?.eq_ignore_ascii_case("wav") {
         return None;
     }
-    let mut file = std::fs::File::open(path).ok()?;
+    if let Some((bytes, _)) = crate::vfs::get(path) {
+        return wav_info(std::io::Cursor::new(bytes.as_slice()));
+    }
+    wav_info(std::fs::File::open(path).ok()?)
+}
+
+fn wav_info(mut file: impl std::io::Read + std::io::Seek) -> Option<WavInfo> {
+    use std::io::SeekFrom;
     let mut head = [0_u8; 12];
     file.read_exact(&mut head).ok()?;
     if &head[..4] != b"RIFF" || &head[8..] != b"WAVE" {

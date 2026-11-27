@@ -61,7 +61,11 @@ impl Samples {
 
     /// Where `path` is, or where it was first looked for if it isn't anywhere.
     fn resolve(&self, path: &str) -> PathBuf {
-        let found = self.bases.iter().map(|b| b.join(path)).find(|p| p.exists());
+        let found = self
+            .bases
+            .iter()
+            .map(|b| b.join(path))
+            .find(|p| niminal_engine::vfs::exists(p) || p.exists());
         found.unwrap_or_else(|| {
             self.bases
                 .first()
@@ -135,7 +139,11 @@ impl Samples {
     }
 
     fn load_file(&self, path: &Path) -> Result<Vec<Arc<Table>>, String> {
-        let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        // a file in memory is told apart by the number it was put with; one on disk by when it changed
+        let modified = match niminal_engine::vfs::get(path) {
+            Some((_, generation)) => Some(std::time::UNIX_EPOCH + std::time::Duration::from_nanos(generation)),
+            None => std::fs::metadata(path).and_then(|m| m.modified()).ok(),
+        };
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((when, data)) = cache.get(path)
             && *when == modified
@@ -152,13 +160,8 @@ impl Samples {
     pub fn load_sfz(&self, path: &str) -> Result<Vec<SfzSample>, String> {
         let file = self.resolve(path);
         let dir = file.parent().map(Path::to_path_buf).unwrap_or_default();
-        let text = std::fs::read_to_string(&file)
-            .map_err(|e| format!("can't read {}: {e}", file.display()))?;
-        let sfz = crate::sfz::parse(&text, &mut |name| {
-            let included = dir.join(name.replace('\\', "/"));
-            std::fs::read_to_string(&included)
-                .map_err(|e| format!("can't read {}: {e}", included.display()))
-        })
+        let text = read_text(&file)?;
+        let sfz = crate::sfz::parse(&text, &mut |name| read_text(&dir.join(name.replace('\\', "/"))))
         .map_err(|e| format!("{}: {e}", file.display()))?;
         sfz.regions
             .into_iter()
@@ -179,13 +182,19 @@ impl Samples {
     /// Each entry is the file's channels as tables.
     pub fn load_kit(&self, path: &str) -> Result<Kit, String> {
         let dir = self.resolve(path);
-        let entries = std::fs::read_dir(&dir)
-            .map_err(|e| format!("can't read the folder {}: {e}", dir.display()))?;
-        let mut files: Vec<PathBuf> = entries
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .filter(|p| p.is_file() && is_audio(p))
-            .collect();
+        let mut files: Vec<PathBuf> = match niminal_engine::vfs::files_in(&dir) {
+            Some(held) => held.into_iter().filter(|p| is_audio(p)).collect(),
+            None if cfg!(target_arch = "wasm32") => {
+                let shown = dir.strip_prefix(".").unwrap_or(&dir);
+                return Err(format!("there are no files in the folder {} in this project", shown.display()));
+            }
+            None => std::fs::read_dir(&dir)
+                .map_err(|e| format!("can't read the folder {}: {e}", dir.display()))?
+                .filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|p| p.is_file() && is_audio(p))
+                .collect(),
+        };
         files.sort();
         if files.is_empty() {
             return Err(format!("there are no audio files in {}", dir.display()));
@@ -202,6 +211,14 @@ impl Samples {
             })
             .collect()
     }
+}
+
+/// A text file, from memory if the program put it there, otherwise from disk.
+fn read_text(path: &Path) -> Result<String, String> {
+    if let Some(text) = niminal_engine::vfs::read_to_string(path) {
+        return Ok(text);
+    }
+    std::fs::read_to_string(path).map_err(|e| format!("can't read {}: {e}", path.display()))
 }
 
 pub use niminal_engine::{AUDIO_EXTENSIONS, is_audio};

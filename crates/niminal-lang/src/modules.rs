@@ -356,9 +356,12 @@ impl Walk<'_> {
             let module_source = match embedded(name) {
                 Some(source) => source.to_string(),
                 None => {
-                    let source = std::fs::read_to_string(&path).map_err(|e| {
-                        Diagnostic::new(format!("can't read {}: {e}", path.display()), used_at)
-                    })?;
+                    let source = match niminal_engine::vfs::read_to_string(&path) {
+                        Some(source) => source,
+                        None => std::fs::read_to_string(&path).map_err(|e| {
+                            Diagnostic::new(format!("can't read {}: {e}", path.display()), used_at)
+                        })?,
+                    };
                     sample_paths(&source, path.parent().unwrap_or(dir))
                 }
             };
@@ -391,7 +394,10 @@ impl Walk<'_> {
         ]
         .into_iter()
         .flatten()
-        .find_map(|p| p.canonicalize().ok())
+        .find_map(|p| {
+            // a module the program has put in memory is found as it is written; one on disk by its real path
+            if niminal_engine::vfs::exists(&p) { Some(p) } else { p.canonicalize().ok() }
+        })
     }
 }
 

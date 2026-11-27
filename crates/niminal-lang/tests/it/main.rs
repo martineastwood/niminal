@@ -3,6 +3,7 @@
 mod arrays;
 mod blocks;
 mod bundled_samples;
+mod memory_files;
 mod composition;
 mod control_scopes;
 mod frames;

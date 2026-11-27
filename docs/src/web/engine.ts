@@ -90,7 +90,20 @@ export function createEngine(hooks: {
     return audioReady;
   }
 
+  /** The project's files, as the pieces see them: what to put (path relative to the project), what to take out, and
+   *  `all` to start the project again with only these. Both workers get them: one plays, the other checks the code. */
+  async function setFiles(files: { put?: { path: string; bytes: ArrayBuffer }[]; remove?: string[]; all?: boolean }) {
+    // a worker takes the bytes it is sent, so the other gets its own copy
+    const copy = (f: typeof files) => ({ ...f, put: f.put?.map((p) => ({ path: p.path, bytes: p.bytes.slice(0) })) });
+    const forLsp = copy(files);
+    const id = nextId++;
+    const lspDone = new Promise<void>((resolve) => { lspPending.set(id, () => resolve()); });
+    lspWorker.postMessage({ id, kind: 'files', ...forLsp }, forLsp.put?.map((p) => p.bytes) ?? []);
+    await Promise.all([ask({ kind: 'files', ...files }, files.put?.map((p) => p.bytes) ?? []), lspDone]);
+  }
+
   return {
+    setFiles,
     exchange,
     context,
     ensureAudio,

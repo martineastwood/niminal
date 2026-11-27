@@ -116,3 +116,23 @@ button, summary, select, .cm-run-gutter { touch-action: manipulation; }
 
 /* the code that has just been run: bright enough to see from across the screen */
 .cm-flash { background: color-mix(in srgb, var(--accent) 55%, transparent) !important; outline: 2px solid var(--accent); }
+
+/* the Files panel: over the Perform side on a wide screen, over everything on a narrow one */
+.st-files { position: fixed; top: 4rem; right: 0.8rem; bottom: 0.8rem; width: min(26rem, calc(100vw - 1.6rem)); z-index: 40; display: flex; flex-direction: column; gap: 0.7rem;
+  padding: 1rem; overflow: auto; background: var(--bg-elevated); border: 1px solid var(--line-strong); border-radius: 8px; }
+.st-files[hidden] { display: none; }
+.st-files-head { display: flex; justify-content: space-between; align-items: center; }
+.st-files-head h2 { margin: 0; font: 600 1rem var(--mono); }
+.st-files-head .btn, .st-files-add .btn { cursor: pointer; background: transparent; color: var(--ink); }
+.st-files-add .btn-solid { background: var(--accent); color: var(--accent-ink); }
+.st-files-help { margin: 0; color: var(--muted); font-size: 0.85rem; }
+.st-files-add { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
+.st-files-add label { display: flex; align-items: center; gap: 0.4rem; font: 500 0.8rem var(--mono); color: var(--muted); flex: 1; min-width: 10rem; }
+.st-files-add input[type='text'] { flex: 1; min-width: 0; background: var(--panel); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0.4rem 0.6rem; font: 400 1rem var(--mono); }
+.st-files-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; }
+.st-files-list li { display: flex; gap: 0.6rem; align-items: center; padding: 0.4rem 0.6rem; border: 1px solid var(--line-strong); border-radius: 6px; font: 400 0.85rem var(--mono); }
+.st-files-list .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-files-list .info { color: var(--muted); }
+.st-files-list .btn { cursor: pointer; background: transparent; color: var(--ink); min-width: 2.5rem; min-height: 2.5rem; }
+.st-files-note { margin: 0; color: var(--muted); font-size: 0.8rem; }
+@media (max-width: 860px), (orientation: portrait) { .st-files { top: 3.5rem; left: 0.8rem; width: auto; } }

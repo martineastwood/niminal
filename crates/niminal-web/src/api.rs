@@ -46,6 +46,37 @@ pub unsafe extern "C" fn niminal_free(pointer: *mut u8, n: usize) {
     drop(unsafe { Vec::from_raw_parts(pointer, 0, n.max(1)) });
 }
 
+/// Put a file in the project held in memory: `path` is relative to the project (`kick.wav`, `kits/drums/snare.wav`)
+/// and is what a piece writes in `sample(\"...\")`, `kit(\"...\")` or `use`. A file put again replaces the one before.
+///
+/// # Safety
+/// `path` points to `path_length` readable bytes of UTF-8 and `data` to `data_length` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn niminal_vfs_put(path: *const u8, path_length: usize, data: *const u8, data_length: usize) {
+    // SAFETY: the caller's contract.
+    let path = String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(path, path_length) }).into_owned();
+    // SAFETY: the caller's contract.
+    let data = unsafe { std::slice::from_raw_parts(data, data_length) }.to_vec();
+    niminal_engine::vfs::put(&path, data);
+}
+
+/// Take a file out of the project held in memory.
+///
+/// # Safety
+/// `path` points to `path_length` readable bytes of UTF-8.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn niminal_vfs_remove(path: *const u8, path_length: usize) {
+    // SAFETY: the caller's contract.
+    let path = String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(path, path_length) }).into_owned();
+    niminal_engine::vfs::remove(&path);
+}
+
+/// Take every file out of the project held in memory.
+#[unsafe(no_mangle)]
+pub extern "C" fn niminal_vfs_clear() {
+    niminal_engine::vfs::clear();
+}
+
 /// Render the UTF-8 source at `source` (`length` bytes) for `bars` bars. Returns 0 for audio (read it with the
 /// functions below), 1 if the source has mistakes or cannot be rendered (read [`niminal_report`]).
 ///

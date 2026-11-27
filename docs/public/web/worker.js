@@ -73,6 +73,14 @@ self.onmessage = async (event) => {
   const { id, kind, source, bars } = event.data;
   try {
     niminal ??= await load(new URL("./niminal_web.wasm", import.meta.url));
+    if (kind === "files") {
+      // the project's files: the ones to put (path, bytes) and the ones to take out; `all` starts the project again
+      if (event.data.all) niminal.clearFiles();
+      for (const path of event.data.remove ?? []) niminal.removeFile(path);
+      for (const { path, bytes } of event.data.put ?? []) niminal.putFile(path, new Uint8Array(bytes));
+      self.postMessage({ id, result: { ok: true } });
+      return;
+    }
     if (kind === "live-link") {
       link = event.data.link;
       link.onmessage = (message) => {

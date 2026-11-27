@@ -21,6 +21,8 @@ export async function load(source) {
 class Niminal {
   #module;
   #wasm;
+  // the project's files, kept here as well as in the module: a module that trapped is started again, and gets them back
+  #files = new Map();
 
   constructor(module) {
     this.#module = module;
@@ -30,6 +32,41 @@ class Niminal {
   #start() {
     this.#wasm = new WebAssembly.Instance(this.#module, imports).exports;
     this.#wasm.niminal_init();
+    for (const [path, bytes] of this.#files) this.#put(path, bytes);
+  }
+
+  #put(path, bytes) {
+    const wasm = this.#wasm;
+    const name = new TextEncoder().encode(path);
+    const at = wasm.niminal_alloc(name.length);
+    new Uint8Array(wasm.memory.buffer, at, name.length).set(name);
+    const data = wasm.niminal_alloc(bytes.length);
+    new Uint8Array(wasm.memory.buffer, data, bytes.length).set(bytes);
+    try {
+      wasm.niminal_vfs_put(at, name.length, data, bytes.length);
+    } finally {
+      wasm.niminal_free(at, name.length);
+      wasm.niminal_free(data, bytes.length);
+    }
+  }
+
+  /** Put a file in the project the pieces see: `path` is relative (`kick.wav`, `kits/drums/snare.wav`), `bytes` a
+   *  Uint8Array. A file put again replaces the one before. */
+  putFile(path, bytes) {
+    this.#files.set(path, bytes);
+    this.#put(path, bytes);
+  }
+
+  /** Take a file out of the project. */
+  removeFile(path) {
+    this.#files.delete(path);
+    this.#withText(path, (p, n) => this.#wasm.niminal_vfs_remove(p, n));
+  }
+
+  /** Take every file out of the project. */
+  clearFiles() {
+    this.#files.clear();
+    this.#wasm.niminal_vfs_clear();
   }
 
   #text(pointer, length) {

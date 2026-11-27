@@ -62,4 +62,29 @@ niminal.liveHush();
 niminal.liveStop();
 if (niminal.liveProcess(128) !== null) fail("audio after the session was stopped");
 console.log("live session: starts, plays, takes a snippet, reports a bad one");
+// files put in the project are found by a piece: a sample, then a module
+function wav16(frames) {
+  const data = new DataView(new ArrayBuffer(44 + frames * 2));
+  const text = (at, t) => [...t].forEach((c, i) => data.setUint8(at + i, c.charCodeAt(0)));
+  text(0, "RIFF"); data.setUint32(4, 36 + frames * 2, true); text(8, "WAVEfmt ");
+  data.setUint32(16, 16, true); data.setUint16(20, 1, true); data.setUint16(22, 1, true);
+  data.setUint32(24, 44100, true); data.setUint32(28, 88200, true); data.setUint16(32, 2, true); data.setUint16(34, 16, true);
+  text(36, "data"); data.setUint32(40, frames * 2, true);
+  for (let i = 0; i < frames; i++) data.setInt16(44 + i * 2, Math.round(Math.sin(i / 8) * 20000), true);
+  return new Uint8Array(data.buffer);
+}
+const withSample = 'tempo 120bpm\nhit = sample("mine/hit.wav").root(c3)\nclip c {\n  instrument: hit\n  length: 1bar\n  notes: [c3 ~ ~ ~]\n}\nc.start\n';
+const missing = niminal.render(withSample, 1);
+if (missing.ok) fail("a piece with a missing sample rendered");
+if (!missing.diagnostics.some((d) => /there is no file mine\/hit\.wav in this project/.test(d.message))) fail(`the missing-file message: ${JSON.stringify(missing.diagnostics)}`);
+niminal.putFile("mine/hit.wav", wav16(4000));
+const heardSample = niminal.render(withSample, 1);
+if (!heardSample.ok) fail(`a sample put in the project was not found: ${JSON.stringify(heardSample)}`);
+if (!(Math.max(...heardSample.channels[0].map(Math.abs)) > 0.05)) fail("the sample made no sound");
+niminal.putFile("mine/voices.nml", new TextEncoder().encode('hit = sample("hit.wav").root(c3)\n'));
+const viaModule = niminal.render('use mine/voices\ntempo 120bpm\nclip c {\n  instrument: hit\n  length: 1bar\n  notes: [c3 ~ ~ ~]\n}\nc.start\n', 1);
+if (!viaModule.ok) fail(`a module put in the project was not found: ${JSON.stringify(viaModule)}`);
+niminal.clearFiles();
+if (niminal.render(withSample, 1).ok) fail("a sample that was taken out was still found");
+console.log("project files: a sample and a module are found by their relative paths");
 console.log(`ok: ${good.channels.length} channels, ${(good.channels[0].length / 48000).toFixed(2)} s, error at bytes ${bad.diagnostics[0].start}-${bad.diagnostics[0].end}`);

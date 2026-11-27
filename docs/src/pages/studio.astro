@@ -100,6 +100,7 @@ const examples: [string, string, number][] = [
               </div>
             </details>
             <button class="btn" id="share">Copy link</button>
+            <button class="btn" id="files-open">Files…</button>
           </div>
         </div>
       </div>
@@ -153,11 +154,27 @@ const examples: [string, string, number][] = [
         </div>
       </div>
     </div>
+    <div class="st-files" id="files" role="dialog" aria-label="Files" hidden>
+      <div class="st-files-head"><h2>Files</h2><button class="btn" id="files-close">Done</button></div>
+      <p class="st-files-help">
+        Add audio (WAV, MP3, FLAC, Ogg, AIFF, M4A), <code>.nml</code> modules, <code>.sfz</code> instruments and <code>.scl</code> scales.
+        A piece names a file by its path: <code>sample("kick.wav")</code>, or <code>kit("drums")</code> for a folder. They stay in this browser, not on a server.
+      </p>
+      <div class="st-files-add">
+        <label>in folder <input id="files-folder" type="text" placeholder="(top level)" autocapitalize="none" autocorrect="off" spellcheck="false" /></label>
+        <button class="btn btn-solid" id="files-add">Add files</button>
+        <input id="files-input" type="file" multiple hidden accept="audio/*,.wav,.mp3,.flac,.ogg,.oga,.aif,.aiff,.m4a,.aac,.nml,.sfz,.scl,.csv" />
+      </div>
+      <ul class="st-files-list" id="files-list"></ul>
+      <p class="st-empty" id="files-empty">No files yet. Anything you add shows up here.</p>
+      <p class="st-files-note" id="files-note"></p>
+    </div>
     <div class="st-keys" id="keys" role="toolbar" aria-label="Code keys"></div>
 
     <script>
       import { createEditor } from '../web/editor';
       import { setupKeyRow } from '../web/keys';
+      import { openStore, type Store } from '../web/storage';
       import { annotatedRanges, clipCode, describe, format, positionOf, valueAt, type ControlSpec, type PerformCommand, type PerformState, type Range } from '../web/perform';
       import {
         byteToIndex, createEngine, decodePiece, encodePiece, lineColumn, shiftDiagnostics, wavFile,
@@ -616,6 +633,85 @@ const examples: [string, string, number][] = [
         } catch { setStatus('The link, with your piece in it, is in the address bar.'); }
       });
 
+      // ---- the project's files: added here, kept in the browser, and put where the engine finds them by path
+      const filesPanel = $('files');
+      const filesList = $('files-list');
+      const filesEmpty = $('files-empty');
+      const filesNote = $('files-note');
+      let store: Store | undefined;
+      const known = new Map<string, number>(); // path -> size
+      const size = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`);
+      function showFiles() {
+        filesList.replaceChildren();
+        for (const [path, bytes] of [...known].sort(([a], [b]) => a.localeCompare(b))) {
+          const item = document.createElement('li');
+          const name = document.createElement('span');
+          name.className = 'name';
+          name.textContent = path;
+          const info = document.createElement('span');
+          info.className = 'info';
+          info.textContent = size(bytes);
+          const remove = document.createElement('button');
+          remove.className = 'btn';
+          remove.textContent = '✕';
+          remove.setAttribute('aria-label', `Remove ${path}`);
+          remove.addEventListener('click', () => void removeFile(path));
+          item.append(name, info, remove);
+          filesList.append(item);
+        }
+        filesEmpty.hidden = known.size > 0;
+        const total = [...known.values()].reduce((a, b) => a + b, 0);
+        filesNote.textContent = (known.size ? `${known.size} file${known.size === 1 ? '' : 's'}, ${size(total)}. ` : '')
+          + (store && !store.lasting ? 'This browser is not keeping files between visits (a private window?), so these will be gone when you close the page.' : '')
+          + (total > 200e6 ? ' That is a lot for a tablet: the page may run out of memory.' : '');
+      }
+      async function addFiles(files: File[], folder: string) {
+        const prefix = folder.trim().replace(/^\/+|\/+$/g, '');
+        const put = [];
+        for (const file of files) {
+          const path = (prefix ? `${prefix}/` : '') + file.name;
+          const bytes = await file.arrayBuffer();
+          await store?.put({ path, bytes, added: Date.now() });
+          put.push({ path, bytes });
+          known.set(path, bytes.byteLength);
+        }
+        // the engine takes the bytes; the store has its own copy
+        await engine.setFiles({ put: put.map((p) => ({ path: p.path, bytes: p.bytes.slice(0) })) });
+        showFiles();
+        setStatus(put.length === 1 ? `Added ${put[0].path}. Use it as sample("${put[0].path}").` : `Added ${put.length} files.`);
+      }
+      async function removeFile(path: string) {
+        await store?.remove(path);
+        known.delete(path);
+        await engine.setFiles({ remove: [path] });
+        showFiles();
+      }
+      const openFiles = (open: boolean) => { filesPanel.hidden = !open; if (open) showFiles(); };
+      $('files-open').addEventListener('click', () => { more.removeAttribute('data-open'); openFiles(true); });
+      $('files-close').addEventListener('click', () => openFiles(false));
+      $('files-add').addEventListener('click', () => $('files-input').click());
+      $<HTMLInputElement>('files-input').addEventListener('change', async (e) => {
+        const input = e.target as HTMLInputElement;
+        const picked = [...(input.files ?? [])];
+        input.value = '';
+        if (picked.length) await addFiles(picked, $<HTMLInputElement>('files-folder').value);
+      });
+      // on a desktop, files can be dropped on the code
+      const codeBox = document.querySelector('.st-code') as HTMLElement;
+      codeBox.addEventListener('dragover', (e) => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
+      codeBox.addEventListener('drop', (e) => {
+        if (!e.dataTransfer?.files.length) return;
+        e.preventDefault();
+        void addFiles([...e.dataTransfer.files], $<HTMLInputElement>('files-folder').value);
+      });
+      async function restoreFiles() {
+        store = await openStore();
+        const saved = await store.all();
+        for (const f of saved) known.set(f.path, f.bytes.byteLength);
+        if (saved.length) await engine.setFiles({ all: true, put: saved.map((f) => ({ path: f.path, bytes: f.bytes.slice(0) })) });
+        showFiles();
+      }
+
       // ---- starting points
       async function loadExample(name: string) {
         const wanted = exampleSelect.querySelector<HTMLOptionElement>(`option[value="${name}"]`)?.dataset.bars;
@@ -643,6 +739,7 @@ const examples: [string, string, number][] = [
         } else {
           await loadExample(exampleSelect.value);
         }
+        await restoreFiles();
         await engine.warm();
         for (const b of [runButton, runAllButton, resetButton, play, stop]) b.disabled = false;
         setStatus('Ready. Press Run all to start the piece.');
