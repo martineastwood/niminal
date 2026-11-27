@@ -104,127 +104,19 @@ const examples: [string, string, number][] = [
     </main>
 
     <script>
-      import { basicSetup, EditorView } from 'codemirror';
-      import { Compartment, EditorState, Prec } from '@codemirror/state';
-      import { Decoration, type DecorationSet, keymap } from '@codemirror/view';
-      import { StateEffect, StateField } from '@codemirror/state';
-      import { indentWithTab } from '@codemirror/commands';
-      import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
-      import { lintGutter } from '@codemirror/lint';
-      import { acceptCompletion } from '@codemirror/autocomplete';
-      import { tags } from '@lezer/highlight';
-      import DOMPurify from 'dompurify';
-      // the same lexer, palette and language-server client the Stage editor uses
-      import { colours, niminal } from '../../../editors/codemirror/language';
-      import { connectLanguageServer, languageClient } from '../../../editors/codemirror/lsp';
-      import { semanticHighlighting } from '../../../editors/codemirror/semantic';
-      import { blockAround } from '../../../editors/codemirror/blocks';
+      import { createEditor } from '../playground/editor';
+      import {
+        byteToIndex, createEngine, decodePiece, encodePiece, lineColumn, shiftDiagnostics, wavFile,
+        type Diagnostic, type Status,
+      } from '../playground/engine';
 
       const root = document.documentElement;
-      document.querySelectorAll<HTMLButtonElement>('[data-ground]').forEach((b) =>
-        b.addEventListener('click', () => {
-          const mode = b.dataset.ground as 'ink' | 'paper';
-          root.setAttribute('data-mode', mode);
-          root.setAttribute('data-theme', mode === 'paper' ? 'light' : 'dark');
-          try { localStorage.setItem('starlight-theme', mode === 'paper' ? 'light' : 'dark'); } catch {}
-          applyGround();
-        }));
-
       const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-
-      // ---- the editor: the language's own highlighting, in the page's two grounds
-      const paperColours = syntaxHighlighting(HighlightStyle.define([
-        { tag: tags.keyword, color: '#8250df' },
-        { tag: tags.comment, color: '#6e7781' },
-        { tag: tags.string, color: '#1a7f37' },
-        { tag: [tags.number, tags.atom], color: '#b35900' },
-        { tag: tags.typeName, color: '#0a7e7e' },
-        { tag: tags.className, color: '#1a7f37' },
-        { tag: tags.function(tags.variableName), color: '#0550ae' },
-        { tag: tags.propertyName, color: '#a5303d' },
-        { tag: tags.local(tags.variableName), color: '#a5303d' },
-        { tag: tags.definition(tags.variableName), color: '#9a6700' },
-        { tag: tags.special(tags.variableName), color: '#953800' },
-        { tag: tags.operator, color: '#57606a' },
-        { tag: [tags.punctuation, tags.bracket], color: '#57606a' },
-      ]));
-      const editorTheme = (dark: boolean) => EditorView.theme({
-        '&': { backgroundColor: 'var(--panel)', color: 'var(--panel-ink)', fontSize: '0.9rem' },
-        '.cm-content': { fontFamily: 'var(--mono)', caretColor: 'var(--accent)', padding: '0.6rem 0' },
-        '.cm-gutters': { backgroundColor: 'var(--panel-bar)', color: 'var(--panel-muted)', border: 'none', borderRight: '1px solid var(--panel-line)', fontFamily: 'var(--mono)' },
-        '.cm-activeLine': { backgroundColor: 'color-mix(in srgb, var(--accent) 7%, transparent)' },
-        '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--panel-ink)' },
-        '.cm-cursor': { borderLeftColor: 'var(--accent)' },
-        '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: 'color-mix(in srgb, var(--accent) 28%, transparent)' },
-        '.cm-matchingBracket': { outline: '1px solid var(--accent)', backgroundColor: 'transparent' },
-        '.cm-tooltip': { backgroundColor: 'var(--bg-elevated)', color: 'var(--ink)', border: '1px solid var(--line-strong)', borderRadius: '4px', maxWidth: '36rem' },
-        '.cm-tooltip pre': { whiteSpace: 'pre-wrap', fontFamily: 'var(--mono)' },
-        '.cm-tooltip-autocomplete > ul > li[aria-selected]': { backgroundColor: 'var(--accent)', color: 'var(--accent-ink)' },
-      }, { dark });
-      // the compiler's colours for what it has resolved: Stage's are for the ink ground, so paper gets its own
-      const paperSemantic = Prec.high(EditorView.theme({
-        '.cm-sem-function': { color: '#0550ae' },
-        '.cm-sem-class, .cm-sem-namespace': { color: '#0a7e7e' },
-        '.cm-sem-variable': { color: '#9a6700' },
-        '.cm-sem-parameter': { color: '#a5303d' },
-        '.cm-sem-enumMember': { color: '#b35900' },
-        '.cm-sem-enum': { color: '#1a7f37' },
-      }));
-      // the code that has just been run flashes, so it is clear what was sent
-      const flashOn = StateEffect.define<{ from: number; to: number }>();
-      const flashOff = StateEffect.define<null>();
-      const flashField = StateField.define<DecorationSet>({
-        create: () => Decoration.none,
-        update(value, tr) {
-          value = value.map(tr.changes);
-          for (const e of tr.effects) {
-            if (e.is(flashOn)) value = Decoration.set([Decoration.mark({ class: 'cm-flash' }).range(e.value.from, e.value.to)]);
-            if (e.is(flashOff)) value = Decoration.none;
-          }
-          return value;
-        },
-        provide: (f) => EditorView.decorations.from(f),
-      });
-      const lsp = languageClient((html) => DOMPurify.sanitize(html));
-      const ground = new Compartment();
-      const groundExtensions = () => {
-        const dark = root.dataset.mode !== 'paper';
-        return [editorTheme(dark), dark ? colours : [paperColours, paperSemantic]];
-      };
-      const view = new EditorView({
-        parent: $('editor'),
-        state: EditorState.create({
-          doc: '',
-          extensions: [
-            Prec.highest(keymap.of([
-              { key: 'Mod-Shift-Enter', run: () => { void runAll(); return true; } },
-              { key: 'Mod-Enter', run: () => { void runPart(); return true; } },
-            ])),
-            flashField,
-            basicSetup,
-            // Tab takes the suggestion when the list is open, and indents otherwise
-            keymap.of([{ key: 'Tab', run: acceptCompletion }, indentWithTab]),
-            niminal,
-            semanticHighlighting,
-            // mistakes, completion and hovers come from the language server, running in a worker
-            lsp.plugin('file:///playground.nml', 'niminal'),
-            lintGutter(),
-            ground.of(groundExtensions()),
-          ],
-        }),
-      });
-      const applyGround = () => view.dispatch({ effects: ground.reconfigure(groundExtensions()) });
-      const code = {
-        get value() { return view.state.doc.toString(); },
-        set value(text: string) { view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } }); },
-        select(from: number, to: number) { view.focus(); view.dispatch({ selection: { anchor: from, head: to }, scrollIntoView: true }); },
-      };
       const runButton = $<HTMLButtonElement>('run');
       const runAllButton = $<HTMLButtonElement>('runall');
-      const resetButton = $<HTMLButtonElement>('reset');
-      const now = $('now');
-      const play = $<HTMLButtonElement>('play');
       const stop = $<HTMLButtonElement>('stop');
+      const resetButton = $<HTMLButtonElement>('reset');
+      const play = $<HTMLButtonElement>('play');
       const download = $<HTMLButtonElement>('download');
       const share = $<HTMLButtonElement>('share');
       const exampleSelect = $<HTMLSelectElement>('example');
@@ -232,57 +124,39 @@ const examples: [string, string, number][] = [
       const status = $('status');
       const errors = $('errors');
       const progress = $('progress');
-
-      type Diagnostic = { start: number; end: number; message: string; help?: string | null };
-      type Result =
-        | { ok: true; sampleRate: number; channels: Float32Array[]; warnings: string[]; renderMs: number }
-        | { ok: false; diagnostics: Diagnostic[]; message: string; internal: boolean };
-
-      // ---- rendering, in a worker so the page stays responsive
-      const worker = new Worker('/playground/worker.js', { type: 'module' });
-      let nextId = 1;
-      const pending = new Map<number, (r: any) => void>();
-      worker.onmessage = (e) => {
-        // the live session talks without being asked: how it is doing, and if it was lost
-        if (e.data.kind === 'live-status') return showNow(e.data);
-        if (e.data.kind === 'live-lost') { sessionOn = false; setStatus('The engine stopped unexpectedly. Run all starts it again.'); now.textContent = ''; return; }
-        pending.get(e.data.id)?.(e.data.result);
-        pending.delete(e.data.id);
-      };
-      worker.onerror = () => setStatus('The engine could not be loaded in this browser.');
-      const ask = <T = Result>(message: object, transfer: Transferable[] = []) => new Promise<T>((resolve) => {
-        const id = nextId++;
-        pending.set(id, resolve);
-        worker.postMessage({ id, ...message }, transfer);
-      });
-      // the language server runs in a worker of its own, so typing is not held up by a render
-      const lspWorker = new Worker('/playground/worker.js', { type: 'module' });
-      const lspPending = new Map<number, (replies: Record<string, unknown>[]) => void>();
-      lspWorker.onmessage = (e) => { lspPending.get(e.data.id)?.(e.data.replies ?? []); lspPending.delete(e.data.id); };
-      const exchange = (message: Record<string, unknown>) => new Promise<Record<string, unknown>[]>((resolve) => {
-        const id = nextId++;
-        lspPending.set(id, resolve);
-        lspWorker.postMessage({ id, kind: 'lsp', message });
-      });
-      void connectLanguageServer(lsp, exchange, (message) => console.info(message));
-
-      // ---- helpers
+      const now = $('now');
       const setStatus = (text: string) => { status.textContent = text; };
-      // the engine reports positions in UTF-8 bytes; the textarea counts UTF-16 units
-      const byteToIndex = (text: string, byte: number) => {
-        let bytes = 0;
-        for (let i = 0; i < text.length; ) {
-          if (bytes >= byte) return i;
-          const point = text.codePointAt(i)!;
-          bytes += point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
-          i += point > 0xffff ? 2 : 1;
-        }
-        return text.length;
-      };
-      const lineColumn = (text: string, index: number) => {
-        const before = text.slice(0, index);
-        return { line: before.split('\n').length, column: index - before.lastIndexOf('\n') };
-      };
+
+      document.querySelectorAll<HTMLButtonElement>('[data-ground]').forEach((b) =>
+        b.addEventListener('click', () => {
+          const mode = b.dataset.ground as 'ink' | 'paper';
+          root.setAttribute('data-mode', mode);
+          root.setAttribute('data-theme', mode === 'paper' ? 'light' : 'dark');
+          try { localStorage.setItem('starlight-theme', mode === 'paper' ? 'light' : 'dark'); } catch {}
+          code.applyGround();
+        }));
+
+      // ---- what the running session says about itself
+      function showNow(m: Status) {
+        const s = m.status;
+        if (!s) { now.textContent = ''; return; }
+        const playing = s.clips.filter((c) => c.running && !c.muted).map((c) => c.name);
+        let text = `bar ${s.bar} · beat ${Math.floor(s.beat)} · ${Math.round(s.bpm)} bpm · ${playing.length ? playing.join(', ') : s.voices > 0 ? `${s.voices} voices` : 'silent'}`;
+        if (m.underruns > 0 || m.load > 0.85) text += ' · this piece is heavy for this device and the sound may break up (try fewer parts, or Export)';
+        now.textContent = text;
+        now.title = `engine load ${(m.load * 100).toFixed(0)}%, ${m.buffered.toFixed(2)} s ahead, ${m.underruns} gaps`;
+      }
+      const engine = createEngine({
+        onStatus: showNow,
+        onLost: () => { setStatus('The engine stopped unexpectedly. Run all starts it again.'); now.textContent = ''; },
+        onBroken: () => setStatus('The engine could not be loaded in this browser.'),
+      });
+      const code = createEditor({
+        parent: $('editor'),
+        exchange: engine.exchange,
+        onRun: () => void runPart(),
+        onRunAll: () => void runAll(),
+      });
 
       function showErrors(source: string, diagnostics: Diagnostic[], message: string, warnings: string[] = []) {
         errors.replaceChildren();
@@ -312,79 +186,25 @@ const examples: [string, string, number][] = [
         }
       }
 
-      // ---- the live session: the engine runs in the worker, a little ahead of an audio worklet that plays it
-      type Landed = { bar: number; beat: number; changes: string[] };
-      type LiveReply = { ok: true; landed: Landed } | { ok: false; diagnostics: Diagnostic[]; message: string; internal: boolean };
-      type Status = { buffered: number; status: { bar: number; beat: number; bpm: number; voices: number; clips: { name: string; running: boolean; muted: boolean }[] } | null; load: number; underruns: number };
-      let sessionOn = false;
+      // ---- the live session
       let busy = false;
-      let node: AudioWorkletNode | undefined;
-      let audioReady: Promise<void> | undefined;
-
-      // the audio context is made inside the click (a browser only allows it there); the rest can wait
-      function ensureAudio() {
-        ctx ??= new AudioContext();
-        void ctx.resume();
-        audioReady ??= (async () => {
-          await ctx!.audioWorklet.addModule('/playground/playback-worklet.js');
-          node = new AudioWorkletNode(ctx!, 'niminal-player', { outputChannelCount: [2] });
-          node.connect(ctx!.destination);
-          const channel = new MessageChannel();
-          node.port.postMessage({ link: channel.port1 }, [channel.port1]);
-          await ask({ kind: 'live-link', link: channel.port2 }, [channel.port2]);
-        })().catch((error) => { audioReady = undefined; throw error; });
-        return audioReady;
-      }
-
-      let flashTimer: number | undefined;
-      function flash(from: number, to: number) {
-        view.dispatch({ effects: flashOn.of({ from, to }) });
-        clearTimeout(flashTimer);
-        flashTimer = window.setTimeout(() => view.dispatch({ effects: flashOff.of(null) }), 450);
-      }
-
-      function showNow(m: Status) {
-        const s = m.status;
-        if (!s) { now.textContent = ''; return; }
-        const playing = s.clips.filter((c) => c.running && !c.muted).map((c) => c.name);
-        let text = `bar ${s.bar} · beat ${Math.floor(s.beat)} · ${Math.round(s.bpm)} bpm · ${playing.length ? playing.join(', ') : s.voices > 0 ? `${s.voices} voices` : 'silent'}`;
-        if (m.underruns > 0 || m.load > 0.85) text += ' · this piece is heavy for this device and the sound may break up (try fewer parts, or Export)';
-        now.textContent = text;
-        now.title = `engine load ${(m.load * 100).toFixed(0)}%, ${m.buffered.toFixed(2)} s ahead, ${m.underruns} gaps`;
-      }
-
-      // where the cursor is, or the selection: the code Run sends
-      function target() {
-        const selection = view.state.selection.main;
-        if (!selection.empty) return { from: selection.from, to: selection.to };
-        const line = view.state.doc.lineAt(selection.head);
-        const hit = blockAround(view.state.doc.toString().split('\n'), line.number - 1);
-        if (!hit) return null;
-        return { from: view.state.doc.line(hit.start + 1).from, to: view.state.doc.line(hit.end + 1).to };
-      }
-
-      const setButtons = (ready: boolean) => {
-        for (const b of [runButton, runAllButton, resetButton, play]) b.disabled = !ready;
-        stop.disabled = !ready;
-      };
+      let pristine = '';
 
       async function runAll() {
         if (busy || runButton.disabled) return;
         busy = true;
         stopPlaying();
         try {
-          await ensureAudio();
           setStatus('Starting…');
           const text = code.value;
-          const reply = await ask<LiveReply>({ kind: 'live-start', source: text, sampleRate: ctx!.sampleRate });
+          const reply = await engine.start(text);
           if (!reply.ok) {
             setStatus(reply.internal ? 'The engine stopped unexpectedly.' : 'There is a mistake in the piece, so it did not start.');
             showErrors(text, reply.diagnostics, reply.message);
             return;
           }
-          sessionOn = true;
           showErrors(text, [], '');
-          flash(0, view.state.doc.length);
+          code.flash(0, code.view.state.doc.length);
           setStatus('Playing the whole piece. Select some code and press Run to change it while it plays.');
         } catch {
           setStatus('Audio could not be started in this browser.');
@@ -394,26 +214,22 @@ const examples: [string, string, number][] = [
       async function runPart() {
         if (busy || runButton.disabled) return;
         // nothing is playing yet, so there is nothing to change: start the piece
-        if (!sessionOn) return runAll();
-        const part = target();
+        if (!engine.sessionOn) return runAll();
+        const part = code.target();
         if (!part) { setStatus('Put the cursor in some code, or select some, and press Run.'); return; }
         busy = true;
         stopPlaying();
         try {
-          void ctx?.resume();
           const text = code.value;
-          const piece = text.slice(part.from, part.to);
-          const reply = await ask<LiveReply>({ kind: 'live-eval', source: piece, now: false });
+          const reply = await engine.run(text.slice(part.from, part.to));
           if (!reply.ok) {
             // the engine located the mistakes within the piece it was given: move them into the whole text
-            const base = new TextEncoder().encode(text.slice(0, part.from)).length;
-            const moved = reply.diagnostics.map((d) => ({ ...d, start: d.start + base, end: d.end + base }));
             setStatus(reply.internal ? 'The engine stopped unexpectedly.' : 'There is a mistake in that code, so it was not run.');
-            showErrors(text, moved, reply.message);
+            showErrors(text, shiftDiagnostics(text, part.from, reply.diagnostics), reply.message);
             return;
           }
           showErrors(text, [], '');
-          flash(part.from, part.to);
+          code.flash(part.from, part.to);
           const what = reply.landed.changes.length ? reply.landed.changes.join(', ') : 'nothing changed';
           setStatus(`Sent: ${what}. It lands at bar ${reply.landed.bar}.`);
         } finally { busy = false; }
@@ -421,24 +237,22 @@ const examples: [string, string, number][] = [
 
       async function stopAll() {
         stopPlaying();
-        if (!sessionOn) return;
-        await ask({ kind: 'live-hush' });
+        if (!engine.sessionOn) return;
+        await engine.hush();
         setStatus('Stopped. Run plays again, and Run all starts the piece from the top.');
       }
 
       async function reset() {
         if (code.value !== pristine && !confirm('Put the example back as it was? Your changes will be lost.')) return;
         stopPlaying();
-        await ask({ kind: 'live-stop' });
-        sessionOn = false;
+        await engine.stop();
         now.textContent = '';
         code.value = pristine;
         errors.replaceChildren();
         setStatus('Back to the start. Run all plays it.');
       }
 
-      // ---- playback of a finished render (Export)
-      let ctx: AudioContext | undefined;
+      // ---- Export: render the whole piece, then play it
       let source: AudioBufferSourceNode | undefined;
       let last: { channels: Float32Array[]; sampleRate: number } | undefined;
       let frame = 0;
@@ -453,11 +267,11 @@ const examples: [string, string, number][] = [
       async function renderAndPlay() {
         if (play.disabled) return;
         stopPlaying();
-        // an AudioContext must be made or resumed inside the click, before anything is awaited
-        ctx ??= new AudioContext();
-        void ctx.resume();
+        // the context must be made or resumed inside the click, before anything is awaited
+        const ctx = engine.context();
         // the live session and a render would play over each other
-        if (sessionOn) { await ask({ kind: 'live-stop' }); sessionOn = false; now.textContent = ''; }
+        await engine.stop();
+        now.textContent = '';
         play.disabled = true;
         download.disabled = true;
         const text = code.value;
@@ -467,7 +281,7 @@ const examples: [string, string, number][] = [
         say();
         const waiting = setInterval(say, 250);
         errors.replaceChildren();
-        const result = await ask({ kind: 'render', source: text, bars: Number(bars.value) || 8 });
+        const result = await engine.render(text, Number(bars.value) || 8);
         clearInterval(waiting);
         play.disabled = false;
         if (!result.ok) {
@@ -490,7 +304,7 @@ const examples: [string, string, number][] = [
         source.start();
         setStatus(`Playing ${seconds.toFixed(1)} s (rendered in ${(result.renderMs / 1000).toFixed(2)} s).`);
         const tick = () => {
-          progress.style.width = `${Math.min(100, ((ctx!.currentTime - started) / seconds) * 100)}%`;
+          progress.style.width = `${Math.min(100, ((ctx.currentTime - started) / seconds) * 100)}%`;
           frame = requestAnimationFrame(tick);
         };
         tick();
@@ -502,50 +316,20 @@ const examples: [string, string, number][] = [
       stop.addEventListener('click', () => void stopAll());
       resetButton.addEventListener('click', () => void reset());
 
-      // ---- WAV
       download.addEventListener('click', () => {
         if (!last) return;
-        const { channels, sampleRate } = last;
-        const frames = channels[0].length;
-        const data = new DataView(new ArrayBuffer(44 + frames * channels.length * 2));
-        const text = (at: number, s: string) => [...s].forEach((c, i) => data.setUint8(at + i, c.charCodeAt(0)));
-        text(0, 'RIFF'); data.setUint32(4, 36 + frames * channels.length * 2, true); text(8, 'WAVEfmt ');
-        data.setUint32(16, 16, true); data.setUint16(20, 1, true); data.setUint16(22, channels.length, true);
-        data.setUint32(24, sampleRate, true); data.setUint32(28, sampleRate * channels.length * 2, true);
-        data.setUint16(32, channels.length * 2, true); data.setUint16(34, 16, true);
-        text(36, 'data'); data.setUint32(40, frames * channels.length * 2, true);
-        let at = 44;
-        for (let i = 0; i < frames; i++) {
-          for (const c of channels) {
-            data.setInt16(at, Math.round(Math.max(-1, Math.min(1, c[i])) * 32767), true);
-            at += 2;
-          }
-        }
         const link = document.createElement('a');
-        link.href = URL.createObjectURL(new Blob([data], { type: 'audio/wav' }));
+        link.href = URL.createObjectURL(wavFile(last.channels, last.sampleRate));
         link.download = 'niminal.wav';
         link.click();
         setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
       });
 
       // ---- sharing: the piece, compressed, in the address
-      const toBase64Url = (bytes: Uint8Array) =>
-        btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-      const fromBase64Url = (s: string) =>
-        Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
-      async function pipe(bytes: Uint8Array, stream: CompressionStream | DecompressionStream) {
-        const writer = stream.writable.getWriter();
-        void writer.write(bytes as BufferSource);
-        void writer.close();
-        return new Uint8Array(await new Response(stream.readable).arrayBuffer());
-      }
-      const encode = async (text: string) => toBase64Url(await pipe(new TextEncoder().encode(text), new CompressionStream('deflate-raw')));
-      const decode = async (s: string) => new TextDecoder().decode(await pipe(fromBase64Url(s), new DecompressionStream('deflate-raw')));
-
       share.addEventListener('click', async () => {
         let url: string;
         try {
-          url = `${location.origin}${location.pathname}#c=${await encode(code.value)}&b=${Number(bars.value) || 8}`;
+          url = `${location.origin}${location.pathname}#c=${await encodePiece(code.value)}&b=${Number(bars.value) || 8}`;
         } catch { setStatus('Could not make a link in this browser.'); return; }
         history.replaceState(null, '', url);
         try {
@@ -555,7 +339,6 @@ const examples: [string, string, number][] = [
       });
 
       // ---- starting points
-      let pristine = '';
       async function loadExample(name: string) {
         const wanted = exampleSelect.querySelector<HTMLOptionElement>(`option[value="${name}"]`)?.dataset.bars;
         if (wanted) bars.value = wanted;
@@ -566,7 +349,8 @@ const examples: [string, string, number][] = [
       }
       exampleSelect.addEventListener('change', async () => {
         stopPlaying();
-        if (sessionOn) { await ask({ kind: 'live-stop' }); sessionOn = false; now.textContent = ''; }
+        await engine.stop();
+        now.textContent = '';
         history.replaceState(null, '', location.pathname);
         await loadExample(exampleSelect.value);
         setStatus('Run all plays it.');
@@ -577,13 +361,12 @@ const examples: [string, string, number][] = [
         const hash = shared.get('c');
         if (Number(shared.get('b')) > 0) bars.value = String(Math.min(64, Number(shared.get('b'))));
         if (hash) {
-          try { pristine = await decode(hash); code.value = pristine; } catch { await loadExample(exampleSelect.value); }
+          try { pristine = await decodePiece(hash); code.value = pristine; } catch { await loadExample(exampleSelect.value); }
         } else {
           await loadExample(exampleSelect.value);
         }
-        await ask({ kind: 'warm' });
-        setButtons(true);
-        download.disabled = true;
+        await engine.warm();
+        for (const b of [runButton, runAllButton, resetButton, play, stop]) b.disabled = false;
         setStatus('Ready. Press Run all to start the piece.');
       })();
     </script>
